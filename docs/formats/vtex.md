@@ -74,7 +74,8 @@ Plain BC5 normal maps store X/Y only; Z is rebuilt as `sqrt(1 − x² − y²)`.
 | `ak47_default_rough_psd` | ATI2N | 4096² | roughness (R) and metalness (G) — used as `g_tMetalness` |
 | `ak47_default_ao_png` | ATI1N | 4096² | ambient occlusion |
 
-The roughness/metalness channel meaning is OFAST's reading of the data, to confirm against renders.
+Channel meanings are confirmed from ValveResourceFormat's shaders: for `csgo_weapon`, `g_tMetalness` R = roughness
+and G = metalness; other `csgo_*` shaders keep roughness in the normal map's B channel. See [material.md](material.md).
 
 ## Sources
 

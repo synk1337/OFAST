@@ -10,5 +10,7 @@ synthetic test fixtures are built straight from them.
 | KeyValues3 | text `.vmat`, `.vpcf`…; binary inside compiled resources | [kv3.md](kv3.md) | binary decoder done, verified on all CS2 files; text writer done |
 | Resource container | every `*_c` file (`.vmat_c`, `.vmdl_c`, `.vtex_c`…) | [resource.md](resource.md) | block splitter done |
 | Model + mesh | `.vmdl_c` (`CTRL`, `MDAT`, `MVTX`, `MIDX`, older `VBIB`/`MBUF`), meshopt buffers | [model.md](model.md) | reader done, all 13,105 CS2 models decode; glTF export |
+| Map | `world.vwrld_c`, `*.vwnod_c`, `*.vents_c` in `maps/<map>.vpk` | [map.md](map.md) | reader + glTF export, verified on de_mirage against CS2 |
+| Material | `.vmat_c` (shader channel conventions, layer blending) | [material.md](material.md) | glTF + Unreal layer-blend material |
 | Texture | `.vtex_c` | [vtex.md](vtex.md) | header, mips, LZ4, BC1/3/4/5/7 + uncompressed → RGBA8 |
 | Demo | `.dem` | [demo.md](demo.md) | header, entities, player positions + eye angles, rounds; matches demoparser2 bit for bit on a real match |

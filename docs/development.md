@@ -79,6 +79,39 @@ Interchange, builds a small level (sky, sun, floor, camera) and writes a 1920×1
 (`tools/unreal/import_and_shot.py`). The first run on a machine compiles shaders and is slow; later runs take under a
 minute. Imported content in `unreal/Sandbox/Content/` is ignored by git (it comes from Valve files).
 
+### Whole maps
+
+```bash
+cargo run --release -p ofast-cli -- export-map de_mirage --out test-data/exports/de_mirage
+powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/import_map.py -Gltf test-data/exports/de_mirage/de_mirage.gltf -Shot test-data/shots -Name de_mirage
+```
+
+`import_map.py` imports the glTF as a scene (one actor per placement, lights included), swaps two-layer materials
+for the layer-blend material, turns the sun like CS2's `light_environment`, saves everything under
+`/Game/OFAST/<map>` and writes screenshots from the first CT spawn, the first T spawn and above the map.
+
+The sandbox needs **DirectX 12 + Shader Model 6** for Nanite (set in `unreal/Sandbox/Config/DefaultEngine.ini`);
+switching it on recompiles all shaders once (long).
+
+### Comparing with CS2
+
+1. Start CS2 with `-insecure`, open the console (check which key is bound to `toggleconsole` in
+   `Steam/userdata/<id>/730/local/cfg/cs2_user_keys_0_slot0.vcfg`), `map de_mirage`.
+2. `sv_cheats 1; bot_kick; mp_warmup_end; mp_ignore_round_win_conditions 1; noclip; cl_drawhud 0;
+   r_drawviewmodel 0`, then `setpos <origin_source> ; setang <angles>` from the manifest's spawn and `getpos` to check
+   (the eye is 64 units above the origin).
+3. Screenshot, then put both images side by side (see `test-data/shots/compare_*.png`).
+
+### Debug tools for maps
+
+| Tool | What it answers |
+|---|---|
+| `cargo run --release --example map_raycast -- de_mirage ct0 "x,y;x,y"` | which model/material OFAST's geometry has under a screenshot pixel |
+| `cargo run --release --example map_outliers -- de_mirage [classes]` | stretched geometry, dropped triangles, entity classes with models |
+| `cargo run --release --example model_layout -- formats de_mirage` | vertex attribute formats used by a map |
+| `tools/unreal/probe_actors.py` (`OFAST_FILTER=<text>` or `@empty`) | imported actors, their meshes and materials in Unreal |
+| `tools/unreal/probe_axes.py` | how Unreal's glTF importer maps axes (see decision 003) |
+
 ## Rules we work by
 
 1. **Comment and document a lot.** Every crate has `missing_docs` on. Every module opens with a doc comment that

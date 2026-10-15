@@ -31,14 +31,29 @@ Ordered so that **Demo → Unreal scene** works first. Every milestone ends in s
 - [x] One model → glTF → UE 5.8: the AK-47 (geometry, 4 textures, materials) imports and renders by script
   (`ofast export-model` + `tools/unreal/run_shot.ps1`). Own meshopt decoder; all 13,105 CS2 models decode.
 
-### Carried into M1/M2 (found during the M0 model spike)
+## M1 progress
 
-- **Axes:** models currently land in UE with Source +X along UE Y. Choose the glTF axis mapping so a Source position
-  `(x, y, z)` lands at UE `(x, −y, z) × 2.54`, and prove it with marker objects + an in-game screenshot.
-  (Scale is already proven: the AK-47 is 37.3 in in CS2 and 94.7 cm in UE.)
-- **Materials:** the AK-47's metal renders lighter and shinier than in game. Confirm the channel meaning of CS2's
-  roughness/metalness texture against a CS2 screenshot, then build real CS2 → UE master materials (M2).
-- Colour texture alpha is a mask in CS2 (exported opaque for now); find what it drives.
+- [x] **Axes** settled and measured: Source `(x, y, z)` → Unreal `(x, −y, z) × 2.54` (`coords.rs`,
+  [decision 003](decisions/003-axes.md)).
+- [x] Map reader: world, world nodes (scene objects, aggregates, instanced fragments), entity lumps
+  (`crates/ofast-core/src/map/`, [map.md](formats/map.md)).
+- [x] `ofast export-map de_mirage`: 1.23 M triangles, 836 placements, 372 materials, 705 textures, 72 lights + a
+  manifest (sun, sky, spawns) in about 1 s.
+- [x] Material rules from CS2's shaders: hemi-octahedral normals with roughness in B, metalness in `g_tMetalness`.G,
+  two-layer blending with `F_FANCY_BLENDING`, overlays, tints ([material.md](formats/material.md)).
+- [x] Unreal: scripted scene import (`tools/unreal/import_map.py`), layer-blend master material built by script,
+  Nanite with DX12/SM6, screenshots from spawns.
+- [x] **Verified against CS2**: CT spawn view in CS2 (`setpos`/`setang`, -insecure) vs Unreal — same framing to the
+  pixel; textures, blends, decals and railings match.
+
+### Still to do (M1 → M2)
+
+- 3D skybox (separate world `maps/prefabs/<map>/…vpk`, scaled ×16) and the sky material.
+- Lighting calibration against CS2 (sun intensity, sky light, exposure, local light units).
+- Materials with more than two layers, detail textures, vertex colour tint (`COLOR` attribute), glass.
+- Rebuild `csgo_effects` dust / light-shaft cards as Unreal effects.
+- Colour texture alpha mask on weapons: find what it drives.
+- Move the Unreal Python into the `ofast-unreal` plugin (M2).
 
 ## Hard problems we know about
 

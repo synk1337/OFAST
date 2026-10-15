@@ -1,8 +1,10 @@
 //! Exporters: turn CS2 content into standard files other tools (Unreal, Blender) can open.
 //!
-//! - [`gltf`]: models (with materials and textures) as glTF 2.0.
+//! - [`gltf`]: models (with materials and textures) as glTF 2.0, and the shared glTF writer.
+//! - [`map`]: whole maps (world, props, lights) as glTF 2.0 plus an OFAST manifest for Unreal.
 
 pub mod gltf;
+pub mod map;
 
 use crate::model::ModelError;
 use crate::resource::ResourceError;
@@ -27,6 +29,9 @@ pub enum ExportError {
     /// A texture could not be decoded.
     #[error(transparent)]
     Texture(#[from] TextureError),
+    /// A map could not be read.
+    #[error(transparent)]
+    Map(#[from] crate::map::MapError),
     /// PNG encoding failed.
     #[error("PNG encoding failed: {0}")]
     Png(String),

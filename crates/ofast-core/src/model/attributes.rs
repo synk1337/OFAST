@@ -24,18 +24,51 @@ pub struct Geometry {
     pub tangents: Vec<[f32; 4]>,
     /// Texture coordinate sets, `uvs[n]` = `TEXCOORD n`.
     pub uvs: Vec<Vec<[f32; 2]>>,
+    /// Vertex-painted layer blend weights (0–1, RGBA), from `TEXCOORD 4` stored as `R8G8B8A8_UNORM` on layered
+    /// world materials. In de_mirage the four channels hold the same value: 0 = layer 1, 1 = layer 2.
+    pub blend: Vec<[f32; 4]>,
     /// Triangle list indices into the arrays above.
     pub indices: Vec<u32>,
 }
 
+/// The vertex buffers ("streams") a draw call reads together. World geometry often keeps positions in one stream
+/// and UVs/normals in another; an attribute is looked up across all of them.
+struct Streams<'a> {
+    buffers: &'a [&'a VertexBuffer],
+    /// Number of vertices available in every stream.
+    count: usize,
+}
+
+impl<'a> Streams<'a> {
+    fn new(buffers: &'a [&'a VertexBuffer]) -> Self {
+        Self {
+            buffers,
+            count: buffers.iter().map(|b| b.count).min().unwrap_or(0),
+        }
+    }
+
+    /// The stream holding `semantic`/`index`, and the attribute.
+    fn find(&self, semantic: &str, index: u32) -> Option<(&'a VertexBuffer, &'a Attribute)> {
+        self.buffers
+            .iter()
+            .find_map(|vb| vb.attribute(semantic, index).map(|a| (*vb, a)))
+    }
+}
+
+/// Bytes of vertex `i` in `vb`.
+fn vertex_bytes(vb: &VertexBuffer, i: usize) -> &[u8] {
+    &vb.data[i * vb.stride..(i + 1) * vb.stride]
+}
+
 impl Geometry {
-    /// Decodes the vertices referenced by `draw` from `vb`, with indices from `ib`.
-    pub(super) fn decode(vb: &VertexBuffer, ib: &[u32], draw: &DrawCall) -> Self {
+    /// Decodes the vertices referenced by `draw` from its vertex streams, with indices from `ib`.
+    pub(super) fn decode(buffers: &[&VertexBuffer], ib: &[u32], draw: &DrawCall) -> Self {
+        let streams = Streams::new(buffers);
         let start = draw.start_index as usize;
         let end = (start + draw.index_count as usize).min(ib.len());
-        // Drop whole triangles that point outside the vertex buffer (dropping single indices would shift every
+        // Drop whole triangles that point outside the vertex buffers (dropping single indices would shift every
         // later triangle). A geometry without positions has nothing to draw.
-        let source_indices: Vec<u32> = if vb.attribute("POSITION", 0).is_none() {
+        let source_indices: Vec<u32> = if streams.find("POSITION", 0).is_none() {
             Vec::new()
         } else {
             ib[start.min(end)..end]
@@ -43,7 +76,7 @@ impl Geometry {
                 .0
                 .iter()
                 .map(|tri| tri.map(|i| i + draw.base_vertex))
-                .filter(|tri| tri.iter().all(|&i| (i as usize) < vb.count))
+                .filter(|tri| tri.iter().all(|&i| (i as usize) < streams.count))
                 .flatten()
                 .collect()
         };
@@ -61,16 +94,15 @@ impl Geometry {
             ..Geometry::default()
         };
 
-        let vertex = |i: usize| &vb.data[i * vb.stride..(i + 1) * vb.stride];
-
-        if let Some(attr) = vb.attribute("POSITION", 0) {
+        if let Some((vb, attr)) = streams.find("POSITION", 0) {
             geometry.positions = vertices
                 .clone()
-                .map(|i| read_vec3(vertex(i), attr))
+                .map(|i| read_vec3(vertex_bytes(vb, i), attr))
                 .collect();
         }
 
-        if let Some(attr) = vb.attribute("NORMAL", 0) {
+        if let Some((vb, attr)) = streams.find("NORMAL", 0) {
+            let vertex = |i: usize| vertex_bytes(vb, i);
             // R32_UINT and R8G8B8A8_UNORM normals only exist in packed form; trust the format over the flag.
             let packed = draw.compressed_normal_tangent
                 || matches!(attr.format, dxgi::R32_UINT | dxgi::R8G8B8A8_UNORM);
@@ -100,13 +132,13 @@ impl Geometry {
             }
         }
         if geometry.tangents.is_empty()
-            && let Some(attr) = vb.attribute("TANGENT", 0)
+            && let Some((vb, attr)) = streams.find("TANGENT", 0)
             && attr.format == dxgi::R32G32B32A32_FLOAT
         {
             geometry.tangents = vertices
                 .clone()
                 .map(|i| {
-                    let b = &vertex(i)[attr.offset..];
+                    let b = &vertex_bytes(vb, i)[attr.offset..];
                     let f = |k: usize| {
                         f32::from_le_bytes([b[4 * k], b[4 * k + 1], b[4 * k + 2], b[4 * k + 3]])
                     };
@@ -115,13 +147,27 @@ impl Geometry {
                 .collect();
         }
 
+        if let Some((vb, attr)) = streams.find("TEXCOORD", 4)
+            && attr.format == dxgi::R8G8B8A8_UNORM
+        {
+            geometry.blend = vertices
+                .clone()
+                .map(|i| {
+                    let b = &vertex_bytes(vb, i)[attr.offset..];
+                    [b[0], b[1], b[2], b[3]].map(|c| f32::from(c) / 255.0)
+                })
+                .collect();
+        }
+
+        // Consecutive texture coordinate sets from 0 (set 3 on world geometry is the lightmap UV, skipped when
+        // sets 1–2 are absent).
         for set in 0..8 {
-            let Some(attr) = vb.attribute("TEXCOORD", set) else {
+            let Some((vb, attr)) = streams.find("TEXCOORD", set) else {
                 break;
             };
             let Some(uvs) = vertices
                 .clone()
-                .map(|i| read_uv(vertex(i), attr))
+                .map(|i| read_uv(vertex_bytes(vb, i), attr))
                 .collect::<Option<Vec<_>>>()
             else {
                 break;

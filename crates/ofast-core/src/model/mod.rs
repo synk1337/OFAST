@@ -127,8 +127,9 @@ impl VertexBuffer {
 pub struct DrawCall {
     /// Material path, e.g. `weapons/models/ak47/materials/weapon_rif_ak47.vmat` (no `_c`).
     pub material: String,
-    /// Index into the mesh's vertex buffers.
-    pub vertex_buffer: usize,
+    /// Indices into the mesh's vertex buffers: the streams read together (e.g. positions in one, UVs and
+    /// normals in another).
+    pub vertex_buffers: Vec<usize>,
     /// Index into the mesh's index buffers.
     pub index_buffer: usize,
     /// Added to every index.
@@ -159,13 +160,22 @@ pub struct Mesh {
 impl Mesh {
     /// Decodes the geometry of one draw call (positions, normals, tangents, UVs, triangle indices).
     pub fn geometry(&self, draw: &DrawCall) -> Result<Geometry, ModelError> {
-        let vb = self.vertex_buffers.get(draw.vertex_buffer).ok_or_else(|| {
-            ModelError::BadBufferReference {
-                mesh: self.name.clone(),
-                kind: "vertex",
-                index: draw.vertex_buffer,
-            }
-        })?;
+        // A draw call without explicit streams reads the first vertex buffer.
+        let handles: &[usize] = if draw.vertex_buffers.is_empty() {
+            &[0]
+        } else {
+            &draw.vertex_buffers
+        };
+        let mut streams = Vec::with_capacity(handles.len());
+        for &handle in handles {
+            streams.push(self.vertex_buffers.get(handle).ok_or_else(|| {
+                ModelError::BadBufferReference {
+                    mesh: self.name.clone(),
+                    kind: "vertex",
+                    index: handle,
+                }
+            })?);
+        }
         let ib = self.index_buffers.get(draw.index_buffer).ok_or_else(|| {
             ModelError::BadBufferReference {
                 mesh: self.name.clone(),
@@ -173,7 +183,7 @@ impl Mesh {
                 index: draw.index_buffer,
             }
         })?;
-        Ok(Geometry::decode(vb, ib, draw))
+        Ok(Geometry::decode(&streams, ib, draw))
     }
 }
 
@@ -544,11 +554,13 @@ fn read_draw_calls(mesh_data: &Value) -> Vec<DrawCall> {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_owned(),
-                vertex_buffer: buffer_handle(
-                    draw.get("m_vertexBuffers")
-                        .and_then(Value::as_array)
-                        .and_then(|a| a.first()),
-                ),
+                vertex_buffers: draw
+                    .get("m_vertexBuffers")
+                    .and_then(Value::as_array)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|b| buffer_handle(Some(b)))
+                    .collect(),
                 index_buffer: buffer_handle(draw.get("m_indexBuffer")),
                 base_vertex: int(draw, &["m_nBaseVertex"]).unwrap_or(0).max(0) as u32,
                 start_index: int(draw, &["m_nStartIndex"]).unwrap_or(0).max(0) as u32,

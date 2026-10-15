@@ -28,10 +28,13 @@
 #![forbid(unsafe_code)]
 
 pub mod bytes;
+pub mod content;
+pub mod coords;
 pub mod demo;
 pub mod export;
 pub mod game;
 pub mod kv3;
+pub mod map;
 pub mod meshopt;
 pub mod model;
 pub mod resource;
