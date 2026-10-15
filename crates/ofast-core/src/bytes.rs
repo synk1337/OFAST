@@ -122,6 +122,33 @@ impl<'a> ByteReader<'a> {
         }
     }
 
+    /// Reads an unsigned LEB128 "varint" (7 data bits per byte, high bit = "more bytes follow"), as used by
+    /// protobuf and by the frame headers of CS2 demos. At most 10 bytes are read; extra high bits are dropped.
+    pub fn varint_u64(&mut self, what: &'static str) -> Result<u64, UnexpectedEof> {
+        let mut value = 0u64;
+        for i in 0..10 {
+            let byte = self.u8(what)?;
+            value |= u64::from(byte & 0x7F) << (7 * i);
+            if byte & 0x80 == 0 {
+                break;
+            }
+        }
+        Ok(value)
+    }
+
+    /// Reads a varint that is meant to fit in 32 bits (at most 5 bytes; bits above 32 are dropped).
+    pub fn varint_u32(&mut self, what: &'static str) -> Result<u32, UnexpectedEof> {
+        let mut value = 0u32;
+        for i in 0..5 {
+            let byte = self.u8(what)?;
+            value |= u32::from(byte & 0x7F).wrapping_shl(7 * i);
+            if byte & 0x80 == 0 {
+                break;
+            }
+        }
+        Ok(value)
+    }
+
     read_le! {
         u8 => u8,
         u16 => u16,
@@ -165,6 +192,19 @@ mod tests {
                 available: 1
             }
         );
+    }
+
+    #[test]
+    fn reads_varints() {
+        // 1 → one byte; 300 = 0b1_0010_1100 → [0xAC, 0x02]; u32::MAX → five bytes.
+        let data = [0x01, 0xAC, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F];
+        let mut r = ByteReader::new(&data);
+        assert_eq!(r.varint_u32("a").unwrap(), 1);
+        assert_eq!(r.varint_u64("b").unwrap(), 300);
+        assert_eq!(r.varint_u32("c").unwrap(), u32::MAX);
+        assert_eq!(r.remaining(), 0);
+        // A varint whose "more bytes" bit runs past the end is an error.
+        assert!(ByteReader::new(&[0x80]).varint_u32("d").is_err());
     }
 
     #[test]

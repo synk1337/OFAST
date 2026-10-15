@@ -21,7 +21,14 @@ cargo doc --no-deps --open          # browse the API docs
 ```
 
 `game-data` tests find CS2 automatically through Steam's default path. Override with the `OFAST_CS2_DIR` environment
-variable (the folder that contains `game\csgo\pak01_dir.vpk`).
+variable (the folder that contains `game\csgo\pak01_dir.vpk`). Add `--release` when running them: they read whole
+VPK archives and 200 MB demos.
+
+| Variable | Used by | Meaning |
+|---|---|---|
+| `OFAST_CS2_DIR` | all `game-data` tests | CS2 root folder, if not in Steam's default library |
+| `OFAST_TEST_DEMO` | `tests/cs2_demo.rs` | demo to test with; default: the newest `.dem` in `game\csgo\replays` (download a match in CS2's Watch tab to get one) |
+| `OFAST_ORACLE_PYTHON` | `tests/cs2_demo.rs` | Python with demoparser2 installed (see below); default: `python` on the PATH; skipped if neither has it |
 
 ## Test data rules
 
@@ -39,7 +46,22 @@ or fixed.
 |---|---|
 | VPK | ValvePak / Source 2 Viewer CLI file listing |
 | KV3 / resources | Source 2 Viewer CLI decompiled text |
-| Demos | demoparser2 per-tick output |
+| Demos | demoparser2 per-tick output, through `tools/oracle/demoparser2_oracle.py` |
+
+Setting up the demo oracle once (in any folder outside the repository — it is a test tool, not a dependency;
+on Linux/macOS the interpreter is `oracle-venv/bin/python`):
+
+```bash
+python -m venv oracle-venv
+oracle-venv/Scripts/python -m pip install demoparser2 pandas
+```
+
+Then set `OFAST_ORACLE_PYTHON` to `oracle-venv/Scripts/python` (full path) and run
+`cargo test --release --features game-data --test cs2_demo -- --nocapture`. The test prints how many rows matched
+and the largest differences.
+
+Developer tools for poking at demos: `cargo run --release --example demo_inspect -- <demo> [rounds | fields <Class>…]`
+and `cargo run --release --example demo_round -- <demo> <round> > round.csv`.
 
 ## Rules we work by
 

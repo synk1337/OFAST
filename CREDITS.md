@@ -14,6 +14,6 @@ is kept below.
 | [HLAE / advancedfx](https://github.com/advancedfx/advancedfx) | Game capture, camera paths, `.cam` format, recording streams | MIT |
 | [SourceIO](https://github.com/REDxEYE/SourceIO) | CS2 shader parameter meanings | MIT |
 | [Valve Developer Community wiki](https://developer.valvesoftware.com/) | File formats, units, coordinates | CC BY-NC-SA 3.0 (docs only) |
-| [SteamDatabase GameTracking-CS2](https://github.com/SteamDatabase/GameTracking-CS2) | Protobuf definitions, game file listings | see repository |
+| [SteamDatabase GameTracking-CS2](https://github.com/SteamDatabase/GameTracking-CS2) | Protobuf definitions (Valve's demo `.proto` files are copied unchanged into `crates/ofast-core/proto/`), game file listings | see repository |
 
 Not used as code sources (incompatible or missing license): UEditingTools (GPL-3.0), afxlivelink (no license).

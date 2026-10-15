@@ -11,21 +11,24 @@
 //! | [`vpk`] | Valve Pak archives (`pak01_dir.vpk` + `pak01_NNN.vpk`) | `docs/formats/vpk.md` |
 //! | [`resource`] | Compiled resource container (`*_c` files): header + typed blocks | `docs/formats/resource.md` |
 //! | [`kv3`] | KeyValues3, binary and text — the data format inside most resources | `docs/formats/kv3.md` |
+//! | [`demo`] | CS2 demos (`.dem`): frames, string tables, send tables, entities, player positions per round | `docs/formats/demo.md` |
 //! | [`game`] | Locating a CS2 install on disk | — |
-//! | [`bytes`] | Shared little-endian byte cursor used by every binary reader | — |
+//! | [`bytes`] | Shared little-endian byte cursor (and varints) used by every binary reader | — |
 //!
-//! More modules (KeyValues3, resource container, textures, meshes, demos…) arrive milestone by milestone — see
+//! More modules (textures, meshes, materials, maps…) arrive milestone by milestone — see
 //! `docs/roadmap.md`.
 //!
 //! ## Where the knowledge comes from
 //!
 //! OFAST is a clean rewrite. The formats were learned from public community work — mainly ValveResourceFormat and
-//! ValvePak (MIT) and the Valve Developer Community wiki — and our output is checked against those tools in tests.
+//! ValvePak (MIT) for assets, demoparser2 and demoinfocs-golang (MIT) for demos, and the Valve Developer Community
+//! wiki — and our output is checked against those tools in tests.
 //! See `CREDITS.md`.
 
 #![forbid(unsafe_code)]
 
 pub mod bytes;
+pub mod demo;
 pub mod game;
 pub mod kv3;
 pub mod resource;

@@ -1,0 +1,378 @@
+# CS2 demo (`.dem`)
+
+A CS2 demo is a recording of everything the server sent to a spectator (SourceTV): every entity's networked
+fields, tick by tick, plus events, string tables and the class descriptions needed to decode them. Matchmaking and
+FACEIT demos, and the ones CS2 downloads to `game/csgo/replays`, are all this format. OFAST's code:
+`crates/ofast-core/src/demo/`.
+
+Reading a demo is a stack of layers. Each section below is one layer, outermost first.
+
+| Layer | Section | Code |
+|---|---|---|
+| file header + frames | [Frames](#frames) | `frame.rs` |
+| protobuf messages | [Protobufs](#protobufs) | `proto.rs`, `proto/*.proto`, `build.rs` |
+| network messages in packets | [Packets](#packets) | `parser.rs` |
+| bit-level encodings | [Bit encodings](#bit-encodings) | `bits.rs` |
+| string tables | [String tables](#string-tables) | `stringtable.rs` |
+| class descriptions | [Send tables](#send-tables-serializers) | `serializer.rs` |
+| field values | [Field decoders](#field-decoders) | `decoder.rs` |
+| which fields changed | [Field paths](#field-paths) | `fieldpath.rs` |
+| entities | [Entities](#entities) | `entity.rs` |
+| players and rounds | [Players and rounds](#players-and-rounds) | `players.rs` |
+
+## What CS2 actually uses
+
+Checked on 2026-10-15 against a 216 MB matchmaking demo (de_nuke, 20 rounds, build 10847, patch 14173) with
+`cargo test --release --features game-data --test cs2_demo`:
+
+- **all 129,530 frames parse**, through to the final tick 129,518, in about 3.5 s;
+- **round 1 matches demoparser2 bit for bit**: 50,740 of 50,740 player × tick rows have identical x, y, z,
+  pitch and yaw;
+- **all 20 round start ticks match** demoparser2's `round_start` events.
+
+| Fact | Value in that demo |
+|---|---|
+| tick interval | 1/64 s (`svc_ServerInfo.tick_interval`) |
+| server classes | 218 → class ids are 8 bits |
+| send tables | 263 serializers, 1,573 fields, 1,915 symbols |
+| player position | `m_skeletonInstance.m_vecOrigin.m_cellX/Y/Z` (`uint16`) + `m_vecX/Y/Z` (`CNetworkedQuantizedFloat`, 32 bits = plain float) on the pawn's `CBodyComponent` |
+| eye angles | `m_angEyeAngles`, `QAngle` with encoder `qangle_precise` |
+| Steam id | `m_steamID`, `uint64` with encoder `fixed64` |
+| full entity snapshot | only the first `DEM_FullPacket` is needed; later ones repeat what deltas built |
+
+## Frames
+
+All integers little-endian. The file starts with 16 bytes:
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | 8 bytes | magic `PBDEMS2\0` (CS:GO demos start with `HL2DEMO\0` instead — a different format) |
+| 8 | u32 | file offset of the `DEM_FileInfo` frame (near the end; 0 if the recording was not finalized) |
+| 12 | u32 | file offset of the `DEM_SpawnGroups` frame |
+
+Then frames until `DEM_Stop`. Each frame is three byte-aligned **varints** (protobuf LEB128: 7 data bits per
+byte, high bit = "more bytes follow") and a payload:
+
+| Field | Encoding | Meaning |
+|---|---|---|
+| command | varint | `EDemoCommands` value; bit 64 (`DEM_IsCompressed`) set = payload is Snappy-compressed (raw block format, not the framed format) |
+| tick | varint (u32) | game tick; `0xFFFFFFFF` = before the game started ("signon") |
+| size | varint | payload bytes |
+| payload | `size` bytes | the protobuf message for this command |
+
+| Command | # | Payload | Used by OFAST |
+|---|---|---|---|
+| `DEM_Stop` | 0 | `CDemoStop` | end of frames |
+| `DEM_FileHeader` | 1 | `CDemoFileHeader` | map, server, build — always the first frame |
+| `DEM_FileInfo` | 2 | `CDemoFileInfo` | duration (`playback_ticks`, `playback_time`) |
+| `DEM_SyncTick` | 3 | `CDemoSyncTick` | — |
+| `DEM_SendTables` | 4 | `CDemoSendTables` | [send tables](#send-tables-serializers) |
+| `DEM_ClassInfo` | 5 | `CDemoClassInfo` | class id → network name |
+| `DEM_StringTables` | 6 | `CDemoStringTables` | string table snapshot |
+| `DEM_Packet` | 7 | `CDemoPacket` | [packets](#packets) |
+| `DEM_SignonPacket` | 8 | `CDemoPacket` | packets before the game starts |
+| `DEM_ConsoleCmd` | 9 | `CDemoConsoleCmd` | — |
+| `DEM_CustomData` … `DEM_UserCmd` | 10–12 | | — |
+| `DEM_FullPacket` | 13 | `CDemoFullPacket` = string table snapshot + packet | see below |
+| `DEM_SaveGame`, `DEM_SpawnGroups`, `DEM_AnimationData`, `DEM_AnimationHeader`, `DEM_Recovery` | 14–18 | | — |
+
+Typical order: `FileHeader`, `SignonPacket`s (server info, string tables), `SendTables`, `ClassInfo`,
+`StringTables`, more `SignonPacket`s, `SyncTick`, then `Packet`s with ticks increasing by one, a `FullPacket` about
+every minute (34 in the 34-minute demo above), and finally `Stop`, `SpawnGroups`, `FileInfo`.
+
+**Full packets** exist so a player can seek: each holds a complete entity snapshot (`svc_PacketEntities` with
+`legacy_is_delta = false`). When reading from the start, the **first** one is required — it is the only complete
+snapshot, and the deltas after it build on it — and later ones are skipped (their string table snapshots are still
+applied). This is what demoinfocs-golang does; demoparser2's single-threaded mode skips all full-packet entities.
+OFAST recognizes snapshots by the frame type (`DEM_FullPacket`) rather than the `legacy_is_delta` flag, whose name
+suggests Valve may stop filling it.
+
+**Ticks.** OFAST reports the frame tick (demo-relative, starting near 0). Network messages carry the server tick
+(`net_Tick`, `server_tick`), which is the frame tick plus a constant offset (`CDemoFileHeader.server_start_tick`).
+
+## Protobufs
+
+Payloads are protobuf messages defined in Valve's `.proto` files, which SteamDatabase's
+[GameTracking-CS2](https://github.com/SteamDatabase/GameTracking-CS2/tree/master/Protobufs) dumps from the game.
+OFAST keeps a copy of the needed files in `crates/ofast-core/proto/` (see its README for the commit) and compiles
+them at build time with [protox](https://crates.io/crates/protox) (pure Rust, so no `protoc` install) and
+prost-build. Valve's files use a few options defined only in Valve-internal files (`option additional_includes`,
+bare field options like `boxed_type = "CEntityIndex"`); they only steer Valve's C++ code generator, so `build.rs`
+drops them while reading. Decision: [002](../decisions/002-demo-protobufs-built-with-protox.md).
+
+## Packets
+
+A `CDemoPacket.data` is a **bit stream** (see [Bit encodings](#bit-encodings)) holding a list of network messages:
+
+| Field | Encoding |
+|---|---|
+| message type | ubitvar |
+| size | varint (read from the bit stream, so not byte-aligned) |
+| body | `size` bytes, a protobuf message |
+
+…repeated until fewer than 8 bits are left (padding). Message types OFAST handles:
+
+| Message | Id | Protobuf | What for |
+|---|---|---|---|
+| `net_Tick` | 4 | `CNETMsg_Tick` | server tick (not needed yet) |
+| `svc_ServerInfo` | 40 | `CSVCMsg_ServerInfo` | `max_classes` (class id bit width), `tick_interval` |
+| `svc_CreateStringTable` | 44 | `CSVCMsg_CreateStringTable` | new string table |
+| `svc_UpdateStringTable` | 45 | `CSVCMsg_UpdateStringTable` | string table changes |
+| `svc_ClearAllStringTables` | 51 | `CSVCMsg_ClearAllStringTables` | drop all tables |
+| `svc_PacketEntities` | 55 | `CSVCMsg_PacketEntities` | [entities](#entities) |
+| `GE_Source1LegacyGameEvent(List)` | 205 / 207 | `gameevents.proto` | game events (kills, rounds) — from M3 |
+
+Within one packet, string table and server info messages are applied **before** `svc_PacketEntities`: an entity
+created in a packet may need a baseline that arrives in the same packet.
+
+## Bit encodings
+
+Bit streams are **least-significant bit first**: the first bit is bit 0 of byte 0, the ninth is bit 0 of byte 1,
+and a multi-bit value has its first bit as its lowest bit (like reading the buffer as one huge little-endian
+integer from the bottom).
+
+| Name | Layout |
+|---|---|
+| bits(n) | n bits, unsigned |
+| varint | bytes of 8 bits each, LEB128; at most 5 bytes for 32-bit values, 10 for 64-bit |
+| signed varint | varint, then zigzag: `(u >> 1) ^ -(u & 1)` (0, -1, 1, -2, …) |
+| ubitvar | 6 bits `b`; `b & 0x30` = `0x00`: value `b`; `0x10`: `(b & 15) \| bits(4) << 4`; `0x20`: `… bits(8) << 4`; `0x30`: `… bits(28) << 4` |
+| field-path ubitvar | `1` → bits(2); `01` → bits(4); `001` → bits(10); `0001` → bits(17); `0000` → bits(31) |
+| string | bytes until a NUL |
+| bit coord | `has_int`, `has_frac`; if either: `sign`, then `bits(14) + 1` if `has_int`, `bits(5)` (1/32 steps) if `has_frac`; both clear = 0 |
+| angle(n) | `bits(n) × 360 / 2ⁿ` degrees |
+| normal | `sign`, `bits(11) / 2047` |
+| normal vector | `has_x`, `has_y`, [x normal], [y normal], `negative_z`; `z = √(1 − x² − y²)` (0 if negative under the root) |
+
+## String tables
+
+Named lists of `key → value` entries. OFAST uses two:
+
+- **`instancebaseline`**: key = class id in decimal (`"38"`), value = an encoded field-change list (same format as an
+  [entity update](#entities)) with the class's default values. Every created entity starts from its class baseline.
+  Keys like `"12:3"` exist too (alternate baselines) and are ignored.
+- **`userinfo`**: key = player slot, value = `CMsgPlayerInfo` (name, Steam id). Not needed yet: the player
+  controller entity carries the same data.
+
+`svc_CreateStringTable` gives the table settings and the initial entries (`string_data`, Snappy-compressed as a whole
+if `data_compressed`). `svc_UpdateStringTable` patches table number `table_id` (creation order). Both encode
+`num_entries` entries in a bit stream:
+
+1. **index**: bit `1` → previous index + 1; bit `0` → previous index + varint + 2. The previous index starts at -1.
+2. **key**: bit `has_key`. If set: bit `use_history`; with history, bits(5) pick one of the last 32 keys and bits(5)
+   say how many of its leading bytes to reuse, then a string completes the key; without, a plain string. Every read
+   key is added to the history (oldest dropped after 32).
+3. **value**: bit `has_value`. If set:
+   - fixed-size tables (`user_data_fixed_size`): `user_data_size_bits` bits;
+   - otherwise: if table flag bit 0 is set, a bit `is_compressed`; a byte length — ubitvar if
+     `using_varint_bitcounts`, else bits(17); that many bytes, Snappy-decompressed if `is_compressed`.
+
+`CDemoStringTables` (in `DEM_StringTables` and full packets) is a plain protobuf copy: table name + items
+(`str`, `data`), values not compressed.
+
+## Send tables (serializers)
+
+`CDemoSendTables.data` = a varint length + a `CSVCMsg_FlattenedSerializer` message, which holds:
+
+- `symbols`: every string; all `*_sym` fields below are indices into it;
+- `fields`: one global list of field descriptions;
+- `serializers`: name, version, and `fields_index` — the field list of one class or nested struct, as indices into
+  `fields`. Fields are shared: a class re-lists its parents' fields.
+
+A field description has `var_name_sym` (`m_vecX`), `var_type_sym` (C++ type), `send_node_sym` (the flattened struct
+it came from; `(root)` = none), `var_encoder_sym`, `bit_count`, `low_value`, `high_value`, `encode_flags`,
+`field_serializer_name_sym` (for nested structs) and `polymorphic_types`. Absent optional fields mean "not given"
+(not zero). Serializers only refer to serializers declared before them; with several versions of one name the one
+declared last wins (in practice the newest; both reference parsers do the same).
+
+**Type strings** split into base, template argument, pointer and array count:
+`CNetworkUtlVectorBase< CHandle< CBaseEntity > >` → base `CNetworkUtlVectorBase`, argument `CHandle< CBaseEntity >`;
+`float32[3]` → count 3; `CPlayer_WeaponServices*` → pointer. Counts can be constants (`MAX_ITEM_STOCKS` = 8,
+`MAX_ABILITY_DRAFT_ABILITIES` = 48); the exact count never matters on the wire.
+
+**Field kinds** decide how [field paths](#field-paths) walk into the field:
+
+| Kind | When | Path ending here | One more index | Deeper |
+|---|---|---|---|---|
+| pointer | has a field serializer and (type ends in `*`, or base is a component like `CBodyComponent`, `CPhysicsComponent`, `CRenderComponent`, `CLightComponent`, `CPlayerLocalData`, …, or it is polymorphic) | bool "present" (polymorphic: bool, then if set a ubitvar choosing the serializer: 0 = own, 1.. = alternatives) | field of the nested serializer | … |
+| variable table | has a field serializer otherwise (`CUtlVectorEmbeddedNetworkVar< T >`) | varint new length | element number | field of the element's serializer |
+| fixed array | count > 0 and base is not `char` | — | element (no length on the wire) | — |
+| variable array | base `CUtlVector` or `CNetworkUtlVectorBase` | varint new length | element (decoder of the template argument) | — |
+| simple | anything else (`char[N]` is a string) | the value | — | — |
+
+Field names can repeat inside one serializer under different send nodes (the pawn has `m_vecX` under both
+`m_vecVelocity` and `m_vecViewOffset`), so OFAST names fields `send_node.var_name`. Lookups by name also accept
+the bare `var_name` when it is unique — CS2 moved the position fields under `m_skeletonInstance.m_vecOrigin`
+without changing their member names.
+
+## Field decoders
+
+Chosen per field, in this order:
+
+1. by base type, depending on encoder and bit count:
+
+   | Base type | Decoder |
+   |---|---|
+   | `float32` | encoder `coord` → bit coord; `simtime` → varint × 1/64; `runetime` → bits(4) as float bits; bit count missing, ≤ 0 or ≥ 32 → 32-bit float; else quantized float |
+   | `CNetworkedQuantizedFloat` | 32-bit float if the bit count says so, else quantized float |
+   | `uint64`, `CStrongHandle` | encoder `fixed64` → 64 raw bits; else varint |
+   | `Vector`, `VectorWS` | encoder `normal` → normal vector; else 3 × the `float32` rule |
+   | `Vector2D` / `Vector4D`, `Quaternion` / `CTransform` | 2 / 4 / 6 × the `float32` rule |
+   | `QAngle` | encoder `qangle_precise` → 3 presence bits, then for each present component `angle(20) − 180`; bit count ≥ 32 → 3 floats; bit count 1–31 → 3 × angle(n); none → 3 presence bits, then a bit coord per present component |
+
+2. by name: `m_iClip1` → varint − 1; `m_flSimulationTime` and `m_flAnimTime` always use the `simtime` encoder;
+3. by base type, fixed: `bool` → 1 bit; `int8/16/32/64` and a few signed enums (`HSequence`, `CEntityIndex`, …) →
+   signed varint; `char`, `CUtlString`, `CUtlSymbolLarge`, `CGlobalSymbol` → string; `CUtlBinaryBlock` → varint
+   length + bytes; `GameTime_t` → 32-bit float;
+4. everything else (unsigned integers, handles, enums, colors, string tokens) → varint.
+
+**Quantized floats** store a value in `low..high` as an n-bit integer, with optional flag bits in front:
+round-down (bit set → exactly `low`), round-up (→ `high`), encode-zero (→ 0). The decoder must reproduce Valve's
+encoder setup exactly, because it decides which flag bits exist: flags are first validated (e.g. encode-zero becomes
+round-down when `low` is 0), the range is narrowed by one step for round-down/round-up, widened to a power of two for
+encode-integers (which may add bits), multipliers are computed, and finally flags whose special value the plain
+encoding already hits exactly are dropped. Value = `low + (high − low) × raw / (2ⁿ − 1)`. The redundancy check
+rounds to the nearest step (demoinfocs-golang found a real field where truncating keeps a flag the encoder dropped).
+
+## Field paths
+
+An entity update first lists the paths of the fields it changes, then their values. A path is up to 7 indices into
+the field tree (`[9, 3]` = field 3 of the struct in field 9). The list is delta-coded from `[-1]`: each step is one
+of 40 **operations**, Huffman-coded, and each operation produces exactly one path. `FieldPathEncodeFinish` ends the
+list.
+
+The Huffman tree is built from fixed weights (0 counts as 1): repeatedly join the two lightest trees; on equal
+weight the tree with the **higher value** comes out first, where leaves are worth their operation number and joined
+trees are numbered 40, 41, … in creation order; the first tree taken is the left child (bit 0). Codes are read bit by
+bit in stream order.
+
+`p` = path, `L` = index of its last level, `fp()` = field-path ubitvar, `ubv()` = ubitvar, `zz()` = signed varint,
+`b(n)` = bits(n). "Pop n" goes up n levels, resetting the left levels to 0.
+
+| # | Operation | Weight | Code | Effect |
+|---|---|---|---|---|
+| 0 | PlusOne | 36271 | `0` | `p[L] += 1` |
+| 1 | PlusTwo | 10334 | `1110` | `p[L] += 2` |
+| 2 | PlusThree | 1375 | `110010` | `p[L] += 3` |
+| 3 | PlusFour | 646 | `11011111` | `p[L] += 4` |
+| 4 | PlusN | 4128 | `11010` | `p[L] += fp() + 5` |
+| 5 | PushOneLeftDeltaZeroRightZero | 35 | `110110001101` | push 0 |
+| 6 | PushOneLeftDeltaZeroRightNonZero | 3 | `110110001100101` | push `fp()` |
+| 7 | PushOneLeftDeltaOneRightZero | 521 | `11011010` | `p[L] += 1`, push 0 |
+| 8 | PushOneLeftDeltaOneRightNonZero | 2942 | `11000` | `p[L] += 1`, push `fp()` |
+| 9 | PushOneLeftDeltaNRightZero | 560 | `11011100` | `p[L] += fp()`, push 0 |
+| 10 | PushOneLeftDeltaNRightNonZero | 471 | `11011001` | `p[L] += fp() + 2`, push `fp() + 1` |
+| 11 | PushOneLeftDeltaNRightNonZeroPack6Bits | 10530 | `1111` | `p[L] += b(3) + 2`, push `b(3) + 1` |
+| 12 | PushOneLeftDeltaNRightNonZeroPack8Bits | 251 | `110110110` | `p[L] += b(4) + 2`, push `b(4) + 1` |
+| 13 | PushTwoLeftDeltaZero | 0 | `1101100011001000` | push `fp()` twice |
+| 14 | PushTwoPack5LeftDeltaZero | 0 | `11011000110010011` | push `b(5)` twice |
+| 15 | PushThreeLeftDeltaZero | 0 | `11011000110010010` | push `fp()` three times |
+| 16 | PushThreePack5LeftDeltaZero | 0 | `11011000110011101` | push `b(5)` three times |
+| 17 | PushTwoLeftDeltaOne | 0 | `11011000110011100` | `p[L] += 1`, push `fp()` twice |
+| 18 | PushTwoPack5LeftDeltaOne | 0 | `11011000110011111` | `p[L] += 1`, push `b(5)` twice |
+| 19 | PushThreeLeftDeltaOne | 0 | `11011000110011110` | `p[L] += 1`, push `fp()` three times |
+| 20 | PushThreePack5LeftDeltaOne | 0 | `11011000110011001` | `p[L] += 1`, push `b(5)` three times |
+| 21 | PushTwoLeftDeltaN | 0 | `11011000110011000` | `p[L] += ubv() + 2`, push `fp()` twice |
+| 22 | PushTwoPack5LeftDeltaN | 0 | `11011000110011011` | `p[L] += ubv() + 2`, push `b(5)` twice |
+| 23 | PushThreeLeftDeltaN | 0 | `11011000110011010` | `p[L] += ubv() + 2`, push `fp()` three times |
+| 24 | PushThreePack5LeftDeltaN | 0 | `1101100011000101` | `p[L] += ubv() + 2`, push `b(5)` three times |
+| 25 | PushN | 0 | `1101100011000100` | `n = ubv()`, `p[L] += ubv()`, push `fp()` n times |
+| 26 | PushNAndNonTopological | 310 | `110111011` | for each level i ≤ L: if bit, `p[i] += zz() + 1`; then `n = ubv()`, push `fp()` n times |
+| 27 | PopOnePlusOne | 2 | `110110001100001` | pop 1, `p[L] += 1` |
+| 28 | PopOnePlusN | 0 | `1101100011000111` | pop 1, `p[L] += fp() + 1` |
+| 29 | PopAllButOnePlusOne | 1837 | `110011` | pop to the top, `p[0] += 1` |
+| 30 | PopAllButOnePlusN | 149 | `110110000` | pop to the top, `p[0] += fp() + 1` |
+| 31 | PopAllButOnePlusNPack3Bits | 300 | `110111010` | pop to the top, `p[0] += b(3) + 1` |
+| 32 | PopAllButOnePlusNPack6Bits | 634 | `11011110` | pop to the top, `p[0] += b(6) + 1` |
+| 33 | PopNPlusOne | 0 | `1101100011000110` | pop `fp()`, `p[L] += 1` |
+| 34 | PopNPlusN | 0 | `1101100011000001` | pop `fp()`, `p[L] += zz()` |
+| 35 | PopNAndNonTopographical | 1 | `1101100011000000` | pop `fp()`, then for each level i ≤ L: if bit, `p[i] += zz()` |
+| 36 | NonTopoComplex | 76 | `11011000111` | for each level i ≤ L: if bit, `p[i] += zz()` |
+| 37 | NonTopoPenultimatePlusOne | 271 | `110110111` | `p[L − 1] += 1` |
+| 38 | NonTopoComplexPack4Bits | 99 | `1101100010` | for each level i ≤ L: if bit, `p[i] += b(4) − 7` |
+| 39 | FieldPathEncodeFinish | 25474 | `10` | end of list (no path) |
+
+OFAST builds the tree itself and a unit test checks every code in this table.
+
+## Entities
+
+`CSVCMsg_PacketEntities.entity_data` is a bit stream with `updated_entries` entries:
+
+| Field | Encoding |
+|---|---|
+| index delta | ubitvar; index = previous + delta + 1 (previous starts at -1) |
+| command | bits(2): `00` update, `10` create, `11` delete, `01` leaves the update set (still exists; rare in SourceTV demos) |
+| *update*: visibility | only if `has_pvs_vis_bits_deprecated` ≠ 0: bits(2); bit 0 set = no field data follows |
+| *create*: class id | bits(N), N = bit length of `max_classes` (218 → 8) |
+| *create*: serial | bits(17) |
+| *create*: unused | varint |
+| *create / update*: changes | field paths until `FieldPathEncodeFinish`, then one value per path in path order |
+
+A created entity first applies its class's `instancebaseline` changes (own bit stream), then the packet's changes.
+Values are stored per path. A path that ends at a variable-length array stores its new length; when the length
+shrinks, elements past it are dropped (otherwise a later regrowth would show stale values, because elements equal to
+their default are not resent). Element indices must be below the array's length — fixed or current; Valve sends a
+new length before elements past the old end, so anything else means the stream is out of sync (the real demo above
+never trips this check). The stored value of a polymorphic pointer selects the serializer used for paths below it.
+
+**Handles** (`CHandle`, `CEntityHandle`) are `serial << 14 | index`: index = `handle & 0x3FFF`; `0xFFFFFF` = none.
+
+## Players and rounds
+
+- **Controller** (`CCSPlayerController`, entity index = player slot + 1): `m_iszPlayerName`, `m_steamID`,
+  `m_iTeamNum` (2 = T, 3 = CT), `m_hPlayerPawn` (handle of the pawn).
+- **Pawn** (`CCSPlayerPawn`): position = `cell × 512 − 16384 + offset` per axis from `CBodyComponent` →
+  `m_cellX/Y/Z` and `m_vecX/Y/Z` (world units: 1 unit = 1 inch; the world spans ±16384); `m_angEyeAngles` =
+  (pitch, yaw, roll) in degrees (pitch negative = looking up; yaw −180..180, 0 = +x); `m_lifeState` 0 = alive.
+- **Game rules** (`CCSGameRulesProxy` → pointer `m_pGameRules`): `m_totalRoundsPlayed`, `m_bFreezePeriod`,
+  `m_bWarmupPeriod`, `m_gamePhase` (5 = match ended).
+
+OFAST's round: starts when freeze time begins (`m_bFreezePeriod` turns on) outside warmup and before the match has
+ended; number = `m_totalRoundsPlayed + 1`; lasts until the tick before the next round starts, the match ends, or the
+demo ends — so it includes the seconds after the round is decided. Start ticks equal the `round_start` game event.
+A player sample for tick T is the state after the last packet of frame tick T (demoparser2 samples the same way).
+
+## Where the references disagree
+
+| Topic | demoparser2 | demoinfocs-golang | OFAST (checked how) |
+|---|---|---|---|
+| fixed-size string table values | reads `user_data_size` bits | same | `user_data_size_bits` — the other choice desyncs `decalprecache` in real demos |
+| string table index skip | previous + varint + 1 | previous + varint + 2 | + 2 (a skip of 0 would otherwise repeat "+1") |
+| `has_value` bit | only read when `has_key` | always | always |
+| full packets when reading linearly | entities skipped | first snapshot applied | first applied — the demo's only complete snapshot |
+| quantized float redundancy check | truncates | rounds to nearest | rounds (documented real-world desync) |
+| normal component | `len × (1/2048 − 1)` (precedence slip) | `len / 2047` | `/ 2047` |
+| `m_flSimulationTime` scale | 1/30 | 1/64 | 1/64 (CS2 tick) |
+| polymorphic pointer | always reads the type ubitvar | only if present | only if present |
+| entity "leaves the update set" (`01`) | deletes the entity | keeps it | keeps it (it was not deleted: `11` is delete) |
+| `m_iClip1` raw 0 | 0 | wraps to `u32::MAX` | −1 ("no clip"); the wire value is `ammo + 1` |
+| shrinking variable arrays | — | clears elements past the end | same |
+| string table problems | fatal | updates to unknown tables ignored; only a few tables decoded | fatal only for `instancebaseline`; otherwise a warning (`DemoParser::warnings()`) |
+
+## Safety limits
+
+A demo is untrusted input: a broken or hostile file must produce an error, never a crash or a multi-gigabyte
+allocation. Limits, each far above what a real CS2 match uses (measured on the demo above):
+
+| Limit | Value | Real match |
+|---|---|---|
+| Snappy output vs. input | ≤ 22× (the format's maximum ratio is 21.3×) | — |
+| fields per entity / in total | 65,536 / 4,194,304 | 3,215 / 55,967 |
+| fixed array length | 16,384 | 128 |
+| string tables / entries per table | 64 / 65,536 | 12 / 72 |
+| class ids | < 65,536 | 218 |
+| template nesting in type strings | 8 | ≤ 3 |
+
+## Not implemented yet
+
+Game events (kills, round events — M3), user commands, `userinfo` decoding, animation data frames, alternate
+baselines (`"12:3"` keys), seeking via full packets, the `coord_size_params` overrides in the serializer message
+(absent in the CS2 demo checked, so the bit sizes above apply).
+
+## Sources
+
+- demoparser2 (MIT, Rust): `src/parser/src/first_pass/*`, `second_pass/*` — https://github.com/LaihoE/demoparser
+- demoinfocs-golang (MIT, Go): `pkg/demoinfocs/sendtables/*`, `stringtables.go`, `s2_commands.go` —
+  https://github.com/markus-wa/demoinfocs-golang
+- Valve protobufs via SteamDatabase GameTracking-CS2 — https://github.com/SteamDatabase/GameTracking-CS2
+- Oracle used in tests: demoparser2 0.42.0 through `tools/oracle/demoparser2_oracle.py`.

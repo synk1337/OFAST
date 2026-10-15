@@ -26,7 +26,8 @@ Ordered so that **Demo → Unreal scene** works first. Every milestone ends in s
 - [ ] KV3 text parser (needed to diff against other tools' decompiled output)
 - [x] Resource container reader
 - [ ] `ofast` CLI (`vpk list/extract/verify`, `kv3 dump`)
-- [ ] Demo header + player positions for one round
+- [x] Demo header + player positions for one round (whole 216 MB match demo parses in ~3.5 s; round 1 positions and
+  eye angles identical to demoparser2 for all 50,740 player-ticks; all 20 round starts match)
 - [ ] One model → glTF → UE 5.8
 
 ## Hard problems we know about
