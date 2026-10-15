@@ -15,7 +15,9 @@ game-data = []
 [dependencies]
 blake3 = { version = "1", features = ["pure"] } # VPK v2 chunk hashes (pure Rust: no C/asm build step)
 crc32fast = "1"        # VPK entry checksums (IEEE CRC-32)
+lz4_flex = "0.11"      # KV3 LZ4 buffers and blob chunks (pure Rust)
 md-5 = "0.10"          # VPK v2 integrity sections
+ruzstd = "0.8"         # KV3 ZSTD buffers (pure Rust decoder; its encoder is used by tests)
 thiserror = "2"        # error types
 
 [lints]

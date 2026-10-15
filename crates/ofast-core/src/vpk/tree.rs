@@ -9,9 +9,6 @@ use crate::bytes::ByteReader;
 /// Placeholder Valve uses for an empty directory or a missing extension.
 const EMPTY_PLACEHOLDER: &str = " ";
 
-/// Size of the fixed part of an entry record (CRC, preload count, archive index, offset, length, terminator).
-const ENTRY_RECORD_SIZE: usize = 18;
-
 /// Parses the tree occupying `dir[tree_start..tree_end]` into a flat list of entries.
 ///
 /// The parse must end *exactly* at `tree_end`; anything else means the header's tree size and the tree disagree,
@@ -67,7 +64,6 @@ fn read_name<'a>(r: &mut ByteReader<'a>, what: &'static str) -> Result<&'a str, 
 
 /// Reads the 18-byte entry record and the preload bytes that follow it.
 fn read_entry(r: &mut ByteReader<'_>, path: String) -> Result<VpkEntry, VpkError> {
-    debug_assert_eq!(ENTRY_RECORD_SIZE, 4 + 2 + 2 + 4 + 4 + 2);
     let crc32 = r.u32("VPK entry CRC32")?;
     let preload_len = r.u16("VPK entry preload size")?;
     let archive_index = r.u16("VPK entry archive index")?;

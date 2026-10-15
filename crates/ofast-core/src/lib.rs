@@ -9,6 +9,8 @@
 //! | Module | What it reads | Format notes |
 //! |---|---|---|
 //! | [`vpk`] | Valve Pak archives (`pak01_dir.vpk` + `pak01_NNN.vpk`) | `docs/formats/vpk.md` |
+//! | [`resource`] | Compiled resource container (`*_c` files): header + typed blocks | `docs/formats/resource.md` |
+//! | [`kv3`] | KeyValues3, binary and text — the data format inside most resources | `docs/formats/kv3.md` |
 //! | [`game`] | Locating a CS2 install on disk | — |
 //! | [`bytes`] | Shared little-endian byte cursor used by every binary reader | — |
 //!
@@ -25,4 +27,6 @@
 
 pub mod bytes;
 pub mod game;
+pub mod kv3;
+pub mod resource;
 pub mod vpk;

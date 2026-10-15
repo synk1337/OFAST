@@ -21,8 +21,11 @@ Ordered so that **Demo → Unreal scene** works first. Every milestone ends in s
 - [x] Repository, license, docs skeleton, decision log
 - [x] CI workflow
 - [x] VPK reader (synthetic tests in CI, oracle tests on the local CS2 install — MD5 + BLAKE3 chunks, CRCs)
-- [ ] KV3 reader (text + binary)
-- [ ] Resource container reader
+- [x] Binary KV3 decoder v1–v5, none/LZ4/ZSTD — all 245,863 KV3 blocks in CS2 decode exactly
+- [x] KV3 text writer
+- [ ] KV3 text parser (needed to diff against other tools' decompiled output)
+- [x] Resource container reader
+- [ ] `ofast` CLI (`vpk list/extract/verify`, `kv3 dump`)
 - [ ] Demo header + player positions for one round
 - [ ] One model → glTF → UE 5.8
 

@@ -6,7 +6,7 @@ synthetic test fixtures are built straight from them.
 
 | Format | Files | Page | Status |
 |---|---|---|---|
-| VPK archive | `pak01_dir.vpk`, `pak01_000.vpk`… | [vpk.md](vpk.md) | in progress (M0) |
-| KeyValues3 | text `.vmat`, `.vpcf`…; binary inside compiled resources | [kv3.md](kv3.md) | in progress (M0) |
-| Resource container | every `*_c` file (`.vmat_c`, `.vmdl_c`, `.vtex_c`…) | [resource.md](resource.md) | in progress (M0) |
+| VPK archive | `pak01_dir.vpk`, `pak01_000.vpk`… | [vpk.md](vpk.md) | reader done, verified on CS2 |
+| KeyValues3 | text `.vmat`, `.vpcf`…; binary inside compiled resources | [kv3.md](kv3.md) | binary decoder done, verified on all CS2 files; text writer done |
+| Resource container | every `*_c` file (`.vmat_c`, `.vmdl_c`, `.vtex_c`…) | [resource.md](resource.md) | block splitter done |
 | Demo | `.dem` | demo.md | planned (M0/M3) |
