@@ -39,7 +39,9 @@ pub struct PlayerSample {
     pub steam_id: u64,
     /// Team number: 2 = Terrorists, 3 = Counter-Terrorists (1 = spectators).
     pub team: u32,
-    /// World position of the pawn's origin (feet), in Source units (1 unit = 1 inch).
+    /// World position of the pawn's origin (feet), in Source units (1 unit = 1 inch). The first-person camera is
+    /// higher by the pawn's `m_vecViewOffset` (63.97 standing, 45.97 crouched — measured in CS2, see
+    /// `docs/formats/demo.md`), which this sample does not carry yet.
     pub position: [f32; 3],
     /// Looking up/down in degrees (negative = up).
     pub pitch: f32,

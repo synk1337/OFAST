@@ -7,7 +7,8 @@
 //! 1. every frame of the whole demo parses (a misread bit anywhere breaks everything after it);
 //! 2. round 1 gives physically sane player positions and eye angles;
 //! 3. if demoparser2 is installed (see `tools/oracle/demoparser2_oracle.py`), its positions, angles and round start
-//!    ticks match ours.
+//!    ticks match ours;
+//! 4. for the one demo they were taken from, the camera positions and angles CS2 itself showed (`getpos`) match ours.
 //!
 //! Only runs with `cargo test --release --features game-data -- --nocapture` (release: a match demo is ~200 MB).
 
@@ -185,6 +186,134 @@ fn round_starts_match_demoparser2() {
         .collect();
     let ours: Vec<u32> = rounds.iter().map(|r| r.start_tick).collect();
     assert_eq!(ours, expected, "round start ticks (ours vs demoparser2)");
+}
+
+/// File name of the demo the [`CS2_READINGS`] were taken from (the developer's de_nuke match, build 10847).
+const CS2_CHECKED_DEMO: &str = "match730_003834889241758793957_1039649504_272.dem";
+
+/// One reading taken in CS2 itself: `demo_gototick`, `spec_player` in first person, then `getpos` (6 decimals) or
+/// `cl_showpos 1` (2 decimals). See "Checked in the game" in `docs/formats/demo.md`.
+struct GameReading {
+    tick: u32,
+    player: &'static str,
+    /// Camera (eye) position CS2 printed.
+    camera: [f32; 3],
+    /// Camera height above the feet: the pawn's networked `m_vecViewOffset.z` at that tick.
+    eye_height: f32,
+    pitch: f32,
+    yaw: f32,
+    /// How exactly CS2 printed the position / the angles: 0.001 for `getpos`, 0.006 for `cl_showpos` (rounded to 2
+    /// decimals).
+    position_tolerance: f32,
+    angle_tolerance: f32,
+}
+
+/// The digits are copied as CS2 printed them, more than an `f32` holds.
+#[allow(clippy::excessive_precision)]
+const CS2_READINGS: [GameReading; 6] = [
+    GameReading {
+        tick: 300,
+        player: "Synk",
+        camera: [-1832.0, -1160.0, -352.0],
+        eye_height: 63.96875,
+        pitch: 0.0,
+        yaw: 39.999847,
+        position_tolerance: 0.001,
+        angle_tolerance: 0.001,
+    },
+    GameReading {
+        tick: 3090,
+        player: "vg",
+        camera: [449.045685, -1334.654053, -352.0],
+        eye_height: 63.96875,
+        pitch: -0.316895,
+        yaw: 161.706390,
+        position_tolerance: 0.001,
+        angle_tolerance: 0.001,
+    },
+    GameReading {
+        tick: 4074,
+        player: "Wajam",
+        camera: [396.895844, -1471.968750, -352.0],
+        eye_height: 63.96875,
+        pitch: 3.352203,
+        yaw: 89.47,
+        position_tolerance: 0.001,
+        angle_tolerance: 0.006,
+    },
+    // Running at about 3 units per tick: matching here to 0.001 also proves that `demo_gototick N` and OFAST's
+    // tick N are the same moment.
+    GameReading {
+        tick: 4195,
+        player: "Wajam",
+        camera: [343.548157, -1313.562378, -352.0],
+        eye_height: 63.96875,
+        pitch: 2.408066,
+        yaw: -37.04,
+        position_tolerance: 0.001,
+        angle_tolerance: 0.006,
+    },
+    GameReading {
+        tick: 4195,
+        player: "waltey",
+        camera: [616.298645, -901.900574, -378.0],
+        eye_height: 37.96875,
+        pitch: -12.898636,
+        yaw: 55.44,
+        position_tolerance: 0.001,
+        angle_tolerance: 0.006,
+    },
+    GameReading {
+        tick: 4520,
+        player: "XANTARES",
+        camera: [96.06, 143.97, -370.0],
+        eye_height: 45.96875,
+        pitch: -1.10,
+        yaw: 4.21,
+        position_tolerance: 0.006,
+        angle_tolerance: 0.006,
+    },
+];
+
+#[test]
+fn round_one_matches_cs2() {
+    let Some((path, data)) = load() else { return };
+    if path.file_name().and_then(|n| n.to_str()) != Some(CS2_CHECKED_DEMO) {
+        println!("SKIPPED: the CS2 readings belong to {CS2_CHECKED_DEMO}");
+        return;
+    }
+    let track = track_round(&data, 1).expect("round 1");
+    for r in &CS2_READINGS {
+        let sample = track
+            .samples
+            .iter()
+            .find(|s| s.tick == r.tick)
+            .unwrap_or_else(|| panic!("no sample at tick {}", r.tick));
+        let p = sample
+            .players
+            .iter()
+            .find(|p| p.name == r.player)
+            .unwrap_or_else(|| panic!("tick {}: no player {}", r.tick, r.player));
+        assert!(p.alive, "tick {} {}: alive in CS2", r.tick, r.player);
+        let eye = [p.position[0], p.position[1], p.position[2] + r.eye_height];
+        for (axis, (ours, game)) in eye.iter().zip(r.camera).enumerate() {
+            assert!(
+                (ours - game).abs() <= r.position_tolerance,
+                "tick {} {}: camera axis {axis} is {ours} here, {game} in CS2",
+                r.tick,
+                r.player
+            );
+        }
+        for (name, ours, game) in [("pitch", p.pitch, r.pitch), ("yaw", p.yaw, r.yaw)] {
+            assert!(
+                angle_difference(ours, game) <= r.angle_tolerance,
+                "tick {} {}: {name} is {ours} here, {game} in CS2",
+                r.tick,
+                r.player
+            );
+        }
+    }
+    println!("{} CS2 readings match", CS2_READINGS.len());
 }
 
 fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {

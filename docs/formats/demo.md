@@ -40,6 +40,49 @@ Checked on 2026-10-15 against a 216 MB matchmaking demo (de_nuke, 20 rounds, bui
 | Steam id | `m_steamID`, `uint64` with encoder `fixed64` |
 | full entity snapshot | only the first `DEM_FullPacket` is needed; later ones repeat what deltas built |
 
+### Checked in the game
+
+demoparser2 can only tell us that two programs read the bits the same way. To check what the bits mean, the same
+demo was played in CS2 itself on 2026-10-15 (`-insecure`, offline, local demo only): `playdemo`, `demo_pause`,
+`demo_gototick <tick>`, `spec_player <name>` in first person, then `getpos` (camera position and angles, 6
+decimals) and `cl_showpos 1` (on-screen, 2 decimals). Six readings in round 1:
+
+| Tick | Player | Stance | CS2 camera x, y, z | OFAST x, y, z (feet) | Eye height | CS2 pitch, yaw | OFAST pitch, yaw |
+|---|---|---|---|---|---|---|---|
+| 300 | Synk | standing (freeze time) | -1832.000000, -1160.000000, -352.000000 | -1832, -1160, -415.96875 | 63.96875 | 0.000000, 39.999847 | 0, 39.999847 |
+| 3090 | vg | standing | 449.045685, -1334.654053, -352.000000 | 449.0457, -1334.654, -415.96875 | 63.96875 | -0.316895, 161.706390 | -0.31689453, 161.70639 |
+| 4074 | Wajam | standing | 396.895844, -1471.968750, -352.000000 | 396.89584, -1471.9688, -415.96875 | 63.96875 | 3.352203, 89.47¹ | 3.3522034, 89.47128 |
+| 4195 | Wajam | **running**, ~3 units per tick | 343.548157, -1313.562378, -352.000000 | 343.54816, -1313.5624, -415.96875 | 63.96875 | 2.408066, -37.04¹ | 2.4080658, -37.039032 |
+| 4195 | waltey | crouched, C4 in hand | 616.298645, -901.900574, -378.000000 | 616.29865, -901.9006, -415.96875 | 37.96875 | -12.898636, 55.44¹ | -12.898636, 55.440796 |
+| 4520 | XANTARES | crouched | 96.06, 143.97, -370.00¹ | 96.05551, 143.96875, -415.96875 | 45.96875 | -1.10, 4.21¹ | -1.1000061, 4.214966 |
+
+¹ From `cl_showpos` (2 decimals): the rest of the `getpos` line was hidden on screen, or buried under console spam.
+OFAST prints the shortest text that gives back the same 32-bit float, so `449.0457` and CS2's `449.045685` are the
+same number. "Eye height" = CS2's z minus OFAST's z.
+
+What this shows:
+
+- **Positions and angles agree** to every digit CS2 prints (x, y, pitch, yaw), for both teams, standing, crouched
+  and running.
+- **The camera is the feet origin plus the pawn's `m_vecViewOffset`**, exactly. That field is a
+  `CNetworkedQuantizedFloat`; z has 12 bits from 1/64 to 64 in steps of 1/64, and x and y were 0 in every sample.
+  Standing gives **63.96875, not 64** (CS:GO used 64.06), crouching 45.96875, and the crouched sample with the C4
+  37.96875. A first-person camera should therefore read the networked offset per tick instead of adding a
+  constant; OFAST's [`PlayerSample`](../../crates/ofast-core/src/demo/players.rs) does not carry it yet.
+- **No tick off-by-one.** `demo_gototick N` lands on the tick the demo UI shows as `Tick: N`, and the view there
+  is OFAST's sample for tick N. The running sample proves it: CS2's camera matched OFAST's tick 4195 to 6 decimals,
+  while OFAST's ticks 4194 and 4196 are about 3 units away. A paused seek shows that tick's state as is, without
+  blending in the neighbouring ticks.
+- **Console messages use server ticks.** CS2 logs `skipping to demo tick 300 (game tick 2703)`: game tick = demo
+  tick + `CDemoFileHeader.server_start_tick` (2403 here). `CGameRules - paused on tick 2704` is one more. OFAST,
+  the demo UI and `demo_gototick` all count demo ticks.
+- Practical notes for the next check: while spectating, `getpos` prints the spectated player's camera even though
+  `cl_showpos` names the local player `DemoRecorder`. CS2 has no `con_logfile`, so the values were read from
+  screenshots. On an AZERTY keyboard the console opens with `²`, and pasting commands is more reliable than typing
+  them.
+
+`tests/cs2_demo.rs` (`round_one_matches_cs2`) keeps these readings as fixed expectations for this demo.
+
 ## Frames
 
 All integers little-endian. The file starts with 16 bytes:
