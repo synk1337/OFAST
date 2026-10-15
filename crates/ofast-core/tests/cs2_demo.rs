@@ -5,10 +5,11 @@
 //!
 //! Checks, from cheapest to strongest:
 //! 1. every frame of the whole demo parses (a misread bit anywhere breaks everything after it);
-//! 2. round 1 gives physically sane player positions and eye angles;
+//! 2. round 1 gives physically sane player positions, view offsets and eye angles;
 //! 3. if demoparser2 is installed (see `tools/oracle/demoparser2_oracle.py`), its positions, angles and round start
-//!    ticks match ours;
-//! 4. for the one demo they were taken from, the camera positions and angles CS2 itself showed (`getpos`) match ours.
+//!    ticks match ours (not the view offset: demoparser2 cannot export it, see `compare_with_demoparser2`);
+//! 4. for the one demo they were taken from, the camera positions and angles CS2 itself showed (`getpos`) match our
+//!    eye positions (feet + view offset) and angles.
 //!
 //! Only runs with `cargo test --release --features game-data -- --nocapture` (release: a match demo is ~200 MB).
 
@@ -24,6 +25,8 @@ use ofast_core::game::Cs2Install;
 
 /// Largest believable movement of a living player between two ticks (CS2 caps speed far below this).
 const MAX_STEP_PER_TICK: f32 = 64.0;
+/// Range of the view offset's networked components (`m_vecViewOffset`: x and y −64..64, z 1/64..64).
+const MAX_VIEW_OFFSET: f32 = 64.0;
 /// Allowed difference to demoparser2, in world units and degrees (both read the same 32-bit floats).
 const ORACLE_TOLERANCE: f32 = 0.01;
 
@@ -117,6 +120,8 @@ fn round_one_is_sane() {
 
     let mut previous: HashMap<u64, [f32; 3]> = HashMap::new();
     let mut travelled: HashMap<u64, f32> = HashMap::new();
+    let (mut eye_lowest, mut eye_highest) = (f32::INFINITY, f32::NEG_INFINITY);
+    let mut sideways_view_offsets = 0usize;
     for sample in &track.samples {
         for p in &sample.players {
             assert!(
@@ -128,6 +133,21 @@ fn round_one_is_sane() {
                 p.name,
                 p.position
             );
+            // A misread path (say, the velocity's z, which shares the member name `m_vecZ`) would leave this range
+            // as soon as someone jumps, and be 0 for living players standing on the ground.
+            assert!(
+                p.view_offset
+                    .iter()
+                    .all(|c| c.is_finite() && c.abs() <= MAX_VIEW_OFFSET)
+                    && (!p.alive || p.view_offset[2] > 0.0),
+                "tick {} {}: view offset {:?}",
+                sample.tick,
+                p.name,
+                p.view_offset
+            );
+            if p.view_offset[..2] != [0.0, 0.0] {
+                sideways_view_offsets += 1;
+            }
             assert!(
                 (-90.0..=90.0).contains(&p.pitch),
                 "tick {} {}: pitch {}",
@@ -146,6 +166,8 @@ fn round_one_is_sane() {
                 previous.remove(&p.steam_id);
                 continue;
             }
+            eye_lowest = eye_lowest.min(p.view_offset[2]);
+            eye_highest = eye_highest.max(p.view_offset[2]);
             if let Some(before) = previous.insert(p.steam_id, p.position) {
                 let step = distance(before, p.position);
                 assert!(
@@ -161,6 +183,12 @@ fn round_one_is_sane() {
     let furthest = travelled.values().copied().fold(0.0, f32::max);
     println!("furthest a player walked: {furthest:.0} units");
     assert!(furthest > 500.0, "players move during a round");
+    // x and y of the view offset were 0 in every sample of the checked match; a demo where they are not is worth a
+    // look (eye_position() handles it either way).
+    println!(
+        "eye height of living players: {eye_lowest}..={eye_highest}; view offset x/y not 0 in {sideways_view_offsets} samples"
+    );
+    assert!(eye_highest > 60.0, "living players stand up at some point");
 
     compare_with_demoparser2(&path, &track);
 }
@@ -196,10 +224,10 @@ const CS2_CHECKED_DEMO: &str = "match730_003834889241758793957_1039649504_272.de
 struct GameReading {
     tick: u32,
     player: &'static str,
-    /// Camera (eye) position CS2 printed.
+    /// Camera (eye) position CS2 printed, compared with OFAST's `eye_position()` (feet + view offset).
     camera: [f32; 3],
-    /// Camera height above the feet: the pawn's networked `m_vecViewOffset.z` at that tick.
-    eye_height: f32,
+    /// What the reading shows, for the failure message (the eye height differs per stance).
+    stance: &'static str,
     pitch: f32,
     yaw: f32,
     /// How exactly CS2 printed the position / the angles: 0.001 for `getpos`, 0.006 for `cl_showpos` (rounded to 2
@@ -215,7 +243,7 @@ const CS2_READINGS: [GameReading; 6] = [
         tick: 300,
         player: "Synk",
         camera: [-1832.0, -1160.0, -352.0],
-        eye_height: 63.96875,
+        stance: "standing (freeze time)",
         pitch: 0.0,
         yaw: 39.999847,
         position_tolerance: 0.001,
@@ -225,7 +253,7 @@ const CS2_READINGS: [GameReading; 6] = [
         tick: 3090,
         player: "vg",
         camera: [449.045685, -1334.654053, -352.0],
-        eye_height: 63.96875,
+        stance: "standing",
         pitch: -0.316895,
         yaw: 161.706390,
         position_tolerance: 0.001,
@@ -235,7 +263,7 @@ const CS2_READINGS: [GameReading; 6] = [
         tick: 4074,
         player: "Wajam",
         camera: [396.895844, -1471.968750, -352.0],
-        eye_height: 63.96875,
+        stance: "standing",
         pitch: 3.352203,
         yaw: 89.47,
         position_tolerance: 0.001,
@@ -247,7 +275,7 @@ const CS2_READINGS: [GameReading; 6] = [
         tick: 4195,
         player: "Wajam",
         camera: [343.548157, -1313.562378, -352.0],
-        eye_height: 63.96875,
+        stance: "running",
         pitch: 2.408066,
         yaw: -37.04,
         position_tolerance: 0.001,
@@ -257,7 +285,7 @@ const CS2_READINGS: [GameReading; 6] = [
         tick: 4195,
         player: "waltey",
         camera: [616.298645, -901.900574, -378.0],
-        eye_height: 37.96875,
+        stance: "crouched, C4 in hand",
         pitch: -12.898636,
         yaw: 55.44,
         position_tolerance: 0.001,
@@ -267,7 +295,7 @@ const CS2_READINGS: [GameReading; 6] = [
         tick: 4520,
         player: "XANTARES",
         camera: [96.06, 143.97, -370.0],
-        eye_height: 45.96875,
+        stance: "crouched",
         pitch: -1.10,
         yaw: 4.21,
         position_tolerance: 0.006,
@@ -295,15 +323,22 @@ fn round_one_matches_cs2() {
             .find(|p| p.name == r.player)
             .unwrap_or_else(|| panic!("tick {}: no player {}", r.tick, r.player));
         assert!(p.alive, "tick {} {}: alive in CS2", r.tick, r.player);
-        let eye = [p.position[0], p.position[1], p.position[2] + r.eye_height];
-        for (axis, (ours, game)) in eye.iter().zip(r.camera).enumerate() {
+        // Everything comes from the demo: the feet position plus the networked view offset of that tick.
+        for (axis, (ours, game)) in p.eye_position().iter().zip(r.camera).enumerate() {
             assert!(
                 (ours - game).abs() <= r.position_tolerance,
-                "tick {} {}: camera axis {axis} is {ours} here, {game} in CS2",
+                "tick {} {} ({}): camera axis {axis} is {ours} here (feet {:?} + view offset {:?}), {game} in CS2",
                 r.tick,
-                r.player
+                r.player,
+                r.stance,
+                p.position,
+                p.view_offset
             );
         }
+        println!(
+            "tick {} {} ({}): eye height {} from the demo",
+            r.tick, r.player, r.stance, p.view_offset[2]
+        );
         for (name, ours, game) in [("pitch", p.pitch, r.pitch), ("yaw", p.yaw, r.yaw)] {
             assert!(
                 angle_difference(ours, game) <= r.angle_tolerance,
@@ -368,6 +403,12 @@ fn run_oracle(args: &[&str]) -> Option<String> {
     Some(String::from_utf8(output.stdout).expect("UTF-8 oracle output"))
 }
 
+/// Compares positions and angles with demoparser2, row by row.
+///
+/// The view offset is not compared: demoparser2 0.42.0 names fields `Class.member` without the send node, so
+/// `m_vecViewOffset.m_vecZ` and `m_vecVelocity.m_vecZ` both become `CCSPlayerPawn.m_vecZ`, a column that holds
+/// whichever of the two changed last (its `m_vecX` column shows the velocity). `round_one_matches_cs2` checks the
+/// view offset against CS2 itself instead.
 fn compare_with_demoparser2(path: &Path, track: &RoundTrack) {
     let Some(csv) = run_oracle(&[
         "positions",

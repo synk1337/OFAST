@@ -1,11 +1,13 @@
-//! Developer tool: print every player's position and eye angles for one round of a demo, as CSV.
+//! Developer tool: print every player's position, eye angles and view offset for one round of a demo, as CSV.
 //!
 //! ```bash
 //! cargo run --release --example demo_round -- path/to/match.dem 1 > round1.csv
 //! ```
 //!
-//! Columns: `tick,steamid,name,team,alive,x,y,z,pitch,yaw`. Without a path, the newest demo in CS2's
-//! `game/csgo/replays` folder is used; the round defaults to 1.
+//! Columns: `tick,steamid,name,team,alive,x,y,z,pitch,yaw,view_offset_x,view_offset_y,view_offset_z`. x, y, z are
+//! the feet; the first-person camera is at x + view_offset_x, y + view_offset_y, z + view_offset_z (the view offset
+//! columns come last so that scripts written for the older columns keep working). Without a path, the newest demo
+//! in CS2's `game/csgo/replays` folder is used; the round defaults to 1.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -50,12 +52,16 @@ fn main() {
 
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
-    writeln!(out, "tick,steamid,name,team,alive,x,y,z,pitch,yaw").unwrap();
+    writeln!(
+        out,
+        "tick,steamid,name,team,alive,x,y,z,pitch,yaw,view_offset_x,view_offset_y,view_offset_z"
+    )
+    .unwrap();
     for sample in &track.samples {
         for p in &sample.players {
             writeln!(
                 out,
-                "{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 sample.tick,
                 p.steam_id,
                 p.name.replace(',', " "),
@@ -65,7 +71,10 @@ fn main() {
                 p.position[1],
                 p.position[2],
                 p.pitch,
-                p.yaw
+                p.yaw,
+                p.view_offset[0],
+                p.view_offset[1],
+                p.view_offset[2]
             )
             .unwrap();
         }

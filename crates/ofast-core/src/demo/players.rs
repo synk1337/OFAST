@@ -5,11 +5,13 @@
 //! - a **controller** (`CCSPlayerController`, one per connected player, entity index = player slot + 1) with the
 //!   name (`m_iszPlayerName`), Steam id (`m_steamID`), team (`m_iTeamNum`) and a handle to the pawn
 //!   (`m_hPlayerPawn`);
-//! - a **pawn** (`CCSPlayerPawn`, the body in the world) with the position and the eye angles.
+//! - a **pawn** (`CCSPlayerPawn`, the body in the world) with the position, the view offset and the eye angles.
 //!
 //! The position is split into a coarse grid cell and an offset inside it, both on the pawn's `CBodyComponent`:
 //! `x = m_cellX × 512 − 16384 + m_vecX` (cells are 512 units wide and the world spans ±16384 units), same for y and
-//! z. Eye angles are `m_angEyeAngles` = (pitch, yaw, roll) in degrees.
+//! z. That is the feet. The first-person camera sits `m_vecViewOffset` above them (63.96875 units standing,
+//! 45.96875 crouched, smoothed over steps, so it changes from tick to tick), and CS2 aims it along `m_angEyeAngles`
+//! = (pitch, yaw, roll) in degrees. Both were checked against the camera CS2 itself shows when spectating a player.
 //!
 //! Rounds come from the game rules entity (`CCSGameRulesProxy` → `m_pGameRules`). A round **starts** when the
 //! freeze time begins (`m_bFreezePeriod` turns on) outside warmup and before the match has ended (`m_gamePhase` =
@@ -39,16 +41,36 @@ pub struct PlayerSample {
     pub steam_id: u64,
     /// Team number: 2 = Terrorists, 3 = Counter-Terrorists (1 = spectators).
     pub team: u32,
-    /// World position of the pawn's origin (feet), in Source units (1 unit = 1 inch). The first-person camera is
-    /// higher by the pawn's `m_vecViewOffset` (63.97 standing, 45.97 crouched — measured in CS2, see
-    /// `docs/formats/demo.md`), which this sample does not carry yet.
+    /// World position of the pawn's origin (feet), in Source units (1 unit = 1 inch).
     pub position: [f32; 3],
+    /// From the feet to the first-person camera: the pawn's networked `m_vecViewOffset`, in world units.
+    ///
+    /// z is the eye height. It is not a constant: 63.96875 standing (not 64), 45.96875 fully crouched, values in
+    /// between while crouching or standing up, other values in special poses (37.96875 was seen crouched with the C4
+    /// in hand), and when the feet go up or down a step it moves the other way for a few ticks so the camera glides.
+    /// It comes in steps of 1/64, at most 64. x and y are networked too but were 0 in every sample of the checked
+    /// match; they are kept because the engine adds the whole vector (so does demoinfocs-golang's `PositionEyes`),
+    /// so [`eye_position`](Self::eye_position) stays right even if a CS2 update starts using them.
+    pub view_offset: [f32; 3],
     /// Looking up/down in degrees (negative = up).
     pub pitch: f32,
     /// Looking left/right in degrees (-180..180, 0 = +x axis, counter-clockwise).
     pub yaw: f32,
     /// The pawn is alive (`m_lifeState` = 0).
     pub alive: bool,
+}
+
+impl PlayerSample {
+    /// Where the first-person camera is: [`position`](Self::position) + [`view_offset`](Self::view_offset).
+    ///
+    /// This is exactly the camera position CS2 prints with `getpos` while spectating the player in first person
+    /// (checked to 6 decimals, standing, crouched and running — "Checked in the game" in `docs/formats/demo.md`).
+    /// Point the camera along [`pitch`](Self::pitch) and [`yaw`](Self::yaw) to get the player's view.
+    pub fn eye_position(&self) -> [f32; 3] {
+        let [x, y, z] = self.position;
+        let [dx, dy, dz] = self.view_offset;
+        [x + dx, y + dy, z + dz]
+    }
 }
 
 /// Every player at one tick.
@@ -113,6 +135,7 @@ struct Paths {
     team: FieldPath,
     cell: [FieldPath; 3],
     offset: [FieldPath; 3],
+    view_offset: [FieldPath; 3],
     eye_angles: FieldPath,
     life_state: FieldPath,
     rounds_played: FieldPath,
@@ -132,11 +155,12 @@ impl Paths {
         let controller = "CCSPlayerController";
         let pawn = "CCSPlayerPawn";
         let rules = "CCSGameRulesProxy";
+        // The x, y and z members of a vector field on the pawn, e.g. `CBodyComponent.m_cellX` / `Y` / `Z`.
         let axes = |prefix: &str| -> Result<[FieldPath; 3], TrackError> {
             Ok([
-                path(pawn, &format!("CBodyComponent.{prefix}X"))?,
-                path(pawn, &format!("CBodyComponent.{prefix}Y"))?,
-                path(pawn, &format!("CBodyComponent.{prefix}Z"))?,
+                path(pawn, &format!("{prefix}X"))?,
+                path(pawn, &format!("{prefix}Y"))?,
+                path(pawn, &format!("{prefix}Z"))?,
             ])
         };
         Ok(Self {
@@ -147,8 +171,10 @@ impl Paths {
             name: path(controller, "m_iszPlayerName")?,
             steam_id: path(controller, "m_steamID")?,
             team: path(controller, "m_iTeamNum")?,
-            cell: axes("m_cell")?,
-            offset: axes("m_vec")?,
+            cell: axes("CBodyComponent.m_cell")?,
+            offset: axes("CBodyComponent.m_vec")?,
+            // The full name is needed: the pawn also has `m_vecVelocity.m_vecX` etc. (see `Serializers::path_of`).
+            view_offset: axes("m_vecViewOffset.m_vec")?,
             eye_angles: path(pawn, "m_angEyeAngles")?,
             life_state: path(pawn, "m_lifeState")?,
             rounds_played: path(rules, "m_pGameRules.m_totalRoundsPlayed")?,
@@ -260,7 +286,8 @@ pub fn list_rounds(data: &[u8]) -> Result<Vec<RoundInfo>, TrackError> {
     Ok(rounds)
 }
 
-/// Reads the demo up to the end of `round` and returns every player's position and eye angles for each tick of it.
+/// Reads the demo up to the end of `round` and returns every player's position, view offset and eye angles for each
+/// tick of it.
 pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
     let mut track: Option<RoundTrack> = None;
     walk_rounds(data, |parser, paths, tick, events, current| {
@@ -337,6 +364,11 @@ fn read_players(parser: &DemoParser<'_>, paths: &Paths) -> Vec<PlayerSample> {
         let Some(position) = position(pawn, paths) else {
             continue;
         };
+        // A field the server never sent still holds its C++ default, which is 0 for a vector.
+        let view_offset = paths
+            .view_offset
+            .each_ref()
+            .map(|p| pawn.get(p).and_then(FieldValue::as_f32).unwrap_or(0.0));
         let angles = pawn
             .get(&paths.eye_angles)
             .and_then(FieldValue::as_vector3)
@@ -357,6 +389,7 @@ fn read_players(parser: &DemoParser<'_>, paths: &Paths) -> Vec<PlayerSample> {
                 .and_then(FieldValue::as_u64)
                 .unwrap_or(0) as u32,
             position,
+            view_offset,
             pitch: angles[0],
             yaw: angles[1],
             alive: pawn
@@ -417,6 +450,17 @@ mod tests {
             bits: Some(32),
             ..f(name, "CNetworkedQuantizedFloat")
         };
+        // The view offset as CS2 sends it (`demo_inspect … fields CCSPlayerPawn`): x and y 10 bits in −64..64 with
+        // the encode-zero flag, z 12 bits up to 64 with the round-up flag and no low value — which the decoder turns
+        // into 12 plain bits, value = (raw + 1) / 64.
+        let view_offset = |name, bits, low, flags| F {
+            bits: Some(bits),
+            low,
+            high: Some(64.0),
+            flags: Some(flags),
+            send_node: Some("m_vecViewOffset"),
+            ..f(name, "CNetworkedQuantizedFloat")
+        };
         let msg = message(&[
             (
                 "CBodyComponentBaseAnimGraph",
@@ -442,6 +486,9 @@ mod tests {
                         ..f("m_angEyeAngles", "QAngle")
                     },
                     f("m_lifeState", "uint8"),
+                    view_offset("m_vecX", 10, Some(-64.0), 4),
+                    view_offset("m_vecY", 10, Some(-64.0), 4),
+                    view_offset("m_vecZ", 12, None, 2),
                 ],
             ),
             (
@@ -545,19 +592,22 @@ mod tests {
             .varint_signed(rounds);
     }
 
-    /// Pawn position (cell 32 on each axis, so world position = offset) and eye angles (20-bit precise angles).
+    /// Pawn position (cell 32 on each axis, so world position = offset), eye angles (20-bit precise angles) and the
+    /// view offset's z (12 bits, value = (raw + 1) / 64). The view offset's x and y are never sent, so they keep
+    /// their default 0 (CS2's are 0 too).
     fn pawn_fields(
         w: &mut BitWriter,
         with_pointer: bool,
         pos: [f32; 3],
         pitch_raw: u64,
         yaw_raw: u64,
+        eye_raw: u64,
     ) {
         let mut paths: Vec<&[i32]> = Vec::new();
         if with_pointer {
             paths.extend([&[0][..], &[0, 0], &[0, 1], &[0, 2]]);
         }
-        paths.extend([&[0, 3][..], &[0, 4], &[0, 5], &[1]]);
+        paths.extend([&[0, 3][..], &[0, 4], &[0, 5], &[1], &[5]]);
         write_paths(w, &paths);
         if with_pointer {
             // Present, then cells: 32 × 512 − 16384 = 0.
@@ -570,7 +620,8 @@ mod tests {
             .bool(true)
             .bool(false)
             .bits(pitch_raw, 20)
-            .bits(yaw_raw, 20);
+            .bits(yaw_raw, 20)
+            .bits(eye_raw, 12);
     }
 
     fn synthetic_demo() -> Vec<u8> {
@@ -618,7 +669,8 @@ mod tests {
         create_header(&mut w, i64::from(CONTROLLER), RULES, RULES_CLASS);
         rules_fields(&mut w, false, 0);
         create_header(&mut w, i64::from(RULES), PAWN, PAWN_CLASS);
-        pawn_fields(&mut w, true, [100.0, 200.0, -50.0], 1 << 19, 1 << 19);
+        // Standing: eye height (4093 + 1) / 64 = 63.96875.
+        pawn_fields(&mut w, true, [100.0, 200.0, -50.0], 1 << 19, 1 << 19, 4093);
         // The controller's team (3) only comes from its class baseline, which this same packet adds to the
         // `instancebaseline` table *after* the entity message: string tables must be applied first.
         let mut baseline = BitWriter::default();
@@ -673,8 +725,8 @@ mod tests {
                 count = 2;
             }
             update_header(&mut w, previous, PAWN);
-            // pitch: 3/8 turn − 180° = −45°; yaw: 5/8 turn − 180° = 45°.
-            pawn_fields(&mut w, false, [x, 200.0, -50.0], 3 << 17, 5 << 17);
+            // pitch: 3/8 turn − 180° = −45°; yaw: 5/8 turn − 180° = 45°; crouched: (2941 + 1) / 64 = 45.96875.
+            pawn_fields(&mut w, false, [x, 200.0, -50.0], 3 << 17, 5 << 17, 2941);
             demo.frame(
                 EDemoCommands::DemPacket,
                 Some(tick),
@@ -714,10 +766,17 @@ mod tests {
         assert_eq!(first.controller, CONTROLLER);
         assert!(first.alive);
         assert_eq!(first.position, [100.0, 200.0, -50.0]);
+        // x and y were never sent, so they keep their default 0. z is (raw + 1) / 64 in exact arithmetic; the
+        // quantized float formula (Valve's, also used by demoparser2) can land one float step (~4e-6) off.
+        let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5);
+        assert!(close(first.view_offset, [0.0, 0.0, 63.96875]));
+        assert!(close(first.eye_position(), [100.0, 200.0, 13.96875]));
         assert_eq!((first.pitch, first.yaw), (0.0, 0.0));
 
         let last = &track.samples[2].players[0];
         assert_eq!(last.position, [108.0, 200.0, -50.0]);
+        assert!(close(last.view_offset, [0.0, 0.0, 45.96875]));
+        assert!(close(last.eye_position(), [108.0, 200.0, -4.03125]));
         assert_eq!((last.pitch, last.yaw), (-45.0, 45.0));
 
         let rounds = list_rounds(&data).unwrap();

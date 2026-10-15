@@ -36,6 +36,7 @@ Checked on 2026-10-15 against a 216 MB matchmaking demo (de_nuke, 20 rounds, bui
 | server classes | 218 → class ids are 8 bits |
 | send tables | 263 serializers, 1,573 fields, 1,915 symbols |
 | player position | `m_skeletonInstance.m_vecOrigin.m_cellX/Y/Z` (`uint16`) + `m_vecX/Y/Z` (`CNetworkedQuantizedFloat`, 32 bits = plain float) on the pawn's `CBodyComponent` |
+| view offset (feet → camera) | `m_vecViewOffset.m_vecX/Y/Z` on the pawn, `CNetworkedQuantizedFloat`: x and y 10 bits in −64..64 with encode-zero; z 12 bits, no low value, high 64, round-up → 12 plain bits, value = (raw + 1) / 64 |
 | eye angles | `m_angEyeAngles`, `QAngle` with encoder `qangle_precise` |
 | Steam id | `m_steamID`, `uint64` with encoder `fixed64` |
 | full entity snapshot | only the first `DEM_FullPacket` is needed; later ones repeat what deltas built |
@@ -47,7 +48,7 @@ demo was played in CS2 itself on 2026-10-15 (`-insecure`, offline, local demo on
 `demo_gototick <tick>`, `spec_player <name>` in first person, then `getpos` (camera position and angles, 6
 decimals) and `cl_showpos 1` (on-screen, 2 decimals). Six readings in round 1:
 
-| Tick | Player | Stance | CS2 camera x, y, z | OFAST x, y, z (feet) | Eye height | CS2 pitch, yaw | OFAST pitch, yaw |
+| Tick | Player | Stance | CS2 camera x, y, z | OFAST x, y, z (feet) | Eye height² | CS2 pitch, yaw | OFAST pitch, yaw |
 |---|---|---|---|---|---|---|---|
 | 300 | Synk | standing (freeze time) | -1832.000000, -1160.000000, -352.000000 | -1832, -1160, -415.96875 | 63.96875 | 0.000000, 39.999847 | 0, 39.999847 |
 | 3090 | vg | standing | 449.045685, -1334.654053, -352.000000 | 449.0457, -1334.654, -415.96875 | 63.96875 | -0.316895, 161.706390 | -0.31689453, 161.70639 |
@@ -58,17 +59,30 @@ decimals) and `cl_showpos 1` (on-screen, 2 decimals). Six readings in round 1:
 
 ¹ From `cl_showpos` (2 decimals): the rest of the `getpos` line was hidden on screen, or buried under console spam.
 OFAST prints the shortest text that gives back the same 32-bit float, so `449.0457` and CS2's `449.045685` are the
-same number. "Eye height" = CS2's z minus OFAST's z.
+same number.
+² The pawn's `m_vecViewOffset.z` at that tick, as OFAST reads it from the demo: 4094/64, 2942/64 and 2430/64. (For
+the standing value OFAST's float math gives 63.968754, one float step above 63.96875 — the quantized-float formula
+rounds that way, demoparser2's too — and the step vanishes when added to the feet: the sum is CS2's -352.000000.)
 
 What this shows:
 
 - **Positions and angles agree** to every digit CS2 prints (x, y, pitch, yaw), for both teams, standing, crouched
   and running.
-- **The camera is the feet origin plus the pawn's `m_vecViewOffset`**, exactly. That field is a
-  `CNetworkedQuantizedFloat`; z has 12 bits from 1/64 to 64 in steps of 1/64, and x and y were 0 in every sample.
-  Standing gives **63.96875, not 64** (CS:GO used 64.06), crouching 45.96875, and the crouched sample with the C4
-  37.96875. A first-person camera should therefore read the networked offset per tick instead of adding a
-  constant; OFAST's [`PlayerSample`](../../crates/ofast-core/src/demo/players.rs) does not carry it yet.
+- **The camera is the feet origin plus the pawn's `m_vecViewOffset`**, exactly: CS2's camera z is OFAST's feet z
+  plus that tick's networked view offset, to every printed digit. OFAST's
+  [`PlayerSample`](../../crates/ofast-core/src/demo/players.rs) carries it as `view_offset`, and
+  `PlayerSample::eye_position()` is the camera position; `round_one_matches_cs2` compares it with the readings
+  directly. Standing gives **63.96875, not 64** (CS:GO used 64.06), crouching 45.96875, and the crouched sample with
+  the C4 37.96875.
+- **The eye height is not a constant**, so a first-person camera must read it per tick. Besides crouching and
+  standing up (values in between for a few ticks), it smooths the camera over steps: when the feet go up or down a
+  step in one tick, the offset changes the other way by about as much and then eases back towards the standing
+  height, so the camera glides while the feet jump. All 24 isolated steps of 1 to 8 units in round 1 behave like
+  this (e.g. feet −2: offset 62.20 → 64; feet +2: offset 63.97 → 62.02, then slowly back up). The offset cannot go
+  above 64. In round 1, living players range from 37.97 to 64; dead pawns keep values down to 14.
+- **x and y of the view offset are always 0** in this match: all 1,281,420 player × tick samples of the 20 rounds.
+  OFAST still carries them, because the engine adds the whole vector (as does demoinfocs-golang's `PositionEyes`),
+  so the camera stays right if an update ever uses them; they cost 8 bytes per sample.
 - **No tick off-by-one.** `demo_gototick N` lands on the tick the demo UI shows as `Tick: N`, and the view there
   is OFAST's sample for tick N. The running sample proves it: CS2's camera matched OFAST's tick 4195 to 6 decimals,
   while OFAST's ticks 4194 and 4196 are about 3 units away. A paused seek shows that tick's state as is, without
@@ -365,8 +379,13 @@ never trips this check). The stored value of a polymorphic pointer selects the s
 - **Controller** (`CCSPlayerController`, entity index = player slot + 1): `m_iszPlayerName`, `m_steamID`,
   `m_iTeamNum` (2 = T, 3 = CT), `m_hPlayerPawn` (handle of the pawn).
 - **Pawn** (`CCSPlayerPawn`): position = `cell × 512 − 16384 + offset` per axis from `CBodyComponent` →
-  `m_cellX/Y/Z` and `m_vecX/Y/Z` (world units: 1 unit = 1 inch; the world spans ±16384); `m_angEyeAngles` =
-  (pitch, yaw, roll) in degrees (pitch negative = looking up; yaw −180..180, 0 = +x); `m_lifeState` 0 = alive.
+  `m_cellX/Y/Z` and `m_vecX/Y/Z` (world units: 1 unit = 1 inch; the world spans ±16384) — this is the feet;
+  `m_vecViewOffset.m_vecX/Y/Z` = from the feet to the first-person camera (z = eye height, 63.97 standing, 45.97
+  crouched, smoothed over steps; x and y 0 in practice; a component never sent keeps its default 0);
+  `m_angEyeAngles` = (pitch, yaw, roll) in degrees (pitch negative = looking up; yaw −180..180, 0 = +x);
+  `m_lifeState` 0 = alive.
+- **Camera**: `PlayerSample::eye_position()` = position + view offset, aimed along pitch and yaw — what CS2 shows
+  when spectating that player in first person (see [Checked in the game](#checked-in-the-game)).
 - **Game rules** (`CCSGameRulesProxy` → pointer `m_pGameRules`): `m_totalRoundsPlayed`, `m_bFreezePeriod`,
   `m_bWarmupPeriod`, `m_gamePhase` (5 = match ended).
 
@@ -389,6 +408,7 @@ A player sample for tick T is the state after the last packet of frame tick T (d
 | polymorphic pointer | always reads the type ubitvar | only if present | only if present |
 | entity "leaves the update set" (`01`) | deletes the entity | keeps it | keeps it (it was not deleted: `11` is delete) |
 | `m_iClip1` raw 0 | 0 | wraps to `u32::MAX` | −1 ("no clip"); the wire value is `ammo + 1` |
+| same member under two send nodes (`m_vecViewOffset.m_vecZ`, `m_vecVelocity.m_vecZ`) | one prop `CCSPlayerPawn.m_vecZ` holding whichever changed last, so it cannot export the view offset (0.42.0) | renames clashing fields to `send_node.member` | always `send_node.member`; the view offset is checked against CS2 itself instead |
 | shrinking variable arrays | — | clears elements past the end | same |
 | string table problems | fatal | updates to unknown tables ignored; only a few tables decoded | fatal only for `instancebaseline`; otherwise a warning (`DemoParser::warnings()`) |
 
