@@ -1,0 +1,22 @@
+[package]
+name = "ofast-core"
+description = "OFAST core library: reads Counter-Strike 2 files (VPK, KeyValues3, resources) and demos."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+# Enables extra tests that read the developer's local CS2 install (never available in CI).
+# Run with: cargo test --features game-data
+game-data = []
+
+[dependencies]
+blake3 = { version = "1", features = ["pure"] } # VPK v2 chunk hashes (pure Rust: no C/asm build step)
+crc32fast = "1"        # VPK entry checksums (IEEE CRC-32)
+md-5 = "0.10"          # VPK v2 integrity sections
+thiserror = "2"        # error types
+
+[lints]
+workspace = true

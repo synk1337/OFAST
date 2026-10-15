@@ -1,0 +1,9 @@
+# Store text files with LF line endings in the repository so Windows and Linux CI see identical bytes.
+* text=auto eol=lf
+
+# Binary formats we may add as tooling assets (never Valve content — see .gitignore).
+*.png binary
+*.jpg binary
+*.exr binary
+*.uasset binary
+*.umap binary

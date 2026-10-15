@@ -1,0 +1,5 @@
+# Pin the toolchain channel so local builds and CI behave the same.
+# Windows MSVC is the primary target: CS2 and Unreal Engine both run there.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

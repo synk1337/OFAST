@@ -1,0 +1,54 @@
+# Continuous integration for OFAST.
+#
+# Runs on every push and pull request. Everything here must pass WITHOUT Valve game files: tests that need a real
+# CS2 install sit behind the `game-data` feature and only run locally (see docs/development.md).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel an older run of the same branch when a newer commit arrives.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Warnings fail the build in CI (missing docs included), but not on developer machines.
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  # Formatting is OS-independent, so check it once on the cheapest runner.
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  # Lint + test + docs on Windows (the platform CS2 and Unreal run on) and Linux (keeps the core portable).
+  check:
+    name: Clippy, tests, docs (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+      - name: Tests (synthetic fixtures only)
+        run: cargo test --workspace
+      - name: Docs
+        run: cargo doc --workspace --no-deps

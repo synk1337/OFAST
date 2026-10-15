@@ -1,0 +1,32 @@
+# --- Rust build output ---
+/target/
+**/*.rs.bk
+
+# --- Valve content: NEVER commit game files, demos or extracted assets ---
+# Local test data lives here (see docs/development.md). It is ignored on purpose.
+/test-data/
+*.dem
+*.dem.info
+*.vpk
+*_c
+*.gltf
+*.glb
+
+# --- Node / Tauri (apps/studio) ---
+node_modules/
+apps/studio/dist/
+apps/studio/src-tauri/target/
+
+# --- Unreal Engine plugin build output ---
+unreal/**/Binaries/
+unreal/**/Intermediate/
+unreal/**/Saved/
+unreal/**/DerivedDataCache/
+
+# --- Editors / OS ---
+.vs/
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store

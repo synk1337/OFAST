@@ -1,0 +1,26 @@
+# OFAST Cargo workspace.
+#
+# Every Rust part of OFAST lives in this one workspace so that `cargo test` / `cargo clippy` at the repository root
+# checks everything at once. New crates are added to `members` as milestones introduce them
+# (apps/studio and apps/capture arrive in later milestones — see docs/roadmap.md).
+
+[workspace]
+resolver = "3"
+members = ["crates/ofast-core"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/synk1337/OFAST"
+authors = ["Synk1337 and the OFAST contributors"]
+
+# Shared lint policy: we document a lot (see docs/development.md), so missing docs are warnings everywhere and
+# CI turns warnings into errors.
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
