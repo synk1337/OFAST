@@ -29,7 +29,11 @@
 
 pub mod bytes;
 pub mod demo;
+pub mod export;
 pub mod game;
 pub mod kv3;
+pub mod meshopt;
+pub mod model;
 pub mod resource;
+pub mod texture;
 pub mod vpk;

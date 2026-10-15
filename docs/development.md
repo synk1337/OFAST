@@ -63,6 +63,22 @@ and the largest differences.
 Developer tools for poking at demos: `cargo run --release --example demo_inspect -- <demo> [rounds | fields <Class>…]`
 and `cargo run --release --example demo_round -- <demo> <round> > round.csv`.
 
+Developer tools for game files: `cargo run --release --example resource_dump -- find <text>` lists archive paths,
+`cargo run --release --example resource_dump -- <path>_c` dumps a compiled file's blocks (KV3 as text), and
+`cargo run --release --example kv3_inspect -- <path>_c` prints raw KV3 headers.
+
+## Exporting and checking in Unreal
+
+```bash
+cargo run --release -p ofast-cli -- export-model weapons/models/ak47/weapon_rif_ak47.vmdl_c --out test-data/exports/ak47
+powershell -File tools/unreal/run_shot.ps1 -Gltf test-data/exports/ak47/weapon_rif_ak47.gltf -Shot test-data/shots/ak47.png -Name ak47
+```
+
+`run_shot.ps1` opens the sandbox project `unreal/Sandbox/OFASTSandbox.uproject` in UE 5.8, imports the glTF through
+Interchange, builds a small level (sky, sun, floor, camera) and writes a 1920×1080 screenshot, then closes the editor
+(`tools/unreal/import_and_shot.py`). The first run on a machine compiles shaders and is slow; later runs take under a
+minute. Imported content in `unreal/Sandbox/Content/` is ignored by git (it comes from Valve files).
+
 ## Rules we work by
 
 1. **Comment and document a lot.** Every crate has `missing_docs` on. Every module opens with a doc comment that

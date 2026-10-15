@@ -25,10 +25,20 @@ Ordered so that **Demo → Unreal scene** works first. Every milestone ends in s
 - [x] KV3 text writer
 - [ ] KV3 text parser (needed to diff against other tools' decompiled output)
 - [x] Resource container reader
-- [ ] `ofast` CLI (`vpk list/extract/verify`, `kv3 dump`)
+- [x] `ofast` CLI: `find`, `export-model`, `vpk verify` (`crates/ofast-cli`)
 - [x] Demo header + player positions for one round (whole 216 MB match demo parses in ~3.5 s; round 1 positions and
   eye angles identical to demoparser2 for all 50,740 player-ticks; all 20 round starts match)
-- [ ] One model → glTF → UE 5.8
+- [x] One model → glTF → UE 5.8: the AK-47 (geometry, 4 textures, materials) imports and renders by script
+  (`ofast export-model` + `tools/unreal/run_shot.ps1`). Own meshopt decoder; all 13,105 CS2 models decode.
+
+### Carried into M1/M2 (found during the M0 model spike)
+
+- **Axes:** models currently land in UE with Source +X along UE Y. Choose the glTF axis mapping so a Source position
+  `(x, y, z)` lands at UE `(x, −y, z) × 2.54`, and prove it with marker objects + an in-game screenshot.
+  (Scale is already proven: the AK-47 is 37.3 in in CS2 and 94.7 cm in UE.)
+- **Materials:** the AK-47's metal renders lighter and shinier than in game. Confirm the channel meaning of CS2's
+  roughness/metalness texture against a CS2 screenshot, then build real CS2 → UE master materials (M2).
+- Colour texture alpha is a mask in CS2 (exported opaque for now); find what it drives.
 
 ## Hard problems we know about
 

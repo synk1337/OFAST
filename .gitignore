@@ -22,6 +22,8 @@ unreal/**/Binaries/
 unreal/**/Intermediate/
 unreal/**/Saved/
 unreal/**/DerivedDataCache/
+# Sandbox content is imported from Valve files: never commit it.
+unreal/Sandbox/Content/
 
 # --- Editors / OS ---
 .vs/

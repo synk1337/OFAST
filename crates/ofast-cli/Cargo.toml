@@ -1,0 +1,19 @@
+[package]
+name = "ofast-cli"
+description = "OFAST command-line tool: inspect and export Counter-Strike 2 content."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "ofast"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }   # command-line parsing
+ofast-core = { path = "../ofast-core" }
+
+[lints]
+workspace = true
