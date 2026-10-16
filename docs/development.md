@@ -113,7 +113,9 @@ switching it on recompiles all shaders once (long).
 
 | Tool | What it answers |
 |---|---|
-| `cargo run --release --example map_raycast -- de_mirage ct0 "x,y;x,y"` | which model/material OFAST's geometry has under a screenshot pixel |
+| `cargo run --release --example map_raycast -- de_mirage ct0 "x,y;x,y"` (or a view `"x,y,z,pitch,yaw"` from CS2's setpos/setang) | which model/material OFAST's geometry has under a screenshot pixel |
+| `tools/unreal/shoot_views.py` (`-Views <json>`) | re-shoots views of the imported level without importing again (~1 min) |
+| `OFAST_DISABLE=sun,sky,local,bounce` for `import_map.py` | diagnostic renders without some light sources, to see what lights a spot |
 | `cargo run --release --example map_outliers -- de_mirage [classes]` | stretched geometry, dropped triangles, entity classes with models |
 | `cargo run --release --example model_layout -- formats de_mirage` | vertex attribute formats used by a map |
 | `cargo run --release --example map_entities -- de_mirage [classes…]` | entity classes with counts, or every key of the given classes |

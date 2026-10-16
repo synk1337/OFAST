@@ -433,7 +433,7 @@ enum LightShape {
     Point,
     /// A cone (`light_spot`, narrow `light_omni2`): inner and outer half-angles in degrees.
     Spot { inner: f32, outer: f32 },
-    /// An emitting rectangle facing forward (`light_rect`, `light_barn`): width and height in inches.
+    /// An emitting rectangle facing forward (`light_rect`, `light_barn`): full width and height in inches.
     Rect { width: f32, height: f32 },
 }
 
@@ -494,9 +494,11 @@ impl<'a> LocalLight<'a> {
                     .min(outer);
                 LightShape::Spot { inner, outer }
             }
+            // `size_params` holds half-sizes: Hammer's defaults (16, 16) with 80 cd and 120 nits only agree for a
+            // 32 × 32 rectangle (lights2.fgd).
             "light_rect" | "light_barn" => LightShape::Rect {
-                width: size(0).unwrap_or(16.0),
-                height: size(1).unwrap_or(16.0),
+                width: 2.0 * size(0).unwrap_or(16.0),
+                height: 2.0 * size(1).unwrap_or(16.0),
             },
             _ => return None,
         };

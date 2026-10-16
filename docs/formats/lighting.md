@@ -48,14 +48,20 @@ hemisphere average); black on de_mirage (albedo 0).
 - Checked on de_mirage's own lights: Hammer's stored `brightness_candelas` ≈ 79.6 × 2^EV, i.e. 1000 lm / 4π at EV 0.
 - `colormode` 1 means the colour comes from `colortemperature` (kelvin) instead of `color`.
 - Shapes: `light_omni2` lights a cone of half-angle `outer_angle` (180 = all around) from a sphere of radius
-  `size_params[0]`; `light_rect` / `light_barn` are rectangles of `size_params[0] × size_params[1]` units lighting
-  the hemisphere in front of them; `light_spot` uses `innerconeangle` / `outerconeangle`.
+  `size_params[0]`; `light_rect` / `light_barn` are rectangles lighting the hemisphere in front of them, and their
+  `size_params` are **half**-sizes (Hammer's defaults 16 × 16 with 80 cd and 120 nits only agree for 32 × 32 units;
+  likewise the omni2 default 9816 nits ↔ a sphere of radius 2); `light_spot` uses `innerconeangle` / `outerconeangle`.
 - `range` is where the light has faded out (linearly over the last `skirt` fraction); `bouncescale` scales its bounce
   in the bake (≈ Unreal's Indirect Lighting Intensity).
+- de_mirage's lights are `directlight` 1 ("Static": fully baked into the lightmaps, bounce included).
 
 In the glTF they are `KHR_lights_punctual` approximations (rect → wide spot) for any tool. Unreal's Interchange drops
 the glTF `range` (every light gets a 10 m attenuation radius), so `import_map.py` replaces them with Unreal Point,
 Spot and **Rect** lights built from the manifest's `lights` list: exact shape, size, range, colour and bounce, movable.
+
+**Unreal rect lights shine twice their candela value** along their axis: `RectLightSceneProxy.cpp` sets the luminance
+to intensity / (0.5 × width × height), while point and spot lights use the intensity as is. `import_map.py` halves
+rect lights' candela; without it de_mirage's palace came out 1.48× too bright, with it 0.81× (like the other views).
 
 ## Sky — `env_sky`
 
@@ -104,7 +110,12 @@ The measurement: in a sunlit de_mirage view, pure-sky pixels — whose radiance 
 — display at 0.80 × radiance (blue channel; red and green a little higher from the bloom), and 0.80 is the volume's
 `minexposure`. Source 2 Viewer's reading, `exposure × scene / white_point`, would give 0.53: the white point does
 not scale the picture (tool: `tools/compare/sky_exposure.py`). Auto exposure is clamped to [0.8, 1.0]; sunlit views
-sit at 0.8.
+sit at 0.8, the palace too, the dark B apartments go up to 1.0. Its controller is Source 1's histogram tonemap
+(cheat cvars `mat_tonemap_force_percent_target` "old default 45", `…_percent_bright_pixels`, `…_average_lum_min`).
+
+For comparisons, **`mat_tonemap_force_scale <exposure>`** (cheat) locks CS2's exposure: a palace capture at
+`mat_tonemap_force_scale 0.8` is identical to the automatic one (ratio 1.000), at 1.0 it is 1.23× brighter.
+`mat_fullbright 1` shows the albedo only.
 
 Unreal, with Manual exposure (physical camera off) and its tone curve off (`ToneCurveAmount` 0, `ExpandGamut` 0,
 `BlueCorrection` 0), shows `luminance × 2^bias` (`PostProcessEyeAdaptation.cpp`; checked the same way: Unreal's
@@ -118,25 +129,28 @@ de_mirage: EV100 0.322 at exposure 0.8 (sunlit, used for screenshots), 0 at 1.0.
 
 ## Calibration against CS2 (de_mirage, 2026-10-16)
 
-Same viewpoints in CS2 (`-insecure`, `setpos`/`setang`, HUD off) and Unreal, compared cell by cell on a 4 × 3 grid
-with `tools/compare/compare_shots.py` (ratio of mean linear luminance, Unreal / CS2):
+Same viewpoints in CS2 (`-insecure`, `setpos`/`setang`, HUD off, interiors at `mat_tonemap_force_scale 0.8` like
+Unreal) and Unreal, compared cell by cell on a 4 × 3 grid with `tools/compare/compare_shots.py` (ratio of mean
+linear luminance, Unreal / CS2). Views: `test-data/views/de_mirage.json` plus the two spawns.
 
 | View | Whole image | Cells | Notes |
 |---|---|---|---|
 | CT spawn (sunlit street, sky) | 0.95 | 0.86 – 1.00 | sunlit ground 0.97 – 1.00, sky 0.96; shade 0.86 – 0.90 |
 | T spawn (sunlit + large shaded walls) | 0.86 | 0.76 – 1.00 | sunlit ground 0.98 – 1.00; shaded walls 0.76 – 0.83 |
-| Palace interior (wall lights only) | 1.48 | 0.92 – 1.60 | right distribution, too bright |
+| Palace interior (`light_rect` wall lights) | 0.81 | 0.51 – 0.88 | wall facing the lights 0.84 |
+| B apartments (`light_omni2` ceiling lights) | 0.74 | 0.52 – 0.92 | lit walls 0.74 – 0.92, floor 0.55 – 0.63 |
 
 Before calibration (Unreal template lighting) the CT view was 0.91 overall but 0.38 in shade and 0.61 in the sky.
+Before the rect-light fix the palace was 1.48.
 
-Known differences, in order of size:
+How the interior was pinned down (palace): exposure ruled out (`mat_tonemap_force_scale`), sky and sun ruled out
+(`OFAST_DISABLE=sun,sky`: still 1.41), bounce ruled out (`OFAST_DISABLE=…,bounce`: direct light alone already 1.3× CS2's
+total). CS2's actual light on the wall, from lit ÷ albedo against the sunlit CT ground, is 1.7× the formula's direct
+light (its bounce), so the formula was right and Unreal over-delivered: the rect-light factor above.
 
-- **Interiors lit by local lights come out ~1.4× too bright.** The units follow Source 2 Viewer's renderer (checked
-  in its `SceneLight.cs`); not settled whether CS2's auto exposure goes lower than measured outdoors, Lumen's
-  bounces build up more than CS2's bake in small bright rooms, or the bake treats area lights differently.
-- **Shade is 10 – 25 % darker** than CS2: CS2's screen-blended bloom (strength 0.126) lifts dark tones, and its baked
-  bounce is stronger than Lumen's.
-- No colour LUT (CS2's is close to identity, slightly more saturated) and no fog yet.
+What remains is **shade and indirect light 10 – 25 % darker** than CS2, everywhere: CS2's baked bounce (lightmaps,
+per-light `bouncescale`) is stronger than Lumen's, and its screen-blended bloom (strength 0.126) lifts dark tones.
+No colour LUT (CS2's is close to identity, slightly more saturated) and no fog yet.
 
 ## Fog — `env_cubemap_fog`
 

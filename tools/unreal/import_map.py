@@ -7,6 +7,8 @@ Inputs (environment variables):
     OFAST_SHOT   folder for screenshots: <map>_ct0.png, <map>_t0.png, <map>_top.png
     OFAST_NAME   map name (asset folder /Game/OFAST/<name>, level /Game/OFAST/Maps/<name>)
     OFAST_VIEWS  optional JSON file of extra viewpoints given as CS2 setpos/setang (see extra_views)
+    OFAST_DISABLE  optional, diagnostics only: comma list of light sources to leave out (sun, sky, local, and
+                 bounce = the local lights' indirect light)
 
 Steps: level made once from the Basic template, its environment (sky, clouds, fog, sun, floor) removed →
 Interchange *scene* import of the glTF (one actor per placement) → layer-blend materials → CS2's environment from the
@@ -512,9 +514,13 @@ def setup_local_lights(manifest, imported):
         component.set_mobility(unreal.ComponentMobility.MOVABLE)
         r, g, b = light["color"]
         component.set_light_color(unreal.LinearColor(r, g, b, 1.0))
+        # Unreal's rect lights shine twice their candela value along their axis: RectLightSceneProxy.cpp sets the
+        # luminance to intensity / (0.5 × width × height), point and spot lights have no such factor. Halving keeps
+        # CS2's candela (measured on de_mirage's palace: rect lights came out ~2× too bright before).
+        candela = light["intensity_cd"] / (2.0 if light["shape"] == "rect" else 1.0)
         settings = {
             "intensity_units": unreal.LightUnits.CANDELAS,
-            "intensity": light["intensity_cd"],
+            "intensity": candela,
             "indirect_lighting_intensity": light.get("indirect_intensity", 1.0),
             "cast_shadows": True,
         }
@@ -534,6 +540,19 @@ def setup_local_lights(manifest, imported):
 
 
 def setup_environment(manifest, imported):
+    # Diagnostics: OFAST_DISABLE="sun,sky,local,bounce" leaves those light sources out, to see what lights a spot.
+    disabled = set(filter(None, os.environ.get("OFAST_DISABLE", "").split(",")))
+    if disabled:
+        log("WARNING: diagnostic run without %s" % ", ".join(sorted(disabled)))
+    if "sun" in disabled:
+        manifest = dict(manifest, sun={**manifest["sun"], "illuminance_lux": 0.0})
+    if "sky" in disabled:
+        manifest = dict(manifest, ambient={**manifest.get("ambient", {}), "sky_light_intensity": 0.0})
+    if "local" in disabled:
+        manifest = dict(manifest, lights=[])
+    if "bounce" in disabled:
+        # Local lights without their bounce (Lumen GI): direct light only.
+        manifest = dict(manifest, lights=[dict(l, indirect_intensity=0.0) for l in manifest.get("lights", [])])
     setup_sun(manifest)
     setup_sky(manifest)
     setup_local_lights(manifest, imported)

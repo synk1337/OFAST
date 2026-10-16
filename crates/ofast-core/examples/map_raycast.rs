@@ -2,10 +2,11 @@
 //!
 //! ```bash
 //! cargo run --release --example map_raycast -- de_mirage ct0 "60,680;960,800"
+//! cargo run --release --example map_raycast -- de_mirage "1330,-1420,-144,5,215" "300,500"
 //! ```
 //!
-//! Builds the camera of the first CT (`ct0`) or T (`t0`) spawn exactly like the Unreal script (eye 64 units above
-//! the origin, CS2's 90° fov on 16:9), casts a ray through each pixel of a 1920×1080 frame and prints the nearest
+//! Builds the camera of the first CT (`ct0`) or T (`t0`) spawn, or of CS2 `setpos x y z; setang pitch yaw` values,
+//! exactly like the Unreal script (eye 64 units above the origin, CS2's 90° fov on 16:9), casts a ray through each pixel of a 1920×1080 frame and prints the nearest
 //! triangle hit: which placement (scene object, aggregate fragment or entity), model and material. "nothing" means
 //! the exported geometry has a hole there.
 
@@ -77,15 +78,24 @@ fn main() {
     let content = Content::for_map(&install, name).expect("archives open");
     let map = Map::load(&content, name).expect("map loads");
 
-    let class = if view.starts_with("ct") {
-        "info_player_counterterrorist"
+    // The view is a spawn (`ct0` / `t0`) or CS2 console values "x,y,z,pitch,yaw" (setpos feet, setang).
+    let (o, angles) = if view.contains(',') {
+        let v: Vec<f32> = view
+            .split(',')
+            .map(|s| s.trim().parse().expect("number"))
+            .collect();
+        ([v[0], v[1], v[2]], [v[3], v[4], 0.0])
     } else {
-        "info_player_terrorist"
+        let class = if view.starts_with("ct") {
+            "info_player_counterterrorist"
+        } else {
+            "info_player_terrorist"
+        };
+        let spawn = map.entities_of(class).next().expect("spawn exists");
+        (spawn.origin(), spawn.angles())
     };
-    let spawn = map.entities_of(class).next().expect("spawn exists");
-    let o = spawn.origin();
     let eye = [o[0], o[1], o[2] + 64.0];
-    let cam = entity_transform(eye, spawn.angles(), [1.0; 3]);
+    let cam = entity_transform(eye, angles, [1.0; 3]);
     let forward = [cam[0][0], cam[1][0], cam[2][0]];
     let left = [cam[0][1], cam[1][1], cam[2][1]];
     let up = [cam[0][2], cam[1][2], cam[2][2]];
