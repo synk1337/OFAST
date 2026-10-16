@@ -6,7 +6,7 @@
 //! |---|---|
 //! | world-node scene objects (baked world, overlays/decals) | one mesh per model, one node per placement |
 //! | "block light" scene objects (invisible light blockers) | same, nodes named `lightblocker_…` |
-//! | aggregate fragments in world space | one mesh per aggregate, one node |
+//! | aggregate fragments in world space | one mesh per aggregate (per tint and kind), one node |
 //! | aggregate fragments with their own transform (instanced props) | one mesh per (model, draw call), one node each |
 //! | dynamic props, brush entities (`prop_dynamic`, `prop_physics_multiplayer`, `func_brush`, …) | one mesh per model, one node each |
 //! | `light_omni2`, `light_rect`, `light_barn`, `light_spot` | `KHR_lights_punctual` point / spot lights |
@@ -16,7 +16,8 @@
 //!
 //! Light blockers are invisible tool meshes (`toolsblocklight` materials) that seal gaps for CS2's light bake; without
 //! them sunlight leaks into interiors. They are exported under [`LIGHT_BLOCKER_NODE_PREFIX`] so tools can hide them
-//! while keeping their shadows.
+//! while keeping their shadows. World geometry (built in Hammer, not placed from a model) is named with
+//! [`WORLD_GEOMETRY_NODE_PREFIX`]: CS2 shades the back of its faces too, which Unreal reproduces with shadow proxies.
 //!
 //! Skipped: triggers and clips, baked lightmaps (Unreal relights the map with Lumen).
 //!
@@ -80,6 +81,12 @@ pub const SKYBOX_NODE_PREFIX: &str = "sky3d_";
 /// should hide them and keep their shadows.
 pub const LIGHT_BLOCKER_NODE_PREFIX: &str = "lightblocker_";
 
+/// Node-name prefix of world geometry: geometry built in Hammer (walls, floors and roofs) rather than placed from a
+/// model — world-node placements without `OBJECT_TYPE_MODEL` that are not overlays, and brush entities (`func_*`).
+/// Hammer geometry is often a lone wall with no outer face, so Unreal gives these meshes two-sided shadows
+/// (`import_map.py`'s shadow proxies); the casters CS2 needed from behind were all of this kind.
+pub const WORLD_GEOMETRY_NODE_PREFIX: &str = "world_";
+
 /// A map's 3D skybox world and the transform that places it in the main map (see [`crate::map::sky_to_world`]).
 pub struct Skybox<'a> {
     /// The skybox world, loaded from its own archive.
@@ -105,6 +112,7 @@ pub fn export_map(
         roots: Vec::new(),
         node_prefix: "",
         placing_blocker: false,
+        placing_world_geometry: false,
     };
 
     exporter.place_world(map, None)?;
@@ -234,22 +242,29 @@ struct MapExporter<'c> {
     node_prefix: &'static str,
     /// True while placing light blockers: their node names get [`LIGHT_BLOCKER_NODE_PREFIX`].
     placing_blocker: bool,
+    /// True while placing world geometry (not from a model): node names get [`WORLD_GEOMETRY_NODE_PREFIX`].
+    placing_world_geometry: bool,
 }
+
+/// An aggregate's world-space fragments merged per (tint key, world geometry?): their draw calls and the tint.
+type FragmentGroups<'m> = BTreeMap<([u8; 4], bool), (Vec<&'m DrawCall>, [f32; 4])>;
 
 fn tint_key(tint: [f32; 4]) -> [u8; 4] {
     tint.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
 impl MapExporter<'_> {
-    /// Node name for a placement of `path`: the model's file name, prefixed for 3D-skybox geometry and light
-    /// blockers (`sky3d_lightblocker_…` for a blocker in the skybox).
+    /// Node name for a placement of `path`: the model's file name, prefixed for 3D-skybox geometry, light blockers
+    /// and world geometry (`sky3d_lightblocker_…` for a blocker in the skybox, `world_…` for a wall).
     fn node_name(&self, path: &str) -> String {
-        let blocker = if self.placing_blocker {
+        let kind = if self.placing_blocker {
             LIGHT_BLOCKER_NODE_PREFIX
+        } else if self.placing_world_geometry {
+            WORLD_GEOMETRY_NODE_PREFIX
         } else {
             ""
         };
-        format!("{}{}{}", self.node_prefix, blocker, short_name(path))
+        format!("{}{}{}", self.node_prefix, kind, short_name(path))
     }
 
     /// Places a world's geometry (scene objects, aggregates, model entities), all moved by `root` when given.
@@ -271,8 +286,11 @@ impl MapExporter<'_> {
                 };
                 let transform = under_root(&object.transform);
                 self.placing_blocker = object.flags & object_flags::BLOCK_LIGHT != 0;
+                self.placing_world_geometry =
+                    object.flags & (object_flags::MODEL | object_flags::OVERLAY) == 0;
                 self.place_model(&object.model, transform.as_ref(), object.tint, offset)?;
                 self.placing_blocker = false;
+                self.placing_world_geometry = false;
             }
             for aggregate in &node.aggregates {
                 self.place_aggregate(&aggregate.model, aggregate, root)?;
@@ -291,7 +309,10 @@ impl MapExporter<'_> {
                     .map(|c| [c[0] / 255.0, c[1] / 255.0, c[2] / 255.0, 1.0])
                     .unwrap_or([1.0; 4]);
                 let transform = under_root(&transform);
+                // Brush entities (`func_brush`, doors, breakables) are Hammer geometry too; props are models.
+                self.placing_world_geometry = class.starts_with("func_");
                 self.place_model(model, transform.as_ref(), tint, 0.0)?;
+                self.placing_world_geometry = false;
             }
         }
         Ok(())
@@ -384,24 +405,28 @@ impl MapExporter<'_> {
             return Ok(());
         };
 
-        // World-space fragments, grouped by tint (a tint is a material variant).
-        let mut by_tint: BTreeMap<[u8; 4], (Vec<&DrawCall>, [f32; 4])> = BTreeMap::new();
+        // World-space fragments, grouped by tint (a tint is a material variant) and by world geometry vs model pieces
+        // (they cast shadows differently, see object_flags::MODEL; de_inferno's aggregates never mix the two).
+        let is_world = |f: &crate::map::Fragment| f.flags & object_flags::MODEL == 0;
+        let mut groups: FragmentGroups = BTreeMap::new();
         for fragment in aggregate.fragments.iter().filter(|f| f.transform.is_none()) {
             if let Some(draw) = mesh.draw_calls.get(fragment.draw_call) {
-                let entry = by_tint
-                    .entry(tint_key(fragment.tint))
+                let entry = groups
+                    .entry((tint_key(fragment.tint), is_world(fragment)))
                     .or_insert((Vec::new(), fragment.tint));
                 entry.0.push(draw);
             }
         }
-        for (draws, tint) in by_tint.values() {
+        for (&(_, world), (draws, tint)) in &groups {
             if let Some(gltf_mesh) = self
                 .writer
                 .mesh(&short_name(path), mesh, draws, *tint, 0.0)?
             {
+                self.placing_world_geometry = world;
                 let node = self
                     .writer
                     .node(&self.node_name(path), Some(gltf_mesh), root);
+                self.placing_world_geometry = false;
                 self.roots.push(node);
             }
         }
@@ -431,11 +456,13 @@ impl MapExporter<'_> {
             };
             if let Some(gltf_mesh) = gltf_mesh {
                 let placed = root.map(|r| compose(r, transform));
+                self.placing_world_geometry = is_world(fragment);
                 let node = self.writer.node(
                     &self.node_name(path),
                     Some(gltf_mesh),
                     Some(placed.as_ref().unwrap_or(transform)),
                 );
+                self.placing_world_geometry = false;
                 self.roots.push(node);
             }
         }
@@ -786,7 +813,8 @@ fn post_manifest(content: &Content, map: &Map, warnings: &mut Vec<String>) -> Js
                 if root.get("m_bHasTonemapParams").is_some_and(kv3_true) {
                     bias = float(params, "m_flExposureBias").unwrap_or(0.0);
                     tonemap = json!({
-                        // Kept for reference: it does not scale the picture (see above).
+                        // A linear curve's white point does not scale the picture (see above); a Hable curve's
+                        // normalises it (Unreal: import_map.py's Hable tone mapper).
                         "white_point": float(params, "m_flWhitePoint"),
                         "exposure_bias": bias,
                         "shoulder_strength": float(params, "m_flShoulderStrength"),

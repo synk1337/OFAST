@@ -14,7 +14,11 @@ Inputs (environment variables):
                    "sun_rotation": [pitch, yaw, roll] of the sun (Unreal degrees)
                    "meshes": properties of the imported map meshes' components (not the sky sphere, proxies or blockers)
                    "blockers": properties of CS2's light blockers (e.g. {"cast_shadow": false})
+                   "proxies": properties of the shadow proxies
+                   (in these three groups, "visible": false hides and "material": "/Game/..." replaces every slot)
                    "post": PostProcessSettings fields (set with their override flag)
+                   "console": console commands run before shooting, e.g. ["ShowFlag.Lighting 0"] (base colour only,
+                              to compare with CS2's mat_fullbright 1)
 
 It uses the cameras import_map.py saved with the level (labels OFAST_cam_<view>), so the viewpoints are exactly
 the import's. The level is not changed or saved; its lighting is whatever the last import saved (including a
@@ -57,23 +61,44 @@ def apply_try(actors):
         "sky_light": (unreal.SkyLight,),
         "local": (unreal.PointLight, unreal.SpotLight, unreal.RectLight),
     }
-    unknown = set(settings) - set(groups) - {"post", "sun_rotation", "meshes", "blockers"}
+    unknown = set(settings) - set(groups) - {"post", "sun_rotation", "meshes", "blockers", "proxies", "console"}
     if unknown:
         raise RuntimeError(
-            "unknown OFAST_TRY group: %s (sun, sun_rotation, sky_light, local, meshes, blockers, post)"
+            "unknown OFAST_TRY group: %s (sun, sun_rotation, sky_light, local, meshes, blockers, proxies, post, console)"
             % ", ".join(sorted(unknown))
         )
+    for command in settings.get("console", []):
+        unreal.SystemLibrary.execute_console_command(None, command)
+
+    def apply(component, props):
+        # "visible" and "material" are not editor properties: they go through set_visibility and set_material
+        # ("material": an asset path put on every slot, e.g. to see where shadow proxies are).
+        props = dict(props)
+        if "visible" in props:
+            component.set_visibility(bool(props.pop("visible")))
+        if "material" in props:
+            material = unreal.load_asset(props.pop("material"))
+            if material is None:
+                raise RuntimeError("OFAST_TRY material not found")
+            for index in range(component.get_num_materials()):
+                component.set_material(index, material)
+        if props:
+            component.set_editor_properties(props)
+
     # "meshes": properties set on the imported map meshes (not the sky sphere, proxies or other OFAST helpers);
-    # "blockers": on CS2's light blockers only (labels containing lightblocker_).
+    # "blockers": on CS2's light blockers only (labels containing lightblocker_); "proxies": on the shadow proxies.
     for actor in actors:
         label = actor.get_actor_label()
-        if not isinstance(actor, unreal.StaticMeshActor) or label.startswith(("OFAST_", "shadowproxy_")):
+        if not isinstance(actor, unreal.StaticMeshActor) or label.startswith("OFAST_"):
             continue
-        if "lightblocker_" in label:
-            if settings.get("blockers"):
-                actor.static_mesh_component.set_editor_properties(settings["blockers"])
-        elif settings.get("meshes"):
-            actor.static_mesh_component.set_editor_properties(settings["meshes"])
+        if label.startswith("shadowproxy_"):
+            group = "proxies"
+        elif "lightblocker_" in label:
+            group = "blockers"
+        else:
+            group = "meshes"
+        if settings.get(group):
+            apply(actor.static_mesh_component, settings[group])
     if "sun_rotation" in settings:
         # [pitch, yaw, roll] in Unreal degrees, e.g. to see whether a lit patch moves like sunlight through a window.
         pitch, yaw, roll = settings["sun_rotation"]

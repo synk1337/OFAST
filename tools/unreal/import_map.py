@@ -16,7 +16,7 @@ Steps: level made once from the Basic template, its environment (sky, clouds, fo
 Interchange *scene* import of the glTF (one actor per placement) → layer-blend and height-blend materials (two-layer
 CS2 materials, which glTF cannot describe) → light blockers hidden and
 shadow proxies added (no sunlight through single-sided walls) → CS2's environment from the manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
-exposure with no tone curve (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
+exposure, no tone curve or CS2's Hable curve (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
 default field of view → screenshots → quit. Everything the script adds is tagged "OFAST" and rebuilt on every run.
 """
 
@@ -56,6 +56,9 @@ TAG = unreal.Name("OFAST")
 SKYBOX_PREFIX = "sky3d_"
 # Actor labels of light blockers contain this (LIGHT_BLOCKER_NODE_PREFIX in ofast-core's map exporter).
 LIGHT_BLOCKER_PREFIX = "lightblocker_"
+# Actor labels of world geometry (built in Hammer, not placed from a model) start with this, unless they are in the
+# 3D skybox (WORLD_GEOMETRY_NODE_PREFIX in the exporter).
+WORLD_GEOMETRY_PREFIX = "world_"
 
 
 def log(message):
@@ -127,8 +130,9 @@ def import_scene():
 
 
 def hide_light_blockers(imported):
-    """CS2's "block light" meshes are invisible but seal gaps against light for its bake: hidden here, casting
-    shadows from both faces and blocking Lumen's light as black (absorbing) occluders."""
+    """CS2's "block light" meshes are invisible but seal gaps against light for its bake: made invisible here
+    (make_shadow_only), casting sun shadows from both faces and kept in Lumen's distance fields, where they should
+    block bounce light as black occluders (not re-checked since their material became masked)."""
     material = ensure_shadow_proxy_material()
     count = 0
     for actor in imported:
@@ -140,7 +144,7 @@ def hide_light_blockers(imported):
         component = actor.static_mesh_component
         make_shadow_only(component, material, len(component.get_materials()), affect_lumen=True)
         count += 1
-    log("light blockers: %d hidden shadow casters" % count)
+    log("light blockers: %d invisible sun-shadow casters" % count)
 
 
 # Versioned like BLEND_MASTER: the material of 3D-skybox geometry, drawn behind the world (see setup_skybox).
@@ -314,6 +318,7 @@ def skybox_instance(name, material, document, master, defaults, folder):
         overrides.set_editor_property("override_two_sided", True)
         overrides.set_editor_property("two_sided", True)
         instance.set_editor_property("base_property_overrides", overrides)
+    CHANGED_INSTANCES.add(instance.get_path_name())  # the vector and override writes are not tracked one by one
     return instance
 
 
@@ -601,9 +606,23 @@ def blend_instance(name, master, folder=BLEND_FOLDER):
         instance = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
             "MI_" + name, folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew()
         )
+        CHANGED_INSTANCES.add(instance.get_path_name())
     if instance.get_editor_property("parent") != master:
         unreal.MaterialEditingLibrary.set_material_instance_parent(instance, master)
+        CHANGED_INSTANCES.add(instance.get_path_name())
     return instance
+
+
+# Material instances whose parent or parameters this run changed. These Python calls do not mark the package dirty,
+# so save_directory(only_if_is_dirty) skipped them: de_inferno's tone mapper instance kept its old parent on disk
+# and the reopened level looked different from the import's screenshots. save_changed_instances() saves them.
+CHANGED_INSTANCES = set()
+
+
+def save_changed_instances():
+    for path in sorted(CHANGED_INSTANCES):
+        unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+    CHANGED_INSTANCES.clear()
 
 
 # Material-instance parameters are only written when they change: every write updates the instance. When the
@@ -614,21 +633,36 @@ def set_texture_parameter(instance, param, texture):
     mel = unreal.MaterialEditingLibrary
     if mel.get_material_instance_texture_parameter_value(instance, param) != texture:
         mel.set_material_instance_texture_parameter_value(instance, param, texture)
+        CHANGED_INSTANCES.add(instance.get_path_name())
 
 
 def set_scalar_parameter(instance, param, value):
     mel = unreal.MaterialEditingLibrary
     if abs(mel.get_material_instance_scalar_parameter_value(instance, param) - float(value)) > 1e-6:
         mel.set_material_instance_scalar_parameter_value(instance, param, float(value))
+        CHANGED_INSTANCES.add(instance.get_path_name())
 
 
-# Versioned like BLEND_MASTER: the material of the shadow proxies (opaque, two-sided, never seen).
-SHADOW_PROXY_MATERIAL = "/Game/OFAST/Materials/M_OFAST_ShadowProxy_v1"
+# Versioned like BLEND_MASTER: the material of the shadow proxies and light blockers (two-sided, drawn only in
+# shadow passes).
+SHADOW_PROXY_MATERIAL = "/Game/OFAST/Materials/M_OFAST_ShadowProxy_v2"
 # A mesh needs a shadow proxy only if it is at least this wide in two directions (see add_shadow_proxies).
 PROXY_MIN_SPAN_CM = 100.0
+# Lighting channels: the shadow-only meshes (proxies, light blockers) are in channel 1 alone and only the sun shares
+# it, so they block sunlight but no local light (see make_shadow_only). Everything else stays in channel 0.
+SHADOW_ONLY_CHANNELS = unreal.LightingChannels(channel0=False, channel1=True, channel2=False)
+SUN_CHANNELS = unreal.LightingChannels(channel0=True, channel1=True, channel2=False)
 
 
 def ensure_shadow_proxy_material():
+    """Two-sided, masked: opacity 0 everywhere except in shadow passes (Shadow Pass Switch), so a proxy is an
+    ordinary visible mesh that nobody sees but that casts shadows. Hiding the mesh instead (bVisible off +
+    bCastHiddenShadow, or out of the main pass) silently removes a Nanite mesh from the shadow passes too; see
+    make_shadow_only for why the components also render without Nanite.
+
+    Tried and dropped: keeping only the faces the light sees from behind (TwoSidedSign in the shadow branch), so a
+    proxy would not cast again what its visible mesh already casts. It let sunlight onto de_mirage's B-apartment
+    stairs, which both faces block, and changed nothing measurable elsewhere."""
     if unreal.EditorAssetLibrary.does_asset_exist(SHADOW_PROXY_MATERIAL):
         return unreal.EditorAssetLibrary.load_asset(SHADOW_PROXY_MATERIAL)
     folder, name = SHADOW_PROXY_MATERIAL.rsplit("/", 1)
@@ -636,7 +670,16 @@ def ensure_shadow_proxy_material():
         name, folder, unreal.Material, unreal.MaterialFactoryNew()
     )
     material.set_editor_property("two_sided", True)
-    unreal.MaterialEditingLibrary.recompile_material(material)
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+    mel = unreal.MaterialEditingLibrary
+    switch = mel.create_material_expression(material, unreal.MaterialExpressionShadowReplace, -300, 0)
+    for value, pin, y in ((0.0, "Default", -100), (1.0, "Shadow", 100)):
+        constant = mel.create_material_expression(material, unreal.MaterialExpressionConstant, -600, y)
+        constant.set_editor_property("r", value)
+        if not mel.connect_material_expressions(constant, "", switch, pin):
+            raise RuntimeError("shadow proxy material: could not connect " + pin)
+    mel.connect_material_property(switch, "", unreal.MaterialProperty.MP_OPACITY_MASK)
+    mel.recompile_material(material)
     unreal.EditorAssetLibrary.save_loaded_asset(material)
     return material
 
@@ -649,21 +692,31 @@ def add_shadow_proxies(imported):
 
     Making the real materials two-sided would fix the shadows but also turn the meshes' distance fields into thin
     shells (DistanceFieldAtlas.cpp reads the material's two-sidedness), which lets Lumen's sky light and bounce leak
-    — measured: the calibration views moved by up to +80 %. So every opaque, single-sided mesh instead gets a hidden
-    copy with a two-sided material that only casts shadows and that Lumen ignores.
+    — measured: the calibration views moved by up to +80 %. So every opaque, single-sided mesh instead gets an
+    invisible copy with a two-sided material that only casts shadows and that Lumen ignores (make_shadow_only).
+
+    Only world geometry gets one (labels with WORLD_GEOMETRY_PREFIX: built in Hammer, not placed from a model).
+    Hammer geometry is often a lone wall with no outer face; models are usually closed. The casters CS2 needs from
+    behind were all world geometry (de_inferno's T-spawn street: a plaster wall; de_mirage's B-apartment stairs: two
+    plaster walls), and de_inferno's spawns measured the same with every mesh proxied (0.72 / 1.21 of CS2) as with
+    world geometry only (0.73 / 1.21), with 57 – 86 % fewer proxies.
 
     Only meshes at least PROXY_MIN_SPAN_CM wide in two directions (walls, floors, roofs) get one: thin or small
-    pieces (pipes, wires, bottles, signs) cannot let a visible patch of sunlight through. On de_nuke this keeps
-    735 of 5368 candidates."""
+    pieces (pipes, wires, bottles, signs) cannot let a visible patch of sunlight through. On de_nuke this kept
+    735 of 5368 candidates (before the world-geometry rule)."""
     material = ensure_shadow_proxy_material()
     count = 0
     small = 0
+    others = 0
     for actor in imported:
         if not isinstance(actor, unreal.StaticMeshActor):
             continue
         label = actor.get_actor_label()
         if label.startswith(SKYBOX_PREFIX) or LIGHT_BLOCKER_PREFIX in label:
             continue  # far away / handled by hide_light_blockers
+        if not label.startswith(WORLD_GEOMETRY_PREFIX):
+            others += 1  # props, model pieces and decals: usually closed or not walls
+            continue
         component = actor.static_mesh_component
         mesh = component.static_mesh
         slots = component.get_materials()
@@ -683,7 +736,8 @@ def add_shadow_proxies(imported):
         proxy.set_actor_label("shadowproxy_" + label)
         make_shadow_only(proxy.static_mesh_component, material, len(slots), affect_lumen=False)
         count += 1
-    log("shadow proxies: %d (two-sided shadows for single-sided walls; %d smaller meshes skipped)" % (count, small))
+    log("shadow proxies: %d (two-sided shadows for single-sided walls; %d smaller meshes and %d props, model pieces "
+        "and decals skipped)" % (count, small, others))
 
 
 def mesh_spans(mesh, actor):
@@ -707,19 +761,33 @@ def is_two_sided(material):
 
 def make_shadow_only(component, material, slot_count, affect_lumen):
     """Turns a static mesh component into an invisible, two-sided shadow caster without collision. `affect_lumen`
-    keeps it in Lumen's scene as a black (absorbing) occluder."""
+    keeps it in Lumen's scene as a black (absorbing) occluder.
+
+    It stays an ordinary visible mesh whose material (ensure_shadow_proxy_material) only shows in shadow passes,
+    and it renders without Nanite (bDisallowNanite: the mesh's fallback LOD, an ordinary static mesh). Measured on
+    de_inferno's T-spawn street, which stayed sunlit (2.7x CS2) although its wall had a proxy:
+    - a hidden Nanite mesh (bVisible off + bCastHiddenShadow, or out of the main pass) casts no shadow at all;
+    - a visible Nanite mesh with this material casts none either, although the material has bUsedWithNanite and
+      Nanite's virtual-shadow-map raster takes the switch's shadow branch (NaniteRasterizer.usf defines
+      SHADOW_DEPTH_SHADER as DEPTH_ONLY); cause not found;
+    - the same mesh without Nanite shades the street as in CS2 (2.05x -> 1.20x for the whole view).
+
+    It casts shadows for the sun only (lighting channel 1, which only the sun shares: SUN_CHANNELS): a proxy lies
+    on its wall, and for the lights mounted on walls and ceilings it shaded the very surfaces they light (de_mirage's
+    palace went from 0.97 to 0.62 of CS2)."""
     for index in range(slot_count):
         component.set_material(index, material)
-    component.set_visibility(False)
     component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)
     component.set_editor_properties(
         {
+            "disallow_nanite": True,
+            "lighting_channels": SHADOW_ONLY_CHANNELS,
             "cast_shadow": True,
-            "cast_hidden_shadow": True,
+            "visible_in_reflection_captures": False,
+            "visible_in_real_time_sky_captures": False,
+            "visible_in_ray_tracing": False,
             "affect_distance_field_lighting": affect_lumen,
             "affect_dynamic_indirect_lighting": affect_lumen,
-            "affect_indirect_lighting_while_hidden": affect_lumen,
-            "visible_in_ray_tracing": False,
         }
     )
 
@@ -972,7 +1040,8 @@ def setup_sun(manifest):
     sun = manifest.get("sun")
     if not sun:
         # No light_environment: a plain sun so the map is not black (not calibrated against CS2).
-        spawn(unreal.DirectionalLight, rotation=unreal.Rotator(roll=0.0, pitch=-50.0, yaw=30.0))
+        actor = spawn(unreal.DirectionalLight, rotation=unreal.Rotator(roll=0.0, pitch=-50.0, yaw=30.0))
+        actor.light_component.set_editor_property("lighting_channels", SUN_CHANNELS)
         log("WARNING: no sun in the manifest; using a default sun")
         return
     pitch, yaw, roll = sun["rotation"]
@@ -989,6 +1058,7 @@ def setup_sun(manifest):
             "atmosphere_sun_light": False,
             "use_temperature": False,
             "cast_shadows": True,
+            "lighting_channels": SUN_CHANNELS,
         }
     )
     log("sun: pitch %.1f yaw %.1f, %.2f lux" % (pitch, yaw, sun["illuminance_lux"]))
@@ -996,7 +1066,8 @@ def setup_sun(manifest):
 
 def setup_post(manifest):
     """Unbound post-process volume reproducing CS2's picture: fixed exposure (EV100 from the exporter, measured
-    against CS2 screenshots), no tone curve (CS2's is a straight line), no bloom, no vignette."""
+    against CS2 screenshots), no tone curve when the map's is a straight line (a shoulder of 0) and CS2's Hable curve
+    otherwise (hable_tonemapper_instance), no bloom, no vignette."""
     post = manifest.get("post") or {}
     # Sunlit views sit at CS2's minimum exposure, the highest EV100.
     ev100 = post.get("ev100_max", 0.0)
@@ -1013,8 +1084,102 @@ def setup_post(manifest):
     # r_csgo_render_post_bloom, r_csgo_render_post_colorcorrection, fog_enable), so none of them is added here.
     override("bloom_intensity", 0.0)
     override("vignette_intensity", 0.0)
+    # Keys the .vpost lacks are written as null: drop them so the defaults below apply.
+    tonemap = {key: value for key, value in (post.get("tonemap") or {}).items() if value is not None}
+    curve = "tone curve off"
+    if tonemap.get("shoulder_strength", 0.0) > 0.0:
+        # A real Hable curve (de_inferno): CS2's picture is not linear, so Unreal's tone mapper is replaced.
+        tonemapper = hable_tonemapper_instance(tonemap)
+        settings.set_editor_property(
+            "weighted_blendables",
+            unreal.WeightedBlendables(array=[unreal.WeightedBlendable(weight=1.0, object=tonemapper)]),
+        )
+        curve = "Hable tone curve (shoulder %.2f, white point %.2f)" % (tonemap["shoulder_strength"],
+                                                                     tonemap.get("white_point", 1.0))
     volume.set_editor_property("settings", settings)
-    log("post: manual exposure EV100 %.3f, tone curve off" % ev100)
+    log("post: manual exposure EV100 %.3f, %s" % (ev100, curve))
+
+
+# Versioned like BLEND_MASTER: CS2's Hable (Uncharted 2) filmic curve as a replacement tone mapper.
+HABLE_TONEMAPPER = "/Game/OFAST/Materials/M_OFAST_TonemapHable_v2"
+# display = H(INPUT x) / H(WHITE W), x = exposure x scene (what Unreal shows linearly with the manual exposure
+# above), W the .vpost white point. Fitted on de_inferno (docs/formats/lighting.md): the white scale from one view at
+# exposures 0.4 and 0.8 (the curve's shape, whatever the input level), the input level on lit surfaces of both
+# spawns (median of 16 cells, 1.9 – 3.25). Sky pixels alone gave 2.0 and CS2's mat_fullbright shot 3.8: the level
+# only holds for OFAST's own light and sky values on that map, see lighting.md.
+HABLE_INPUT_SCALE = 2.5
+HABLE_WHITE_SCALE = 1.25
+HABLE_SCALES = {"InputScale": HABLE_INPUT_SCALE, "WhiteScale": HABLE_WHITE_SCALE}
+HABLE_PARAMETERS = {  # material parameter -> .vpost tone map key (manifest post.tonemap)
+    "ShoulderStrength": "shoulder_strength",
+    "LinearStrength": "linear_strength",
+    "LinearAngle": "linear_angle",
+    "ToeStrength": "toe_strength",
+    "ToeNumerator": "toe_numerator",
+    "ToeDenominator": "toe_denominator",
+    "WhitePoint": "white_point",
+}
+HABLE_HLSL = """
+float3 x = max(Color * Exposure, 0.0) * InputScale;
+float A = ShoulderStrength, B = LinearStrength, C = LinearAngle, D = ToeStrength, E = ToeNumerator, F = ToeDenominator;
+float3 h = (x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F) - E / F;
+float w = WhitePoint * WhiteScale;
+float hw = (w * (A * w + C * B) + D * E) / (w * (A * w + B) + D * F) - E / F;
+float3 c = saturate(h / hw);
+// sRGB encoding (lerp/step instead of a vector ?: so it compiles under HLSL 2021 too).
+return lerp(1.055 * pow(c, 1.0 / 2.4) - 0.055, c * 12.92, step(c, 0.0031308));
+"""
+
+
+def ensure_hable_tonemapper():
+    """Post-process material that replaces Unreal's tone mapper with CS2's Hable curve: scene colour x exposure
+    (Unreal's eye adaptation value, the manual exposure) -> H(InputScale x) / H(WhiteScale W) per channel -> sRGB.
+    Unreal applies nothing after a replacing tone mapper, so the sRGB encoding is done here."""
+    if unreal.EditorAssetLibrary.does_asset_exist(HABLE_TONEMAPPER):
+        return unreal.EditorAssetLibrary.load_asset(HABLE_TONEMAPPER)
+    folder, name = HABLE_TONEMAPPER.rsplit("/", 1)
+    material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, folder, unreal.Material, unreal.MaterialFactoryNew())
+    material.set_editor_property("material_domain", unreal.MaterialDomain.MD_POST_PROCESS)
+    material.set_editor_property("blendable_location", unreal.BlendableLocation.BL_REPLACING_TONEMAPPER)
+    mel = unreal.MaterialEditingLibrary
+    scene = mel.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -900, 0)
+    scene.set_editor_property("scene_texture_id", unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0)
+    exposure = mel.create_material_expression(material, unreal.MaterialExpressionEyeAdaptation, -900, 200)
+    curve = mel.create_material_expression(material, unreal.MaterialExpressionCustom, -400, 0)
+    curve.set_editor_property("description", "CS2 Hable tone curve")
+    curve.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    curve.set_editor_property("code", HABLE_HLSL)
+    inputs = []
+    for input_name in ["Color", "Exposure"] + list(HABLE_SCALES) + list(HABLE_PARAMETERS):
+        custom_input = unreal.CustomInput()
+        custom_input.set_editor_property("input_name", input_name)
+        inputs.append(custom_input)
+    curve.set_editor_property("inputs", inputs)
+    mel.connect_material_expressions(scene, "Color", curve, "Color")
+    mel.connect_material_expressions(exposure, "", curve, "Exposure")
+    for index, param in enumerate(list(HABLE_SCALES) + list(HABLE_PARAMETERS)):
+        scalar = mel.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -900,
+                                                350 + index * 110)
+        scalar.set_editor_property("parameter_name", param)
+        scalar.set_editor_property("default_value", HABLE_SCALES.get(param, 1.0))
+        mel.connect_material_expressions(scalar, "", curve, param)
+    mel.connect_material_property(curve, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    mel.recompile_material(material)
+    unreal.EditorAssetLibrary.save_asset(HABLE_TONEMAPPER)
+    log("created " + HABLE_TONEMAPPER)
+    return material
+
+
+def hable_tonemapper_instance(tonemap):
+    """An instance of the Hable tone mapper with a map's .vpost curve parameters."""
+    instance = blend_instance("TonemapHable_" + NAME, ensure_hable_tonemapper(), "/Game/OFAST/%s" % NAME)
+    for param, value in HABLE_SCALES.items():
+        set_scalar_parameter(instance, param, value)
+    for param, key in HABLE_PARAMETERS.items():
+        set_scalar_parameter(instance, param, tonemap.get(key, 1.0))
+    unreal.EditorAssetLibrary.save_loaded_asset(instance)
+    return instance
 
 
 LIGHT_CLASSES = {"point": unreal.PointLight, "spot": unreal.SpotLight, "rect": unreal.RectLight}
@@ -1140,6 +1305,7 @@ def setup_realistic(manifest, imported):
             # The real sun is 0.53° across: crisp but not razor-sharp shadows.
             "light_source_angle": 0.5357,
             "cast_shadows": True,
+            "lighting_channels": SUN_CHANNELS,
         }
     )
 
@@ -1250,6 +1416,7 @@ def main():
     setup_skybox(imported)
     setup_environment(manifest, imported)
     shots = views(manifest, imported)
+    save_changed_instances()
     save_level()
     # Enough frames per screenshot for Lumen and temporal AA to settle at the screenshot resolution.
     unreal.SystemLibrary.execute_console_command(None, "r.HighResScreenshotDelay 16")

@@ -227,9 +227,21 @@ fn main() {
             }
         }
     }
-    for ((x, y), b) in pixels.iter().zip(best) {
+    for (((x, y), dir), b) in pixels.iter().zip(&rays).zip(best) {
         match b {
-            Some((t, what)) => println!("pixel ({x}, {y}): {:.0} units — {what}", t),
+            // The hit point in Source units: as a view "x y z-64 pitch yaw" it starts a new ray there (e.g. toward
+            // the sun, to find what shades a spot).
+            Some((t, what)) => {
+                let p = [
+                    eye[0] + dir[0] * t,
+                    eye[1] + dir[1] * t,
+                    eye[2] + dir[2] * t,
+                ];
+                println!(
+                    "pixel ({x}, {y}): {t:.0} units at {:.1} {:.1} {:.1} — {what}",
+                    p[0], p[1], p[2]
+                )
+            }
             None => println!("pixel ({x}, {y}): nothing"),
         }
     }

@@ -30,13 +30,23 @@ already in world space.
 
 | Flag | Value | OFAST |
 |---|---|---|
-| `OBJECT_TYPE_BLOCK_LIGHT` | 16 | light blockers (`toolsblocklight` / `toolssolidblocklight` meshes that seal gaps for the bake): exported as `lightblocker_…` nodes, hidden in Unreal but casting shadows (de_mirage: 7, 217 triangles) |
+| `OBJECT_TYPE_MODEL` | 8 | placed from a model (static props, kit pieces) rather than built in Hammer. Without it (and not an overlay) the node is named `world_…`, like brush entities (`func_*`). Unreal gives only `world_…` meshes two-sided shadows: the walls CS2 shades with from behind were all world geometry ([lighting.md](lighting.md#shadows-from-the-back-of-walls)) |
+| `OBJECT_TYPE_BLOCK_LIGHT` | 16 | light blockers (`toolsblocklight` / `toolssolidblocklight` meshes that seal gaps for the bake): exported as `lightblocker_…` nodes, invisible in Unreal but casting sun shadows (de_mirage: 7, 217 triangles) |
+| `OBJECT_TYPE_NO_SHADOWS` | 32 | not used: set on nearly all world-node geometry (5474 of de_inferno's 5852 aggregate draws), whose shadows are in the lightmaps |
 | `OBJECT_TYPE_OVERLAY` | 8192 | exported (decals) |
 
+The engine's names for the other bits (`worldrenderer.dll`): `WORLDSPACE_TEXURE_BLEND`, `RENDER_WITH_DYNAMIC`,
+`DISABLED_IN_LOW_QUALITY`, `MODEL_HAS_LODS`, `RENDER_TO_CUBEMAPS` (1024), `PRECOMPUTED_VISMEMBERS`,
+`DISABLE_VIS_CULLING`, `STATIC_CUBE_MAP`, `NEEDS_DYNAMIC_SHADOWS`, `BAKED_GEOMETRY`, `HAS_EMISSIVE_GI`,
+`HAS_AGGREGATE_RTPROXY`. de_inferno's world geometry carries 1056 (`RENDER_TO_CUBEMAPS | NO_SHADOWS`), its model
+pieces mostly 132136 (the same plus `MODEL` and 131072).
+
 **`m_aggregateSceneObjects[]`** — per-draw-call placement of one model: `m_renderableModel`, `m_aggregateMeshes[]`
-(`m_nDrawCallIndex`, `m_bHasTransform`, `m_vTintColor` RGB 0–255, `m_nLODGroupMask`), `m_fragmentTransforms[]`
+(`m_nDrawCallIndex`, `m_bHasTransform`, `m_vTintColor` RGB 0–255, `m_nLODGroupMask`, `m_objectFlags` — the
+fragment's own `OBJECT_TYPE_*` bits; the aggregate also has `m_allFlags` / `m_anyFlags`), `m_fragmentTransforms[]`
 (flat 12 floats each, consumed in order by the fragments that have `m_bHasTransform`). Several fragments can draw
-the same draw call with different transforms (instanced static props).
+the same draw call with different transforms (instanced static props). On de_inferno no aggregate mixes model and
+world-geometry fragments; the exporter still splits them.
 
 de_mirage: 335 scene objects (301 overlays), 260 aggregates, 3,023 fragments (10 with their own transform).
 

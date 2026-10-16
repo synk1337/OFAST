@@ -51,15 +51,18 @@ Ordered so that **Demo → Unreal scene** works first. Every milestone ends in s
 - [x] **Lighting calibrated against CS2** ([lighting.md](formats/lighting.md)): one unit constant, sun and sky light
   from the map, local lights rebuilt as Unreal point/spot/rect lights (rect lights halved: Unreal shines them at 2×
   their candela), fixed exposure measured on CS2 screenshots, measured bounce gains for Lumen. Four views: CT 1.00,
-  T 0.97, palace 0.965, B apartments 0.75 of CS2's brightness. Sunlight no longer leaks through
-  single-sided walls (shadow proxies, light blockers). CS2's bloom, colour correction and fog measured to have
-  no visible effect.
+  T 0.97, palace 0.965, B apartments 0.75 of CS2's brightness (0.6 once the shadow proxies below really cast).
+  CS2's bloom, colour correction and fog measured to have no visible effect.
 - [x] **Two import styles**: `standard` (CS2's picture) and `realistic` (Unreal sky, real-world light units, auto
   exposure, filmic tone curve) — [lighting.md](formats/lighting.md#import-styles).
-- [x] **Same pipeline on de_dust2, de_inferno, de_nuke**: all import and render with no sunlight leaks; the bugs it
-  found were fixed for every map (layer detection, screenshot timing, shadow-proxy count, GPU crash on re-import).
+- [x] **Same pipeline on de_dust2, de_inferno, de_nuke**: all import and render; the bugs it found were fixed for
+  every map (layer detection, screenshot timing, shadow-proxy count, GPU crash on re-import).
 - [x] **CS2's environment shaders** (`csgo_environment`, `csgo_environment_blend`): colour adjustments baked,
   height blend in Unreal ([material.md](formats/material.md)).
+- [x] **Hable tone curve** (CS2's filmic curve, used by 10 of the official maps checked) as a replacement tone mapper
+  in Unreal; level fitted on de_inferno ([lighting.md](formats/lighting.md#exposure-and-tone-mapping--post_processing_volume--vpost)).
+- [x] **Shadows from the back of walls** that actually cast: shadow proxies without Nanite, sun only, for world
+  geometry only (CS2's `OBJECT_TYPE_MODEL` flag) — de_inferno's T-spawn street went from 2.7× to CS2's shade.
 
 ### Every official map, not one script per map
 
@@ -83,7 +86,13 @@ de_fachwerk) — probably stored in another archive.
 
 ### Still to do (M1 → M2)
 
-- Deep interiors lit by sunlight bouncing down corridors (B apartments, 0.75 of CS2): Lumen carries less of it.
+- Deep interiors lit by sunlight bouncing down corridors (B apartments, 0.6 of CS2 now that no sunlight leaks
+  through their walls): Lumen carries less of it. Same family: de_inferno's loggia and façades in the shade
+  (0.4 – 0.8), de_dust2's CT room (0.11).
+- The Hable curve's level holds for de_inferno with OFAST's light as is. Capture a second Hable map in CS2 (sky, lit
+  and `mat_fullbright` shots at a locked exposure) to separate level, light (Unreal 1.46× CS2's on de_inferno) and
+  sky (which `env_sky` CS2 draws when the skybox's and the world's differ).
+- de_inferno T spawn: a pillar and an arch floor get sunlight in Unreal that CS2 shades (not found yet).
 - Materials with more than two layers, detail textures, vertex colour tint (`COLOR` attribute), glass.
 - Rebuild `csgo_effects` dust / light-shaft cards as Unreal effects.
 - Colour texture alpha mask on weapons: find what it drives.

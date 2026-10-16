@@ -55,6 +55,10 @@ pub const IDENTITY: Transform = [
 
 /// `m_nObjectTypeFlags` bits that matter to OFAST.
 pub mod object_flags {
+    /// Geometry placed from a model (static props, kits), as opposed to world geometry built in Hammer. It matters
+    /// for shadows: the walls CS2 shades with from behind were all world geometry, so OFAST gives only that two-sided
+    /// shadows (see docs/formats/lighting.md, "Shadows from the back of walls").
+    pub const MODEL: u32 = 8;
     /// Light blockers ("block light" tool meshes): invisible, they only stop light (in the bake, and in Unreal as
     /// hidden shadow casters).
     pub const BLOCK_LIGHT: u32 = 16;
@@ -86,6 +90,8 @@ pub struct Fragment {
     pub transform: Option<Transform>,
     /// Tint colour (RGB 0–1, alpha 1).
     pub tint: [f32; 4],
+    /// `OBJECT_TYPE_*` flags of this fragment (`m_objectFlags`, see [`object_flags`]).
+    pub flags: u32,
 }
 
 /// A model whose draw calls are placed individually.
@@ -258,7 +264,7 @@ fn object_type_flags(value: Option<&Value>) -> u32 {
         Some(Value::String(name)) => name
             .split('|')
             .map(|part| match part.trim() {
-                "OBJECT_TYPE_MODEL" => 8,
+                "OBJECT_TYPE_MODEL" => object_flags::MODEL,
                 "OBJECT_TYPE_BLOCK_LIGHT" => object_flags::BLOCK_LIGHT,
                 "OBJECT_TYPE_NO_SHADOWS" => 32,
                 "OBJECT_TYPE_RENDER_TO_CUBEMAPS" => 1024,
@@ -346,6 +352,7 @@ fn parse_world_node(root: &Value) -> WorldNode {
                     .max(0) as usize,
                 transform: fragment_transform,
                 tint,
+                flags: object_type_flags(mesh.get("m_objectFlags")),
             });
         }
         node.aggregates.push(Aggregate {
@@ -473,5 +480,47 @@ mod tests {
             object_flags::OVERLAY
         );
         assert_eq!(object_type_flags(Some(&Value::Int(1040))), 1040);
+    }
+
+    #[test]
+    fn aggregate_fragments_keep_their_own_flags() {
+        // Two fragments of one aggregate: world geometry (de_inferno's plaster, 1056) and a model piece (its roof kit,
+        // 132136 = MODEL | …).
+        let mesh = |draw: i64, flags: i64| {
+            Value::Object(
+                [
+                    ("m_nDrawCallIndex", Value::Int(draw)),
+                    ("m_bHasTransform", Value::Bool(false)),
+                    ("m_objectFlags", Value::Int(flags)),
+                ]
+                .into_iter()
+                .collect(),
+            )
+        };
+        let aggregate = Value::Object(
+            [
+                ("m_renderableModel", Value::String("maps/x/agg.vmdl".into())),
+                (
+                    "m_aggregateMeshes",
+                    Value::Array(vec![mesh(0, 1056), mesh(1, 132_136)]),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let root = Value::Object(
+            [("m_aggregateSceneObjects", Value::Array(vec![aggregate]))]
+                .into_iter()
+                .collect(),
+        );
+        let node = parse_world_node(&root);
+        let flags: Vec<u32> = node.aggregates[0]
+            .fragments
+            .iter()
+            .map(|f| f.flags)
+            .collect();
+        assert_eq!(flags, [1056, 132_136]);
+        assert_eq!(flags[0] & object_flags::MODEL, 0);
+        assert_ne!(flags[1] & object_flags::MODEL, 0);
     }
 }

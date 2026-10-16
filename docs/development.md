@@ -100,8 +100,8 @@ powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/import_map.py -Glt
 
 `export-map` also loads the map's 3D skybox (its own archive under `game/csgo/maps/prefabs/`) and writes the sky as
 `<map>_sky.hdr`. `import_map.py` imports the glTF as a scene (one actor per placement), swaps two-layer materials for
-the layer-blend and height-blend materials ([material.md](formats/material.md)), hides CS2's light blockers and adds hidden two-sided shadow copies of single-sided meshes
-(so sunlight cannot leak through walls), replaces the template's sky, fog and lights with CS2's (sun, sky sphere + Sky Light from
+the layer-blend and height-blend materials ([material.md](formats/material.md)), hides CS2's light blockers and adds invisible shadow copies of single-sided world geometry
+(so sunlight cannot leak through walls; see [lighting.md](formats/lighting.md#shadows-from-the-back-of-walls)), replaces the template's sky, fog and lights with CS2's (sun, sky sphere + Sky Light from
 the HDR, local lights from the manifest, fixed exposure — see [lighting.md](formats/lighting.md)), saves everything
 under `/Game/OFAST/<map>` and writes screenshots from the first CT spawn, the first T spawn, the optional `-Views`
 spots (CS2 `setpos`/`setang` values in a JSON list) and above the map. It never saves an engine level.
@@ -135,8 +135,8 @@ switching it on recompiles all shaders once (long).
 
 | Tool | What it answers |
 |---|---|
-| `cargo run --release --example map_raycast -- de_mirage ct0 "x,y;x,y"` (or a view `"x,y,z,pitch,yaw"` from CS2's setpos/setang) | which model/material OFAST's geometry has under a screenshot pixel |
-| `tools/unreal/shoot_views.py` (`-Name <map>` or `<map>_realistic`, `-Only ct0,palace`, `-Try what-if.json`) | re-shoots the import's saved cameras without importing again (~1 min), optionally with what-if settings (not saved; pass them as a .json file — PowerShell strips the quotes of inline JSON): light properties, `sun_rotation`, `meshes` (component properties), `blockers` (light blockers only), `post` — see the script's docstring |
+| `cargo run --release --example map_raycast -- de_mirage ct0 "x,y;x,y"` (or a view `"x,y,z,pitch,yaw"` from CS2's setpos/setang) | which model/material OFAST's geometry has under a screenshot pixel, and where (Source units). A view placed at that point, with z − 64 and the angles toward the sun, shows what shades it |
+| `tools/unreal/shoot_views.py` (`-Name <map>` or `<map>_realistic`, `-Only ct0,palace`, `-Try what-if.json`) | re-shoots the import's saved cameras without importing again (~1 min), optionally with what-if settings (not saved; pass them as a .json file — PowerShell strips the quotes of inline JSON): light properties, `sun_rotation`, `meshes` (component properties), `blockers` (light blockers only), `proxies` (shadow proxies only; in these three groups `"visible"` and `"material"` work too), `post`, `console` (commands such as `ShowFlag.Lighting 0` for a base-colour render to compare with CS2's `mat_fullbright 1`) — see the script's docstring. A changed `cast_shadow` alone did not reach the renderer in one test; change `visible` with it |
 | `run_ue.ps1 … import_map.py … -Disable sun,sky,local,bounce` | diagnostic renders without some light sources, to see what lights a spot (the level keeps that lighting until the next normal import) |
 | `cargo run --release --example map_outliers -- de_mirage [classes]` | stretched geometry, dropped triangles, entity classes with models |
 | `cargo run --release --example model_layout -- formats de_mirage` | vertex attribute formats used by a map |

@@ -145,12 +145,40 @@ de_mirage: EV100 0.322 at exposure 0.8 (sunlit, used for screenshots), 0 at 1.0.
 `mat_tonemap_force_scale 1` one to 0.1 %, and a forced 0.85 one is 0.855× as bright. OFAST uses the minimum too.
 
 **Non-linear curves.** de_inferno's `.vpost` has Hable's stock parameters instead: shoulder 0.15, linear strength 0.5,
-linear angle 0.1, toe strength 0.2, toe numerator 0.02, toe denominator 0.3, white point 4. Measured on one view taken
-at exposures 0.4 and 0.8, the darkest pixels halve and more (×0.42) while the brightest only lose a third (×0.69), so
-the picture is not linear there. With `H(x) = (x(Ax + CB) + DE) / (x(Ax + B) + DF) − E/F`,
-`display = H(k × exposure × scene) / H(k × W)` with k ≈ 1.45 reproduces the measured pixels to about 0.01 (linear: 0.05),
-the toe being somewhat darker in the game. Unreal still shows such maps linearly: their mid-tones and shadows come out
-too bright (de_inferno's T spawn below). A replacement tone mapper is to do.
+linear angle 0.1, toe strength 0.2, toe numerator 0.02, toe denominator 0.3, white point 4. So do most official maps:
+cs_italy, cs_office, cs_shelter, de_ancient, de_ancient_night, de_anubis, de_cache, de_inferno, de_train and
+de_vertigo. Only de_dust2, de_mirage, de_nuke and de_overpass are linear. de_boulder's `.vpost` has no tone-map block,
+and de_debris, de_eldorado, de_fachwerk and de_poseidon have no `.vpost` that `map_entities` finds.
+
+Measured on one view taken at exposures 0.4 and 0.8, the darkest pixels halve and more (×0.42) while the brightest
+only lose a third (×0.69), so the picture is not linear there. With `H(x) = (x(Ax + CB) + DE) / (x(Ax + B) + DF) − E/F`:
+
+```text
+display = H(a × exposure × scene) / H(b × W)          then sRGB
+```
+
+- **b = 1.25** comes from the exposure pair. The ratio between the two shots of a pixel depends only on the curve's
+  shape and on `H(b × W)`, not on `a` (the unknown scene value absorbs it).
+- **a**, the input level, needs pixels whose scene value is known. Three anchors disagree on de_inferno:
+
+| Anchor | a | What it depends on |
+|---|---|---|
+| sky pixels (radiance from the exported sky) | 2.0 | OFAST's value of the visible sky: de_inferno's skybox `env_sky` (`brightnessscale` 0.8 × 2^1) is 1.6× its main world's (0.5 × 2^1), and it is not known which one CS2 draws |
+| lit surfaces of both spawns (median of 16 cells, 1.9 – 3.25) | 2.5 | OFAST's sun, sky light and bounce, calibrated on the linear maps |
+| `mat_fullbright 1` at exposure 1 against Unreal's base colour (`ShowFlag.Lighting 0`) | 3.8 | Unreal's base colours being CS2's albedo; checked on de_mirage, where fullbright shows albedo × 1 |
+
+Lit ÷ fullbright, both shots inverted through the curve, measures the light itself, independently of `a` (it
+cancels in the ratio). Done for CS2's two shots and for Unreal's lit and unlit renders of the same view, Unreal's
+light on de_inferno is 1.46× CS2's, in the sun and in the shade alike (median of 12 cells; the sunlit ground gets
+2.5 units in Unreal, 1.64 in CS2). That roughly reconciles the last two anchors (2.5 × 1.46 = 3.65, against 3.8). The
+`light_environment` has the same brightness as de_mirage's (3), so where the 1.46 comes from is open. Only the
+product of level and light shows in the picture, so `import_map.py` uses **a = 2.5** (`HABLE_INPUT_SCALE`) with
+the light as calibrated. A second Hable map captured in CS2 (sky, lit and fullbright shots) would tell whether 2.5
+holds there, or whether the light, the sky or the level is what differs.
+
+In Unreal the curve is a post-process material at `BL_ReplacingTonemapper` (`M_OFAST_TonemapHable_v2`): scene colour ×
+eye-adaptation exposure → the formula above → sRGB. The parameters come from the manifest's `post.tonemap`. Maps
+with a shoulder of 0 keep Unreal's tone curve off, which gives the linear picture.
 
 ## Calibration against CS2 (de_mirage, 2026-10-16)
 
@@ -163,7 +191,7 @@ linear luminance, Unreal / CS2). Views: `tools/compare/views/de_mirage.json` plu
 | CT spawn (sunlit street, sky) | 1.00 | 0.93 – 1.06 | sunlit ground 1.00 – 1.06, sky 0.96 – 0.99 |
 | T spawn (sunlit + large shaded walls) | 0.97 | 0.89 – 1.04 | shaded walls 0.93 – 0.97 |
 | Palace interior (`light_rect` wall lights) | 0.965 | 0.77 – 1.13 | wall facing the lights ≈ 0.97 |
-| B apartments (`light_omni2` ceiling lights) | 0.75 | 0.58 – 0.92 | see below |
+| B apartments (`light_omni2` ceiling lights) | 0.75 | 0.58 – 0.92 | see below; 0.6 since the shadow proxies really cast ([below](#shadows-from-the-back-of-walls)) |
 
 Unreal screenshots are taken 6 s after switching to each camera (`SHOT_DELAY_S`), so Lumen's lighting has settled.
 At 2 s (the first measurements) interiors came out too dark by a varying amount: the palace measured 0.79 – 0.93
@@ -187,9 +215,10 @@ CT 1.09, T 1.21, too far) but not interiors; the local lights' bounce moves the 
 0.7× the direct light, Lumen 0.43×. `import_map.py` therefore multiplies the bounce scales by **1.25 for sun and
 sky** and **2.0 for local lights** (`OUTDOOR_BOUNCE_GAIN`, `LOCAL_BOUNCE_GAIN`), which gives the table above.
 
-The B apartments stay at 0.75: CS2's light on their walls (lit ÷ albedo, 0.46) is several times what the ceiling
+The B apartments stayed at 0.75: CS2's light on their walls (lit ÷ albedo, 0.46) is several times what the ceiling
 lights send directly (≈ 0.08) — it is sunlight bouncing down the corridors from the sunlit rooms, which Lumen carries
-only partly whatever its settings or the sun's bounce gain (×2 moved it by 0.01).
+only partly whatever its settings or the sun's bounce gain (×2 moved it by 0.01). That 0.75 still included sunlight
+leaking through walls (the proxies of the time never cast); without it they are at 0.6.
 
 **Bloom, colour correction and fog: no measurable effect.** Toggled in CS2 at the CT spawn (exposure locked):
 `r_csgo_render_post_bloom 0` (default 1), and switching `r_csgo_render_post_colorcorrection` between 0 (default) and
@@ -208,7 +237,7 @@ The spawns of de_dust2, de_inferno and de_nuke, in CS2 (`-insecure`, exposure lo
 | de_dust2 T spawn (sunlit street) | 0.95 | calibration holds; the shade under a balcony 0.64 – 0.70 |
 | de_dust2 CT spawn (covered room) | 0.11 | the room is lit warmly in CS2 although no light entity is near: bounce of the sunlit courtyard in its bake (or emissive surfaces); Lumen brings almost none of it — open |
 | de_inferno CT spawn | 1.08 | colours right with the environment materials (white "Pasini" wall, pink house with stone showing); one ground shadow missing (1.62 there) |
-| de_inferno T spawn (shaded street) | 2.7 | sunlight reaches the street in Unreal, not in CS2: shadows missing although the occluding wall has its shadow proxy — open; also the Hable curve above, and foliage / cloth colours |
+| de_inferno T spawn (shaded street) | 2.7 | sunlight reaches the street in Unreal, not in CS2: shadows missing although the occluding wall has its shadow proxy: those proxies never cast (fixed, see the table below); also foliage / cloth colours |
 | de_nuke CT spawn | 1.05 | |
 | de_nuke T spawn | 0.97 | |
 
@@ -221,28 +250,66 @@ The demo export was checked the same evening: de_nuke round 2 at tick 8135, CS2'
 (`demo_gototick`, `spec_player`) and the Unreal sequence's camera overlap; the victim's proxy covers the player model,
 with a vertical difference of about 3° (CS2's demo playback interpolates; "TrueView: disabled - old demo").
 
-## Sunlight leaks through single-sided walls
+### After the shadow and tone-curve fixes (2026-10-16 night)
 
-CS2's walls are single-sided: an interior wall usually has no outer face. CS2's light bake treats faces as
-two-sided, but Unreal's Nanite meshes only cast shadows from front faces — seen from the sun, an interior wall shows
-its back and lets the light through. On de_mirage this drew bright strips of sunlight on the B apartments' stairs
-(the user's idea of moving the sun showed the strips follow it; a ray from the lit stair towards the sun, through
-OFAST's visible geometry with `map_raycast`, hits the inner face of the wall).
+All ten views again, after shadow proxies that cast ([below](#shadows-from-the-back-of-walls)) and the Hable tone
+curve on de_inferno (Unreal / CS2, whole image):
 
-What does not work: the component flag `bCastShadowAsTwoSided` (not used by Nanite); making the materials two-sided
-(fixes the shadows, but `DistanceFieldAtlas.cpp` then builds thin-shell distance fields, and Lumen's sky light and
-bounce leak instead — the calibration views moved by up to +80 %).
+| View | Before | Now | Notes |
+|---|---|---|---|
+| de_mirage CT / T / palace | 1.00 / 0.97 / 0.965 | 1.00 / 0.97 / 0.96 | unchanged |
+| de_mirage B apartments | 0.75 | 0.61 | no more sunlight through the walls (strips on the stairs gone); bounce down the corridors still short |
+| de_dust2 T / CT | 0.95 / 0.11 | 0.95 / 0.11 | unchanged; the CT room's bounce is still open |
+| de_inferno CT | 1.08 (linear picture) | 0.85 | ground 0.93 – 1.01; façades and loggia in the shade 0.75 – 0.85 |
+| de_inferno T | 2.7 | 1.46 | the street is shaded as in CS2 (0.98 – 1.18); a pillar and the floor by the arch get sunlight that CS2 shades (1.4 – 2.3) |
+| de_nuke CT / T | 1.05 / 0.97 | 0.98 / 0.96 | |
 
-What `import_map.py` does (`add_shadow_proxies`): every opaque, single-sided mesh at least 1 m wide in two
-directions gets a hidden copy with a two-sided material that only casts shadows (`cast_hidden_shadow`), has no
-collision and that Lumen ignores (`affect_distance_field_lighting` and `affect_dynamic_indirect_lighting` off).
-Masked, translucent and already two-sided meshes (decals, foliage, fences, glass) get none — they would cast solid
-shadows. Thin or small meshes (pipes, wires, bottles, signs) get none either: they cannot let a visible patch of
-sunlight through, and de_nuke alone has ~5400 of them (proxies with the size rule: de_mirage 258, de_dust2 624,
-de_inferno 681, de_nuke 735). The visible
-meshes and their distance fields stay as they were, and the calibration hardly moves (table above; the B apartments
-lose the 0.01 – 0.02 of leaked light). CS2's own light blockers (`OBJECT_TYPE_BLOCK_LIGHT`) get the same treatment,
-but stay in Lumen's scene as black occluders, since they seal gaps for CS2's bounce light too.
+## Shadows from the back of walls
+
+CS2's walls are single-sided: an interior wall usually has no outer face. CS2 stops sunlight at such a wall from
+either side, but Unreal's Nanite meshes only cast shadows from front faces. Seen from the sun, an interior wall shows
+its back and lets the light through:
+- de_mirage: bright strips of sunlight on the B apartments' stairs. A ray from a lit stair towards the sun
+  (`map_raycast`) crosses two plaster walls, both from behind.
+- de_inferno: the T-spawn street sunlit (2.7× CS2's brightness). The caster is a plaster wall seen from behind.
+
+**Which faces CS2 shades with.** Nearly all world-node geometry carries `OBJECT_TYPE_NO_SHADOWS`; its sun shadows
+are in the lightmaps. The casters that CS2 needs from behind were all world geometry built in Hammer (no
+`OBJECT_TYPE_MODEL`). Hammer geometry is often a lone wall, while models are usually closed. So OFAST gives
+two-sided shadows to world geometry only: the exporter names it, and brush entities (`func_*`), `world_…`
+([map.md](map.md#world-node-vwnod_c-data)).
+On de_inferno's spawns this measured the same as proxying every mesh (0.73 / 1.21 against 0.72 / 1.21), with 57 – 86 %
+fewer proxies. Whether CS2 really lets light through the back of models is not shown: the one case looked at (a
+roof kit's wooden ceiling over a façade) also has the roof's sun-facing tiles above it.
+
+What does not work:
+- `bCastShadowAsTwoSided` on the component: Nanite does not use it.
+- Two-sided materials on the visible meshes: they fix the shadows, but `DistanceFieldAtlas.cpp` then builds
+  thin-shell distance fields, and Lumen's sky light and bounce leak instead (the calibration views moved by up to
+  +80 %).
+- A hidden copy, either `bVisible` off + `bCastHiddenShadow` or out of the main pass: a Nanite mesh hidden like
+  this casts nothing at all. Earlier imports had such proxies and they never cast. de_mirage's calibration was
+  measured with them, so its B apartments then included light leaking through walls (0.75, now 0.6).
+- A visible Nanite copy whose masked material shows only in shadow passes (Shadow Pass Switch) casts nothing either.
+  This holds although the material has `bUsedWithNanite` and Nanite's shadow raster takes the switch's shadow branch
+  (`NaniteRasterizer.usf`: `SHADOW_DEPTH_SHADER` is `DEPTH_ONLY`). The cause was not found.
+- Keeping only the faces the light sees from behind (`TwoSidedSign` in the shadow branch), so a copy would not cast
+  again what its visible mesh casts: sunlight reached the B-apartment stairs again.
+
+What `import_map.py` does (`add_shadow_proxies`, `make_shadow_only`): every opaque, single-sided `world_…` mesh at
+least 1 m wide in two directions gets a copy with these settings:
+- rendered **without Nanite** (`bDisallowNanite`: the mesh's fallback LOD);
+- a two-sided masked material visible only in shadow passes (`M_OFAST_ShadowProxy_v2`);
+- **lighting channel 1**, which only the sun shares (`SUN_CHANNELS`). With all lights, the copies on walls and
+  ceilings shaded the very surfaces their wall lights light: de_mirage's palace fell from 0.97 to 0.62 of CS2;
+- no collision, and out of Lumen (`affect_distance_field_lighting`, `affect_dynamic_indirect_lighting` off).
+
+Masked, translucent and already two-sided meshes (decals, foliage, fences, glass) get none, since they would cast
+solid shadows. Thin or small meshes (pipes, wires, bottles, signs) get none either: they cannot let a visible patch
+of sunlight through. Proxies per map: de_mirage 110, de_dust2 89, de_inferno 279, de_nuke 226. CS2's own light blockers (`OBJECT_TYPE_BLOCK_LIGHT`) get the
+same treatment. Unlike proxies, they stay in Lumen's distance fields, where they should stop bounce light as black
+occluders, since they seal gaps for CS2's bounce light too. That has not been re-checked since their material became
+masked: Lumen's surface cache sees nothing of them now.
 
 ## Import styles
 
@@ -256,7 +323,7 @@ but stay in Lumen's scene as black occluders, since they seal gaps for CS2's bou
 | Sky | CS2's `env_sky` HDR on a sphere + Sky Light from it | Unreal's Sky Atmosphere + real-time Sky Light, light height fog |
 | Local lights | CS2-matched candela (`intensity_cd`), CS2 bounce × gain | Hammer's real candela (`intensity_cd_photometric` = 79.6 × linear), plain bounce |
 | Exposure | fixed, measured on CS2 (EV100 0.322 on de_mirage) | auto (histogram), EV100 2 – 16 |
-| Tone curve | none (CS2's is a straight line) | Unreal's filmic curve, local exposure, light bloom and vignette |
+| Tone curve | none where CS2's is a straight line, CS2's Hable curve otherwise | Unreal's filmic curve, local exposure, light bloom and vignette |
 
 The realistic style does **not** keep CS2's light ratios: it pairs Hammer's photometric candela with a real-world
 sun (100 000 lux before the atmosphere, about 80 000 on the ground), so a 121 cd wall lamp is far fainter next to the
