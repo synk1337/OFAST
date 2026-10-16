@@ -12,7 +12,8 @@ Inputs (environment variables):
                    "sun", "sky_light", "local": light component properties, e.g. {"indirect_lighting_intensity": 2}
                                                 ("name*": multiply the current value)
                    "sun_rotation": [pitch, yaw, roll] of the sun (Unreal degrees)
-                   "meshes": properties of the imported map meshes' components (not the sky sphere or proxies)
+                   "meshes": properties of the imported map meshes' components (not the sky sphere, proxies or blockers)
+                   "blockers": properties of CS2's light blockers (e.g. {"cast_shadow": false})
                    "post": PostProcessSettings fields (set with their override flag)
 
 It uses the cameras import_map.py saved with the level (labels OFAST_cam_<view>), so the viewpoints are exactly
@@ -56,19 +57,22 @@ def apply_try(actors):
         "sky_light": (unreal.SkyLight,),
         "local": (unreal.PointLight, unreal.SpotLight, unreal.RectLight),
     }
-    unknown = set(settings) - set(groups) - {"post", "sun_rotation", "meshes"}
+    unknown = set(settings) - set(groups) - {"post", "sun_rotation", "meshes", "blockers"}
     if unknown:
         raise RuntimeError(
-            "unknown OFAST_TRY group: %s (sun, sun_rotation, sky_light, local, meshes, post)" % ", ".join(sorted(unknown))
+            "unknown OFAST_TRY group: %s (sun, sun_rotation, sky_light, local, meshes, blockers, post)"
+            % ", ".join(sorted(unknown))
         )
-    # "meshes": properties set on the imported map meshes (not the sky sphere, proxies or other OFAST helpers).
+    # "meshes": properties set on the imported map meshes (not the sky sphere, proxies or other OFAST helpers);
+    # "blockers": on CS2's light blockers only (labels containing lightblocker_).
     for actor in actors:
         label = actor.get_actor_label()
-        if (
-            isinstance(actor, unreal.StaticMeshActor)
-            and settings.get("meshes")
-            and not label.startswith(("OFAST_", "shadowproxy_"))
-        ):
+        if not isinstance(actor, unreal.StaticMeshActor) or label.startswith(("OFAST_", "shadowproxy_")):
+            continue
+        if "lightblocker_" in label:
+            if settings.get("blockers"):
+                actor.static_mesh_component.set_editor_properties(settings["blockers"])
+        elif settings.get("meshes"):
             actor.static_mesh_component.set_editor_properties(settings["meshes"])
     if "sun_rotation" in settings:
         # [pitch, yaw, roll] in Unreal degrees, e.g. to see whether a lit patch moves like sunlight through a window.

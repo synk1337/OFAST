@@ -132,11 +132,189 @@ def hide_light_blockers(imported):
     material = ensure_shadow_proxy_material()
     count = 0
     for actor in imported:
-        if isinstance(actor, unreal.StaticMeshActor) and LIGHT_BLOCKER_PREFIX in actor.get_actor_label():
-            component = actor.static_mesh_component
-            make_shadow_only(component, material, len(component.get_materials()), affect_lumen=True)
-            count += 1
+        label = actor.get_actor_label()
+        if not isinstance(actor, unreal.StaticMeshActor) or LIGHT_BLOCKER_PREFIX not in label:
+            continue
+        if label.startswith(SKYBOX_PREFIX):
+            continue  # the 3D skybox's own blockers: hidden with the rest of its lighting (setup_skybox)
+        component = actor.static_mesh_component
+        make_shadow_only(component, material, len(component.get_materials()), affect_lumen=True)
+        count += 1
     log("light blockers: %d hidden shadow casters" % count)
+
+
+# Versioned like BLEND_MASTER: the material of 3D-skybox geometry, drawn behind the world (see setup_skybox).
+SKYBOX_MASTER = "/Game/OFAST/Materials/M_OFAST_Skybox_v2"
+# Shared 1x1 stand-ins for missing glTF texture maps (saved: the master uses them as parameter defaults).
+DEFAULT_TEXTURE_FOLDER = "/Game/OFAST/Materials/Defaults"
+# How far skybox pixels are pushed back, cm: more than any distance inside a map, so the world always wins.
+SKYBOX_DEPTH_OFFSET_CM = 100000.0
+
+
+def setup_skybox(imported):
+    """CS2 draws the 3D skybox first and the world over it, so skybox geometry never hides the world, whatever its
+    position. Placed at 16x around the map in one Unreal scene, it can cut through the playable space instead:
+    de_dust2's skybox sand lies 1.1 m above the CT spawn's floor and covered it (CS2: 0.12 of the brightness there).
+
+    So every sky3d_ actor gets (component overrides, the world's copies of a mesh are untouched):
+    - opaque and masked materials -> an instance of SKYBOX_MASTER (the glTF material's colour, normal and
+      metallic-roughness textures and factors) whose pixel depth offset pushes it SKYBOX_DEPTH_OFFSET_CM back;
+      translucent ones (clouds) keep their material — they are depth-tested against the world anyway;
+    - no shadows and no Lumen presence: the skybox is lit apart in CS2 and must not shade the world (its light
+      blockers, at 16x, would otherwise cast huge shadows);
+    - its light blockers are simply hidden."""
+    with open(GLTF) as f:
+        document = json.load(f)
+    by_name = {m["name"]: m for m in document.get("materials", [])}
+    folder = "/Game/OFAST/%s/Skybox" % NAME
+    defaults = skybox_default_textures()
+    master = ensure_skybox_master(defaults)
+    instances = {}
+    actors_done = 0
+    for actor in imported:
+        if not isinstance(actor, unreal.StaticMeshActor) or not actor.get_actor_label().startswith(SKYBOX_PREFIX):
+            continue
+        component = actor.static_mesh_component
+        component.set_editor_properties({
+            "cast_shadow": False,
+            "affect_distance_field_lighting": False,
+            "affect_dynamic_indirect_lighting": False,
+        })
+        if LIGHT_BLOCKER_PREFIX in actor.get_actor_label():
+            component.set_visibility(False)
+            continue
+        mesh = component.static_mesh
+        if mesh is None:
+            continue
+        for index, slot in enumerate(mesh.static_materials):
+            material = by_name.get(str(slot.material_slot_name))
+            if material is None or material.get("alphaMode") == "BLEND":
+                continue
+            name = material["name"]
+            if name not in instances:
+                instances[name] = skybox_instance(name, material, document, master, defaults, folder)
+            component.set_material(index, instances[name])
+        actors_done += 1
+    # The instances and the textures they sample must be saved, or the level loses its overrides when reopened.
+    unreal.EditorAssetLibrary.save_directory("/Game/OFAST", only_if_is_dirty=True, recursive=True)
+    log("3D skybox: %d actors drawn behind the world (%d materials), no shadows" % (actors_done, len(instances)))
+
+
+def skybox_default_textures():
+    """1x1 textures for missing glTF maps (white colour, flat normal, roughness 1 / metalness 0), shared by every
+    map and saved."""
+    import struct
+    import tempfile
+    import zlib
+
+    def png(path, rgba):
+        raw = b"\x00" + bytes(rgba)
+        chunk = lambda kind, data: (struct.pack(">I", len(data)) + kind + data
+                                    + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+        with open(path, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
+                    + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+    out = {}
+    directory = tempfile.mkdtemp()
+    for key, rgba, kind in (("color", (255, 255, 255, 255), "color"), ("normal", (128, 128, 255, 255), "normal"),
+                            ("orm", (255, 255, 0, 255), "linear")):
+        path = os.path.join(directory, "T_OFAST_Default_%s.png" % key)
+        png(path, rgba)
+        out[key] = import_texture(path, DEFAULT_TEXTURE_FOLDER, kind)
+        unreal.EditorAssetLibrary.save_loaded_asset(out[key])
+    return out
+
+
+def ensure_skybox_master(defaults):
+    """Masked material with glTF's PBR inputs (colour, normal and metallic-roughness textures with their factors)
+    plus a constant pixel depth offset."""
+    if unreal.EditorAssetLibrary.does_asset_exist(SKYBOX_MASTER):
+        return unreal.EditorAssetLibrary.load_asset(SKYBOX_MASTER)
+    folder, name = SKYBOX_MASTER.rsplit("/", 1)
+    material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, folder, unreal.Material, unreal.MaterialFactoryNew())
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+    material.set_editor_property("opacity_mask_clip_value", 0.5)  # glTF's default alpha cutoff
+    mel = unreal.MaterialEditingLibrary
+    sampler = unreal.MaterialSamplerType
+    prop = unreal.MaterialProperty
+
+    def texture(param, kind, y):
+        node = mel.create_material_expression(material, unreal.MaterialExpressionTextureSampleParameter2D, -900, y)
+        node.set_editor_property("parameter_name", param)
+        node.set_editor_property("sampler_type", {"color": sampler.SAMPLERTYPE_COLOR, "normal": sampler.SAMPLERTYPE_NORMAL,
+                                                  "orm": sampler.SAMPLERTYPE_MASKS}[kind])
+        node.set_editor_property("texture", defaults[kind])
+        return node
+
+    def scalar(param, default, y):
+        node = mel.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -600, y)
+        node.set_editor_property("parameter_name", param)
+        node.set_editor_property("default_value", default)
+        return node
+
+    def multiply(a, a_out, b, b_out, y):
+        node = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, -300, y)
+        mel.connect_material_expressions(a, a_out, node, "A")
+        mel.connect_material_expressions(b, b_out, node, "B")
+        return node
+
+    color = texture("BaseColorTexture", "color", -400)
+    normal = texture("NormalTexture", "normal", 0)
+    orm = texture("MetallicRoughnessTexture", "orm", 400)
+    factor = mel.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -600, -250)
+    factor.set_editor_property("parameter_name", "BaseColorFactor")
+    factor.set_editor_property("default_value", unreal.LinearColor(1, 1, 1, 1))
+    depth = mel.create_material_expression(material, unreal.MaterialExpressionConstant, -300, 850)
+    depth.set_editor_property("r", SKYBOX_DEPTH_OFFSET_CM)
+    # Python's MaterialProperty has no pixel depth offset: everything goes through a Make Material Attributes node.
+    material.set_editor_property("use_material_attributes", True)
+    attributes = mel.create_material_expression(material, unreal.MaterialExpressionMakeMaterialAttributes, 0, 0)
+    for source, output, pin in (
+        (multiply(color, "RGB", factor, "", -400), "", "BaseColor"),
+        (multiply(color, "A", factor, "A", -150), "", "OpacityMask"),
+        (normal, "RGB", "Normal"),
+        (multiply(orm, "G", scalar("RoughnessFactor", 1.0, 500), "", 450), "", "Roughness"),
+        (multiply(orm, "B", scalar("MetallicFactor", 0.0, 650), "", 600), "", "Metallic"),
+        (depth, "", "PixelDepthOffset"),
+    ):
+        if not mel.connect_material_expressions(source, output, attributes, pin):
+            raise RuntimeError("skybox master: could not connect " + pin)
+    mel.connect_material_property(attributes, "", prop.MP_MATERIAL_ATTRIBUTES)
+    mel.recompile_material(material)
+    unreal.EditorAssetLibrary.save_asset(SKYBOX_MASTER)
+    log("created " + SKYBOX_MASTER)
+    return material
+
+
+def skybox_instance(name, material, document, master, defaults, folder):
+    """An instance of SKYBOX_MASTER with a glTF material's textures and factors."""
+    def image(slot):
+        info = slot and document["textures"][slot["index"]]
+        return document["images"][info["source"]]["uri"] if info else None
+
+    pbr = material.get("pbrMetallicRoughness", {})
+    textures = {
+        "BaseColorTexture": (image(pbr.get("baseColorTexture")), "color"),
+        "NormalTexture": (image(material.get("normalTexture")), "normal"),
+        "MetallicRoughnessTexture": (image(pbr.get("metallicRoughnessTexture")), "orm"),
+    }
+    instance = blend_instance("Sky_" + name, master, folder)
+    for param, (uri, kind) in textures.items():
+        texture = import_texture(uri, folder, "linear" if kind == "orm" else kind) if uri else defaults[kind]
+        set_texture_parameter(instance, param, texture)
+    r, g, b, a = pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])
+    unreal.MaterialEditingLibrary.set_material_instance_vector_parameter_value(
+        instance, "BaseColorFactor", unreal.LinearColor(r, g, b, a))
+    set_scalar_parameter(instance, "RoughnessFactor", pbr.get("roughnessFactor", 1.0))
+    set_scalar_parameter(instance, "MetallicFactor", pbr.get("metallicFactor", 1.0))
+    if material.get("doubleSided"):
+        overrides = instance.get_editor_property("base_property_overrides")
+        overrides.set_editor_property("override_two_sided", True)
+        overrides.set_editor_property("two_sided", True)
+        instance.set_editor_property("base_property_overrides", overrides)
+    return instance
 
 
 # Versioned name: bump when the graph changes so existing projects get the new master.
@@ -414,14 +592,14 @@ def height_blend_instances():
     return instances
 
 
-def blend_instance(name, master):
-    """The blend material instance MI_<name> (created on first use), parented to `master`."""
-    path = BLEND_FOLDER + "/MI_" + name
+def blend_instance(name, master, folder=BLEND_FOLDER):
+    """The material instance <folder>/MI_<name> (created on first use), parented to `master`."""
+    path = folder + "/MI_" + name
     if unreal.EditorAssetLibrary.does_asset_exist(path):
         instance = unreal.EditorAssetLibrary.load_asset(path)
     else:
         instance = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
-            "MI_" + name, BLEND_FOLDER, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew()
+            "MI_" + name, folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew()
         )
     if instance.get_editor_property("parent") != master:
         unreal.MaterialEditingLibrary.set_material_instance_parent(instance, master)
@@ -1068,6 +1246,8 @@ def main():
     # Sunlight must not leak into interiors: CS2's light blockers and two-sided shadows for single-sided walls.
     hide_light_blockers(imported)
     add_shadow_proxies(imported)
+    # The 3D skybox stays behind the world and out of its lighting, as in CS2.
+    setup_skybox(imported)
     setup_environment(manifest, imported)
     shots = views(manifest, imported)
     save_level()

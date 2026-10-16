@@ -97,7 +97,8 @@ de_fachwerk) — probably stored in another archive.
 - [x] Unreal: `import_demo.py` builds a Level Sequence in the map's level — player proxies in team colours, a
   first-person camera per player (CS2's field of view), camera cuts on each killer, kill markers. Checked: each
   killer's camera has the victim at the crosshair just before the kill.
-- [ ] Compare first-person frames with CS2 itself (`demo_gototick`, `spec_player`).
+- [x] Compare first-person frames with CS2 itself (`demo_gototick`, `spec_player`): de_nuke round 2, tick 8135 —
+  the killer's view and the victim's position match (within ~3° vertically, CS2 interpolating the paused demo).
 - [ ] Several rounds / a whole match in one sequence; weapons in hand; grenades (M6).
 - [ ] Studio demo browser (Tauri app).
 

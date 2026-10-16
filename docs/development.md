@@ -121,6 +121,11 @@ switching it on recompiles all shaders once (long).
 2. `sv_cheats 1; bot_kick; mp_warmup_end; mp_ignore_round_win_conditions 1; noclip; cl_drawhud 0;
    r_drawviewmodel 0`, then `setpos <origin_source> ; setang <angles>` from the manifest's spawn and `getpos` to check
    (the eye is 64 units above the origin). Keyboard movement does not reach the game by script: move with `setpos`.
+   Faster: copy `tools/cs2/cfg/*.cfg` (the setup line, and each spawn view as `ofast_v_<map>_<team>.cfg`) into
+   `game/csgo/cfg/` and `exec` them. `mp_warmup_end` restarts the round a few seconds later and respawns the player at a random spawn,
+   and the view drifts once the console closes: bind a key to the view (`bind F8 "exec ofast_v_…"`, `unbind F8`
+   afterwards), press it right before the screenshot, and check `getpos`. After `map` from the main menu the player
+   has no team: `jointeam 3; mp_restartgame 1`.
 3. Screenshot (CS2's own captures repeat to within 0.1 %), then compare:
    `python tools/compare/compare_shots.py <cs2.jpg> <unreal.png> <out.png>` (CS2 on top, Unreal below, per-cell
    brightness ratios) and, for exposure, `python tools/compare/sky_exposure.py <map>_sky.hdr <shot> <yaw> <pitch>
@@ -131,7 +136,7 @@ switching it on recompiles all shaders once (long).
 | Tool | What it answers |
 |---|---|
 | `cargo run --release --example map_raycast -- de_mirage ct0 "x,y;x,y"` (or a view `"x,y,z,pitch,yaw"` from CS2's setpos/setang) | which model/material OFAST's geometry has under a screenshot pixel |
-| `tools/unreal/shoot_views.py` (`-Name <map>` or `<map>_realistic`, `-Only ct0,palace`, `-Try what-if.json`) | re-shoots the import's saved cameras without importing again (~1 min), optionally with what-if settings (not saved; pass them as a .json file — PowerShell strips the quotes of inline JSON): light properties, `sun_rotation`, `meshes` (component properties), `post` — see the script's docstring |
+| `tools/unreal/shoot_views.py` (`-Name <map>` or `<map>_realistic`, `-Only ct0,palace`, `-Try what-if.json`) | re-shoots the import's saved cameras without importing again (~1 min), optionally with what-if settings (not saved; pass them as a .json file — PowerShell strips the quotes of inline JSON): light properties, `sun_rotation`, `meshes` (component properties), `blockers` (light blockers only), `post` — see the script's docstring |
 | `run_ue.ps1 … import_map.py … -Disable sun,sky,local,bounce` | diagnostic renders without some light sources, to see what lights a spot (the level keeps that lighting until the next normal import) |
 | `cargo run --release --example map_outliers -- de_mirage [classes]` | stretched geometry, dropped triangles, entity classes with models |
 | `cargo run --release --example model_layout -- formats de_mirage` | vertex attribute formats used by a map |

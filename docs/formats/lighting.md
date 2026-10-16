@@ -95,7 +95,12 @@ exposure, and says so in its log: the picture is then not calibrated.
 
 ## 3D skybox — `skybox_reference` + `sky_camera`
 
-See [map.md](map.md#3d-skybox). It is ordinary geometry once placed; it is lit by the main map's sun in Unreal.
+See [map.md](map.md#3d-skybox). CS2 draws the 3D skybox first and the world over it, so skybox geometry never hides
+the world, whatever its position, and is lit apart. Placed at 16× around the map in one Unreal scene it can cut
+through the playable space: de_dust2's skybox sand lies 1.1 m above the floor of a CT-spawn room and covered it.
+`import_map.py` (`setup_skybox`) therefore gives skybox actors a material whose pixel depth offset pushes them 1 km
+back (the world always wins the depth test), and takes them out of shadows and Lumen; translucent skybox materials
+(clouds) keep theirs. Skybox light blockers are hidden without casting anything.
 
 ## Exposure and tone mapping — `post_processing_volume` + `.vpost`
 
@@ -135,6 +140,17 @@ EV100 = log2(LUX_PER_UNIT / (π × exposure × 2^bias))        Unreal exposure b
 ```
 
 de_mirage: EV100 0.322 at exposure 0.8 (sunlit, used for screenshots), 0 at 1.0.
+
+**When `minexposure` > `maxexposure`** (de_nuke: 1.0 and 0.85), the minimum wins: CS2's automatic picture equals a
+`mat_tonemap_force_scale 1` one to 0.1 %, and a forced 0.85 one is 0.855× as bright. OFAST uses the minimum too.
+
+**Non-linear curves.** de_inferno's `.vpost` has Hable's stock parameters instead: shoulder 0.15, linear strength 0.5,
+linear angle 0.1, toe strength 0.2, toe numerator 0.02, toe denominator 0.3, white point 4. Measured on one view taken
+at exposures 0.4 and 0.8, the darkest pixels halve and more (×0.42) while the brightest only lose a third (×0.69), so
+the picture is not linear there. With `H(x) = (x(Ax + CB) + DE) / (x(Ax + B) + DF) − E/F`,
+`display = H(k × exposure × scene) / H(k × W)` with k ≈ 1.45 reproduces the measured pixels to about 0.01 (linear: 0.05),
+the toe being somewhat darker in the game. Unreal still shows such maps linearly: their mid-tones and shadows come out
+too bright (de_inferno's T spawn below). A replacement tone mapper is to do.
 
 ## Calibration against CS2 (de_mirage, 2026-10-16)
 
@@ -181,6 +197,29 @@ only partly whatever its settings or the sun's bounce gain (×2 moved it by 0.01
 either (the only differing pixels are palms moving in the wind; the 3D-skybox hotel is identical). So the Unreal side
 reproduces none of them: doing so would add differences, not remove them. The bloom and fog settings stay in the
 manifest for reference; the colour LUT is not exported.
+
+## Checked on three more maps (2026-10-16 evening)
+
+The spawns of de_dust2, de_inferno and de_nuke, in CS2 (`-insecure`, exposure locked at the value OFAST uses:
+0.925, 0.8, 1.0) and in Unreal with no per-map setting, compared with `compare_shots.py` (Unreal / CS2):
+
+| View | Whole image | What it shows |
+|---|---|---|
+| de_dust2 T spawn (sunlit street) | 0.95 | calibration holds; the shade under a balcony 0.64 – 0.70 |
+| de_dust2 CT spawn (covered room) | 0.11 | the room is lit warmly in CS2 although no light entity is near: bounce of the sunlit courtyard in its bake (or emissive surfaces); Lumen brings almost none of it — open |
+| de_inferno CT spawn | 1.08 | colours right with the environment materials (white "Pasini" wall, pink house with stone showing); one ground shadow missing (1.62 there) |
+| de_inferno T spawn (shaded street) | 2.7 | sunlight reaches the street in Unreal, not in CS2: shadows missing although the occluding wall has its shadow proxy — open; also the Hable curve above, and foliage / cloth colours |
+| de_nuke CT spawn | 1.05 | |
+| de_nuke T spawn | 0.97 | |
+
+How the references were taken: with cfg files in the game's `cfg` folder (`exec ofast_setup`, `exec
+ofast_v_<map>_<team>`, see [development.md](../development.md#comparing-with-cs2)). The round restarts a few seconds after `mp_warmup_end` and puts the player back on a random
+spawn, so the view is re-applied (a key bound to it) right before each screenshot and checked with `getpos` — the
+first de_dust2 CT reference was taken from the wrong spawn this way.
+
+The demo export was checked the same evening: de_nuke round 2 at tick 8135, CS2's first-person view of the killer
+(`demo_gototick`, `spec_player`) and the Unreal sequence's camera overlap; the victim's proxy covers the player model,
+with a vertical difference of about 3° (CS2's demo playback interpolates; "TrueView: disabled - old demo").
 
 ## Sunlight leaks through single-sided walls
 
