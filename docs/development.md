@@ -99,7 +99,7 @@ powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/import_map.py -Glt
 ```
 
 `export-map` also loads the map's 3D skybox (its own archive under `game/csgo/maps/prefabs/`) and writes the sky as
-`<map>_sky.hdr`. `import_map.py` imports the glTF as a scene (one actor per placement), swaps two-layer materials for
+`<map>_sky.hdr` and CS2's colour-correction table as `<map>_lut.png`. `import_map.py` imports the glTF as a scene (one actor per placement), swaps two-layer materials for
 the layer-blend and height-blend materials ([material.md](formats/material.md)), hides CS2's light blockers and adds invisible shadow copies of single-sided world geometry
 (so sunlight cannot leak through walls; see [lighting.md](formats/lighting.md#shadows-from-the-back-of-walls)), replaces the template's sky, fog and lights with CS2's (sun, sky sphere + Sky Light from
 the HDR, local lights from the manifest, fixed exposure — see [lighting.md](formats/lighting.md)), saves everything
@@ -129,7 +129,14 @@ switching it on recompiles all shaders once (long).
 3. Screenshot (CS2's own captures repeat to within 0.1 %), then compare:
    `python tools/compare/compare_shots.py <cs2.jpg> <unreal.png> <out.png>` (CS2 on top, Unreal below, per-cell
    brightness ratios) and, for exposure, `python tools/compare/sky_exposure.py <map>_sky.hdr <shot> <yaw> <pitch>
-   x,y …` on pure-sky pixels.
+   x,y …` on pure-sky pixels (linear maps; on Hable maps the curve and colour table come first, see
+   [lighting.md](formats/lighting.md#exposure-and-tone-mapping--post_processing_volume--vpost)).
+4. Albedo: CS2's `mat_fullbright 1` shows the albedo × 1 whatever the locked exposure and tone curve; the matching
+   Unreal render is `shoot_views.py -Try '{"console": ["ShowFlag.Lighting 0"]}'`, which runs at exposure 1 but through
+   OFAST's tone mapper.
+
+While CS2 runs, do not start it again (a second `cs2.exe` only shows "Only one instance of the game can be running"
+and keeps the game from getting focus); leave it in the main menu before long Unreal runs, which it slows down.
 
 ### Debug tools for maps
 

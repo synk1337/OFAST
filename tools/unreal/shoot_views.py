@@ -18,7 +18,8 @@ Inputs (environment variables):
                    (in these three groups, "visible": false hides and "material": "/Game/..." replaces every slot)
                    "post": PostProcessSettings fields (set with their override flag)
                    "console": console commands run before shooting, e.g. ["ShowFlag.Lighting 0"] (base colour only,
-                              to compare with CS2's mat_fullbright 1)
+                              to compare with CS2's mat_fullbright 1; Unreal then skips the manual exposure, so
+                              the base colour goes through OFAST's tone mapper at exposure 1)
 
 It uses the cameras import_map.py saved with the level (labels OFAST_cam_<view>), so the viewpoints are exactly
 the import's. The level is not changed or saved; its lighting is whatever the last import saved (including a

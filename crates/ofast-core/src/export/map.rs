@@ -21,8 +21,9 @@
 //!
 //! Skipped: triggers and clips, baked lightmaps (Unreal relights the map with Lumen).
 //!
-//! Next to it: `<map>_sky.hdr` (the 2D sky, see [`super::sky`]) and `<map>.ofast.json`, the manifest of what the
-//! Unreal side sets up directly, in Unreal units: sun, ambient, sky, exposure, fog, the local lights with their exact
+//! Next to it: `<map>_sky.hdr` (the 2D sky, see [`super::sky`]), `<map>_lut.png` (the colour-correction table of the
+//! map's post-processing, see `lut_strip`) and `<map>.ofast.json`, the manifest of what the Unreal side sets up
+//! directly, in Unreal units: sun, ambient, sky, exposure and tone curve, fog, the local lights with their exact
 //! shapes and ranges, and player spawns (see `docs/formats/lighting.md` for the light units).
 
 use std::collections::BTreeMap;
@@ -33,13 +34,14 @@ use std::rc::Rc;
 use serde_json::{Value as Json, json};
 
 use super::ExportError;
-use super::gltf::{ExportReport, GltfWriter, load_model, srgb_to_linear};
+use super::gltf::{ExportReport, GltfWriter, load_model, srgb_to_linear, write_png};
 use super::sky::{SkyExport, export_sky, write_flat_hdr};
 use crate::content::Content;
 use crate::coords;
 use crate::map::{Entity, IDENTITY, Map, Transform, compose, entity_transform, object_flags};
 use crate::model::{DrawCall, Model};
 use crate::resource::{BlockKind, Resource};
+use crate::texture::Image;
 
 /// Entity classes whose `model` is drawn.
 const MODEL_ENTITY_CLASSES: &[&str] = &[
@@ -215,6 +217,7 @@ pub fn export_map(
         map,
         sky,
         ambient,
+        out_dir,
         &mut exporter.writer.report.warnings,
     );
     manifest["lights"] = lights.iter().map(LocalLight::manifest).collect();
@@ -772,14 +775,18 @@ fn ambient_manifest(sun: Option<&Entity>, sky: Option<&SkyExport>) -> Json {
     })
 }
 
-/// Exposure, tone mapping and bloom from the master `post_processing_volume` and its `.vpost`.
+/// Exposure, tone mapping, colour correction and bloom from the master `post_processing_volume` and its `.vpost`.
 ///
 /// CS2's Hable tone curve, with the parameters every stock map uses (shoulder 0, linear 0.001, toe 1/1/1), is a
 /// straight line, and measured on screenshots CS2 shows `exposure × scene` (sky pixels of known radiance in a sunlit
 /// de_mirage view: display / radiance = 0.80 = `minexposure`; `docs/formats/lighting.md`). Unreal, with its tone
 /// curve off, shows `luminance × 2^−EV100`, and a CS2 scene value of 1 is a luminance of [`LUX_PER_UNIT`] / π, so the
 /// matching EV100 is `log2(LUX_PER_UNIT / (π × exposure × 2^bias))`.
-fn post_manifest(content: &Content, map: &Map, warnings: &mut Vec<String>) -> Json {
+///
+/// The `.vpost`'s colour-correction table is applied after the curve, to the sRGB-encoded picture (measured on
+/// de_anubis: its table cuts the darkest tenth to black). It is written next to the glTF as `<map>_lut.png`
+/// ([`lut_strip`]).
+fn post_manifest(content: &Content, map: &Map, out_dir: &Path, warnings: &mut Vec<String>) -> Json {
     let volumes: Vec<&Entity> = map.entities_of("post_processing_volume").collect();
     let Some(volume) = volumes
         .iter()
@@ -801,6 +808,7 @@ fn post_manifest(content: &Content, map: &Map, warnings: &mut Vec<String>) -> Js
     let mut tonemap = Json::Null;
     let mut bias = 0.0;
     let mut bloom = Json::Null;
+    let mut color_correction = Json::Null;
     if let Some(path) = volume.string("postprocessing").filter(|p| !p.is_empty()) {
         match read_vpost(content, path) {
             Ok(root) => {
@@ -843,6 +851,38 @@ fn post_manifest(content: &Content, map: &Map, warnings: &mut Vec<String>) -> Js
                         "blur_weights": weights,
                     });
                 }
+                if root.get("m_bHasColorCorrection").is_some_and(kv3_true) {
+                    let dim = root
+                        .get("m_nColorCorrectionVolumeDim")
+                        .and_then(|v| v.as_i64())
+                        .and_then(|d| usize::try_from(d).ok())
+                        .unwrap_or(0);
+                    let data = root
+                        .get("m_colorCorrectionVolumeData")
+                        .map(crate::kv3::Value::unflagged);
+                    match data {
+                        Some(crate::kv3::Value::Blob(data)) => match lut_strip(dim, data) {
+                            Some(image) => {
+                                let file = format!("{}_lut.png", map.name);
+                                match write_png(&out_dir.join(&file), &image) {
+                                    Ok(()) => {
+                                        color_correction = json!({
+                                            "lut": file,
+                                            "size": dim,
+                                            "layout": "size blue slices side by side: pixel (b * size + r, g) = \
+                                                       output for input (r, g, b), sRGB-encoded in and out",
+                                        })
+                                    }
+                                    Err(e) => warnings.push(format!("colour correction {file}: {e}")),
+                                }
+                            }
+                            None => warnings.push(format!(
+                                "post processing {path}: colour-correction table is not {dim}^3 RGBA8 entries"
+                            )),
+                        },
+                        _ => warnings.push(format!("post processing {path}: no colour-correction table")),
+                    }
+                }
             }
             Err(e) => warnings.push(format!("post processing {path}: {e}")),
         }
@@ -858,9 +898,36 @@ fn post_manifest(content: &Content, map: &Map, warnings: &mut Vec<String>) -> Js
         "ev100_min": ev100(max),
         "ev100_max": ev100(min),
         "tonemap": tonemap,
+        // Applied after the tone curve (Unreal: import_map.py's tone mapper); null when the .vpost has none.
+        "color_correction": color_correction,
         // For reference: turning CS2's bloom off (r_csgo_render_post_bloom 0) changes nothing measurable on
-        // de_mirage, so the Unreal side does not reproduce it.
+        // de_mirage, and 0.7 % on de_inferno (additive bloom 0.12), so the Unreal side does not reproduce it.
         "bloom": bloom,
+    })
+}
+
+/// CS2's colour-correction table (`m_colorCorrectionVolumeData`: `dim`³ RGBA8 entries, red fastest, then green,
+/// then blue) as a 2D strip of `dim` blue slices side by side: pixel (x = b·dim + r, y = g) holds the output for the
+/// input (r, g, b). Unreal's own colour-grading LUT textures use this layout. `None` when the blob does not hold
+/// `dim`³ entries.
+fn lut_strip(dim: usize, data: &[u8]) -> Option<Image> {
+    if dim < 2 || data.len() != dim * dim * dim * 4 {
+        return None;
+    }
+    let mut rgba = vec![0u8; data.len()];
+    for b in 0..dim {
+        for g in 0..dim {
+            for r in 0..dim {
+                let src = ((b * dim + g) * dim + r) * 4;
+                let dst = (g * dim * dim + b * dim + r) * 4;
+                rgba[dst..dst + 4].copy_from_slice(&data[src..src + 4]);
+            }
+        }
+    }
+    Some(Image {
+        width: dim * dim,
+        height: dim,
+        rgba,
     })
 }
 
@@ -902,6 +969,7 @@ fn manifest(
     map: &Map,
     sky: Option<(String, SkyExport)>,
     ambient: Json,
+    out_dir: &Path,
     warnings: &mut Vec<String>,
 ) -> Json {
     let sun = map.entities_of("light_environment").next();
@@ -937,8 +1005,49 @@ fn manifest(
         "sun": sun.map(sun_manifest),
         "ambient": ambient,
         "sky": sky,
-        "post": post_manifest(content, map, warnings),
+        "post": post_manifest(content, map, out_dir, warnings),
         "fog": fog_manifest(map),
         "spawns": { "ct": spawns("info_player_counterterrorist"), "t": spawns("info_player_terrorist") },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lut_strip_puts_blue_slices_side_by_side() {
+        // A 2³ table whose entry for (r, g, b) is (r, g, b, 255) scaled to 0/255: red fastest, then green, then blue.
+        let dim = 2;
+        let mut data = Vec::new();
+        for b in 0..dim {
+            for g in 0..dim {
+                for r in 0..dim {
+                    data.extend_from_slice(&[
+                        (r * 255) as u8,
+                        (g * 255) as u8,
+                        (b * 255) as u8,
+                        255,
+                    ]);
+                }
+            }
+        }
+        let image = lut_strip(dim, &data).expect("2^3 entries");
+        assert_eq!((image.width, image.height), (4, 2));
+        let pixel = |x: usize, y: usize| &image.rgba[(y * image.width + x) * 4..][..4];
+        for b in 0..dim {
+            for g in 0..dim {
+                for r in 0..dim {
+                    let expected = [(r * 255) as u8, (g * 255) as u8, (b * 255) as u8, 255];
+                    assert_eq!(pixel(b * dim + r, g), expected, "input ({r}, {g}, {b})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lut_strip_rejects_a_wrong_size() {
+        assert!(lut_strip(32, &[0; 32 * 32 * 4]).is_none());
+        assert!(lut_strip(1, &[0; 4]).is_none());
+    }
 }

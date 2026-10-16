@@ -111,7 +111,7 @@ back (the world always wins the depth test), and takes them out of shadows and L
 | `.vpost` DATA `m_toneMapParams` | `m_flWhitePoint`, `m_flExposureBias` | 1.5, 0 |
 | | shoulder / linear strength / linear angle / toe strength, num, denom | 0 / 0.001 / 0.001 / 1, 1, 1 |
 | `.vpost` DATA `m_bloomParams` | `m_flScreenBloomStrength`, `m_flBloomThreshold` | 0.126, 1.055 |
-| `.vpost` DATA | `m_colorCorrectionVolumeData` | 32³ colour LUT (near identity, slightly more saturated) |
+| `.vpost` DATA | `m_bHasColorCorrection`, `m_nColorCorrectionVolumeDim`, `m_colorCorrectionVolumeData` | true, 32, 32³ RGBA8 colour table (near identity, slightly more saturated; see [the table](#the-colour-correction-table)) |
 
 The tone curve is Hable's (Uncharted 2) filmic curve (Source 2 Viewer's `post_processing.frag.slang`); with the
 stock parameters above it is a straight line. **Measured** on CS2 screenshots, the picture is
@@ -129,7 +129,10 @@ sit at 0.8, the palace too, the dark B apartments go up to 1.0. Its controller i
 
 For comparisons, **`mat_tonemap_force_scale <exposure>`** (cheat) locks CS2's exposure: a palace capture at
 `mat_tonemap_force_scale 0.8` is identical to the automatic one (ratio 1.000), at 1.0 it is 1.23× brighter.
-`mat_fullbright 1` shows the albedo only.
+`mat_fullbright 1` shows the albedo × 1, linearly: it ignores the locked exposure (de_anubis at 1.0 and 0.5: identical
+to 0.002 %) and the tone curve (fullbright against Unreal's base colour is flat over the whole brightness range).
+Unreal's `ShowFlag.Lighting 0` render, its base colour, skips the manual exposure (exposure 1: its sky pixels fit
+exposure 1.0 exactly) but keeps OFAST's tone mapper.
 
 Unreal, with Manual exposure (physical camera off) and its tone curve off (`ToneCurveAmount` 0, `ExpandGamut` 0,
 `BlueCorrection` 0), shows `luminance × 2^bias` (`PostProcessEyeAdaptation.cpp`; checked the same way: Unreal's
@@ -150,35 +153,77 @@ cs_italy, cs_office, cs_shelter, de_ancient, de_ancient_night, de_anubis, de_cac
 de_vertigo. Only de_dust2, de_mirage, de_nuke and de_overpass are linear. de_boulder's `.vpost` has no tone-map block,
 and de_debris, de_eldorado, de_fachwerk and de_poseidon have no `.vpost` that `map_entities` finds.
 
-Measured on one view taken at exposures 0.4 and 0.8, the darkest pixels halve and more (×0.42) while the brightest
-only lose a third (×0.69), so the picture is not linear there. With `H(x) = (x(Ax + CB) + DE) / (x(Ax + B) + DF) − E/F`:
+Halving the exposure does not halve the picture there: on de_anubis the darkest pixels drop to a third (×0.32) and
+the brightest only to ×0.79. With `H(x) = (x(Ax + CB) + DE) / (x(Ax + B) + DF) − E/F` (the `.vpost`'s curve), W its
+white point and LUT its colour-correction table, CS2 shows:
 
 ```text
-display = H(a × exposure × scene) / H(b × W)          then sRGB
+shown sRGB = LUT( sRGB( H(k × exposure × scene) / H(w × W) ) )        k = 3.4, w = 6
 ```
 
-- **b = 1.25** comes from the exposure pair. The ratio between the two shots of a pixel depends only on the curve's
-  shape and on `H(b × W)`, not on `a` (the unknown scene value absorbs it).
-- **a**, the input level, needs pixels whose scene value is known. Three anchors disagree on de_inferno:
+Measured on **de_anubis** (2026-10-16 night), the map to measure on: its visible sky (the 3D skybox's `env_sky`) is
+the same texture at the same brightness (1.45) as the one that lights it, there is no bloom (threshold 10), and its
+automatic exposure sits at `minexposure` (0.7) in both spawns. Shots at the spawns at exposure 0.7, 0.35 and with
+`mat_fullbright 1` (`tools/cs2/cfg/ofast_v_anubis_*.cfg`). Method: invert CS2's shots through the table (its grey
+diagonal per channel) and sRGB, then compare with the curve: pixel by pixel between an exposure pair, against the
+exported sky's radiance on sky pixels (picked where Unreal's render shows nothing but sky), and against Unreal's
+scene values (its shots inverted through its own curve) on lit cells.
 
-| Anchor | a | What it depends on |
+- **The table** (below) is applied after the curve, to the sRGB-encoded picture. de_anubis's sends everything below
+  27/255 to black: that, not Hable's toe, is why the darks drop to a third. Without it no `k` and `w` fit the
+  exposure pairs; with it inverted, every pixel halves at half exposure (0.50 – 0.51 over the whole brightness range).
+- **w = 6** (white 22 – 24): the halving is the same at every brightness for w × W = 22 – 24, on de_anubis's two
+  spawns (0.7 / 0.35) and on de_inferno's CT spawn (0.8 / 0.4). A pair does not depend on `k` (it scales both shots).
+- **k = 3.4**: sky pixels, whose radiance is known from the exported sky, follow the stock Hable shape at both
+  exposures and in all three channels (3 – 5 % per pixel), with k = 3.37 – 3.44 on both de_anubis spawns.
+
+| Anchor (CS2's shots read through the new rule) | de_anubis | de_inferno |
 |---|---|---|
-| sky pixels (radiance from the exported sky) | 2.0 | OFAST's value of the visible sky: de_inferno's skybox `env_sky` (`brightnessscale` 0.8 × 2^1) is 1.6× its main world's (0.5 × 2^1), and it is not known which one CS2 draws |
-| lit surfaces of both spawns (median of 16 cells, 1.9 – 3.25) | 2.5 | OFAST's sun, sky light and bounce, calibrated on the linear maps |
-| `mat_fullbright 1` at exposure 1 against Unreal's base colour (`ShowFlag.Lighting 0`) | 3.8 | Unreal's base colours being CS2's albedo; checked on de_mirage, where fullbright shows albedo × 1 |
+| sky pixels | k = 3.37 (CT), 3.44 (T) | 3.15 – 3.25 with OFAST's sky: CS2 draws the **skybox** `env_sky` (0.8 × 2^1), at 0.93 – 0.95 of OFAST's value; the main world's (0.5 × 2^1) would be 0.63 |
+| lit surfaces, k × CS2 scene / Unreal scene (median of 12 cells) | 3.27 (CT), 3.41 (T): OFAST's light × albedo is right | 5.4 (CT): Unreal's surfaces are too dark |
+| Unreal base colour / CS2 fullbright albedo | 1.00 (CT), 0.72 – 1.00 (T surfaces) | 0.60 (CT) |
+| light, lit ÷ albedo in each engine (Unreal / CS2) | 1.02 (CT), 1.0 – 1.4 (T surfaces, where the base colour is lowest) | 1.01 (CT; 0.58 – 1.51) |
+| whole shot, Unreal / CS2, old rule → new rule (simulated) | 1.37 → 1.02 (CT), 1.32 → 1.00 (T); sky 0.98 | 0.85 → 0.74 (CT: sky 1.05, surfaces 0.73), 1.46 → 1.16 (T) |
 
-Lit ÷ fullbright, both shots inverted through the curve, measures the light itself, independently of `a` (it
-cancels in the ratio). Done for CS2's two shots and for Unreal's lit and unlit renders of the same view, Unreal's
-light on de_inferno is 1.46× CS2's, in the sun and in the shade alike (median of 12 cells; the sunlit ground gets
-2.5 units in Unreal, 1.64 in CS2). That roughly reconciles the last two anchors (2.5 × 1.46 = 3.65, against 3.8). The
-`light_environment` has the same brightness as de_mirage's (3), so where the 1.46 comes from is open. Only the
-product of level and light shows in the picture, so `import_map.py` uses **a = 2.5** (`HABLE_INPUT_SCALE`) with
-the light as calibrated. A second Hable map captured in CS2 (sky, lit and fullbright shots) would tell whether 2.5
-holds there, or whether the light, the sky or the level is what differs.
+So the level differs, not the sky or the light: with k = 3.4 the sky and the lit surfaces of de_anubis agree, and
+de_inferno's sky agrees too. **The old rule (a = 2.5, b = 1.25, no table) was wrong**: it was fitted on de_inferno's lit
+surfaces, which are darker in Unreal than in CS2 for another reason, and it made de_anubis 1.3× too bright, sky
+included. That reason is de_inferno's **materials**: their base colour is 0.6× CS2's albedo in the CT view, while the
+light itself matches (lit ÷ albedo: 1.01). That is open. Its sunlit ground is odd in CS2: lit ÷ fullbright gives 2.08
+units of light, less than the sun alone (≈ 2.5), so for some de_inferno materials fullbright may not show the albedo
+the lit shader uses. The old rule's other two anchors were artifacts: its fullbright anchor (3.8) assumed fullbright
+goes through exposure and curve, and it does not; its sky anchor (2.0) used the same wrong curve.
 
-In Unreal the curve is a post-process material at `BL_ReplacingTonemapper` (`M_OFAST_TonemapHable_v2`): scene colour ×
-eye-adaptation exposure → the formula above → sRGB. The parameters come from the manifest's `post.tonemap`. Maps
-with a shoulder of 0 keep Unreal's tone curve off, which gives the linear picture.
+Not reproduced, because toggling them in CS2 changes nothing: `r_csgo_enable_tonemapping 0` (identical to 0.1 %),
+`r_csgo_render_post_colorcorrection 1` (0.02 sRGB level), `r_csgo_render_post_bloom 0` on de_inferno, which has an
+additive bloom (strength 0.12, threshold 0.6): 0.7 %.
+
+### The colour-correction table
+
+`m_colorCorrectionVolumeData`: `m_nColorCorrectionVolumeDim`³ (32³) RGBA8 entries, red fastest, then green, then
+blue; input and output are the sRGB-encoded picture. The exporter writes it as `<map>_lut.png`, the 32 blue slices
+side by side (1024 × 32, pixel (b × 32 + r, g) = output for input (r, g, b), Unreal's colour-grading layout), and the
+manifest's `post.color_correction` names it. Every official map checked but de_overpass has one:
+
+| Largest change (sRGB levels of 255) | Maps | Grey input 32 → |
+|---|---|---|
+| ≤ 10 | de_mirage 7, de_train 7, de_dust2 10, de_overpass (none) | 30 – 32 |
+| 15 – 24 | de_ancient 15, de_nuke 17, cs_italy 17, cs_office 22, de_cache 24, de_inferno 24 | 14 – 25 |
+| 27 – 31 | de_vertigo 27, de_anubis 31 | 5 – 19 |
+
+CS2 draws every map through the same post-processing, so OFAST applies the table on linear maps too, although there
+it could not be confirmed separately: its effect is small (de_mirage ±1 %, de_dust2 +1 %), and de_nuke's 17 levels
+move its spawns from 0.98 / 0.96 to 0.92 / 0.90 of CS2 (an exposure pair, 1.0 / 0.85, halves the same with or
+without it; its sky's three channels agree better with it in one spawn and worse in the other).
+
+### In Unreal
+
+A post-process material at `BL_ReplacingTonemapper` (`M_OFAST_Tonemap_v3`), on every map: scene colour ×
+eye-adaptation exposure → a straight line (shoulder 0) or `H(3.4 x) / H(6 W)` (`HABLE_INPUT_SCALE`,
+`HABLE_WHITE_SCALE` in `import_map.py`) → sRGB → the map's table, imported as an uncompressed, non-sRGB texture
+without mips and read with two bilinear lookups on neighbouring blue slices. Unreal applies nothing after a replacing
+tone mapper. The curve's parameters come from the manifest's `post.tonemap`. Before this, linear maps used Unreal's
+own tone mapper with its curve off, and Hable maps `M_OFAST_TonemapHable_v2` (H(2.5 x) / H(1.25 W), no table).
 
 ## Calibration against CS2 (de_mirage, 2026-10-16)
 
@@ -220,12 +265,13 @@ lights send directly (≈ 0.08) — it is sunlight bouncing down the corridors f
 only partly whatever its settings or the sun's bounce gain (×2 moved it by 0.01). That 0.75 still included sunlight
 leaking through walls (the proxies of the time never cast); without it they are at 0.6.
 
-**Bloom, colour correction and fog: no measurable effect.** Toggled in CS2 at the CT spawn (exposure locked):
+**Bloom and fog: no measurable effect.** Toggled in CS2 at the CT spawn (exposure locked):
 `r_csgo_render_post_bloom 0` (default 1), and switching `r_csgo_render_post_colorcorrection` between 0 (default) and
 1, change the picture by less than 0.1 sRGB level on average; `fog_enable 0; fog_enableskybox 0` changes nothing
 either (the only differing pixels are palms moving in the wind; the 3D-skybox hotel is identical). So the Unreal side
-reproduces none of them: doing so would add differences, not remove them. The bloom and fog settings stay in the
-manifest for reference; the colour LUT is not exported.
+reproduces neither bloom nor fog: doing so would add differences, not remove them. Their settings stay in the
+manifest for reference. The colour-correction cvar switches nothing, but the table itself is applied (measured on
+de_anubis, where it is strong; [above](#the-colour-correction-table)); de_mirage's is nearly the identity.
 
 ## Checked on three more maps (2026-10-16 evening)
 
@@ -263,6 +309,21 @@ curve on de_inferno (Unreal / CS2, whole image):
 | de_inferno CT | 1.08 (linear picture) | 0.85 | ground 0.93 – 1.01; façades and loggia in the shade 0.75 – 0.85 |
 | de_inferno T | 2.7 | 1.46 | the street is shaded as in CS2 (0.98 – 1.18); a pillar and the floor by the arch get sunlight that CS2 shades (1.4 – 2.3) |
 | de_nuke CT / T | 1.05 / 0.97 | 0.98 / 0.96 | |
+
+### After the tone-curve correction (2026-10-16 night)
+
+With the measured rule ([above](#exposure-and-tone-mapping--post_processing_volume--vpost): k = 3.4, white 6 W, the
+colour table on every map), re-imported and compared again (Unreal / CS2, whole image). The real imports reproduce
+the rule's simulation on the earlier Unreal shots to 0.1 % (de_anubis, de_nuke).
+
+| View | Before | Now | Notes |
+|---|---|---|---|
+| de_anubis CT / T | 1.37 / 1.32 (H(2.5 x) / H(1.25 W)) | 1.02 / 1.00 | new map; cells 0.93 – 1.15 / 0.96 – 1.07, sky 0.98 – 0.99 |
+| de_inferno CT / T | 0.85 / 1.46 | 0.74 / 1.16 (simulated) | not re-imported here (the export in `test-data` had moved to a newer format); CT: sky 1.05, surfaces 0.73 — the base colours, above |
+| de_mirage CT / T / palace | 1.00 / 0.97 / 0.96 | 1.00 / 0.97 / 0.95 | the table is nearly the identity |
+| de_mirage B apartments | 0.61 | 0.71 | the table moves dark pixels by a few % (down); the rise is something else in the shared sandbox or run-to-run, not looked into |
+| de_dust2 T / CT | 0.95 / 0.11 | 0.95 / 0.095 | |
+| de_nuke CT / T | 0.98 / 0.96 | 0.92 / 0.90 | applying its table (17 levels) darkens the picture: the one map where the table, unconfirmed on linear maps, makes the match worse; see [the table](#the-colour-correction-table) |
 
 ## Shadows from the back of walls
 
@@ -323,7 +384,7 @@ masked: Lumen's surface cache sees nothing of them now.
 | Sky | CS2's `env_sky` HDR on a sphere + Sky Light from it | Unreal's Sky Atmosphere + real-time Sky Light, light height fog |
 | Local lights | CS2-matched candela (`intensity_cd`), CS2 bounce × gain | Hammer's real candela (`intensity_cd_photometric` = 79.6 × linear), plain bounce |
 | Exposure | fixed, measured on CS2 (EV100 0.322 on de_mirage) | auto (histogram), EV100 2 – 16 |
-| Tone curve | none where CS2's is a straight line, CS2's Hable curve otherwise | Unreal's filmic curve, local exposure, light bloom and vignette |
+| Tone curve | CS2's (a straight line or Hable's), then CS2's colour-correction table | Unreal's filmic curve, local exposure, light bloom and vignette |
 
 The realistic style does **not** keep CS2's light ratios: it pairs Hammer's photometric candela with a real-world
 sun (100 000 lux before the atmosphere, about 80 000 on the ground), so a 121 cd wall lamp is far fainter next to the
@@ -343,8 +404,8 @@ a power law).
 ## Not used yet
 
 - Light probes (`env_combined_light_probe_volume`), lightmaps, `env_cubemap` reflections: baked data Lumen replaces.
-- The colour-correction LUT (32³ RGBA8 blob, red fastest, near identity on de_mirage), bloom and fog: no measurable
-  effect in CS2 on de_mirage, so not applied (bloom and fog settings are in the manifest).
+- Bloom and fog: no measurable effect in CS2 on de_mirage (bloom: 0.7 % on de_inferno), so not applied (their
+  settings are in the manifest).
 
 ## Sources
 
@@ -354,3 +415,5 @@ a power law).
 - Hammer's FGDs in the CS2 install: `game/core/lights_base.fgd`, `lights2.fgd`, `postprocessing.fgd`
 - Unreal 5.8 source: `PostProcessEyeAdaptation.cpp` (manual exposure), `Scene.h` (tone curve settings),
   `InterchangeGltfTranslator.cpp` (light units), `InterchangeGenericTexturePipeline.h` (`.hdr` → cube)
+- Measurements, not sources: the tone curve and the colour-correction table were read off CS2 screenshots
+  (de_anubis, de_inferno), as described above
