@@ -17,6 +17,17 @@ use crate::resource::ResourceError;
 use crate::texture::TextureError;
 use crate::vpk::VpkError;
 
+/// Choices a map export leaves to the caller. The default suits OFAST's Unreal import (`import_map.py`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExportOptions {
+    /// Bake the model tints (`rendercolor`, scene-object tints) of `csgo_environment(_blend)` materials into their
+    /// colour textures, one texture per tint, as glTF readers other than OFAST's Unreal import need (Blender,
+    /// viewers). Off by default: the colour is baked once without the tint and the tint travels in
+    /// `extras.ofast.environment` for Unreal's material to apply — de_inferno then writes about half the colour
+    /// bakes. See `docs/formats/material.md` ("Model tint").
+    pub bake_model_tints: bool,
+}
+
 /// Everything that can go wrong while exporting.
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {

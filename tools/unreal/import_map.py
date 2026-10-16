@@ -14,7 +14,8 @@ Inputs (environment variables):
 
 Steps: level made once from the Basic template, its environment (sky, clouds, fog, sun, floor) removed →
 Interchange *scene* import of the glTF (one actor per placement) → layer-blend and height-blend materials (two-layer
-CS2 materials, which glTF cannot describe) → light blockers hidden and
+CS2 materials, which glTF cannot describe) and single-layer environment materials (their model tint is applied in the
+material, not baked into the textures) → light blockers hidden and
 shadow proxies added (no sunlight through single-sided walls) → CS2's environment from the manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
 exposure, no tone curve or CS2's Hable curve (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
 default field of view → screenshots → quit. Everything the script adds is tagged "OFAST" and rebuilt on every run.
@@ -148,7 +149,7 @@ def hide_light_blockers(imported):
 
 
 # Versioned like BLEND_MASTER: the material of 3D-skybox geometry, drawn behind the world (see setup_skybox).
-SKYBOX_MASTER = "/Game/OFAST/Materials/M_OFAST_Skybox_v2"
+SKYBOX_MASTER = "/Game/OFAST/Materials/M_OFAST_Skybox_v3"
 # Shared 1x1 stand-ins for missing glTF texture maps (saved: the master uses them as parameter defaults).
 DEFAULT_TEXTURE_FOLDER = "/Game/OFAST/Materials/Defaults"
 # How far skybox pixels are pushed back, cm: more than any distance inside a map, so the world always wins.
@@ -162,7 +163,8 @@ def setup_skybox(imported):
 
     So every sky3d_ actor gets (component overrides, the world's copies of a mesh are untouched):
     - opaque and masked materials -> an instance of SKYBOX_MASTER (the glTF material's colour, normal and
-      metallic-roughness textures and factors) whose pixel depth offset pushes it SKYBOX_DEPTH_OFFSET_CM back;
+      metallic-roughness textures and factors, and an environment material's model tint on layer 1) whose pixel
+      depth offset pushes it SKYBOX_DEPTH_OFFSET_CM back;
       translucent ones (clouds) keep their material — they are depth-tested against the world anyway;
     - no shadows and no Lumen presence: the skybox is lit apart in CS2 and must not shade the world (its light
       blockers, at 16x, would otherwise cast huge shadows);
@@ -171,7 +173,7 @@ def setup_skybox(imported):
         document = json.load(f)
     by_name = {m["name"]: m for m in document.get("materials", [])}
     folder = "/Game/OFAST/%s/Skybox" % NAME
-    defaults = skybox_default_textures()
+    defaults = default_textures()
     master = ensure_skybox_master(defaults)
     instances = {}
     actors_done = 0
@@ -204,9 +206,15 @@ def setup_skybox(imported):
     log("3D skybox: %d actors drawn behind the world (%d materials), no shadows" % (actors_done, len(instances)))
 
 
-def skybox_default_textures():
-    """1x1 textures for missing glTF maps (white colour, flat normal, roughness 1 / metalness 0), shared by every
-    map and saved."""
+DEFAULT_TEXTURES = {}
+
+
+def default_textures():
+    """1x1 textures for missing maps, shared by every map and saved: "color" white, "normal" flat, "orm" (glTF
+    metallic-roughness and OFAST's surface textures) occlusion 1 / roughness 1 / metalness 0, "mask" white and
+    linear (a missing height texture: tint mask 1, as the exporter's bake assumes)."""
+    if DEFAULT_TEXTURES:
+        return DEFAULT_TEXTURES
     import struct
     import tempfile
     import zlib
@@ -219,20 +227,20 @@ def skybox_default_textures():
             f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
                     + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
-    out = {}
     directory = tempfile.mkdtemp()
     for key, rgba, kind in (("color", (255, 255, 255, 255), "color"), ("normal", (128, 128, 255, 255), "normal"),
-                            ("orm", (255, 255, 0, 255), "linear")):
+                            ("orm", (255, 255, 0, 255), "linear"), ("mask", (255, 255, 255, 255), "linear")):
         path = os.path.join(directory, "T_OFAST_Default_%s.png" % key)
         png(path, rgba)
-        out[key] = import_texture(path, DEFAULT_TEXTURE_FOLDER, kind)
-        unreal.EditorAssetLibrary.save_loaded_asset(out[key])
-    return out
+        DEFAULT_TEXTURES[key] = import_texture(path, DEFAULT_TEXTURE_FOLDER, kind)
+        unreal.EditorAssetLibrary.save_loaded_asset(DEFAULT_TEXTURES[key])
+    return DEFAULT_TEXTURES
 
 
 def ensure_skybox_master(defaults):
-    """Masked material with glTF's PBR inputs (colour, normal and metallic-roughness textures with their factors)
-    plus a constant pixel depth offset."""
+    """Masked material with glTF's PBR inputs (colour, normal and metallic-roughness textures with their factors),
+    the model tint of environment materials (MODEL_TINT_FUNCTION on the colour, tint mask from HeightTexture.G; a
+    white ModelTint changes nothing) and a constant pixel depth offset."""
     if unreal.EditorAssetLibrary.does_asset_exist(SKYBOX_MASTER):
         return unreal.EditorAssetLibrary.load_asset(SKYBOX_MASTER)
     folder, name = SKYBOX_MASTER.rsplit("/", 1)
@@ -267,16 +275,19 @@ def ensure_skybox_master(defaults):
     color = texture("BaseColorTexture", "color", -400)
     normal = texture("NormalTexture", "normal", 0)
     orm = texture("MetallicRoughnessTexture", "orm", 400)
+    height = texture_parameter(material, "HeightTexture", "linear", defaults["mask"], -900, -800)
     factor = mel.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -600, -250)
     factor.set_editor_property("parameter_name", "BaseColorFactor")
     factor.set_editor_property("default_value", unreal.LinearColor(1, 1, 1, 1))
+    tinted = model_tint_call(material, multiply(color, "RGB", factor, "", -400), "", height, "",
+                             model_tint_parameter(material, -600, -900), -150, -700)
     depth = mel.create_material_expression(material, unreal.MaterialExpressionConstant, -300, 850)
     depth.set_editor_property("r", SKYBOX_DEPTH_OFFSET_CM)
     # Python's MaterialProperty has no pixel depth offset: everything goes through a Make Material Attributes node.
     material.set_editor_property("use_material_attributes", True)
     attributes = mel.create_material_expression(material, unreal.MaterialExpressionMakeMaterialAttributes, 0, 0)
     for source, output, pin in (
-        (multiply(color, "RGB", factor, "", -400), "", "BaseColor"),
+        (tinted, "Result", "BaseColor"),
         (multiply(color, "A", factor, "A", -150), "", "OpacityMask"),
         (normal, "RGB", "Normal"),
         (multiply(orm, "G", scalar("RoughnessFactor", 1.0, 500), "", 450), "", "Roughness"),
@@ -293,21 +304,26 @@ def ensure_skybox_master(defaults):
 
 
 def skybox_instance(name, material, document, master, defaults, folder):
-    """An instance of SKYBOX_MASTER with a glTF material's textures and factors."""
+    """An instance of SKYBOX_MASTER with a glTF material's textures and factors, and the model tint of an
+    environment material's layer 1 (a blend material shows layer 1 only here, like its glTF stand-in)."""
     def image(slot):
         info = slot and document["textures"][slot["index"]]
         return document["images"][info["source"]]["uri"] if info else None
 
     pbr = material.get("pbrMetallicRoughness", {})
+    environment = material.get("extras", {}).get("ofast", {}).get("environment")
+    tinted = environment is not None and tinted_in_material(environment)
     textures = {
         "BaseColorTexture": (image(pbr.get("baseColorTexture")), "color"),
         "NormalTexture": (image(material.get("normalTexture")), "normal"),
         "MetallicRoughnessTexture": (image(pbr.get("metallicRoughnessTexture")), "orm"),
+        "HeightTexture": (environment["layer1"].get("height") if tinted else None, "mask"),
     }
     instance = blend_instance("Sky_" + name, master, folder)
     for param, (uri, kind) in textures.items():
-        texture = import_texture(uri, folder, "linear" if kind == "orm" else kind) if uri else defaults[kind]
+        texture = import_texture(uri, folder, kind if kind in ("color", "normal") else "linear") if uri else defaults[kind]
         set_texture_parameter(instance, param, texture)
+    set_model_tint(instance, environment if tinted else None, [("layer1", "")])
     r, g, b, a = pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])
     unreal.MaterialEditingLibrary.set_material_instance_vector_parameter_value(
         instance, "BaseColorFactor", unreal.LinearColor(r, g, b, a))
@@ -325,7 +341,8 @@ def skybox_instance(name, material, document, master, defaults, folder):
 # Versioned name: bump when the graph changes so existing projects get the new master.
 BLEND_MASTER = "/Game/OFAST/Materials/M_OFAST_LayerBlend_v2"
 EXPORT_DIR = os.path.dirname(GLTF)
-# Blend material instances and the layer textures they sample.
+# The material instances OFAST builds for the glTF materials (layer blends, height blends, tinted environment
+# materials) and the textures they sample.
 BLEND_FOLDER = "/Game/OFAST/%s/Blend" % NAME
 
 
@@ -450,8 +467,269 @@ def ensure_blend_master(defaults):
     return material
 
 
+# Versioned like BLEND_MASTER: the model tint of csgo_environment(_blend) (rendercolor, a placement's tint), used by
+# the environment, height-blend and skybox masters. The exporter leaves it out of the baked colour textures
+# (ExportOptions::bake_model_tints in ofast-core) and writes it to extras.ofast.environment.
+MODEL_TINT_FUNCTION = "/Game/OFAST/Materials/MF_OFAST_ModelTint_v1"
+
+# The shaders' model tint, applied to a layer's colour after its (baked) adjustments: towards the tint's hue at the
+# same luminance, capped at 3 x luminance x the tint's brightest channel, by strength x tint mask x (1 - the tint's
+# darkest channel); a white tint changes nothing. The mask is the height texture's G after the layer's contrast and
+# brightness. The reference is model_tint (and Layer::adjust_color) in crates/ofast-core/src/export/environment.rs,
+# which has tests; keep the two identical. Inputs: colour (linear), tint (linear), strength
+# (g_flModelTintAmount x g_bModelTintN), mask (height.G as stored), contrast / brightness (g_fTintMaskContrastN /
+# g_fTintMaskBrightnessN).
+MODEL_TINT_HLSL = """
+float m = saturate(((mask - 0.5) * contrast + 0.5) * brightness);
+float amount = strength * m * (1.0 - min(tint.r, min(tint.g, tint.b)));
+float3 hue = normalize(max(tint, 0.001));
+const float3 L = float3(0.2125, 0.7154, 0.0721);
+float y = dot(colour, L);
+float3 target = hue * min(y / dot(hue, L), 3.0 * y * max(tint.r, max(tint.g, tint.b)));
+return saturate(lerp(colour, target, amount));
+"""
+# Inputs of MODEL_TINT_FUNCTION: (function input, its type, the HLSL name).
+MODEL_TINT_INPUTS = [
+    ("Color", "FUNCTION_INPUT_VECTOR3", "colour"),
+    ("Tint", "FUNCTION_INPUT_VECTOR3", "tint"),
+    ("Strength", "FUNCTION_INPUT_SCALAR", "strength"),
+    ("Mask", "FUNCTION_INPUT_SCALAR", "mask"),
+    ("MaskContrast", "FUNCTION_INPUT_SCALAR", "contrast"),
+    ("MaskBrightness", "FUNCTION_INPUT_SCALAR", "brightness"),
+]
+
+
+def ensure_model_tint_function():
+    """MODEL_TINT_FUNCTION, built once by script: its inputs (MODEL_TINT_INPUTS) go into a Custom node with
+    MODEL_TINT_HLSL, output "Result" (the tinted colour)."""
+    if unreal.EditorAssetLibrary.does_asset_exist(MODEL_TINT_FUNCTION):
+        return unreal.EditorAssetLibrary.load_asset(MODEL_TINT_FUNCTION)
+    folder, name = MODEL_TINT_FUNCTION.rsplit("/", 1)
+    function = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, folder, unreal.MaterialFunction, unreal.MaterialFunctionFactoryNew()
+    )
+    function.set_editor_property("description", "CS2 csgo_environment model tint (rendercolor) on a layer's colour")
+    mel = unreal.MaterialEditingLibrary
+    custom = mel.create_material_expression_in_function(function, unreal.MaterialExpressionCustom, -300, 0)
+    custom.set_editor_property("description", "ModelTint")
+    custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
+    custom.set_editor_property("code", MODEL_TINT_HLSL)
+    inputs = []
+    for _name, _type, hlsl in MODEL_TINT_INPUTS:
+        custom_input = unreal.CustomInput()
+        custom_input.set_editor_property("input_name", hlsl)
+        inputs.append(custom_input)
+    custom.set_editor_property("inputs", inputs)
+    for index, (input_name, input_type, hlsl) in enumerate(MODEL_TINT_INPUTS):
+        node = mel.create_material_expression_in_function(
+            function, unreal.MaterialExpressionFunctionInput, -700, -300 + index * 120
+        )
+        node.set_editor_property("input_name", input_name)
+        node.set_editor_property("input_type", getattr(unreal.FunctionInputType, input_type))
+        node.set_editor_property("sort_priority", index)
+        if not mel.connect_material_expressions(node, "", custom, hlsl):
+            raise RuntimeError("model tint function: could not connect " + input_name)
+    output = mel.create_material_expression_in_function(function, unreal.MaterialExpressionFunctionOutput, 0, 0)
+    output.set_editor_property("output_name", "Result")
+    if not mel.connect_material_expressions(custom, "", output, ""):
+        raise RuntimeError("model tint function: could not connect its output")
+    mel.update_material_function(function)
+    unreal.EditorAssetLibrary.save_asset(MODEL_TINT_FUNCTION)
+    log("created " + MODEL_TINT_FUNCTION)
+    return function
+
+
+def texture_parameter(material, param, kind, default, x, y):
+    """A texture-sample parameter node. kind: 'color', 'normal' or 'linear' (masks), as import_texture's kinds."""
+    sampler = unreal.MaterialSamplerType
+    node = unreal.MaterialEditingLibrary.create_material_expression(
+        material, unreal.MaterialExpressionTextureSampleParameter2D, x, y
+    )
+    node.set_editor_property("parameter_name", param)
+    node.set_editor_property("sampler_type", {"color": sampler.SAMPLERTYPE_COLOR, "normal": sampler.SAMPLERTYPE_NORMAL,
+                                              "linear": sampler.SAMPLERTYPE_MASKS}[kind])
+    node.set_editor_property("texture", default)
+    return node
+
+
+def scalar_parameter(material, param, default, x, y):
+    node = unreal.MaterialEditingLibrary.create_material_expression(
+        material, unreal.MaterialExpressionScalarParameter, x, y
+    )
+    node.set_editor_property("parameter_name", param)
+    node.set_editor_property("default_value", default)
+    return node
+
+
+def model_tint_parameter(material, x, y):
+    """The "ModelTint" vector parameter (linear RGB, default white = no tint), shared by a material's layers."""
+    node = unreal.MaterialEditingLibrary.create_material_expression(
+        material, unreal.MaterialExpressionVectorParameter, x, y
+    )
+    node.set_editor_property("parameter_name", "ModelTint")
+    node.set_editor_property("default_value", unreal.LinearColor(1, 1, 1, 1))
+    return node
+
+
+def model_tint_call(material, color, color_output, height, prefix, tint, x, y):
+    """MODEL_TINT_FUNCTION on a layer's colour (output `color_output` of node `color`), with the tint mask from
+    the height node's G and the layer's scalar parameters <prefix>TintStrength (default 0: no tint),
+    <prefix>TintMaskContrast and <prefix>TintMaskBrightness. `tint` is the ModelTint parameter node. Output
+    "Result"."""
+    mel = unreal.MaterialEditingLibrary
+    call = mel.create_material_expression(material, unreal.MaterialExpressionMaterialFunctionCall, x, y)
+    call.set_editor_property("material_function", ensure_model_tint_function())
+    connections = [
+        (color, color_output, "Color"),
+        (tint, "", "Tint"),
+        (scalar_parameter(material, prefix + "TintStrength", 0.0, x - 300, y + 150), "", "Strength"),
+        (height, "G", "Mask"),
+        (scalar_parameter(material, prefix + "TintMaskContrast", 1.0, x - 300, y + 250), "", "MaskContrast"),
+        (scalar_parameter(material, prefix + "TintMaskBrightness", 1.0, x - 300, y + 350), "", "MaskBrightness"),
+    ]
+    for source, output, pin in connections:
+        if not mel.connect_material_expressions(source, output, call, pin):
+            raise RuntimeError("model tint: could not connect %s%s" % (prefix, pin))
+    return call
+
+
+def tinted_in_material(environment):
+    """True when Unreal's material has a model tint to apply for this extras.ofast.environment: not baked by the
+    exporter, not white, and taken by at least one layer."""
+    if environment.get("model_tint_baked"):
+        return False
+    if all(abs(c - 1.0) < 1e-6 for c in environment.get("model_tint", (1.0, 1.0, 1.0))):
+        return False
+    return any(environment[key].get("tint_strength") for key in ("layer1", "layer2") if key in environment)
+
+
+def set_model_tint(instance, environment, layers):
+    """Writes the model tint of extras.ofast.environment (white when there is none to apply, see
+    tinted_in_material) and the tint settings of `layers`: (layer key, parameter prefix) pairs."""
+    tinted = environment is not None and tinted_in_material(environment)
+    r, g, b = environment["model_tint"] if tinted else (1.0, 1.0, 1.0)
+    set_vector_parameter(instance, "ModelTint", unreal.LinearColor(r, g, b, 1.0))
+    for key, prefix in layers:
+        layer = environment[key] if tinted else {}
+        contrast, brightness = layer.get("tint_mask", (1.0, 1.0))
+        set_scalar_parameter(instance, prefix + "TintStrength", layer.get("tint_strength", 0.0))
+        set_scalar_parameter(instance, prefix + "TintMaskContrast", contrast)
+        set_scalar_parameter(instance, prefix + "TintMaskBrightness", brightness)
+
+
+# Versioned like BLEND_MASTER: every csgo_environment material (one layer), tinted or not. Interchange's glTF
+# materials cannot be relied on for them: a re-import keeps existing material instances as they are, and de_inferno's
+# project still held the conversion from before the environment bakes (plain colour x the tint as a factor, an old
+# roughness texture) after many re-exports — checked on the terrace tablecloths (red and white check in CS2, solid
+# dark red in Unreal until they got this master).
+ENVIRONMENT_MASTER = "/Game/OFAST/Materials/M_OFAST_Environment_v1"
+# Texture parameters of the environment master: (parameter, file key in the layer, import kind, default texture).
+ENVIRONMENT_TEXTURES = [
+    ("Layer1Color", "color", "color", "color"),
+    ("Layer1Normal", "normal", "normal", "normal"),
+    ("Layer1Surface", "surface", "linear", "orm"),
+    ("Layer1Height", "height", "linear", "mask"),
+]
+
+
+def ensure_environment_master(defaults):
+    """csgo_environment's material, built once by script: colour (adjustments baked by the exporter) through
+    MODEL_TINT_FUNCTION, normal, surface (R occlusion, G roughness, B metalness), and the colour's alpha as opacity
+    (mask) for the instances that override the blend mode (alpha-tested and translucent materials, see
+    set_alpha_overrides). `defaults` maps texture parameter names to texture assets."""
+    if unreal.EditorAssetLibrary.does_asset_exist(ENVIRONMENT_MASTER):
+        return unreal.EditorAssetLibrary.load_asset(ENVIRONMENT_MASTER)
+    folder, name = ENVIRONMENT_MASTER.rsplit("/", 1)
+    material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, folder, unreal.Material, unreal.MaterialFactoryNew()
+    )
+    mel = unreal.MaterialEditingLibrary
+    prop = unreal.MaterialProperty
+    textures = {}
+    for row, (param, _key, kind, _default) in enumerate(ENVIRONMENT_TEXTURES):
+        textures[param] = texture_parameter(material, param, kind, defaults[param], -1400, -600 + row * 300)
+    tinted = model_tint_call(material, textures["Layer1Color"], "RGB", textures["Layer1Height"], "Layer1",
+                             model_tint_parameter(material, -1100, -900), -500, -700)
+    for source, output, target in (
+        (tinted, "Result", prop.MP_BASE_COLOR),
+        (textures["Layer1Color"], "A", prop.MP_OPACITY),
+        (textures["Layer1Color"], "A", prop.MP_OPACITY_MASK),
+        (textures["Layer1Normal"], "RGB", prop.MP_NORMAL),
+        (textures["Layer1Surface"], "R", prop.MP_AMBIENT_OCCLUSION),
+        (textures["Layer1Surface"], "G", prop.MP_ROUGHNESS),
+        (textures["Layer1Surface"], "B", prop.MP_METALLIC),
+    ):
+        if not mel.connect_material_property(source, output, target):
+            raise RuntimeError("environment master: could not connect %s" % target)
+    mel.recompile_material(material)
+    unreal.EditorAssetLibrary.save_asset(ENVIRONMENT_MASTER)
+    log("created " + ENVIRONMENT_MASTER)
+    return material
+
+
+def environment_instances():
+    """An instance of ENVIRONMENT_MASTER for every csgo_environment material: its layer's textures
+    (extras.ofast.environment) and model tint (white when there is none to apply, tinted_in_material), and the glTF
+    material's alpha mode and sidedness. Returns glTF material name -> instance; main() puts them on the meshes after
+    the scene import (see ENVIRONMENT_MASTER for why not Interchange's glTF material)."""
+    with open(GLTF) as f:
+        document = json.load(f)
+    defaults = default_textures()
+    instances = {}
+    master = None
+    tinted = 0
+    for material in document.get("materials", []):
+        ofast = material.get("extras", {}).get("ofast", {})
+        environment = ofast.get("environment")
+        if ofast.get("shader") != "csgo_environment.vfx" or not environment:
+            continue
+        layer = environment["layer1"]
+        if not layer.get("color"):
+            log("environment: %s keeps its glTF material (no colour texture)" % material["name"])
+            continue
+        textures = {}
+        for param, key, kind, default in ENVIRONMENT_TEXTURES:
+            textures[param] = import_texture(layer[key], BLEND_FOLDER, kind) if layer.get(key) else defaults[default]
+        master = master or ensure_environment_master(textures)
+        instance = blend_instance(material["name"], master)
+        for param, texture in textures.items():
+            set_texture_parameter(instance, param, texture)
+        set_model_tint(instance, environment, [("layer1", "Layer1")])
+        set_alpha_overrides(instance, material)
+        instances[material["name"]] = instance
+        tinted += tinted_in_material(environment)
+    if instances:
+        log("environment: %d materials (%d with a model tint)" % (len(instances), tinted))
+    return instances
+
+
+def set_alpha_overrides(instance, material):
+    """The glTF material's alpha mode (MASK: masked at its alphaCutoff; BLEND: translucent) and doubleSided as
+    overrides of an instance of an opaque, single-sided master — written only when they change."""
+    mode = material.get("alphaMode", "OPAQUE")
+    blend_modes = {"MASK": unreal.BlendMode.BLEND_MASKED, "BLEND": unreal.BlendMode.BLEND_TRANSLUCENT}
+    wanted = {
+        "override_blend_mode": mode in blend_modes,
+        "blend_mode": blend_modes.get(mode, unreal.BlendMode.BLEND_OPAQUE),
+        "override_opacity_mask_clip_value": mode == "MASK",
+        "opacity_mask_clip_value": float(material.get("alphaCutoff", 0.5)),
+        "override_two_sided": bool(material.get("doubleSided")),
+        "two_sided": bool(material.get("doubleSided")),
+    }
+    overrides = instance.get_editor_property("base_property_overrides")
+    changed = False
+    for prop, value in wanted.items():
+        current = overrides.get_editor_property(prop)
+        if (abs(current - value) > 1e-6) if isinstance(value, float) else current != value:
+            overrides.set_editor_property(prop, value)
+            changed = True
+    if changed:
+        instance.set_editor_property("base_property_overrides", overrides)
+        CHANGED_INSTANCES.add(instance.get_path_name())
+
+
 # Versioned like BLEND_MASTER: csgo_environment_blend's height blend.
-HEIGHT_BLEND_MASTER = "/Game/OFAST/Materials/M_OFAST_HeightBlend_v1"
+HEIGHT_BLEND_MASTER = "/Game/OFAST/Materials/M_OFAST_HeightBlend_v2"
 
 # Layer 2's weight, as in Valve's csgo_environment_blend pixel shader (default path, without its view-distance
 # softening). The reference is HeightBlend::weight in crates/ofast-core/src/export/environment.rs, which has tests;
@@ -491,7 +769,8 @@ HEIGHT_BLEND_TEXTURES = [
 
 def ensure_height_blend_master(defaults):
     """csgo_environment_blend's material, built once by script. Per layer: colour (adjustments already baked by
-    the exporter), normal, surface (R occlusion, G roughness, B metalness) and height (R). The vertex colour carries
+    the exporter) through MODEL_TINT_FUNCTION (tint mask: the height's G), normal, surface (R occlusion,
+    G roughness, B metalness) and height (R). The vertex colour carries
     the paint (R = layer 2 weight, A = extra softness; Unreal hands it over linear — see probe_vertex_color.py).
     A Custom node computes layer 2's weight (HEIGHT_BLEND_HLSL); every output is lerp(layer 1, layer 2, weight).
     `defaults` maps texture parameter names to texture assets (a sampler parameter needs a matching texture)."""
@@ -539,15 +818,21 @@ def ensure_height_blend_master(defaults):
         scalar.set_editor_property("default_value", default)
         mel.connect_material_expressions(scalar, "", weight, param)
 
-    def lerp(param, output, y):
+    def lerp(param, output, y, layers=None):
+        a, b = layers or (textures["Layer1" + param], textures["Layer2" + param])
         node = mel.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate, -400, y)
-        mel.connect_material_expressions(textures["Layer1" + param], output, node, "A")
-        mel.connect_material_expressions(textures["Layer2" + param], output, node, "B")
+        mel.connect_material_expressions(a, output, node, "A")
+        mel.connect_material_expressions(b, output, node, "B")
         mel.connect_material_expressions(weight, "", node, "Alpha")
         return node
 
+    # Each layer's colour gets the model tint with its own mask and strength before the two are blended.
+    model_tint = model_tint_parameter(material, -1100, -1300)
+    tinted = [model_tint_call(material, textures[layer + "Color"], "RGB", textures[layer + "Height"], layer,
+                              model_tint, -800, -1200 + index * 500)
+              for index, layer in enumerate(("Layer1", "Layer2"))]
     prop = unreal.MaterialProperty
-    mel.connect_material_property(lerp("Color", "RGB", -600), "", prop.MP_BASE_COLOR)
+    mel.connect_material_property(lerp("Color", "Result", -600, tinted), "", prop.MP_BASE_COLOR)
     mel.connect_material_property(lerp("Normal", "RGB", -300), "", prop.MP_NORMAL)
     mel.connect_material_property(lerp("Surface", "R", 0), "", prop.MP_AMBIENT_OCCLUSION)
     mel.connect_material_property(lerp("Surface", "G", 300), "", prop.MP_ROUGHNESS)
@@ -560,28 +845,30 @@ def ensure_height_blend_master(defaults):
 
 def height_blend_instances():
     """An instance of the height-blend master for every csgo_environment_blend material (glTF stand-in: layer 1
-    only), with both layers' textures and its blend settings (extras.ofast.height_blend, written by the exporter).
-    Returns glTF material name -> instance; main() puts them on the meshes after the scene import."""
+    only), with both layers' textures and model-tint settings and the model tint (extras.ofast.environment) and its
+    blend settings (extras.ofast.height_blend), as the exporter writes them. Returns glTF material name -> instance;
+    main() puts them on the meshes after the scene import."""
     with open(GLTF) as f:
         document = json.load(f)
     blends = {}
     for material in document.get("materials", []):
-        blend = material.get("extras", {}).get("ofast", {}).get("height_blend")
-        if not blend:
+        ofast = material.get("extras", {}).get("ofast", {})
+        blend, environment = ofast.get("height_blend"), ofast.get("environment")
+        if not blend or not environment:
             continue
         missing = ["%s.%s" % (layer, key) for layer in ("layer1", "layer2") for _p, key, _k in HEIGHT_BLEND_TEXTURES
-                   if not blend[layer].get(key)]
+                   if not environment[layer].get(key)]
         if missing:
             log("height blend: %s keeps layer 1 only (no %s)" % (material["name"], ", ".join(missing)))
             continue
-        blends[material["name"]] = blend
+        blends[material["name"]] = (blend, environment)
     instances = {}
     master = None
-    for name, blend in blends.items():
+    for name, (blend, environment) in blends.items():
         textures = {}
         for pattern, key, kind in HEIGHT_BLEND_TEXTURES:
             for layer in ("Layer1", "Layer2"):
-                textures[pattern % layer] = import_texture(blend[layer.lower()][key], BLEND_FOLDER, kind)
+                textures[pattern % layer] = import_texture(environment[layer.lower()][key], BLEND_FOLDER, kind)
         master = master or ensure_height_blend_master(textures)
         instance = blend_instance(name, master)
         for param, texture in textures.items():
@@ -591,6 +878,7 @@ def height_blend_instances():
             if index is not None:
                 value = value[index]
             set_scalar_parameter(instance, param, value)
+        set_model_tint(instance, environment, [("layer1", "Layer1"), ("layer2", "Layer2")])
         instances[name] = instance
     if instances:
         log("height blend: %d materials" % len(instances))
@@ -640,6 +928,14 @@ def set_scalar_parameter(instance, param, value):
     mel = unreal.MaterialEditingLibrary
     if abs(mel.get_material_instance_scalar_parameter_value(instance, param) - float(value)) > 1e-6:
         mel.set_material_instance_scalar_parameter_value(instance, param, float(value))
+        CHANGED_INSTANCES.add(instance.get_path_name())
+
+
+def set_vector_parameter(instance, param, color):
+    mel = unreal.MaterialEditingLibrary
+    current = mel.get_material_instance_vector_parameter_value(instance, param)
+    if any(abs(getattr(current, c) - getattr(color, c)) > 1e-6 for c in "rgba"):
+        mel.set_material_instance_vector_parameter_value(instance, param, color)
         CHANGED_INSTANCES.add(instance.get_path_name())
 
 
@@ -1400,14 +1696,15 @@ def main():
     with open(MANIFEST) as f:
         manifest = json.load(f)
     prepare_level()
-    # Two-layer materials glTF cannot describe: their instances are set up before the scene import, while no mesh in
-    # the level uses them yet, then put on the imported meshes.
+    # Materials glTF cannot describe (two-layer blends, model tints): their instances are set up before the scene
+    # import, while no mesh in the level uses them yet, then put on the imported meshes.
     blends = layer_blend_instances()
     blends.update(height_blend_instances())
+    blends.update(environment_instances())
     unreal.EditorAssetLibrary.save_directory("/Game/OFAST", only_if_is_dirty=True, recursive=True)
     imported = import_scene()
     if blends:
-        log("blend materials: %d mesh slots swapped" % swap_material_slots(imported, blends))
+        log("OFAST materials: %d mesh slots swapped" % swap_material_slots(imported, blends))
         unreal.EditorAssetLibrary.save_directory("/Game/OFAST/" + NAME, only_if_is_dirty=True, recursive=True)
     # Sunlight must not leak into interiors: CS2's light blockers and two-sided shadows for single-sided walls.
     hide_light_blockers(imported)

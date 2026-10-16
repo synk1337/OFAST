@@ -48,8 +48,8 @@ use std::sync::Mutex;
 use rayon::prelude::*;
 use serde_json::{Value as Json, json};
 
-use super::ExportError;
 use super::environment;
+use super::{ExportError, ExportOptions};
 use crate::content::Content;
 use crate::coords;
 use crate::kv3::Value;
@@ -97,7 +97,8 @@ pub fn export_model(
         .and_then(|s| s.to_str())
         .unwrap_or("model")
         .to_owned();
-    let mut writer = GltfWriter::new(content, out_dir)?;
+    // A model on its own has no placement tints: the options change nothing here.
+    let mut writer = GltfWriter::new(content, out_dir, ExportOptions::default())?;
     let mut roots = Vec::new();
     for mesh in model.default_meshes() {
         let draws: Vec<&DrawCall> = mesh.draw_calls.iter().collect();
@@ -190,16 +191,18 @@ struct RegisteredTexture {
     base: String,
 }
 
-/// glTF texture indices of one `csgo_environment(_blend)` layer.
+/// glTF texture indices and settings of one `csgo_environment(_blend)` layer.
 struct EnvironmentLayer {
-    /// Adjusted colour (sRGB).
+    /// Adjusted colour (sRGB), without the model tint unless [`ExportOptions::bake_model_tints`].
     color: Option<usize>,
     /// Normal map.
     normal: Option<usize>,
     /// Occlusion (R), roughness (G), metalness (B).
     surface: Option<usize>,
-    /// The height texture as stored (height in R).
+    /// The height texture as stored (height in R, tint mask in G).
     height: Option<usize>,
+    /// The layer's settings (model-tint strength and tint-mask contrast / brightness go into `extras.ofast`).
+    settings: environment::Layer,
 }
 
 /// Material information read from a `.vmat_c`.
@@ -243,6 +246,7 @@ impl MaterialInfo {
 pub(crate) struct GltfWriter<'c> {
     content: &'c Content,
     out_dir: PathBuf,
+    options: ExportOptions,
     bin: Vec<u8>,
     buffer_views: Vec<Json>,
     accessors: Vec<Json>,
@@ -291,11 +295,16 @@ const AO_PARAMS: &[&str] = &["g_tAmbientOcclusion", "g_tLayer1AmbientOcclusion"]
 const VERTEX_BLEND_SHADERS: &[&str] = &["csgo_lightmappedgeneric.vfx"];
 
 impl<'c> GltfWriter<'c> {
-    pub(crate) fn new(content: &'c Content, out_dir: &Path) -> Result<Self, ExportError> {
+    pub(crate) fn new(
+        content: &'c Content,
+        out_dir: &Path,
+        options: ExportOptions,
+    ) -> Result<Self, ExportError> {
         fs::create_dir_all(out_dir.join("textures"))?;
         Ok(Self {
             content,
             out_dir: out_dir.to_path_buf(),
+            options,
             bin: Vec::new(),
             buffer_views: Vec::new(),
             accessors: Vec::new(),
@@ -551,11 +560,12 @@ impl<'c> GltfWriter<'c> {
             "name": name,
             "pbrMetallicRoughness": { "metallicFactor": 0.0, "roughnessFactor": 1.0 },
         });
-        // csgo_environment(_blend) tint only their tint-masked area, keeping its luminance: baked into the colour.
-        let baked_tint = info
+        // csgo_environment(_blend) tint only their tint-masked area, keeping its luminance: no factor can say that.
+        // Unreal's material applies it from extras.ofast.environment (or it is baked, ExportOptions).
+        let environment_tint = info
             .as_ref()
             .is_some_and(|info| environment::is_environment(&info.shader));
-        if tint_key != [255; 4] && !baked_tint {
+        if tint_key != [255; 4] && !environment_tint {
             // Tints are authored in sRGB; glTF factors are linear.
             let linear = [
                 srgb_to_linear(tint[0]),
@@ -628,8 +638,9 @@ impl<'c> GltfWriter<'c> {
         info
     }
 
-    /// Fills a glTF material from a CS2 material. `tint` is the model tint (sRGB bytes, white = none), which only
-    /// the environment shaders bake in (the others get it as `baseColorFactor` from [`Self::material`]).
+    /// Fills a glTF material from a CS2 material. `tint` is the model tint (sRGB bytes, white = none), which the
+    /// environment shaders describe in `extras.ofast.environment` (the others get it as `baseColorFactor` from
+    /// [`Self::material`]).
     fn fill_material(&mut self, material: &mut Json, info: &MaterialInfo, tint: [u8; 3]) {
         material["extras"] = json!({
             "ofast": {
@@ -713,9 +724,14 @@ impl<'c> GltfWriter<'c> {
     }
 
     /// `csgo_environment(_blend)` (see [`environment`]): layer 1 becomes the glTF material, with its colour
-    /// adjustments and the model tint baked into the colour, and its occlusion, roughness and metalness into one
-    /// texture. A blend material also lists both layers' files and its height-blend settings in
-    /// `extras.ofast.height_blend`, for Unreal's height-blend material.
+    /// adjustments baked into the colour, and its occlusion, roughness and metalness into one texture.
+    ///
+    /// `extras.ofast.environment` describes every layer for Unreal's environment and height-blend materials: its
+    /// files (colour, normal, surface, height) and model-tint settings, plus the model tint itself (linear RGB).
+    /// The tint is not in the colour (`model_tint_baked` false): Unreal's material applies it, so a colour is baked
+    /// once for all the tints placed on it, and other glTF readers see the untinted colour. With
+    /// [`ExportOptions::bake_model_tints`] it is baked into the colour instead, one texture per tint. A blend
+    /// material's height-blend settings go into `extras.ofast.height_blend`.
     fn fill_environment(
         &mut self,
         material: &mut Json,
@@ -725,7 +741,10 @@ impl<'c> GltfWriter<'c> {
     ) {
         let alpha_test = info.flag("F_ALPHA_TEST");
         let blend = info.shader == environment::ENVIRONMENT_BLEND;
-        let layer1 = self.environment_layer(info, 1, tint, keep_alpha, alpha_test, blend);
+        let layers: Vec<EnvironmentLayer> = (1..=if blend { 2 } else { 1 })
+            .map(|n| self.environment_layer(info, n, tint, keep_alpha, alpha_test, blend))
+            .collect();
+        let layer1 = &layers[0];
         if let Some(id) = layer1.color {
             material["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": id });
         }
@@ -738,12 +757,18 @@ impl<'c> GltfWriter<'c> {
             pbr["metallicFactor"] = json!(1.0);
             material["occlusionTexture"] = json!({ "index": id });
         }
+        let mut description = json!({
+            // Tints are authored in sRGB; Unreal's vector parameters are linear.
+            "model_tint": tint.map(|c| srgb_to_linear(f32::from(c) / 255.0)),
+            "model_tint_baked": self.options.bake_model_tints,
+        });
+        for (index, layer) in layers.iter().enumerate() {
+            description[format!("layer{}", index + 1)] = self.layer_json(layer);
+        }
+        material["extras"]["ofast"]["environment"] = description;
         if blend {
-            let layer2 = self.environment_layer(info, 2, tint, keep_alpha, alpha_test, blend);
             let blend = environment::HeightBlend::read(info);
             material["extras"]["ofast"]["height_blend"] = json!({
-                "layer1": self.layer_files(&layer1),
-                "layer2": self.layer_files(&layer2),
                 "softness": blend.softness,
                 "zero_point": blend.zero_point,
                 "scale": blend.scale,
@@ -752,8 +777,9 @@ impl<'c> GltfWriter<'c> {
         }
     }
 
-    /// Registers the textures of an environment material's layer `n` (1 or 2). `blend`: the material is a
-    /// `csgo_environment_blend`, whose height textures Unreal needs for the blend (the others' are only baked from).
+    /// Registers the textures of an environment material's layer `n` (1 or 2). The height texture is written when
+    /// Unreal needs it: for a `csgo_environment_blend` (`blend`, its height blend) and for a layer whose model tint
+    /// Unreal applies (the tint mask is its G); otherwise it is only baked from.
     fn environment_layer(
         &mut self,
         info: &MaterialInfo,
@@ -766,8 +792,21 @@ impl<'c> GltfWriter<'c> {
         let path = |kind: &str| info.textures.get(&format!("g_t{kind}{n}")).cloned();
         let (color, normal, height) = (path("Color"), path("Normal"), path("Height"));
         let layer = environment::Layer::read(info, n);
+        // The tint baked into the colour: none (white) unless asked, Unreal's material applies it.
+        let (baked_tint, tinted_in_material) = if self.options.bake_model_tints {
+            (tint, false)
+        } else {
+            ([255; 3], tint != [255; 3] && layer.model_tint != 0.0)
+        };
         let color_id = color.as_ref().map(|c| {
-            match environment::ColorJob::new(c.clone(), height.clone(), layer, tint, keep_alpha) {
+            let job = environment::ColorJob::new(
+                c.clone(),
+                height.clone(),
+                layer,
+                baked_tint,
+                keep_alpha,
+            );
+            match job {
                 Some(job) => self.register(TextureJob::EnvColor(job), format!("{}_cc", stem(c))),
                 // Nothing changes the colour: the plain texture, shared with any other material using it.
                 None => self.texture(c, TextureRole::Color { keep_alpha }),
@@ -791,13 +830,14 @@ impl<'c> GltfWriter<'c> {
         });
         let height_id = height
             .as_ref()
-            .filter(|_| blend)
+            .filter(|_| blend || tinted_in_material)
             .map(|p| self.texture(p, TextureRole::Raw));
         EnvironmentLayer {
             color: color_id,
             normal: normal_id,
             surface: surface_id,
             height: height_id,
+            settings: layer,
         }
     }
 
@@ -807,14 +847,18 @@ impl<'c> GltfWriter<'c> {
         format!("textures/{}.png", self.texture_jobs[id].name)
     }
 
-    /// The PNG files of an environment layer, for `extras.ofast.height_blend`.
-    fn layer_files(&self, layer: &EnvironmentLayer) -> Json {
+    /// An environment layer for `extras.ofast.environment`: its PNG files (null when it has none, or when Unreal
+    /// does not need its height texture) and its model-tint settings — `tint_strength` = `g_flModelTintAmount` ×
+    /// `g_bModelTintN`, `tint_mask` = contrast and brightness applied to the height texture's G.
+    fn layer_json(&self, layer: &EnvironmentLayer) -> Json {
         let file = |id: Option<usize>| id.map(|id| self.texture_file(id));
         json!({
             "color": file(layer.color),
             "normal": file(layer.normal),
             "surface": file(layer.surface),
             "height": file(layer.height),
+            "tint_strength": layer.settings.model_tint,
+            "tint_mask": layer.settings.tint_mask,
         })
     }
 
@@ -1597,7 +1641,7 @@ mod tests {
         let mut material = json!({
             "pbrMetallicRoughness": { "baseColorTexture": { "index": 2 }, "metallicRoughnessTexture": { "index": 1 } },
             "normalTexture": { "index": 0 },
-            "extras": { "ofast": { "height_blend": { "layer2": { "color": "textures/a_cc.png" } }, "textures": {
+            "extras": { "ofast": { "environment": { "layer2": { "color": "textures/a_cc.png" } }, "textures": {
                 "g_tColor1": "materials/a_cc.png"
             } } },
         });
@@ -1617,11 +1661,87 @@ mod tests {
         rename_files(&mut material["extras"], &renamed);
         let ofast = &material["extras"]["ofast"];
         assert_eq!(
-            ofast["height_blend"]["layer2"]["color"],
+            ofast["environment"]["layer2"]["color"],
             "textures/a_cc_0badcafe.png"
         );
         // CS2 paths are not file names, even when they look alike.
         assert_eq!(ofast["textures"]["g_tColor1"], "materials/a_cc.png");
+    }
+
+    /// A `csgo_environment` material with a colour correction and its layer's model tint on (the shader's default),
+    /// filled once per tint (white = none) by a writer with `options`. Returns the materials and the number of
+    /// colour bakes registered.
+    fn tinted_environment(options: ExportOptions, tints: &[[u8; 3]]) -> (Vec<Json>, usize) {
+        let info = MaterialInfo {
+            shader: environment::ENVIRONMENT.into(),
+            textures: [
+                ("g_tColor1", "materials/plaster_color.vtex"),
+                ("g_tHeight1", "materials/plaster_height.vtex"),
+                ("g_tNormal1", "materials/plaster_normal.vtex"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .into(),
+            floats: [
+                ("g_fTextureColorBrightness1".to_owned(), 1.25),
+                ("g_fTintMaskContrast1".to_owned(), 2.0),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        let content = Content::new();
+        let dir = temp_folder(&format!("tint-{}", options.bake_model_tints));
+        let mut writer = GltfWriter::new(&content, &dir, options).expect("writer");
+        let materials = tints
+            .iter()
+            .map(|&tint| {
+                let mut material = json!({});
+                writer.fill_material(&mut material, &info, tint);
+                material
+            })
+            .collect();
+        let bakes = writer
+            .texture_jobs
+            .iter()
+            .filter(|t| matches!(t.job, TextureJob::EnvColor(_)))
+            .count();
+        let _ = fs::remove_dir_all(&dir);
+        (materials, bakes)
+    }
+
+    #[test]
+    fn model_tints_are_left_to_the_material_unless_baking_is_asked() {
+        let tints = [[255; 3], [230, 120, 130], [120, 160, 230]];
+        let (materials, bakes) = tinted_environment(ExportOptions::default(), &tints);
+        // One colour bake (the brightness) for all three tints.
+        assert_eq!(bakes, 1);
+        let pink = &materials[1]["extras"]["ofast"]["environment"];
+        assert_eq!(pink["model_tint_baked"], false);
+        let linear = tints[1].map(|c| f64::from(srgb_to_linear(f32::from(c) / 255.0)));
+        assert_eq!(pink["model_tint"], json!(linear));
+        assert_eq!(pink["layer1"]["tint_strength"], 1.0);
+        assert_eq!(pink["layer1"]["tint_mask"], json!([2.0, 1.0]));
+        // The tint mask is the height texture's G: written where Unreal tints, not for the untinted variant.
+        assert!(pink["layer1"]["height"].is_string());
+        let white = &materials[0]["extras"]["ofast"]["environment"];
+        assert!(white["layer1"]["height"].is_null());
+        let channels = white["model_tint"].as_array().expect("RGB");
+        assert!(
+            channels
+                .iter()
+                .all(|c| (c.as_f64().expect("number") - 1.0).abs() < 1e-6)
+        );
+        // Every variant shows the same (untinted) colour to other glTF readers.
+        let color = |m: &Json| m["pbrMetallicRoughness"]["baseColorTexture"]["index"].clone();
+        assert!(materials.iter().all(|m| color(m) == color(&materials[0])));
+
+        let baking = ExportOptions {
+            bake_model_tints: true,
+        };
+        let (materials, bakes) = tinted_environment(baking, &tints);
+        assert_eq!(bakes, 3);
+        let pink = &materials[1]["extras"]["ofast"]["environment"];
+        assert_eq!(pink["model_tint_baked"], true);
+        assert!(pink["layer1"]["height"].is_null(), "only baked from");
     }
 
     #[test]

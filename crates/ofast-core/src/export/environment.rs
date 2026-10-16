@@ -20,14 +20,19 @@
 //! colour, [`bake_surface`] a glTF metallic-roughness texture (R occlusion, G roughness, B metalness). The height
 //! blend itself depends on per-vertex paint and is rebuilt in Unreal (`import_map.py`) from [`HeightBlend`].
 //!
+//! The model tint (`rendercolor`, a placement's tint, [`model_tint`]) is not baked by default: a colour is baked
+//! once for every tint placed on it, and Unreal's materials apply the tint (`import_map.py`'s `MF_OFAST_ModelTint`,
+//! the same formula), reading the tint mask from the height texture's G. `ExportOptions::bake_model_tints` bakes
+//! it instead, one texture per tint, for other glTF readers.
+//!
 //! A bake is keyed only by what changes its pixels ([`ColorJob::new`], [`SurfaceJob::new`]): a colour bake ignores
-//! the surface settings and a surface bake the colour ones, a model tint counts only where the layer takes one
+//! the surface settings and a surface bake the colour ones, a baked model tint counts only where the layer takes one
 //! (`g_bModelTintN`, a tint mask that is not zero), and a colour that nothing changes is not baked at all — the
-//! material uses the plain colour texture. de_inferno's placements carry 100+ different tints on one plaster texture,
-//! most of them on layers with the model tint switched off; before this rule each wrote its own 2048² copy (1049
-//! colour bakes, 8.9 GB; now 555 files, 3.3 GB). The glTF writer then stores identical pixels once, whatever made
-//! them, and names a bake after its pixel hash (see "Texture files" in `gltf.rs`). The table of what counts is in
-//! `docs/formats/material.md`.
+//! material uses the plain colour texture. de_inferno's placements carry 100+ different tints on one plaster texture.
+//! Baking every (texture, settings, tint) wrote 1049 colour bakes (8.9 GB); keyed by what changes the pixels, 555
+//! (3.3 GB); with the tints left to Unreal, 126 (0.76 GB). The glTF writer then stores identical pixels once,
+//! whatever made them, and names a bake after its pixel hash (see "Texture files" in `gltf.rs`). The table of what
+//! counts is in `docs/formats/material.md`.
 
 use crate::content::Content;
 use crate::export::ExportError;
@@ -235,6 +240,8 @@ pub(crate) fn color_tint(rgb: [f32; 3], tint: [f32; 3]) -> [f32; 3] {
 
 /// The shaders' model tint: towards the tint's hue at the same luminance (capped at 3 × luminance × the tint's
 /// brightest channel), by `strength` × (1 − the tint's darkest channel). A white tint changes nothing.
+/// `import_map.py`'s `MODEL_TINT_HLSL` (Unreal's `MF_OFAST_ModelTint`) is the same formula, with `strength` =
+/// [`Layer::model_tint`] × the tint mask as in [`Layer::adjust_color`]; keep the two identical.
 pub(crate) fn model_tint(rgb: [f32; 3], tint: [f32; 3], strength: f32) -> [f32; 3] {
     let amount = strength * (1.0 - tint[0].min(tint[1]).min(tint[2]));
     let hue = normalized(tint.map(|c| c.max(0.001)));
@@ -320,8 +327,9 @@ const NEUTRAL: Layer = Layer {
     model_tint: 0.0,
 };
 
-/// A baked colour texture to write: a layer's colour after its adjustments and a model tint. Made by
-/// [`ColorJob::new`], which keeps only what changes the result.
+/// A baked colour texture to write: a layer's colour after its adjustments, and a model tint when the export bakes
+/// them (`ExportOptions::bake_model_tints`; otherwise the tint is white here). Made by [`ColorJob::new`], which
+/// keeps only what changes the result.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ColorJob {
     /// `g_tColorN`.
@@ -338,8 +346,9 @@ pub(crate) struct ColorJob {
 
 impl ColorJob {
     /// The bake of layer colour `color` with tint mask texture `height`, or `None` when the adjustments and the
-    /// model tint `tint` (sRGB bytes) leave every texel as it is: the plain colour texture is then exact (a bake would
-    /// round dark values through the linear table, `linear_to_srgb`).
+    /// model tint `tint` (sRGB bytes; white when Unreal's material applies it, the default) leave every texel as it
+    /// is: the plain colour texture is then exact (a bake would round dark values through the linear table,
+    /// `linear_to_srgb`).
     ///
     /// Settings that cannot change the result are reset, so layers that differ only there share one bake:
     /// - the surface settings (roughness, metalness, occlusion);

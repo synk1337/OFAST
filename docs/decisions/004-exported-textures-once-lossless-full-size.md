@@ -40,7 +40,8 @@ takes ~45 s.
   alpha channel is the only lossless reduction, and it is done.
 - **Apply the model tint in Unreal instead of baking it.** Would leave ~270 colour textures (≈ 1.2 GB instead of
   3.3 GB), but needs a csgo_environment master material with the tint logic in `import_map.py`, and other glTF
-  readers would lose the tints. Left as the next step if the size still matters.
+  readers would lose the tints. Left as the next step if the size still matters — done in
+  [005](005-model-tint-in-unreal-material.md) (126 bakes, 0.76 GB; baking stays available as an option).
 
 ## Consequences
 

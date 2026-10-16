@@ -3,7 +3,7 @@
 //! ```text
 //! ofast find ak47                                  list files in CS2's archives whose path contains "ak47"
 //! ofast export-model weapons/models/ak47/weapon_rif_ak47.vmdl_c --out exports/ak47
-//! ofast export-map de_mirage --out exports/de_mirage
+//! ofast export-map de_mirage --out exports/de_mirage   (--bake-model-tints: tints in the textures, for Blender)
 //! ofast demo-rounds match.dem                      a demo's rounds and their ticks
 //! ofast export-demo match.dem --round 3 --out exports/demos   one round as a replay file for Unreal
 //! ofast vpk verify                                 check CS2's archive checksums
@@ -18,6 +18,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use ofast_core::content::Content;
 use ofast_core::demo::players::list_rounds;
+use ofast_core::export::ExportOptions;
 use ofast_core::export::gltf::{ExportReport, export_model};
 use ofast_core::export::map::{Skybox, export_map};
 use ofast_core::export::replay::export_round;
@@ -62,6 +63,11 @@ enum Command {
         /// Output folder (created if needed).
         #[arg(long, short)]
         out: PathBuf,
+        /// Bake placement tints into the colour textures of environment materials (one texture per tint), for
+        /// glTF readers other than OFAST's Unreal import (Blender, viewers). Without it Unreal's material applies
+        /// them and the export is smaller (de_inferno: about half the colour textures).
+        #[arg(long)]
+        bake_model_tints: bool,
     },
     /// List a demo's rounds with their tick ranges.
     DemoRounds {
@@ -192,7 +198,11 @@ fn run(cli: Cli) -> Result<(), String> {
             let report = export_model(&content, &model, &out).map_err(|e| e.to_string())?;
             print_report(&report, started);
         }
-        Command::ExportMap { map, out } => {
+        Command::ExportMap {
+            map,
+            out,
+            bake_model_tints,
+        } => {
             let mut content = Content::for_map(&install, &map).map_err(|e| e.to_string())?;
             let loaded = Map::load(&content, &map).map_err(|e| e.to_string())?;
 
@@ -230,8 +240,9 @@ fn run(cli: Cli) -> Result<(), String> {
                 transform: *transform,
             });
 
-            let report =
-                export_map(&content, &loaded, skybox.as_ref(), &out).map_err(|e| e.to_string())?;
+            let options = ExportOptions { bake_model_tints };
+            let report = export_map(&content, &loaded, skybox.as_ref(), &out, options)
+                .map_err(|e| e.to_string())?;
             print_report(&report, started);
         }
         Command::Vpk {

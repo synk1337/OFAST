@@ -32,9 +32,9 @@ use std::rc::Rc;
 
 use serde_json::{Value as Json, json};
 
-use super::ExportError;
 use super::gltf::{ExportReport, GltfWriter, load_model, srgb_to_linear};
 use super::sky::{SkyExport, export_sky, write_flat_hdr};
+use super::{ExportError, ExportOptions};
 use crate::content::Content;
 use crate::coords;
 use crate::map::{Entity, IDENTITY, Map, Transform, compose, entity_transform, object_flags};
@@ -102,9 +102,10 @@ pub fn export_map(
     map: &Map,
     skybox: Option<&Skybox<'_>>,
     out_dir: &Path,
+    options: ExportOptions,
 ) -> Result<ExportReport, ExportError> {
     let mut exporter = MapExporter {
-        writer: GltfWriter::new(content, out_dir)?,
+        writer: GltfWriter::new(content, out_dir, options)?,
         content,
         models: BTreeMap::new(),
         model_meshes: BTreeMap::new(),
