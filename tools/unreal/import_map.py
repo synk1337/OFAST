@@ -22,6 +22,7 @@ default field of view → screenshots → quit. Everything the script adds is ta
 import json
 import math
 import os
+import time
 
 import unreal
 
@@ -39,6 +40,14 @@ if STYLE not in ("standard", "realistic"):
     raise RuntimeError("unknown OFAST_STYLE %r (standard or realistic)" % STYLE)
 LEVEL = NAME if STYLE == "standard" else "%s_%s" % (NAME, STYLE)
 WIDTH, HEIGHT = 1920, 1080
+# Longest wait for one screenshot. The first one of a new map waits for all its shaders to compile (de_dust2's
+# took over 10 minutes on the first import).
+SHOT_TIMEOUT_S = 45 * 60
+# Frames to wait before the first screenshot, so meshes and textures have streamed in (shoot_views.WARM_UP_TICKS).
+WARM_UP_TICKS = 600
+# Seconds on each camera before its screenshot, for Lumen's lighting to settle after the cut. At 2 s de_mirage's
+# palace measured 0.79 – 0.93 of CS2 depending on the order of the views; at 6 s and 10 s it is 0.965 every time.
+SHOT_DELAY_S = 6.0
 # CS2's default fov is 90° measured horizontally on a 4:3 screen; on 16:9 that is 2·atan(tan(45°)·(16/9)/(4/3)).
 HFOV_16_9 = math.degrees(2 * math.atan(math.tan(math.radians(45)) * (16 / 9) / (4 / 3)))
 TAG = unreal.Name("OFAST")
@@ -251,6 +260,8 @@ def ensure_blend_master(defaults):
 
 # Versioned like BLEND_MASTER: the material of the shadow proxies (opaque, two-sided, never seen).
 SHADOW_PROXY_MATERIAL = "/Game/OFAST/Materials/M_OFAST_ShadowProxy_v1"
+# A mesh needs a shadow proxy only if it is at least this wide in two directions (see add_shadow_proxies).
+PROXY_MIN_SPAN_CM = 100.0
 
 
 def ensure_shadow_proxy_material():
@@ -275,9 +286,14 @@ def add_shadow_proxies(imported):
     Making the real materials two-sided would fix the shadows but also turn the meshes' distance fields into thin
     shells (DistanceFieldAtlas.cpp reads the material's two-sidedness), which lets Lumen's sky light and bounce leak
     — measured: the calibration views moved by up to +80 %. So every opaque, single-sided mesh instead gets a hidden
-    copy with a two-sided material that only casts shadows and that Lumen ignores."""
+    copy with a two-sided material that only casts shadows and that Lumen ignores.
+
+    Only meshes at least PROXY_MIN_SPAN_CM wide in two directions (walls, floors, roofs) get one: thin or small
+    pieces (pipes, wires, bottles, signs) cannot let a visible patch of sunlight through. On de_nuke this keeps
+    735 of 5368 candidates."""
     material = ensure_shadow_proxy_material()
     count = 0
+    small = 0
     for actor in imported:
         if not isinstance(actor, unreal.StaticMeshActor):
             continue
@@ -294,13 +310,24 @@ def add_shadow_proxies(imported):
         # (Interchange's glTF instances inherit their blend mode from overriding parents).
         if any(slot.get_blend_mode() != unreal.BlendMode.BLEND_OPAQUE or is_two_sided(slot) for slot in slots):
             continue
+        if sorted(mesh_spans(mesh, actor))[1] < PROXY_MIN_SPAN_CM:
+            small += 1
+            continue
         proxy = actors.spawn_actor_from_object(mesh, actor.get_actor_location(), actor.get_actor_rotation())
         proxy.set_actor_transform(actor.get_actor_transform(), False, False)
         proxy.tags = [TAG]
         proxy.set_actor_label("shadowproxy_" + label)
         make_shadow_only(proxy.static_mesh_component, material, len(slots), affect_lumen=False)
         count += 1
-    log("shadow proxies: %d (two-sided shadows for single-sided walls)" % count)
+    log("shadow proxies: %d (two-sided shadows for single-sided walls; %d smaller meshes skipped)" % (count, small))
+
+
+def mesh_spans(mesh, actor):
+    """The size (cm) of an actor's mesh along its three local axes, with the actor's scale."""
+    box = mesh.get_bounding_box()
+    scale = actor.get_actor_scale3d()
+    return [abs((box.max.x - box.min.x) * scale.x), abs((box.max.y - box.min.y) * scale.y),
+            abs((box.max.z - box.min.z) * scale.z)]
 
 
 def is_two_sided(material):
@@ -340,8 +367,15 @@ def apply_layer_blends(imported):
     layered = {}
     for material in document.get("materials", []):
         layers = material.get("extras", {}).get("ofast", {}).get("layers")
-        if layers and layers["layer1"].get("color") and layers["layer2"].get("color"):
-            layered[material["name"]] = layers
+        if not layers:
+            continue
+        # The blend master samples all six textures; a layer without one keeps the glTF stand-in (layer 1).
+        missing = [layer + "." + kind for layer in ("layer1", "layer2") for kind in ("color", "normal", "roughness")
+                   if not layers[layer].get(kind)]
+        if missing:
+            log("layer blend: %s keeps layer 1 only (no %s)" % (material["name"], ", ".join(missing)))
+            continue
+        layered[material["name"]] = layers
     if not layered:
         return
     folder = "/Game/OFAST/%s/Blend" % NAME
@@ -854,29 +888,32 @@ def main():
     # Enough frames per screenshot for Lumen and temporal AA to settle at the screenshot resolution.
     unreal.SystemLibrary.execute_console_command(None, "r.HighResScreenshotDelay 16")
 
-    state = {"ticks": 0, "index": 0, "task": None}
+    state = {"ticks": 0, "index": 0, "task": None, "started": time.monotonic()}
 
     def tick(_delta):
         state["ticks"] += 1
-        if state["ticks"] > 36000:  # ~10 minutes at 60 fps: give up rather than hang
-            log("FAILED: screenshots did not finish")
+        # Wall-clock, not ticks: while shaders compile the editor ticks fast but a screenshot waits for them.
+        if time.monotonic() - state["started"] > SHOT_TIMEOUT_S:
+            log("FAILED: screenshots did not finish (%s took over %d min)"
+                % (state.get("path", "the first screenshot"), SHOT_TIMEOUT_S // 60))
             finish()
             return
-        if state["ticks"] < 60:
-            return  # let the viewport come up
+        if state["ticks"] < WARM_UP_TICKS:
+            return  # let textures stream in (after 60 ticks de_mirage's first shot still had blurry floor tiles)
         task = state["task"]
         if task is not None and not task.is_task_done():
             return
         if task is not None:
-            log("screenshot written: " + state["path"])
+            log("screenshot written: %s (%.0f s)" % (state["path"], time.monotonic() - state["started"]))
             state["index"] += 1
         if state["index"] >= len(shots):
             finish()
             return
         name, camera = shots[state["index"]]
         state["path"] = os.path.join(SHOT_DIR, "%s_%s.png" % (LEVEL, name))
+        state["started"] = time.monotonic()
         state["task"] = unreal.AutomationLibrary.take_high_res_screenshot(
-            WIDTH, HEIGHT, state["path"], camera=camera, delay=2.0
+            WIDTH, HEIGHT, state["path"], camera=camera, delay=SHOT_DELAY_S
         )
 
     def finish():

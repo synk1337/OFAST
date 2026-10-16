@@ -41,6 +41,15 @@ glTF has no layered materials: OFAST writes the weight as `COLOR_0` and both lay
 `extras.ofast.layers`. `import_map.py` builds `M_OFAST_LayerBlend_v2` (by script, from material nodes) and gives
 each blend material an instance of it.
 
+Only `csgo_lightmappedgeneric` materials count as these blends (de_mirage 13, de_dust2 77, de_nuke 11). Other
+shaders with layers are different things and show their first layer only for now:
+
+- `csgo_simple_3layer_parallax` (de_inferno's windows, 9 materials) has a `g_tLayer2Color` too, but its layers are a
+  fake room at depths behind the glass (`g_flLayer1Offset`, `g_flLayer2Offset`), not a painted blend. Treating it as a
+  blend crashed the Unreal import, which found no layer-2 normal map.
+- `csgo_environment_blend` (369 of de_inferno's 922 materials: walls and streets) mixes `g_tColor1` / `g_tColor2`
+  using height maps (`g_tHeight1/2`) and its own colour adjustments.
+
 ## Other rules
 
 | Case | Handling |

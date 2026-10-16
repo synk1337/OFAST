@@ -22,6 +22,7 @@ diagnostic -Disable run).
 
 import json
 import os
+import time
 
 import unreal
 
@@ -32,6 +33,8 @@ WIDTH, HEIGHT = 1920, 1080
 CAMERA_PREFIX = "OFAST_cam_"  # import_map.CAMERA_PREFIX
 # Frames to wait after opening the level, so meshes and textures have streamed in before the first screenshot.
 WARM_UP_TICKS = 600
+SHOT_TIMEOUT_S = 45 * 60  # import_map.SHOT_TIMEOUT_S: longest wait for one screenshot (shader compilation)
+SHOT_DELAY_S = 6.0  # import_map.SHOT_DELAY_S: seconds on each camera before its screenshot (Lumen settling)
 
 
 def log(message):
@@ -116,12 +119,14 @@ def main():
         raise RuntimeError("no camera for %s; the level has %s" % (", ".join(sorted(missing)), ", ".join(sorted(cameras))))
     shots = sorted((name, camera) for name, camera in cameras.items() if not ONLY or name in ONLY)
     unreal.SystemLibrary.execute_console_command(None, "r.HighResScreenshotDelay 16")
-    state = {"ticks": 0, "index": 0, "task": None}
+    state = {"ticks": 0, "index": 0, "task": None, "started": time.monotonic()}
 
     def tick(_delta):
         state["ticks"] += 1
-        if state["ticks"] > 36000:  # ~10 minutes at 60 fps: give up rather than hang
-            log("FAILED: screenshots did not finish")
+        # Wall-clock, not ticks: while shaders compile the editor ticks fast but a screenshot waits for them.
+        if time.monotonic() - state["started"] > SHOT_TIMEOUT_S:
+            log("FAILED: screenshots did not finish (%s took over %d min)"
+                % (state.get("path", "the first screenshot"), SHOT_TIMEOUT_S // 60))
             finish()
             return
         if state["ticks"] < WARM_UP_TICKS:
@@ -130,15 +135,16 @@ def main():
         if task is not None and not task.is_task_done():
             return
         if task is not None:
-            log("screenshot written: " + state["path"])
+            log("screenshot written: %s (%.0f s)" % (state["path"], time.monotonic() - state["started"]))
             state["index"] += 1
         if state["index"] >= len(shots):
             finish()
             return
         name, camera = shots[state["index"]]
         state["path"] = os.path.join(SHOT_DIR, "%s_%s.png" % (NAME, name))
+        state["started"] = time.monotonic()
         state["task"] = unreal.AutomationLibrary.take_high_res_screenshot(
-            WIDTH, HEIGHT, state["path"], camera=camera, delay=2.0
+            WIDTH, HEIGHT, state["path"], camera=camera, delay=SHOT_DELAY_S
         )
 
     def finish():

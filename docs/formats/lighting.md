@@ -75,6 +75,12 @@ g_flRenderOnlyExposureBias)`, with `R` the entity's rotation. When the map has a
 skybox world** is the one drawn, so it also turns with the `skybox_reference` angles (de_mirage's has yaw 146.25° and
 a reference at 0°; the sky is symmetric around the vertical, so it shows little).
 
+A map can have several `env_sky`s. The **visible** one is the first without `startdisabled` (the 3D skybox world's
+first). The one that **lights** the map is the one whose `targetname` the `light_environment`'s `skytexture` names,
+and it can be a disabled one: de_inferno shows `MAT_sky` and lights with the disabled `LIGHT_sky`. When they differ the
+lighting sky is written as `<map>_ambient.hdr` for the Sky Light, and its averages set the ambient values; a
+`skytexture` that names no `env_sky` is reported as a warning and the visible sky lights the map.
+
 OFAST writes it as `<map>_sky.hdr`: an equirectangular Radiance image (2:1) in the layout Unreal imports as a
 `TextureCube` — `u = 0.5 + atan2(D.x, −D.y) / 2π`, `v = acos(D.z) / π` for the Unreal direction `D`. Rotation, tint
 and brightness are baked in; the render-only bias goes to the manifest. Check: the image's average radiance
@@ -138,13 +144,18 @@ linear luminance, Unreal / CS2). Views: `tools/compare/views/de_mirage.json` plu
 
 | View | Whole image | Cells | Notes |
 |---|---|---|---|
-| CT spawn (sunlit street, sky) | 0.99 | 0.93 – 1.04 | sunlit ground 0.99 – 1.04, sky 0.97 |
-| T spawn (sunlit + large shaded walls) | 0.96 | 0.88 – 1.03 | shaded walls 0.91 – 0.96 |
-| Palace interior (`light_rect` wall lights) | 0.93 | 0.72 – 1.08 | wall facing the lights ≈ 0.95 |
-| B apartments (`light_omni2` ceiling lights) | 0.75 | 0.57 – 0.92 | see below |
+| CT spawn (sunlit street, sky) | 1.00 | 0.93 – 1.06 | sunlit ground 1.00 – 1.06, sky 0.96 – 0.99 |
+| T spawn (sunlit + large shaded walls) | 0.97 | 0.89 – 1.04 | shaded walls 0.93 – 0.97 |
+| Palace interior (`light_rect` wall lights) | 0.965 | 0.77 – 1.13 | wall facing the lights ≈ 0.97 |
+| B apartments (`light_omni2` ceiling lights) | 0.75 | 0.58 – 0.92 | see below |
+
+Unreal screenshots are taken 6 s after switching to each camera (`SHOT_DELAY_S`), so Lumen's lighting has settled.
+At 2 s (the first measurements) interiors came out too dark by a varying amount: the palace measured 0.79 – 0.93
+depending on which view was shot before it; at 6 s and 10 s it is 0.965 every time.
 
 History: Unreal's template lighting gave the CT view 0.91 overall but 0.38 in shade and 0.61 in the sky; before the
-rect-light fix the palace was 1.48; before the bounce gains (below) the four views were 0.95 / 0.86 / 0.81 / 0.74.
+rect-light fix the palace was 1.48; before the bounce gains (below) the four views were 0.95 / 0.86 / 0.81 / 0.74
+(those, and the bounce gains, were measured at 2 s).
 
 How the interior was pinned down (palace): exposure ruled out (`mat_tonemap_force_scale`), sky and sun ruled out
 (`-Disable sun,sky`: still 1.41), bounce ruled out (`-Disable sun,sky,bounce`, which turns off the local lights'
@@ -183,10 +194,13 @@ What does not work: the component flag `bCastShadowAsTwoSided` (not used by Nani
 (fixes the shadows, but `DistanceFieldAtlas.cpp` then builds thin-shell distance fields, and Lumen's sky light and
 bounce leak instead — the calibration views moved by up to +80 %).
 
-What `import_map.py` does (`add_shadow_proxies`): every opaque, single-sided mesh (384 on de_mirage) gets a hidden
-copy with a two-sided material that only casts shadows (`cast_hidden_shadow`), has no collision and that Lumen
-ignores (`affect_distance_field_lighting` and `affect_dynamic_indirect_lighting` off). Masked, translucent and
-already two-sided meshes (decals, foliage, fences, glass) get none — they would cast solid shadows. The visible
+What `import_map.py` does (`add_shadow_proxies`): every opaque, single-sided mesh at least 1 m wide in two
+directions gets a hidden copy with a two-sided material that only casts shadows (`cast_hidden_shadow`), has no
+collision and that Lumen ignores (`affect_distance_field_lighting` and `affect_dynamic_indirect_lighting` off).
+Masked, translucent and already two-sided meshes (decals, foliage, fences, glass) get none — they would cast solid
+shadows. Thin or small meshes (pipes, wires, bottles, signs) get none either: they cannot let a visible patch of
+sunlight through, and de_nuke alone has ~5400 of them (proxies with the size rule: de_mirage 258, de_dust2 624,
+de_inferno 681, de_nuke 735). The visible
 meshes and their distance fields stay as they were, and the calibration hardly moves (table above; the B apartments
 lose the 0.01 – 0.02 of leaked light). CS2's own light blockers (`OBJECT_TYPE_BLOCK_LIGHT`) get the same treatment,
 but stay in Lumen's scene as black occluders, since they seal gaps for CS2's bounce light too.

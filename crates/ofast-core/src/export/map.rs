@@ -130,27 +130,68 @@ pub fn export_map(
         exporter.roots.push(node);
     }
 
-    // The 2D sky: the one inside the 3D skybox world wins when there is one (that is the one the engine draws), and
-    // it turns with the skybox.
-    let env_sky = skybox
-        .and_then(|s| {
+    // Every env_sky with the transform of the world it lives in: the 3D skybox's first (they turn with the skybox).
+    let env_skies: Vec<(&Entity, Transform)> = skybox
+        .map(|s| {
             s.map
                 .entities_of("env_sky")
-                .next()
                 .map(|e| (e, s.transform))
+                .collect::<Vec<_>>()
         })
-        .or_else(|| map.entities_of("env_sky").next().map(|e| (e, IDENTITY)));
+        .unwrap_or_default()
+        .into_iter()
+        .chain(map.entities_of("env_sky").map(|e| (e, IDENTITY)))
+        .collect();
+    // The visible 2D sky: the first enabled one, the skybox world's winning (that is the one the engine draws).
+    let visible = env_skies
+        .iter()
+        .find(|(e, _)| e.flag("startdisabled") != Some(true))
+        .or(env_skies.first());
     let mut sky = None;
-    if let Some((env_sky, frame)) = env_sky {
+    if let Some((env_sky, frame)) = visible {
         let file = format!("{}_sky.hdr", map.name);
-        match export_sky(content, env_sky, &frame, &out_dir.join(&file)) {
+        match export_sky(content, env_sky, frame, &out_dir.join(&file)) {
             Ok(exported) => sky = exported.map(|s| (file, s)),
             Err(e) => exporter.writer.report.warnings.push(format!("sky: {e}")),
         }
     }
 
+    // The sky that lights the map is the env_sky light_environment names in `skytexture` — not always the visible
+    // one (de_inferno lights with a disabled "LIGHT_sky" and shows a "MAT_sky").
     let sun = map.entities_of("light_environment").next();
-    let mut ambient = ambient_manifest(sun, sky.as_ref().map(|(_, s)| s));
+    let lighting_name = sun
+        .and_then(|e| e.string("skytexture"))
+        .filter(|s| !s.is_empty());
+    let lighting = lighting_name.and_then(|name| {
+        env_skies
+            .iter()
+            .find(|(e, _)| e.string("targetname") == Some(name))
+    });
+    let mut ambient_sky = None;
+    if let (Some((env_sky, frame)), Some((visible_sky, _))) = (lighting, visible)
+        && !std::ptr::eq(*env_sky, *visible_sky)
+    {
+        let file = format!("{}_ambient.hdr", map.name);
+        match export_sky(content, env_sky, frame, &out_dir.join(&file)) {
+            Ok(exported) => ambient_sky = exported.map(|s| (file, s)),
+            Err(e) => exporter
+                .writer
+                .report
+                .warnings
+                .push(format!("ambient sky: {e}")),
+        }
+    } else if lighting_name.is_some() && lighting.is_none() {
+        exporter.writer.report.warnings.push(format!(
+            "light_environment skytexture {:?} names no env_sky; lighting with the visible sky",
+            lighting_name.unwrap_or_default()
+        ));
+    }
+
+    let lighting_export = ambient_sky.as_ref().or(sky.as_ref()).map(|(_, s)| s);
+    let mut ambient = ambient_manifest(sun, lighting_export);
+    if let Some((file, _)) = &ambient_sky {
+        ambient["hdr"] = json!(file);
+    }
     if ambient["source"] == "sky_color" {
         // A flat sky colour lights the map: give the Sky Light a uniform cube map of that colour.
         let colour = sun

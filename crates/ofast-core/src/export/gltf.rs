@@ -163,6 +163,14 @@ impl MaterialInfo {
     fn flag(&self, name: &str) -> bool {
         self.ints.get(name).is_some_and(|v| *v != 0)
     }
+
+    /// A two-layer material whose second layer is painted per vertex: a [`VERTEX_BLEND_SHADERS`] shader with a
+    /// `g_tLayer2Color`. `csgo_simple_3layer_parallax` (de_inferno's fake room windows) also has a
+    /// `g_tLayer2Color`, but its layers are depths behind the glass, not painted blends.
+    fn is_vertex_blend(&self) -> bool {
+        VERTEX_BLEND_SHADERS.contains(&self.shader.as_str())
+            && self.textures.contains_key("g_tLayer2Color")
+    }
 }
 
 /// Accumulates glTF arrays and the binary buffer while exporting.
@@ -213,6 +221,10 @@ const NORMAL_PARAMS: &[&str] = &[
     "g_tNormalA",
 ];
 const AO_PARAMS: &[&str] = &["g_tAmbientOcclusion", "g_tLayer1AmbientOcclusion"];
+/// Shaders whose `g_tLayer2Color` is a second layer painted per vertex (Hammer's blend brushes), as found on
+/// de_mirage, de_dust2 and de_nuke. `csgo_environment_blend` (de_inferno) names its layers `g_tColor1`/`g_tColor2`
+/// and blends by height: not handled yet.
+const VERTEX_BLEND_SHADERS: &[&str] = &["csgo_lightmappedgeneric.vfx"];
 
 impl<'c> GltfWriter<'c> {
     pub(crate) fn new(content: &'c Content, out_dir: &Path) -> Result<Self, ExportError> {
@@ -371,7 +383,7 @@ impl<'c> GltfWriter<'c> {
             let layered = !draw.material.is_empty()
                 && self
                     .material_info(&draw.material)
-                    .is_some_and(|info| info.textures.contains_key("g_tLayer2Color"));
+                    .is_some_and(|info| info.is_vertex_blend());
             if layered && g.blend.len() == g.positions.len() {
                 // Layer blend weights travel as vertex colour; Unreal's layer-blend material reads them back.
                 attributes.insert(
@@ -609,9 +621,12 @@ impl<'c> GltfWriter<'c> {
         }
     }
 
-    /// For two-layer blend materials (`g_tLayer2Color`), the PNG files of both layers and the blend modulation
-    /// mask, for Unreal's layer-blend material. Layer weights travel per vertex as `COLOR_0`.
+    /// For two-layer blend materials ([`MaterialInfo::is_vertex_blend`]), the PNG files of both layers and the
+    /// blend modulation mask, for Unreal's layer-blend material. Layer weights travel per vertex as `COLOR_0`.
     fn layer_textures(&mut self, info: &MaterialInfo) -> Option<Json> {
+        if !info.is_vertex_blend() {
+            return None;
+        }
         let layer2_color = info.textures.get("g_tLayer2Color")?.clone();
         let hemi_oct = info.shader.starts_with("csgo_");
         let mut file = |param_names: &[&str], role: TextureRole| -> Option<String> {
@@ -1059,5 +1074,20 @@ mod tests {
         for k in 0..3 {
             assert!((-m[8 + k] - dir[k] / len).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn only_painted_two_layer_materials_blend() {
+        let material = |shader: &str| MaterialInfo {
+            shader: shader.into(),
+            textures: [("g_tLayer2Color".to_owned(), "layer2.vtex".to_owned())].into(),
+            ..Default::default()
+        };
+        assert!(material("csgo_lightmappedgeneric.vfx").is_vertex_blend());
+        // de_inferno's fake room windows: layers behind the glass, not a painted blend.
+        assert!(!material("csgo_simple_3layer_parallax.vfx").is_vertex_blend());
+        let mut single = material("csgo_lightmappedgeneric.vfx");
+        single.textures.clear();
+        assert!(!single.is_vertex_blend());
     }
 }
