@@ -526,7 +526,10 @@ impl<'c> GltfWriter<'c> {
         let info = match read_material(self.content, path) {
             Ok(info) => Some(info),
             Err(e) => {
-                self.report.warnings.push(format!("material {path}: {e}"));
+                // Hammer's tool materials (light blockers, clips…) only exist in the editor, never in the game files.
+                if !path.replace('\\', "/").starts_with("materials/tools/") {
+                    self.report.warnings.push(format!("material {path}: {e}"));
+                }
                 None
             }
         };

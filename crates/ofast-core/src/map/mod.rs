@@ -55,7 +55,8 @@ pub const IDENTITY: Transform = [
 
 /// `m_nObjectTypeFlags` bits that matter to OFAST.
 pub mod object_flags {
-    /// Shadow-only geometry ("block light" tool meshes): not visible, skip when exporting.
+    /// Light blockers ("block light" tool meshes): invisible, they only stop light (in the bake, and in Unreal as
+    /// hidden shadow casters).
     pub const BLOCK_LIGHT: u32 = 16;
     /// A decal/overlay drawn on top of other geometry.
     pub const OVERLAY: u32 = 8192;

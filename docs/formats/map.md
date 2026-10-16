@@ -30,7 +30,7 @@ already in world space.
 
 | Flag | Value | OFAST |
 |---|---|---|
-| `OBJECT_TYPE_BLOCK_LIGHT` | 16 | skipped (shadow-only tool geometry) |
+| `OBJECT_TYPE_BLOCK_LIGHT` | 16 | light blockers (`toolsblocklight` / `toolssolidblocklight` meshes that seal gaps for the bake): exported as `lightblocker_…` nodes, hidden in Unreal but casting shadows (de_mirage: 7, 217 triangles) |
 | `OBJECT_TYPE_OVERLAY` | 8192 | exported (decals) |
 
 **`m_aggregateSceneObjects[]`** — per-draw-call placement of one model: `m_renderableModel`, `m_aggregateMeshes[]`

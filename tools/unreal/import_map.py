@@ -13,8 +13,8 @@ Inputs (environment variables):
                  sun, sky (ambient), local, bounce (the local lights' surface-cache bounce); see diagnostic_manifest
 
 Steps: level made once from the Basic template, its environment (sky, clouds, fog, sun, floor) removed →
-Interchange *scene* import of the glTF (one actor per placement) → layer-blend materials → CS2's environment from the
-manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
+Interchange *scene* import of the glTF (one actor per placement) → layer-blend materials → light blockers hidden and
+shadow proxies added (no sunlight through single-sided walls) → CS2's environment from the manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
 exposure with no tone curve (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
 default field of view → screenshots → quit. Everything the script adds is tagged "OFAST" and rebuilt on every run.
 """
@@ -44,6 +44,8 @@ HFOV_16_9 = math.degrees(2 * math.atan(math.tan(math.radians(45)) * (16 / 9) / (
 TAG = unreal.Name("OFAST")
 # Actor labels of 3D-skybox geometry start with this (SKYBOX_NODE_PREFIX in ofast-core's map exporter).
 SKYBOX_PREFIX = "sky3d_"
+# Actor labels of light blockers contain this (LIGHT_BLOCKER_NODE_PREFIX in ofast-core's map exporter).
+LIGHT_BLOCKER_PREFIX = "lightblocker_"
 
 
 def log(message):
@@ -112,6 +114,19 @@ def import_scene():
     # Interchange leaves imported assets in memory only; save them so the project keeps the map after closing.
     unreal.EditorAssetLibrary.save_directory("/Game/OFAST/" + NAME, only_if_is_dirty=True, recursive=True)
     return new
+
+
+def hide_light_blockers(imported):
+    """CS2's "block light" meshes are invisible but seal gaps against light for its bake: hidden here, casting
+    shadows from both faces and blocking Lumen's light as black (absorbing) occluders."""
+    material = ensure_shadow_proxy_material()
+    count = 0
+    for actor in imported:
+        if isinstance(actor, unreal.StaticMeshActor) and LIGHT_BLOCKER_PREFIX in actor.get_actor_label():
+            component = actor.static_mesh_component
+            make_shadow_only(component, material, len(component.get_materials()), affect_lumen=True)
+            count += 1
+    log("light blockers: %d hidden shadow casters" % count)
 
 
 # Versioned name: bump when the graph changes so existing projects get the new master.
@@ -234,6 +249,90 @@ def ensure_blend_master(defaults):
     return material
 
 
+# Versioned like BLEND_MASTER: the material of the shadow proxies (opaque, two-sided, never seen).
+SHADOW_PROXY_MATERIAL = "/Game/OFAST/Materials/M_OFAST_ShadowProxy_v1"
+
+
+def ensure_shadow_proxy_material():
+    if unreal.EditorAssetLibrary.does_asset_exist(SHADOW_PROXY_MATERIAL):
+        return unreal.EditorAssetLibrary.load_asset(SHADOW_PROXY_MATERIAL)
+    folder, name = SHADOW_PROXY_MATERIAL.rsplit("/", 1)
+    material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, folder, unreal.Material, unreal.MaterialFactoryNew()
+    )
+    material.set_editor_property("two_sided", True)
+    unreal.MaterialEditingLibrary.recompile_material(material)
+    unreal.EditorAssetLibrary.save_loaded_asset(material)
+    return material
+
+
+def add_shadow_proxies(imported):
+    """CS2's walls are single-sided and Nanite only casts shadows from front faces (two-sidedness comes from the
+    material; the component's bCastShadowAsTwoSided does not reach Nanite). Seen from the sun, an interior wall
+    shows its back, so sunlight leaked through walls into interiors (de_mirage's B apartments); CS2's light bake
+    treats faces as two-sided.
+
+    Making the real materials two-sided would fix the shadows but also turn the meshes' distance fields into thin
+    shells (DistanceFieldAtlas.cpp reads the material's two-sidedness), which lets Lumen's sky light and bounce leak
+    — measured: the calibration views moved by up to +80 %. So every opaque, single-sided mesh instead gets a hidden
+    copy with a two-sided material that only casts shadows and that Lumen ignores."""
+    material = ensure_shadow_proxy_material()
+    count = 0
+    for actor in imported:
+        if not isinstance(actor, unreal.StaticMeshActor):
+            continue
+        label = actor.get_actor_label()
+        if label.startswith(SKYBOX_PREFIX) or LIGHT_BLOCKER_PREFIX in label:
+            continue  # far away / handled by hide_light_blockers
+        component = actor.static_mesh_component
+        mesh = component.static_mesh
+        slots = component.get_materials()
+        if mesh is None or not slots or any(slot is None for slot in slots):
+            continue
+        # Masked / translucent surfaces (decals, foliage, fences, glass) would cast solid shadows, and two-sided
+        # ones already cast from both faces: no proxy for them. get_blend_mode honours material-instance overrides
+        # (Interchange's glTF instances inherit their blend mode from overriding parents).
+        if any(slot.get_blend_mode() != unreal.BlendMode.BLEND_OPAQUE or is_two_sided(slot) for slot in slots):
+            continue
+        proxy = actors.spawn_actor_from_object(mesh, actor.get_actor_location(), actor.get_actor_rotation())
+        proxy.set_actor_transform(actor.get_actor_transform(), False, False)
+        proxy.tags = [TAG]
+        proxy.set_actor_label("shadowproxy_" + label)
+        make_shadow_only(proxy.static_mesh_component, material, len(slots), affect_lumen=False)
+        count += 1
+    log("shadow proxies: %d (two-sided shadows for single-sided walls)" % count)
+
+
+def is_two_sided(material):
+    """A material's two-sidedness, following material-instance overrides up to the base material (Python has no
+    IsTwoSided)."""
+    while isinstance(material, unreal.MaterialInstance):
+        overrides = material.get_editor_property("base_property_overrides")
+        if overrides.get_editor_property("override_two_sided"):
+            return overrides.get_editor_property("two_sided")
+        material = material.get_editor_property("parent")
+    return bool(material and material.get_editor_property("two_sided"))
+
+
+def make_shadow_only(component, material, slot_count, affect_lumen):
+    """Turns a static mesh component into an invisible, two-sided shadow caster without collision. `affect_lumen`
+    keeps it in Lumen's scene as a black (absorbing) occluder."""
+    for index in range(slot_count):
+        component.set_material(index, material)
+    component.set_visibility(False)
+    component.set_collision_enabled(unreal.CollisionEnabled.NO_COLLISION)
+    component.set_editor_properties(
+        {
+            "cast_shadow": True,
+            "cast_hidden_shadow": True,
+            "affect_distance_field_lighting": affect_lumen,
+            "affect_dynamic_indirect_lighting": affect_lumen,
+            "affect_indirect_lighting_while_hidden": affect_lumen,
+            "visible_in_ray_tracing": False,
+        }
+    )
+
+
 def apply_layer_blends(imported):
     """Replaces the glTF stand-in material (layer 1 only) of every two-layer CS2 material by a blend instance."""
     with open(GLTF) as f:
@@ -311,7 +410,7 @@ def apply_layer_blends(imported):
 # Lumen carries less bounce light than CS2's path-traced lightmaps. Measured compensation on top of CS2's own bounce
 # scales (light_environment bouncescale / skybouncescale, each light's bouncescale), fitted on de_mirage's four
 # calibration views (docs/formats/lighting.md): CT / T / palace / B apartments at 0.95 / 0.86 / 0.81 / 0.74 of CS2
-# before, 0.98 / 0.95 / 0.93 / 0.76 after (CT and T cells 0.89-1.04; the apartments' corridor bounce stays short).
+# before, 0.99 / 0.96 / 0.93 / 0.75 after (CT and T cells 0.88-1.04; the apartments' corridor bounce stays short).
 OUTDOOR_BOUNCE_GAIN = 1.25  # sun and sky light
 LOCAL_BOUNCE_GAIN = 2.0  # local lights (palace: CS2 bounces 0.7x the direct light, Lumen 0.43x)
 
@@ -746,6 +845,9 @@ def main():
     prepare_level()
     imported = import_scene()
     apply_layer_blends(imported)
+    # Sunlight must not leak into interiors: CS2's light blockers and two-sided shadows for single-sided walls.
+    hide_light_blockers(imported)
+    add_shadow_proxies(imported)
     setup_environment(manifest, imported)
     shots = views(manifest, imported)
     save_level()

@@ -8,11 +8,12 @@ Inputs (environment variables):
     OFAST_SHOT   folder for the screenshots: <map>_<view>.png
     OFAST_ONLY   optional comma list of view names (ct0, t0, top, or names from the -Views file of the import)
     OFAST_TRY    optional JSON (or a .json file path) of what-if settings applied before shooting (never saved), to
-                 try lighting changes
-                 quickly: {"post": {"lumen_final_gather_quality": 2}, "sun": {"indirect_lighting_intensity": 2},
-                 "sky_light": {...}, "local": {"indirect_lighting_intensity*": 2}}; "post" keys are
-                 PostProcessSettings fields (set with their override flag), the others are light component
-                 properties ("name*" multiplies the current value)
+                 try changes quickly:
+                   "sun", "sky_light", "local": light component properties, e.g. {"indirect_lighting_intensity": 2}
+                                                ("name*": multiply the current value)
+                   "sun_rotation": [pitch, yaw, roll] of the sun (Unreal degrees)
+                   "meshes": properties of the imported map meshes' components (not the sky sphere or proxies)
+                   "post": PostProcessSettings fields (set with their override flag)
 
 It uses the cameras import_map.py saved with the level (labels OFAST_cam_<view>), so the viewpoints are exactly
 the import's. The level is not changed or saved; its lighting is whatever the last import saved (including a
@@ -52,9 +53,26 @@ def apply_try(actors):
         "sky_light": (unreal.SkyLight,),
         "local": (unreal.PointLight, unreal.SpotLight, unreal.RectLight),
     }
-    unknown = set(settings) - set(groups) - {"post"}
+    unknown = set(settings) - set(groups) - {"post", "sun_rotation", "meshes"}
     if unknown:
-        raise RuntimeError("unknown OFAST_TRY group: %s (sun, sky_light, local, post)" % ", ".join(sorted(unknown)))
+        raise RuntimeError(
+            "unknown OFAST_TRY group: %s (sun, sun_rotation, sky_light, local, meshes, post)" % ", ".join(sorted(unknown))
+        )
+    # "meshes": properties set on the imported map meshes (not the sky sphere, proxies or other OFAST helpers).
+    for actor in actors:
+        label = actor.get_actor_label()
+        if (
+            isinstance(actor, unreal.StaticMeshActor)
+            and settings.get("meshes")
+            and not label.startswith(("OFAST_", "shadowproxy_"))
+        ):
+            actor.static_mesh_component.set_editor_properties(settings["meshes"])
+    if "sun_rotation" in settings:
+        # [pitch, yaw, roll] in Unreal degrees, e.g. to see whether a lit patch moves like sunlight through a window.
+        pitch, yaw, roll = settings["sun_rotation"]
+        for actor in actors:
+            if isinstance(actor, unreal.DirectionalLight):
+                actor.set_actor_rotation(unreal.Rotator(roll=roll, pitch=pitch, yaw=yaw), False)
     if any(prop.endswith("*") for prop in settings.get("post", {})):
         raise RuntimeError('"name*" (multiply) only works on light properties, not "post"')
     for group, classes in groups.items():

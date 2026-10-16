@@ -88,7 +88,8 @@ powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/import_map.py -Glt
 
 `export-map` also loads the map's 3D skybox (its own archive under `game/csgo/maps/prefabs/`) and writes the sky as
 `<map>_sky.hdr`. `import_map.py` imports the glTF as a scene (one actor per placement), swaps two-layer materials for
-the layer-blend material, replaces the template's sky, fog and lights with CS2's (sun, sky sphere + Sky Light from
+the layer-blend material, hides CS2's light blockers and adds hidden two-sided shadow copies of single-sided meshes
+(so sunlight cannot leak through walls), replaces the template's sky, fog and lights with CS2's (sun, sky sphere + Sky Light from
 the HDR, local lights from the manifest, fixed exposure — see [lighting.md](formats/lighting.md)), saves everything
 under `/Game/OFAST/<map>` and writes screenshots from the first CT spawn, the first T spawn, the optional `-Views`
 spots (CS2 `setpos`/`setang` values in a JSON list) and above the map. It never saves an engine level.
@@ -118,11 +119,12 @@ switching it on recompiles all shaders once (long).
 | Tool | What it answers |
 |---|---|
 | `cargo run --release --example map_raycast -- de_mirage ct0 "x,y;x,y"` (or a view `"x,y,z,pitch,yaw"` from CS2's setpos/setang) | which model/material OFAST's geometry has under a screenshot pixel |
-| `tools/unreal/shoot_views.py` (`-Name <map>` or `<map>_realistic`, `-Only ct0,palace`, `-Try what-if.json`) | re-shoots the import's saved cameras without importing again (~1 min), optionally with what-if lighting settings (not saved; pass them as a .json file — PowerShell strips the quotes of inline JSON) |
+| `tools/unreal/shoot_views.py` (`-Name <map>` or `<map>_realistic`, `-Only ct0,palace`, `-Try what-if.json`) | re-shoots the import's saved cameras without importing again (~1 min), optionally with what-if settings (not saved; pass them as a .json file — PowerShell strips the quotes of inline JSON): light properties, `sun_rotation`, `meshes` (component properties), `post` — see the script's docstring |
 | `run_ue.ps1 … import_map.py … -Disable sun,sky,local,bounce` | diagnostic renders without some light sources, to see what lights a spot (the level keeps that lighting until the next normal import) |
 | `cargo run --release --example map_outliers -- de_mirage [classes]` | stretched geometry, dropped triangles, entity classes with models |
 | `cargo run --release --example model_layout -- formats de_mirage` | vertex attribute formats used by a map |
 | `cargo run --release --example map_entities -- de_mirage [classes…]` | entity classes with counts, or every key of the given classes |
+| `cargo run --release --example map_blockers -- de_mirage [x,y,z radius]` | the map's light blockers (invisible "block light" meshes), optionally near a point |
 | `cargo run --release --example sky_faces -- <cube .vtex_c> <out.png>` | the six faces of a cube map (sky), tone-mapped |
 | `cargo run --release --example vpk_list -- <archive.vpk> [text]` | files inside any VPK (map, skybox) |
 | `tools/unreal/probe_actors.py` (`OFAST_FILTER=<text>`, `@empty` or `@lights` + `OFAST_NEAR=x,y,z`) | imported actors, their meshes and materials, or lights (direction, units, radius) in Unreal |

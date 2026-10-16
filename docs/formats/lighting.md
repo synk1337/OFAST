@@ -138,10 +138,10 @@ linear luminance, Unreal / CS2). Views: `tools/compare/views/de_mirage.json` plu
 
 | View | Whole image | Cells | Notes |
 |---|---|---|---|
-| CT spawn (sunlit street, sky) | 0.98 | 0.92 – 1.04 | sunlit ground 0.99 – 1.04, sky 0.97 |
-| T spawn (sunlit + large shaded walls) | 0.95 | 0.89 – 1.03 | shaded walls 0.91 – 0.96 |
-| Palace interior (`light_rect` wall lights) | 0.93 | | wall facing the lights ≈ 0.95 |
-| B apartments (`light_omni2` ceiling lights) | 0.76 | 0.55 – 0.92 | see below |
+| CT spawn (sunlit street, sky) | 0.99 | 0.93 – 1.04 | sunlit ground 0.99 – 1.04, sky 0.97 |
+| T spawn (sunlit + large shaded walls) | 0.96 | 0.88 – 1.03 | shaded walls 0.91 – 0.96 |
+| Palace interior (`light_rect` wall lights) | 0.93 | 0.72 – 1.08 | wall facing the lights ≈ 0.95 |
+| B apartments (`light_omni2` ceiling lights) | 0.75 | 0.57 – 0.92 | see below |
 
 History: Unreal's template lighting gave the CT view 0.91 overall but 0.38 in shade and 0.61 in the sky; before the
 rect-light fix the palace was 1.48; before the bounce gains (below) the four views were 0.95 / 0.86 / 0.81 / 0.74.
@@ -160,7 +160,7 @@ CT 1.09, T 1.21, too far) but not interiors; the local lights' bounce moves the 
 0.7× the direct light, Lumen 0.43×. `import_map.py` therefore multiplies the bounce scales by **1.25 for sun and
 sky** and **2.0 for local lights** (`OUTDOOR_BOUNCE_GAIN`, `LOCAL_BOUNCE_GAIN`), which gives the table above.
 
-The B apartments stay at 0.76: CS2's light on their walls (lit ÷ albedo, 0.46) is several times what the ceiling
+The B apartments stay at 0.75: CS2's light on their walls (lit ÷ albedo, 0.46) is several times what the ceiling
 lights send directly (≈ 0.08) — it is sunlight bouncing down the corridors from the sunlit rooms, which Lumen carries
 only partly whatever its settings or the sun's bounce gain (×2 moved it by 0.01).
 
@@ -170,6 +170,26 @@ only partly whatever its settings or the sun's bounce gain (×2 moved it by 0.01
 either (the only differing pixels are palms moving in the wind; the 3D-skybox hotel is identical). So the Unreal side
 reproduces none of them: doing so would add differences, not remove them. The bloom and fog settings stay in the
 manifest for reference; the colour LUT is not exported.
+
+## Sunlight leaks through single-sided walls
+
+CS2's walls are single-sided: an interior wall usually has no outer face. CS2's light bake treats faces as
+two-sided, but Unreal's Nanite meshes only cast shadows from front faces — seen from the sun, an interior wall shows
+its back and lets the light through. On de_mirage this drew bright strips of sunlight on the B apartments' stairs
+(the user's idea of moving the sun showed the strips follow it; a ray from the lit stair towards the sun, through
+OFAST's visible geometry with `map_raycast`, hits the inner face of the wall).
+
+What does not work: the component flag `bCastShadowAsTwoSided` (not used by Nanite); making the materials two-sided
+(fixes the shadows, but `DistanceFieldAtlas.cpp` then builds thin-shell distance fields, and Lumen's sky light and
+bounce leak instead — the calibration views moved by up to +80 %).
+
+What `import_map.py` does (`add_shadow_proxies`): every opaque, single-sided mesh (384 on de_mirage) gets a hidden
+copy with a two-sided material that only casts shadows (`cast_hidden_shadow`), has no collision and that Lumen
+ignores (`affect_distance_field_lighting` and `affect_dynamic_indirect_lighting` off). Masked, translucent and
+already two-sided meshes (decals, foliage, fences, glass) get none — they would cast solid shadows. The visible
+meshes and their distance fields stay as they were, and the calibration hardly moves (table above; the B apartments
+lose the 0.01 – 0.02 of leaked light). CS2's own light blockers (`OBJECT_TYPE_BLOCK_LIGHT`) get the same treatment,
+but stay in Lumen's scene as black occluders, since they seal gaps for CS2's bounce light too.
 
 ## Import styles
 

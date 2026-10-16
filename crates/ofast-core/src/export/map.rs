@@ -5,6 +5,7 @@
 //! | Map content | glTF |
 //! |---|---|
 //! | world-node scene objects (baked world, overlays/decals) | one mesh per model, one node per placement |
+//! | "block light" scene objects (invisible light blockers) | same, nodes named `lightblocker_…` |
 //! | aggregate fragments in world space | one mesh per aggregate, one node |
 //! | aggregate fragments with their own transform (instanced props) | one mesh per (model, draw call), one node each |
 //! | dynamic props, brush entities (`prop_dynamic`, `prop_physics_multiplayer`, `func_brush`, …) | one mesh per model, one node each |
@@ -13,8 +14,11 @@
 //! The 3D skybox (a separate, 1/16-scale world shipped in its own archive) is placed with the same rules, every
 //! placement composed with the skybox → world transform, so it shows at full size around the playable map.
 //!
-//! Skipped: shadow-only "block light" geometry, triggers and clips, baked lightmaps (Unreal relights the map with
-//! Lumen).
+//! Light blockers are invisible tool meshes (`toolsblocklight` materials) that seal gaps for CS2's light bake; without
+//! them sunlight leaks into interiors. They are exported under [`LIGHT_BLOCKER_NODE_PREFIX`] so tools can hide them
+//! while keeping their shadows.
+//!
+//! Skipped: triggers and clips, baked lightmaps (Unreal relights the map with Lumen).
 //!
 //! Next to it: `<map>_sky.hdr` (the 2D sky, see [`super::sky`]) and `<map>.ofast.json`, the manifest of what the
 //! Unreal side sets up directly, in Unreal units: sun, ambient, sky, exposure, fog, the local lights with their exact
@@ -72,6 +76,10 @@ const LIGHT_REFERENCE_DISTANCE_M: f32 = 100.0 * coords::INCH_TO_METRE;
 /// Node-name prefix of 3D-skybox geometry (Unreal actor labels start with it).
 pub const SKYBOX_NODE_PREFIX: &str = "sky3d_";
 
+/// Node-name prefix of light blockers ("block light" scene objects): invisible in CS2 but stopping light, so Unreal
+/// should hide them and keep their shadows.
+pub const LIGHT_BLOCKER_NODE_PREFIX: &str = "lightblocker_";
+
 /// A map's 3D skybox world and the transform that places it in the main map (see [`crate::map::sky_to_world`]).
 pub struct Skybox<'a> {
     /// The skybox world, loaded from its own archive.
@@ -96,6 +104,7 @@ pub fn export_map(
         draw_meshes: BTreeMap::new(),
         roots: Vec::new(),
         node_prefix: "",
+        placing_blocker: false,
     };
 
     exporter.place_world(map, None)?;
@@ -182,6 +191,8 @@ struct MapExporter<'c> {
     roots: Vec<usize>,
     /// Prepended to node names ([`SKYBOX_NODE_PREFIX`] while placing the 3D skybox).
     node_prefix: &'static str,
+    /// True while placing light blockers: their node names get [`LIGHT_BLOCKER_NODE_PREFIX`].
+    placing_blocker: bool,
 }
 
 fn tint_key(tint: [f32; 4]) -> [u8; 4] {
@@ -189,9 +200,15 @@ fn tint_key(tint: [f32; 4]) -> [u8; 4] {
 }
 
 impl MapExporter<'_> {
-    /// Node name for a placement of `path`: the model's file name, prefixed for 3D-skybox geometry.
+    /// Node name for a placement of `path`: the model's file name, prefixed for 3D-skybox geometry and light
+    /// blockers (`sky3d_lightblocker_…` for a blocker in the skybox).
     fn node_name(&self, path: &str) -> String {
-        format!("{}{}", self.node_prefix, short_name(path))
+        let blocker = if self.placing_blocker {
+            LIGHT_BLOCKER_NODE_PREFIX
+        } else {
+            ""
+        };
+        format!("{}{}{}", self.node_prefix, blocker, short_name(path))
     }
 
     /// Places a world's geometry (scene objects, aggregates, model entities), all moved by `root` when given.
@@ -206,16 +223,15 @@ impl MapExporter<'_> {
         };
         for node in &map.nodes {
             for object in &node.scene_objects {
-                if object.flags & object_flags::BLOCK_LIGHT != 0 {
-                    continue;
-                }
                 let offset = if object.flags & object_flags::OVERLAY != 0 {
                     OVERLAY_OFFSET
                 } else {
                     0.0
                 };
                 let transform = under_root(&object.transform);
+                self.placing_blocker = object.flags & object_flags::BLOCK_LIGHT != 0;
                 self.place_model(&object.model, transform.as_ref(), object.tint, offset)?;
+                self.placing_blocker = false;
             }
             for aggregate in &node.aggregates {
                 self.place_aggregate(&aggregate.model, aggregate, root)?;
