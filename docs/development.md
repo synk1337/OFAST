@@ -110,6 +110,17 @@ the HDR, local lights from the manifest, fixed exposure — see [lighting.md](fo
 under `/Game/OFAST/<map>` and writes screenshots from the first CT spawn, the first T spawn, the optional `-Views`
 spots (CS2 `setpos`/`setang` values in a JSON list) and above the map. It never saves an engine level.
 
+Re-running `import_map.py` after a re-export always gives what a first import of the current glTF gives: before the
+scene import it deletes the Interchange assets under `/Game/OFAST/<map>/<map>` that came from another version of the
+glTF (material instances), from a PNG that changed or is no longer used (textures), and the import record
+`SceneImport_<map>`, and Interchange makes them again. Interchange's own re-import keeps existing material instances
+as they were (de_inferno kept 739 of 922 from older exports); see
+[decision 006](decisions/006-reimport-rebuilds-stale-interchange-assets.md). Without a re-export nothing is rebuilt
+(1–4 s to check; de_mirage's scene import 9–11 s). Assets edited by hand in that folder are not kept. OFAST's own
+instances (`/Game/OFAST/<map>/Blend` and `Skybox`) are rewritten where they differ, their textures are imported again
+when the PNG changed, and what the current glTF no longer uses is deleted at the end of the run.
+`tools/unreal/probe_materials.py` checks the result (table below).
+
 `-Style realistic` lights the same map physically instead (Unreal sky, 100 000 lux sun, real-world candela, auto
 exposure, filmic tone curve) in its own level `<map>_realistic`; see the styles table in
 [lighting.md](formats/lighting.md#import-styles).
@@ -152,6 +163,7 @@ switching it on recompiles all shaders once (long).
 | `tools/unreal/probe_vertex_color.py` (`-Shot <png>`) | whether Unreal hands glTF vertex colours to materials linear or sRGB-encoded (linear) |
 | `cargo run --release --example vpk_list -- <archive.vpk> [text]` | files inside any VPK (map, skybox) |
 | `tools/unreal/probe_actors.py` (`OFAST_FILTER=<text>`, `@empty` or `@lights` + `OFAST_NEAR=x,y,z`) | imported actors, their meshes and materials, or lights (direction, units, radius) in Unreal |
+| `tools/unreal/probe_materials.py` (`-Gltf test-data/exports -Name de_mirage,de_inferno`) | whether the Interchange material instances of imported maps match their current glTF (textures by image name, colour factors), textures no material uses any more, and which folder the mesh slots' materials come from (~20 s for five maps) |
 | `tools/unreal/probe_axes.py` | how Unreal's glTF importer maps axes (see decision 003) |
 
 ## Rules we work by

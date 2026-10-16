@@ -13,10 +13,12 @@ Inputs (environment variables):
                  sun, sky (ambient), local, bounce (the local lights' surface-cache bounce); see diagnostic_manifest
 
 Steps: level made once from the Basic template, its environment (sky, clouds, fog, sun, floor) removed →
-Interchange *scene* import of the glTF (one actor per placement) → layer-blend and height-blend materials (two-layer
+Interchange *scene* import of the glTF (one actor per placement; what an older export left is deleted first, so a
+re-run always shows the current glTF: evict_stale_interchange_assets) → layer-blend and height-blend materials (two-layer
 CS2 materials, which glTF cannot describe) and single-layer environment materials (their model tint is applied in the
-material, not baked into the textures) → light blockers hidden and
-shadow proxies added (no sunlight through single-sided walls) → CS2's environment from the manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
+material, not baked into the textures; OFAST's instances and textures no export uses any more are deleted:
+delete_unused_ofast_assets) → light blockers hidden and
+shadow proxies added (no sunlight through single-sided walls) → 3D skybox drawn behind the world → CS2's environment from the manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
 exposure, no tone curve or CS2's Hable curve (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
 default field of view → screenshots → quit. Everything the script adds is tagged "OFAST" and rebuilt on every run.
 """
@@ -106,13 +108,24 @@ def save_level():
     levels.save_current_level()
 
 
+# Where Interchange's scene import puts the map's assets: Materials/, StaticMeshes/, Textures/ and the scene's import
+# record SceneImport_<name>.
+INTERCHANGE_FOLDER = "/Game/OFAST/%s/%s" % (NAME, NAME)
+
+
 def import_scene():
+    """Interchange's scene import of the glTF: one actor per placement (tagged OFAST), and the meshes, material
+    instances and textures under INTERCHANGE_FOLDER. main() deletes the assets an earlier import left that no longer
+    match the glTF first (evict_stale_interchange_assets), so the result is always what a first import of the current
+    glTF gives."""
     before = set(a.get_path_name() for a in actors.get_all_level_actors())
     source = unreal.InterchangeManager.create_source_data(GLTF)
     params = unreal.ImportAssetParameters()
     params.is_automated = True
     params.replace_existing = True
+    started = time.monotonic()
     unreal.InterchangeManager.get_interchange_manager_scripted().import_scene("/Game/OFAST/" + NAME, source, params)
+    log("scene import: %.0f s" % (time.monotonic() - started))
     new = [a for a in actors.get_all_level_actors() if a.get_path_name() not in before]
     for actor in new:
         actor.tags = [TAG]
@@ -128,6 +141,112 @@ def import_scene():
     # Interchange leaves imported assets in memory only; save them so the project keeps the map after closing.
     unreal.EditorAssetLibrary.save_directory("/Game/OFAST/" + NAME, only_if_is_dirty=True, recursive=True)
     return new
+
+
+FILE_MD5 = {}
+
+
+def file_md5(path):
+    """A file's MD5 (hex, as Unreal records it), computed once per run."""
+    import hashlib
+
+    if path not in FILE_MD5:
+        digest = hashlib.md5()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 22), b""):
+                digest.update(chunk)
+        FILE_MD5[path] = digest.hexdigest()
+    return FILE_MD5[path]
+
+
+def imported_from(data, path):
+    """Whether the asset (registry AssetData) was imported from the file at `path` as it is now, by the source
+    timestamp and MD5 its import data records (the registry's AssetImportData tag: no need to load the asset). None
+    when nothing is recorded. The exporter rewrites every PNG on each export, so after a re-export the timestamps
+    differ and the MD5 decides (de_inferno's 1099 PNGs, 2.6 GB: 6 s)."""
+    try:
+        entry = json.loads(str(data.get_tag_value("AssetImportData") or "[]"))[0]
+        timestamp, digest = int(entry.get("Timestamp") or 0), entry.get("FileMD5") or ""
+    except (ValueError, IndexError, TypeError):
+        return None
+    if not digest:
+        return None
+    return timestamp == int(os.path.getmtime(path)) or digest == file_md5(path)
+
+
+def delete_assets(packages, what):
+    """Deletes assets by package name, in one go (references to them in loaded objects become null)."""
+    objects = [unreal.EditorAssetLibrary.load_asset(package) for package in packages]
+    objects = [o for o in objects if o is not None]
+    if objects and not unreal.EditorAssetLibrary.delete_loaded_assets(objects):
+        raise RuntimeError("could not delete " + what)
+
+
+def evict_stale_interchange_assets():
+    """Deletes what an earlier scene import left under INTERCHANGE_FOLDER that the current glTF would not give, and
+    the scene's import record, so that Interchange's next import creates those assets again from the glTF.
+
+    Why: a second import_scene into the same folder is turned into a re-import of SceneImport_<name> (replace_existing
+    finds it), and a re-import leaves existing material instances as they are — UInterchangeGenericAssetsPipeline's
+    ReimportStrategy defaults to ApplyNoProperties, and the glTF translator writes only parameters that differ from
+    their defaults, so even ApplyPipelineProperties could not reset a factor or texture the glTF no longer has.
+    Checked with probe_materials.py: de_inferno kept 739 of 922 Interchange materials from older exports (environment
+    materials as plain colour x the tint as BaseColorFactor with an old *_rough texture; overlays with old normal
+    maps), de_mirage 366 of 402. A re-import also never recreates an asset deleted since the import before (Interchange
+    remembers it as deleted by the user), hence the import record goes too: every run is a first import, which
+    reuses the assets still there (materials and textures by name) and overwrites the meshes.
+
+    Deleted, using what Interchange recorded in each asset's import data (imported_from), so nothing needs loading to
+    be checked:
+    - material instances made from another version of the glTF file or for a material it no longer has:
+      re-exporting a map rebuilds all of its Interchange materials once (de_inferno: 922 instances and 2824
+      textures deleted in 190 s);
+    - textures for images the glTF no longer has, or whose PNG changed since (a re-export may give an existing name
+      new pixels, e.g. the "_2" of two different textures with one file name), and the material instances that use
+      them;
+    - SceneImport_<name>.
+    Unchanged re-runs delete nothing but the import record. Leftover textures used to pile up: de_inferno's folder
+    held 2087 textures (most of its 12 GB) that no material used."""
+    started = time.monotonic()
+    registry = unreal.AssetRegistryHelpers.get_asset_registry()
+    with open(GLTF) as f:
+        document = json.load(f)
+    materials = set(m.get("name", "") for m in document.get("materials", []))
+    images = {}
+    for image in document.get("images", []):
+        uri = image.get("uri")
+        if uri:
+            images[image.get("name") or os.path.splitext(os.path.basename(uri))[0]] = os.path.join(EXPORT_DIR, uri)
+
+    def assets(subfolder):
+        return registry.get_assets_by_path(INTERCHANGE_FOLDER + subfolder, recursive=False)
+
+    stale = []  # package names
+    stale_textures = set()
+    orphan_textures = 0
+    for data in assets("/Textures"):
+        path = images.get(str(data.asset_name))
+        if path is None or not os.path.isfile(path):
+            orphan_textures += 1
+        elif imported_from(data, path):
+            continue
+        stale.append(str(data.package_name))
+        stale_textures.add(str(data.package_name))
+    stale_materials = 0
+    options = unreal.AssetRegistryDependencyOptions(include_soft_package_references=True,
+                                                    include_hard_package_references=True)
+    for data in assets("/Materials"):
+        package = str(data.package_name)
+        if str(data.asset_name) in materials and imported_from(data, GLTF):
+            uses = registry.get_dependencies(package, options) or []
+            if not any(str(dependency) in stale_textures for dependency in uses):
+                continue
+        stale.append(package)
+        stale_materials += 1
+    stale += [str(d.package_name) for d in assets("") if str(d.asset_class_path.asset_name) == "InterchangeSceneImportAsset"]
+    delete_assets(stale, "the stale Interchange assets of " + NAME)
+    log("stale Interchange assets deleted: %d material instances, %d textures (%d no longer in the glTF) (%.0f s)"
+        % (stale_materials, len(stale_textures), orphan_textures, time.monotonic() - started))
 
 
 def hide_light_blockers(imported):
@@ -172,7 +291,7 @@ def setup_skybox(imported):
     with open(GLTF) as f:
         document = json.load(f)
     by_name = {m["name"]: m for m in document.get("materials", [])}
-    folder = "/Game/OFAST/%s/Skybox" % NAME
+    folder = SKYBOX_FOLDER
     defaults = default_textures()
     master = ensure_skybox_master(defaults)
     instances = {}
@@ -344,16 +463,42 @@ EXPORT_DIR = os.path.dirname(GLTF)
 # The material instances OFAST builds for the glTF materials (layer blends, height blends, tinted environment
 # materials) and the textures they sample.
 BLEND_FOLDER = "/Game/OFAST/%s/Blend" % NAME
+# The same for the 3D skybox (setup_skybox).
+SKYBOX_FOLDER = "/Game/OFAST/%s/Skybox" % NAME
+# Package names of the instances and textures this run made or used in BLEND_FOLDER and SKYBOX_FOLDER; the rest of
+# those folders is left over from older exports (delete_unused_ofast_assets).
+USED_ASSETS = set()
+
+
+def delete_unused_ofast_assets(folder):
+    """Deletes what `folder` (BLEND_FOLDER or SKYBOX_FOLDER) holds that this run did not use (USED_ASSETS):
+    instances of glTF materials the export no longer has, and textures no instance samples any more. Run once the
+    folder's instances are set up; re-exports give changed bakes new names, and de_inferno's Blend folder had grown
+    to 2810 files (11 GB; 1359 unused)."""
+    started = time.monotonic()
+    registry = unreal.AssetRegistryHelpers.get_asset_registry()
+    unused = [str(data.package_name) for data in registry.get_assets_by_path(folder, recursive=False)
+              if str(data.package_name) not in USED_ASSETS]
+    delete_assets(unused, "unused OFAST assets in " + folder)
+    log("%s: %d unused instances and textures deleted (%.0f s)"
+        % (folder.rsplit("/", 1)[1], len(unused), time.monotonic() - started))
 
 
 def import_texture(relative_png, folder, kind):
-    """Imports one exported PNG as a texture asset (once). kind: 'color' (sRGB), 'normal', or 'linear' (masks).
+    """Imports one exported PNG as a texture asset: once, and again in place (references kept) when the PNG changed
+    since (imported_from: a re-export may give a name new pixels). kind: 'color' (sRGB), 'normal', or 'linear'
+    (masks).
 
     Normal maps: the exported PNGs follow glTF's convention (+Y up), Unreal's is DirectX (+Y down), so they get
     flip_green_channel like the ones Interchange imports for the glTF materials (checked: Interchange sets it)."""
     name = os.path.splitext(os.path.basename(relative_png))[0]
     path = folder + "/" + name
-    if not unreal.EditorAssetLibrary.does_asset_exist(path):
+    USED_ASSETS.add(path)
+    exists = unreal.EditorAssetLibrary.does_asset_exist(path)
+    if not exists or imported_from(unreal.EditorAssetLibrary.find_asset_data(path),
+                                   os.path.join(EXPORT_DIR, relative_png)) is False:
+        if exists:
+            log("re-importing %s (its PNG changed)" % name)
         task = unreal.AssetImportTask()
         task.filename = os.path.join(EXPORT_DIR, relative_png)
         task.destination_path = folder
@@ -854,6 +999,9 @@ def height_blend_instances():
     for material in document.get("materials", []):
         ofast = material.get("extras", {}).get("ofast", {})
         blend, environment = ofast.get("height_blend"), ofast.get("environment")
+        if blend and not environment:
+            log("height blend: %s keeps layer 1 only (no extras.ofast.environment: an export from before the model "
+                "tint moved into the material; re-export the map)" % material["name"])
         if not blend or not environment:
             continue
         missing = ["%s.%s" % (layer, key) for layer in ("layer1", "layer2") for _p, key, _k in HEIGHT_BLEND_TEXTURES
@@ -888,6 +1036,7 @@ def height_blend_instances():
 def blend_instance(name, master, folder=BLEND_FOLDER):
     """The material instance <folder>/MI_<name> (created on first use), parented to `master`."""
     path = folder + "/MI_" + name
+    USED_ASSETS.add(path)
     if unreal.EditorAssetLibrary.does_asset_exist(path):
         instance = unreal.EditorAssetLibrary.load_asset(path)
     else:
@@ -1695,12 +1844,16 @@ def main():
     unreal.EditorPythonScripting.set_keep_python_script_alive(True)
     with open(MANIFEST) as f:
         manifest = json.load(f)
-    prepare_level()
+    # Deletions happen before the level is opened: with its objects in memory each deleted asset costs far more
+    # (de_nuke: 602 instances in 272 s with the level open; de_inferno: 3746 assets in 190 s before it).
+    evict_stale_interchange_assets()
     # Materials glTF cannot describe (two-layer blends, model tints): their instances are set up before the scene
     # import, while no mesh in the level uses them yet, then put on the imported meshes.
     blends = layer_blend_instances()
     blends.update(height_blend_instances())
     blends.update(environment_instances())
+    delete_unused_ofast_assets(BLEND_FOLDER)
+    prepare_level()
     unreal.EditorAssetLibrary.save_directory("/Game/OFAST", only_if_is_dirty=True, recursive=True)
     imported = import_scene()
     if blends:
@@ -1711,6 +1864,7 @@ def main():
     add_shadow_proxies(imported)
     # The 3D skybox stays behind the world and out of its lighting, as in CS2.
     setup_skybox(imported)
+    delete_unused_ofast_assets(SKYBOX_FOLDER)
     setup_environment(manifest, imported)
     shots = views(manifest, imported)
     save_changed_instances()

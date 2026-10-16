@@ -141,9 +141,11 @@ brightness, as in the bake. Its users:
 - `M_OFAST_HeightBlend_v2` (every `csgo_environment_blend`): each layer's colour is tinted, then the two are blended.
 - `M_OFAST_Environment_v1` (every single-layer `csgo_environment`, tinted or not): colour, normal, surface and height
   of layer 1; an instance overrides the blend mode for alpha-tested (masked at the glTF `alphaCutoff`) and
-  translucent materials, and two-sidedness. Not Interchange's glTF material: a re-import keeps existing material
-  instances unchanged, and de_inferno's project still showed the conversion from before the environment bakes
-  (plain colour × the tint as a factor): its terrace tablecloths were solid dark red instead of red and white check.
+  translucent materials, and two-sidedness. Not Interchange's glTF material, which has no model tint. (That is how
+  stale Interchange materials were found: de_inferno's project still showed the conversion from before the
+  environment bakes, its terrace tablecloths solid dark red instead of red and white check. `import_map.py` now
+  rebuilds the Interchange materials an older export left, see
+  [decision 006](../decisions/006-reimport-rebuilds-stale-interchange-assets.md).)
 - `M_OFAST_Skybox_v3` (3D-skybox geometry): layer 1's tint, like the rest of its glTF stand-in.
 
 Checked on de_inferno against the same export with `--bake-model-tints`, both through these masters: base-colour

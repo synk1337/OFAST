@@ -68,4 +68,4 @@ same import differ by more than that) with the pink and blue plaster unchanged, 
   untested).
 - The other materials still come from Interchange's glTF import, whose re-import does not update existing material
   instances: whenever the exporter changes how it converts a material, a project that imported the map before keeps
-  the old look until those assets are deleted or rebuilt. Not fixed here.
+  the old look until those assets are deleted or rebuilt. Not fixed here; fixed by decision 006.
