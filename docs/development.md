@@ -83,24 +83,31 @@ minute. Imported content in `unreal/Sandbox/Content/` is ignored by git (it come
 
 ```bash
 cargo run --release -p ofast-cli -- export-map de_mirage --out test-data/exports/de_mirage
-powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/import_map.py -Gltf test-data/exports/de_mirage/de_mirage.gltf -Shot test-data/shots -Name de_mirage
+powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/import_map.py -Gltf test-data/exports/de_mirage/de_mirage.gltf -Shot test-data/shots -Name de_mirage [-Views test-data/views/de_mirage.json]
 ```
 
-`import_map.py` imports the glTF as a scene (one actor per placement, lights included), swaps two-layer materials
-for the layer-blend material, turns the sun like CS2's `light_environment`, saves everything under
-`/Game/OFAST/<map>` and writes screenshots from the first CT spawn, the first T spawn and above the map.
+`export-map` also loads the map's 3D skybox (its own archive under `game/csgo/maps/prefabs/`) and writes the sky as
+`<map>_sky.hdr`. `import_map.py` imports the glTF as a scene (one actor per placement), swaps two-layer materials for
+the layer-blend material, replaces the template's sky, fog and lights with CS2's (sun, sky sphere + Sky Light from
+the HDR, local lights from the manifest, fixed exposure — see [lighting.md](formats/lighting.md)), saves everything
+under `/Game/OFAST/<map>` and writes screenshots from the first CT spawn, the first T spawn, the optional `-Views`
+spots (CS2 `setpos`/`setang` values in a JSON list) and above the map. It never saves an engine level.
 
 The sandbox needs **DirectX 12 + Shader Model 6** for Nanite (set in `unreal/Sandbox/Config/DefaultEngine.ini`);
 switching it on recompiles all shaders once (long).
 
 ### Comparing with CS2
 
-1. Start CS2 with `-insecure`, open the console (check which key is bound to `toggleconsole` in
-   `Steam/userdata/<id>/730/local/cfg/cs2_user_keys_0_slot0.vcfg`), `map de_mirage`.
+1. Start CS2 with `-insecure` (`steam.exe -applaunch 730 -insecure -novid -console +map de_mirage`), open the console
+   (check which key is bound to `toggleconsole` in `Steam/userdata/<id>/730/local/cfg/cs2_user_keys_0_slot0.vcfg`).
+   When driving it by script: the console takes Enter only as a held key, and the console window closes with its X.
 2. `sv_cheats 1; bot_kick; mp_warmup_end; mp_ignore_round_win_conditions 1; noclip; cl_drawhud 0;
    r_drawviewmodel 0`, then `setpos <origin_source> ; setang <angles>` from the manifest's spawn and `getpos` to check
-   (the eye is 64 units above the origin).
-3. Screenshot, then put both images side by side (see `test-data/shots/compare_*.png`).
+   (the eye is 64 units above the origin). Keyboard movement does not reach the game by script: move with `setpos`.
+3. Screenshot (CS2's own captures repeat to within 0.1 %), then compare:
+   `python tools/compare/compare_shots.py <cs2.jpg> <unreal.png> <out.png>` (CS2 on top, Unreal below, per-cell
+   brightness ratios) and, for exposure, `python tools/compare/sky_exposure.py <map>_sky.hdr <shot> <yaw> <pitch>
+   x,y …` on pure-sky pixels.
 
 ### Debug tools for maps
 
@@ -109,7 +116,10 @@ switching it on recompiles all shaders once (long).
 | `cargo run --release --example map_raycast -- de_mirage ct0 "x,y;x,y"` | which model/material OFAST's geometry has under a screenshot pixel |
 | `cargo run --release --example map_outliers -- de_mirage [classes]` | stretched geometry, dropped triangles, entity classes with models |
 | `cargo run --release --example model_layout -- formats de_mirage` | vertex attribute formats used by a map |
-| `tools/unreal/probe_actors.py` (`OFAST_FILTER=<text>` or `@empty`) | imported actors, their meshes and materials in Unreal |
+| `cargo run --release --example map_entities -- de_mirage [classes…]` | entity classes with counts, or every key of the given classes |
+| `cargo run --release --example sky_faces -- <cube .vtex_c> <out.png>` | the six faces of a cube map (sky), tone-mapped |
+| `cargo run --release --example vpk_list -- <archive.vpk> [text]` | files inside any VPK (map, skybox) |
+| `tools/unreal/probe_actors.py` (`OFAST_FILTER=<text>`, `@empty` or `@lights` + `OFAST_NEAR=x,y,z`) | imported actors, their meshes and materials, or lights (direction, units, radius) in Unreal |
 | `tools/unreal/probe_axes.py` | how Unreal's glTF importer maps axes (see decision 003) |
 
 ## Rules we work by

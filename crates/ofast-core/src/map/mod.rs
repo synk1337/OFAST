@@ -167,6 +167,59 @@ impl Map {
             .iter()
             .filter(move |e| e.class_name() == Some(class))
     }
+
+    /// The map's 3D skybox, from its `skybox_reference` entity.
+    pub fn skybox_reference(&self) -> Option<SkyboxReference> {
+        let entity = self.entities_of("skybox_reference").next()?;
+        let target = entity.string("targetmapname")?.replace('\\', "/");
+        // "maps/prefabs/de_mirage/3dskybox_mirage_legacy.vmap" → world "prefabs/de_mirage/3dskybox_mirage_legacy"
+        let without_ext = target.strip_suffix(".vmap").unwrap_or(&target);
+        let world = without_ext
+            .strip_prefix("maps/")
+            .unwrap_or(without_ext)
+            .to_owned();
+        Some(SkyboxReference {
+            archive: format!("{without_ext}.vpk"),
+            world,
+            origin: entity.origin(),
+            angles: entity.angles(),
+        })
+    }
+
+    /// The `sky_camera` of a skybox world: its origin and scale (how many main-map units one skybox unit stands
+    /// for; 16 when the key is missing, the editor's default).
+    pub fn sky_camera(&self) -> Option<([f32; 3], f32)> {
+        let camera = self.entities_of("sky_camera").next()?;
+        let scale = camera.number("scale").filter(|s| *s > 0.0).unwrap_or(16.0);
+        Some((camera.origin(), scale))
+    }
+}
+
+/// Where a map's 3D skybox lives and where it is anchored in the main map.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkyboxReference {
+    /// The skybox's own archive, relative to `game/csgo` (e.g. `maps/prefabs/de_mirage/3dskybox_mirage_legacy.vpk`).
+    pub archive: String,
+    /// The skybox world name for [`Map::load`] (e.g. `prefabs/de_mirage/3dskybox_mirage_legacy`).
+    pub world: String,
+    /// The `skybox_reference` origin in the main map.
+    pub origin: [f32; 3],
+    /// The `skybox_reference` angles (pitch, yaw, roll) — the whole skybox turns with them.
+    pub angles: [f32; 3],
+}
+
+/// Transform that places skybox geometry in the main world: scaled up around the sky camera, then turned and moved
+/// like the reference entity — `world = reference.origin + R(reference.angles) · scale · (p − camera)`.
+///
+/// The engine keeps the skybox small and draws it from a second camera at `(eye − reference) / scale + camera`;
+/// baking the scale into the geometry gives the same picture. Same composition as Source 2 Viewer's `SkyTransform`.
+pub fn sky_to_world(camera: [f32; 3], scale: f32, reference: &SkyboxReference) -> Transform {
+    let placed = entity_transform(reference.origin, reference.angles, [scale; 3]);
+    let mut to_camera = IDENTITY;
+    for (row, c) in to_camera.iter_mut().zip(camera) {
+        row[3] = -c;
+    }
+    compose(&placed, &to_camera)
 }
 
 fn array(value: Option<&Value>) -> &[Value] {
@@ -368,6 +421,36 @@ mod tests {
         let t = entity_transform([1.0, 2.0, 3.0], [10.0, 20.0, 30.0], [2.0; 3]);
         assert!(close(&compose(&IDENTITY, &t), &t));
         assert!(close(&compose(&t, &IDENTITY), &t));
+    }
+
+    fn apply(t: &Transform, p: [f32; 3]) -> [f32; 3] {
+        std::array::from_fn(|i| t[i][0] * p[0] + t[i][1] * p[1] + t[i][2] * p[2] + t[i][3])
+    }
+
+    #[test]
+    fn sky_geometry_scales_around_the_sky_camera() {
+        // de_mirage: sky camera at (5208, -968, 44.5), scale 16, reference at the origin.
+        let reference = SkyboxReference {
+            archive: String::new(),
+            world: String::new(),
+            origin: [0.0; 3],
+            angles: [0.0; 3],
+        };
+        let t = sky_to_world([5208.0, -968.0, 44.5], 16.0, &reference);
+        assert_eq!(apply(&t, [5208.0, -968.0, 44.5]), [0.0; 3]);
+        assert_eq!(apply(&t, [5209.0, -968.0, 45.5]), [16.0, 0.0, 16.0]);
+
+        // A turned, moved reference turns the scaled offset and adds its origin.
+        let turned = SkyboxReference {
+            origin: [100.0, 0.0, 0.0],
+            angles: [0.0, 90.0, 0.0],
+            ..reference
+        };
+        let p = apply(&sky_to_world([0.0; 3], 16.0, &turned), [1.0, 0.0, 0.0]);
+        assert!(
+            (p[0] - 100.0).abs() < 1e-3 && (p[1] - 16.0).abs() < 1e-3,
+            "{p:?}"
+        );
     }
 
     #[test]

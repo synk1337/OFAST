@@ -65,6 +65,14 @@ impl Entity {
         }
     }
 
+    /// A yes/no property, stored as a boolean, a number or a `"0"`/`"1"` string depending on the map's age.
+    pub fn flag(&self, key: &str) -> Option<bool> {
+        match self.get(key)?.unflagged() {
+            Value::Bool(b) => Some(*b),
+            _ => self.number(key).map(|n| n != 0.0),
+        }
+    }
+
     /// A 3-component property (`origin`, `angles`, `color`, …) stored as an array or a space-separated string.
     /// Colours may have a 4th component; only the first 3 are returned.
     pub fn vector3(&self, key: &str) -> Option<[f32; 3]> {

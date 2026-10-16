@@ -54,8 +54,8 @@ def build_scene(mesh):
         for old in actors.get_all_level_actors():
             if "OFAST" in [str(tag) for tag in old.tags]:
                 actors.destroy_actor(old)
-    else:
-        levels.new_level_from_template(level_path, "/Engine/Maps/Templates/Template_Default")
+    elif not levels.new_level_from_template(level_path, "/Engine/Maps/Templates/Template_Default"):
+        raise RuntimeError("could not create " + level_path)
 
     actor = actors.spawn_actor_from_object(mesh, unreal.Vector(0, 0, 0))
     actor.tags = [unreal.Name("OFAST")]
@@ -86,6 +86,11 @@ def build_scene(mesh):
     for light in actors.get_all_level_actors():
         if isinstance(light, unreal.DirectionalLight):
             light.set_actor_rotation(unreal.Rotator(roll=0.0, pitch=-35.0, yaw=rotation.yaw + 25.0), False)
+    # Never save an engine level: the editor starts on /Engine/Maps/Templates/Template_Default, and saving it would
+    # change the template every new level is made from.
+    world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world().get_path_name()
+    if not world.startswith("/Game/"):
+        raise RuntimeError("refusing to save " + world)
     levels.save_current_level()
     return camera
 

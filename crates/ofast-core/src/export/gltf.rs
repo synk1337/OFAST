@@ -146,11 +146,11 @@ enum TextureJob {
 
 /// Material information read from a `.vmat_c`.
 #[derive(Debug, Clone, Default)]
-struct MaterialInfo {
-    shader: String,
-    textures: BTreeMap<String, String>,
-    ints: BTreeMap<String, i64>,
-    floats: BTreeMap<String, f64>,
+pub(crate) struct MaterialInfo {
+    pub(crate) shader: String,
+    pub(crate) textures: BTreeMap<String, String>,
+    pub(crate) ints: BTreeMap<String, i64>,
+    pub(crate) floats: BTreeMap<String, f64>,
 }
 
 impl MaterialInfo {
@@ -779,7 +779,7 @@ impl<'c> GltfWriter<'c> {
     }
 }
 
-fn read_material(content: &Content, path: &str) -> Result<MaterialInfo, ExportError> {
+pub(crate) fn read_material(content: &Content, path: &str) -> Result<MaterialInfo, ExportError> {
     let data = content.read_resource(path)?;
     let resource = Resource::parse(&data)?;
     let root = resource.kv3(BlockKind::DATA)?.root;

@@ -24,7 +24,7 @@ Extra-data records are 12 bytes: `u32 type`, `u32 offset` (relative to its own f
 | 2 | SHEET | sprite-sheet sequences |
 | 3 | METADATA | `u16 0`, `u16 display width`, `u16 display height`, … — crop the decoded image to this size |
 | 4 | COMPRESSED_MIP_SIZE | `u32 method` (0 none, 1 LZ4, 2 ZSTD), `u32 offset` (self-relative), `u32 count`, then `i32` compressed size per mip (index 0 = largest) |
-| 5 | CUBEMAP_RADIANCE_SH | spherical-harmonics coefficients |
+| 5 | CUBEMAP_RADIANCE_SH | 27 floats: 9 real spherical-harmonics coefficients per channel (planar R, G, B), Z up |
 
 ## Pixel data
 
@@ -43,7 +43,7 @@ Extra-data records are 12 bytes: `u32 type`, `u32 offset` (relative to its own f
 | 2 | DXT5 (BC3) | RGBA8 (YCoCg converted back when the compiler says so) |
 | 3 | I8 | grey |
 | 4 | RGBA8888 | as is |
-| 19 | BC6H | HDR — not yet |
+| 19 | BC6H | HDR float (unsigned), via `Texture::decode_slices_f32` — CS2 sky cube maps |
 | 20 | BC7 | RGBA8 — CS2 colour textures |
 | 21 | ATI2N (BC5) | RG — CS2 normal maps and two-channel masks |
 | 22 | IA88 | grey + alpha |
@@ -51,7 +51,30 @@ Extra-data records are 12 bytes: `u32 type`, `u32 offset` (relative to its own f
 | 28 | BGRA8888 | swizzled to RGBA |
 | 33 | R8 | red |
 
-Other values (float formats, ETC2/EAC, JPEG/PNG/WebP-wrapped) are listed in the code and decode later as needed.
+Other values (ETC2/EAC, JPEG/PNG/WebP-wrapped) are listed in the code and decode later as needed. RGBA16F and
+RGBA32F decode to float as well.
+
+## Cube maps
+
+Flag 16 (`CUBE_TEXTURE`): each mip holds 6 faces in the order +X, −X, +Y, −Y, +Z, −Z, in the Direct3D layout. For a
+texel at (`u`, `v`) of a face (`u` right, `v` down, both −1…1) the direction is:
+
+| Face | Direction |
+|---|---|
+| +X | (1, −v, −u) |
+| −X | (−1, −v, u) |
+| +Y | (u, 1, v) |
+| −Y | (u, −1, −v) |
+| +Z | (u, −v, 1) |
+| −Z | (−u, −v, −1) |
+
+CS2 samples these with **Source world directions as is** (Z up): +Z is the zenith. Checked on `sky_de_mirage`:
+zenith gradient on +Z, flat ground colour on −Z, and the horizon falls on the edges the table predicts for the side
+faces (left edge of +X, right of −X, bottom of +Y, top of −Y). Code: `texture::sample_cube`. Preview tool:
+`cargo run --release --example sky_faces -- <texture> <out.png>`.
+
+`sky_de_mirage_exr_71e5f2a1.vtex_c`: 512² per face, BC6H, 8 mips; its reflectivity (0.742, 0.788, 0.844) is the
+average radiance of the cube.
 
 ## Conversions recorded by the compiler
 
@@ -79,5 +102,6 @@ and G = metalness; other `csgo_*` shaders keep roughness in the normal map's B c
 
 ## Sources
 
-- ValveResourceFormat (MIT): `Resource/ResourceTypes/Texture.cs`, `Resource/Enums/VTex*.cs`, `TextureDecoders/*`
+- ValveResourceFormat (MIT): `Resource/ResourceTypes/Texture.cs`, `Resource/Enums/VTex*.cs`, `TextureDecoders/*`,
+  `Renderer/Shaders/texture_decode.frag.slang` (cube face directions)
 - BC1–BC7 block decoding: `bcdec_rs` (MIT) — see [decision 002](../decisions/002-standard-codecs.md)

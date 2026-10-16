@@ -377,6 +377,171 @@ impl Texture {
         let (dw, dh) = self.display_size();
         Ok(Image::new(w, h, rgba).cropped(dw as usize, dh as usize))
     }
+
+    /// Decodes every slice of mip 0 to linear float RGBA — the six faces of a cube map (in the stored order
+    /// +X, −X, +Y, −Y, +Z, −Z), or the single image of a 2D texture. Supports the HDR formats skies use (BC6H,
+    /// RGBA16F, RGBA32F) and falls back to the 8-bit decoders (values / 255) for the rest.
+    pub fn decode_slices_f32(&self, file: &[u8]) -> Result<Vec<ImageF32>, TextureError> {
+        let bytes = self.top_mip_bytes(file)?;
+        let (w, h, slices) = self.mip_dims(0);
+        let slice_size = self.format.image_size(w, h, 1);
+        let mut out = Vec::with_capacity(slices);
+        for slice in 0..slices {
+            let src = bytes
+                .get(slice * slice_size..(slice + 1) * slice_size)
+                .ok_or(UnexpectedEof {
+                    what: "texture slice",
+                    offset: slice * slice_size,
+                    needed: slice_size,
+                    available: bytes.len().saturating_sub(slice * slice_size),
+                })?;
+            out.push(decode_slice_f32(self.format, src, w, h)?);
+        }
+        Ok(out)
+    }
+}
+
+/// A linear floating-point RGBA image (HDR).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageF32 {
+    /// Width in pixels.
+    pub width: usize,
+    /// Height in pixels.
+    pub height: usize,
+    /// `width × height × 4` floats, row-major, top row first.
+    pub rgba: Vec<f32>,
+}
+
+impl ImageF32 {
+    /// Bilinear sample at normalized coordinates, clamped at the borders (`v` = 0 at the top).
+    pub fn sample_bilinear(&self, u: f32, v: f32) -> [f32; 4] {
+        let fx = (u * self.width as f32 - 0.5).clamp(0.0, (self.width - 1) as f32);
+        let fy = (v * self.height as f32 - 0.5).clamp(0.0, (self.height - 1) as f32);
+        let (x0, y0) = (fx as usize, fy as usize);
+        let (x1, y1) = ((x0 + 1).min(self.width - 1), (y0 + 1).min(self.height - 1));
+        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+        let (a, b) = (self.pixel(x0, y0), self.pixel(x1, y0));
+        let (c, d) = (self.pixel(x0, y1), self.pixel(x1, y1));
+        std::array::from_fn(|i| {
+            let top = a[i] + (b[i] - a[i]) * tx;
+            let bottom = c[i] + (d[i] - c[i]) * tx;
+            top + (bottom - top) * ty
+        })
+    }
+
+    fn pixel(&self, x: usize, y: usize) -> [f32; 4] {
+        let i = (y * self.width + x) * 4;
+        [
+            self.rgba[i],
+            self.rgba[i + 1],
+            self.rgba[i + 2],
+            self.rgba[i + 3],
+        ]
+    }
+}
+
+/// Samples a cube map in direction `dir` (any length), with the Direct3D face convention Source 2 uses: faces in
+/// the order +X, −X, +Y, −Y, +Z, −Z, and for each face the image axes below (`u` right, `v` down, both −1..1).
+///
+/// | face | direction of texel (u, v) |
+/// |---|---|
+/// | +X | (1, −v, −u) |
+/// | −X | (−1, −v, u) |
+/// | +Y | (u, 1, v) |
+/// | −Y | (u, −1, −v) |
+/// | +Z | (u, −v, 1) |
+/// | −Z | (−u, −v, −1) |
+///
+/// CS2 samples sky cubes with the Source (Z-up) world direction as is, so +Z is the zenith. Checked on
+/// `sky_de_mirage` (zenith gradient on +Z, ground colour on −Z, horizon on the edges this table predicts) and in
+/// Source 2 Viewer's `texture_decode` shader.
+pub fn sample_cube(faces: &[ImageF32], dir: [f32; 3]) -> [f32; 4] {
+    let [x, y, z] = dir;
+    let (ax, ay, az) = (x.abs(), y.abs(), z.abs());
+    // (face, u, v, major axis length): invert the table for the face the direction points at.
+    let (face, u, v, major) = if ax >= ay && ax >= az {
+        if x > 0.0 {
+            (0, -z, -y, ax)
+        } else {
+            (1, z, -y, ax)
+        }
+    } else if ay >= az {
+        if y > 0.0 {
+            (2, x, z, ay)
+        } else {
+            (3, x, -z, ay)
+        }
+    } else if z > 0.0 {
+        (4, x, -y, az)
+    } else {
+        (5, -x, -y, az)
+    };
+    match faces.get(face) {
+        Some(image) if major > 0.0 => {
+            image.sample_bilinear((u / major + 1.0) * 0.5, (v / major + 1.0) * 0.5)
+        }
+        _ => [0.0; 4],
+    }
+}
+
+/// Decodes one slice to float RGBA.
+fn decode_slice_f32(
+    format: Format,
+    src: &[u8],
+    w: usize,
+    h: usize,
+) -> Result<ImageF32, TextureError> {
+    let mut rgba = vec![0f32; w * h * 4];
+    match format {
+        Format::Bc6h => {
+            let blocks_x = w.div_ceil(4).max(1);
+            let mut block_out = [0f32; 4 * 4 * 3];
+            for (index, block) in src.as_chunks::<16>().0.iter().enumerate() {
+                let (bx, by) = (index % blocks_x, index / blocks_x);
+                // Unsigned BC6H (UF16), 3 floats per pixel, row pitch in floats.
+                bcdec_rs::bc6h_float(block, &mut block_out, 12, false);
+                for y in 0..4 {
+                    for x in 0..4 {
+                        let (px, py) = (bx * 4 + x, by * 4 + y);
+                        if px < w && py < h {
+                            let o = (py * w + px) * 4;
+                            let i = (y * 4 + x) * 3;
+                            rgba[o..o + 3].copy_from_slice(&block_out[i..i + 3]);
+                            rgba[o + 3] = 1.0;
+                        }
+                    }
+                }
+            }
+        }
+        Format::Rgba16161616F => {
+            let texels = rgba.as_chunks_mut::<4>().0.iter_mut();
+            for (o, px) in texels.zip(src.as_chunks::<8>().0) {
+                for (c, half) in o.iter_mut().zip(px.as_chunks::<2>().0) {
+                    *c = crate::model::half_to_f32(u16::from_le_bytes(*half));
+                }
+            }
+        }
+        Format::Rgba32323232F => {
+            let texels = rgba.as_chunks_mut::<4>().0.iter_mut();
+            for (o, px) in texels.zip(src.as_chunks::<16>().0) {
+                for (c, float) in o.iter_mut().zip(px.as_chunks::<4>().0) {
+                    *c = f32::from_le_bytes(*float);
+                }
+            }
+        }
+        other => {
+            let mut rgba8 = vec![0u8; w * h * 4];
+            decode_slice(other, src, w, h, &mut rgba8)?;
+            for (o, &v) in rgba.iter_mut().zip(&rgba8) {
+                *o = f32::from(v) / 255.0;
+            }
+        }
+    }
+    Ok(ImageF32 {
+        width: w,
+        height: h,
+        rgba,
+    })
 }
 
 /// An 8-bit RGBA image.
@@ -617,6 +782,32 @@ fn read_conversions(resource: &Resource<'_>) -> Conversions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cube_lookup_picks_the_face_and_side_the_d3d_table_says() {
+        // Six 2×1 faces: value = face × 10 + column (0 = left, 1 = right).
+        let faces: Vec<ImageF32> = (0..6)
+            .map(|f| ImageF32 {
+                width: 2,
+                height: 1,
+                rgba: [0.0, 1.0]
+                    .iter()
+                    .flat_map(|c| [f as f32 * 10.0 + c, 0.0, 0.0, 1.0])
+                    .collect(),
+            })
+            .collect();
+        let at = |dir| sample_cube(&faces, dir)[0];
+        // Zenith and nadir.
+        assert_eq!(at([0.0, 0.0, 1.0]) as i32 / 10, 4);
+        assert_eq!(at([0.0, 0.0, -1.0]) as i32 / 10, 5);
+        // +X face: up (+Z) is on its left (u = −z), so sky-ward directions read the left column.
+        assert_eq!(at([1.0, 0.0, 0.9]), 0.0);
+        assert_eq!(at([1.0, 0.0, -0.9]), 1.0);
+        // −X face: up is on its right.
+        assert_eq!(at([-1.0, 0.0, 0.9]), 11.0);
+        // +Y face: +X is on its right.
+        assert_eq!(at([0.9, 1.0, 0.0]), 21.0);
+    }
 
     #[test]
     fn block_sizes_round_up_to_whole_blocks() {

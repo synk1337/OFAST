@@ -27,7 +27,7 @@ use crate::kv3::Value;
 use crate::meshopt::{self, MeshoptError};
 use crate::resource::{BlockKind, Resource, ResourceError};
 
-pub use attributes::Geometry;
+pub use attributes::{Geometry, half_to_f32};
 
 /// DXGI format numbers used by CS2 vertex layouts.
 #[allow(missing_docs)]

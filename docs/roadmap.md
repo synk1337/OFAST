@@ -45,11 +45,17 @@ Ordered so that **Demo → Unreal scene** works first. Every milestone ends in s
   Nanite with DX12/SM6, screenshots from spawns.
 - [x] **Verified against CS2**: CT spawn view in CS2 (`setpos`/`setang`, -insecure) vs Unreal — same framing to the
   pixel; textures, blends, decals and railings match.
+- [x] **3D skybox**: the separate 1/16-scale world is loaded from its own archive and placed around the map
+  (`sky_to_world`, [map.md](formats/map.md#3d-skybox)); the hotel and rooftops sit where CS2 shows them.
+- [x] **Sky**: the `env_sky` BC6H cube map → equirect `.hdr` → Unreal TextureCube for the visible sky and the Sky Light.
+- [x] **Lighting calibrated against CS2** ([lighting.md](formats/lighting.md)): one unit constant, sun and sky light
+  from the map, local lights rebuilt as Unreal point/spot/rect lights, fixed exposure measured on CS2 screenshots.
+  Outdoors 0.95 / 0.86 of CS2's brightness; interiors lit by wall lights still ~1.4× too bright.
 
 ### Still to do (M1 → M2)
 
-- 3D skybox (separate world `maps/prefabs/<map>/…vpk`, scaled ×16) and the sky material.
-- Lighting calibration against CS2 (sun intensity, sky light, exposure, local light units).
+- Interior local-light brightness (see the calibration notes in [lighting.md](formats/lighting.md)).
+- CS2's bloom, colour LUT and cubemap fog in Unreal.
 - Materials with more than two layers, detail textures, vertex colour tint (`COLOR` attribute), glass.
 - Rebuild `csgo_effects` dust / light-shaft cards as Unreal effects.
 - Colour texture alpha mask on weapons: find what it drives.

@@ -9,6 +9,7 @@ param(
     [string]$Gltf = "",
     [string]$Shot = "",
     [string]$Name = "",
+    [string]$Views = "",
     [string]$Engine = "C:\Program Files\Epic Games\UE_5.8"
 )
 
@@ -21,6 +22,7 @@ $resolve = { param($p) $ExecutionContext.SessionState.Path.GetUnresolvedProvider
 $env:OFAST_GLTF = if ($Gltf) { & $resolve $Gltf } else { "" }
 $env:OFAST_SHOT = if ($Shot) { & $resolve $Shot } else { "" }
 $env:OFAST_NAME = $Name
+$env:OFAST_VIEWS = if ($Views) { & $resolve $Views } else { "" }
 if ($Shot) {
     # -Shot is either a .png file (single screenshot) or a folder (scripts that take several).
     if ($env:OFAST_SHOT.ToLower().EndsWith(".png")) {

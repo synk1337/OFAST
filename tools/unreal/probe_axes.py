@@ -17,7 +17,13 @@ def log(message):
 try:
     levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
-    levels.load_level("/Engine/Maps/Templates/Template_Default")
+    # A level of our own, never the engine template (importing into the template risks changing it). It is created
+    # (and saved) once; the probe never saves it, so reopening gives a clean level every run.
+    probe_level = "/Game/OFAST/Maps/Probe"
+    if unreal.EditorAssetLibrary.does_asset_exist(probe_level):
+        levels.load_level(probe_level)
+    elif not levels.new_level_from_template(probe_level, "/Engine/Maps/Templates/Template_Default"):
+        raise RuntimeError("could not create " + probe_level)
     before = set(a.get_name() for a in actors.get_all_level_actors())
 
     source = unreal.InterchangeManager.create_source_data(os.environ["OFAST_GLTF"])

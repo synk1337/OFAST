@@ -16,9 +16,10 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use ofast_core::content::Content;
 use ofast_core::export::gltf::{ExportReport, export_model};
-use ofast_core::export::map::export_map;
+use ofast_core::export::map::{Skybox, export_map};
 use ofast_core::game::Cs2Install;
-use ofast_core::map::Map;
+use ofast_core::map::{Map, sky_to_world};
+use ofast_core::vpk::Vpk;
 
 #[derive(Parser)]
 #[command(
@@ -128,9 +129,45 @@ fn run(cli: Cli) -> Result<(), String> {
             print_report(&report, started);
         }
         Command::ExportMap { map, out } => {
-            let content = Content::for_map(&install, &map).map_err(|e| e.to_string())?;
+            let mut content = Content::for_map(&install, &map).map_err(|e| e.to_string())?;
             let loaded = Map::load(&content, &map).map_err(|e| e.to_string())?;
-            let report = export_map(&content, &loaded, &out).map_err(|e| e.to_string())?;
+
+            // The 3D skybox is its own world in its own archive; searched right after the map's archive. A skybox
+            // that cannot be read is a warning: the map still exports without it.
+            let mut skybox_map = None;
+            if let Some(reference) = loaded.skybox_reference() {
+                let archive = install.csgo_dir().join(&reference.archive);
+                let sky = Vpk::open(&archive)
+                    .map_err(|e| e.to_string())
+                    .and_then(|vpk| {
+                        content.insert(1, vpk);
+                        Map::load(&content, &reference.world).map_err(|e| e.to_string())
+                    });
+                match sky {
+                    Ok(sky) => {
+                        let (camera, scale) = sky.sky_camera().unwrap_or(([0.0; 3], 16.0));
+                        let objects: usize = sky
+                            .nodes
+                            .iter()
+                            .map(|n| n.scene_objects.len() + n.aggregates.len())
+                            .sum();
+                        println!(
+                            "3D skybox {}: {objects} objects, scale {scale}, sky camera {camera:?} → {:?}",
+                            reference.world, reference.origin
+                        );
+                        let transform = sky_to_world(camera, scale, &reference);
+                        skybox_map = Some((sky, transform));
+                    }
+                    Err(e) => eprintln!("warning: 3D skybox {} skipped: {e}", archive.display()),
+                }
+            }
+            let skybox = skybox_map.as_ref().map(|(map, transform)| Skybox {
+                map,
+                transform: *transform,
+            });
+
+            let report =
+                export_map(&content, &loaded, skybox.as_ref(), &out).map_err(|e| e.to_string())?;
             print_report(&report, started);
         }
         Command::Vpk {

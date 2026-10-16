@@ -6,10 +6,13 @@ Inputs (environment variables):
     OFAST_GLTF   absolute path of <map>.gltf (the <map>.ofast.json manifest must sit next to it)
     OFAST_SHOT   folder for screenshots: <map>_ct0.png, <map>_t0.png, <map>_top.png
     OFAST_NAME   map name (asset folder /Game/OFAST/<name>, level /Game/OFAST/Maps/<name>)
+    OFAST_VIEWS  optional JSON file of extra viewpoints given as CS2 setpos/setang (see extra_views)
 
-Steps: fresh level from the Basic template (sky, sun, fog) → Interchange *scene* import of the glTF (one actor per
-placement, lights included) → sun rotated like CS2's light_environment → camera at a spawn's eye position with
-CS2's default field of view → screenshots → quit.
+Steps: level made once from the Basic template, its environment (sky, clouds, fog, sun, floor) removed →
+Interchange *scene* import of the glTF (one actor per placement) → layer-blend materials → CS2's environment from the
+manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
+exposure with no tone curve (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
+default field of view → screenshots → quit. Everything the script adds is tagged "OFAST" and rebuilt on every run.
 """
 
 import json
@@ -28,6 +31,8 @@ WIDTH, HEIGHT = 1920, 1080
 # CS2's default fov is 90° measured horizontally on a 4:3 screen; on 16:9 that is 2·atan(tan(45°)·(16/9)/(4/3)).
 HFOV_16_9 = math.degrees(2 * math.atan(math.tan(math.radians(45)) * (16 / 9) / (4 / 3)))
 TAG = unreal.Name("OFAST")
+# Actor labels of 3D-skybox geometry start with this (SKYBOX_NODE_PREFIX in ofast-core's map exporter).
+SKYBOX_PREFIX = "sky3d_"
 
 
 def log(message):
@@ -47,12 +52,31 @@ def prepare_level():
         for actor in old:
             actors.destroy_actor(actor)
         log("reused level, removed %d old actors" % len(old))
-    else:
-        levels.new_level_from_template(level_path, "/Engine/Maps/Templates/Template_Default")
-    # The template's floor would cut through the map.
+    elif not levels.new_level_from_template(level_path, "/Engine/Maps/Templates/Template_Default"):
+        raise RuntimeError("could not create " + level_path)
+    # The template's environment (floor, physical sky, clouds, fog, sun, sky light) is replaced by CS2's own,
+    # rebuilt from the manifest on every run (see setup_environment).
+    template = (
+        unreal.StaticMeshActor,
+        unreal.CineCameraActor,
+        unreal.SkyAtmosphere,
+        unreal.VolumetricCloud,
+        unreal.ExponentialHeightFog,
+        unreal.DirectionalLight,
+        unreal.SkyLight,
+    )
     for actor in actors.get_all_level_actors():
-        if isinstance(actor, unreal.StaticMeshActor) and TAG not in actor.tags and "Floor" in actor.get_actor_label():
+        if isinstance(actor, template) and TAG not in actor.tags:
             actors.destroy_actor(actor)
+
+
+def save_level():
+    """Saves the open level — never an engine one (the editor starts on the engine's template map, and saving that
+    would change every level made from it)."""
+    world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world().get_path_name()
+    if not world.startswith("/Game/"):
+        raise RuntimeError("refusing to save " + world)
+    levels.save_current_level()
 
 
 def import_scene():
@@ -273,17 +297,251 @@ def apply_layer_blends(imported):
     unreal.EditorAssetLibrary.save_directory("/Game/OFAST", only_if_is_dirty=True, recursive=True)
 
 
+# Versioned like BLEND_MASTER.
+SKY_MASTER = "/Game/OFAST/Materials/M_OFAST_Sky_v1"
+# Radius of the sky sphere (cm): beyond the 3D skybox, which reaches about 3 km from the map centre.
+SKY_RADIUS = 1.0e6
+
+
+def spawn(cls, location=(0.0, 0.0, 0.0), rotation=None):
+    actor = actors.spawn_actor_from_class(cls, unreal.Vector(*location), rotation or unreal.Rotator())
+    actor.tags = [TAG]
+    return actor
+
+
+def import_sky_cube(hdr, asset_name):
+    """Imports an exported equirect .hdr; Unreal turns a 2:1 .hdr into a TextureCube by itself."""
+    task = unreal.AssetImportTask()
+    task.filename = os.path.join(EXPORT_DIR, hdr)
+    task.destination_path = "/Game/OFAST/" + NAME
+    task.destination_name = asset_name
+    task.automated = True
+    task.replace_existing = True
+    task.save = False
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+    paths = list(task.imported_object_paths)
+    cube = unreal.load_asset(paths[0]) if paths else None
+    if not isinstance(cube, unreal.TextureCube):
+        raise RuntimeError("sky did not import as a TextureCube: %s" % cube)
+    cube.set_editor_properties(
+        {
+            "compression_settings": unreal.TextureCompressionSettings.TC_HDR,
+            "srgb": False,
+            "lod_group": unreal.TextureGroup.TEXTUREGROUP_SKYBOX,
+        }
+    )
+    unreal.EditorAssetLibrary.save_loaded_asset(cube)
+    return cube
+
+
+def ensure_sky_master(cube):
+    """Unlit sky material: the cube map looked up along the view direction (−CameraVector), times SkyIntensity.
+    Looking up by direction makes the sphere's size and orientation irrelevant."""
+    if unreal.EditorAssetLibrary.does_asset_exist(SKY_MASTER):
+        return unreal.EditorAssetLibrary.load_asset(SKY_MASTER)
+    folder, name = SKY_MASTER.rsplit("/", 1)
+    material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, folder, unreal.Material, unreal.MaterialFactoryNew()
+    )
+    material.set_editor_properties(
+        {"shading_model": unreal.MaterialShadingModel.MSM_UNLIT, "two_sided": True, "is_sky": True}
+    )
+    mel = unreal.MaterialEditingLibrary
+    camera = mel.create_material_expression(material, unreal.MaterialExpressionCameraVectorWS, -900, 0)
+    flip = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, -700, 0)
+    flip.set_editor_property("const_b", -1.0)
+    mel.connect_material_expressions(camera, "", flip, "A")
+    sample = mel.create_material_expression(material, unreal.MaterialExpressionTextureSampleParameterCube, -500, 0)
+    sample.set_editor_properties(
+        {"parameter_name": "SkyCube", "texture": cube, "sampler_type": unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR}
+    )
+    mel.connect_material_expressions(flip, "", sample, "UVs")
+    intensity = mel.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -500, 250)
+    intensity.set_editor_properties({"parameter_name": "SkyIntensity", "default_value": 1.0})
+    scaled = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, -250, 0)
+    mel.connect_material_expressions(sample, "RGB", scaled, "A")
+    mel.connect_material_expressions(intensity, "", scaled, "B")
+    mel.connect_material_property(scaled, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+    mel.recompile_material(material)
+    unreal.EditorAssetLibrary.save_loaded_asset(material)
+    return material
+
+
+def setup_fallback_sky():
+    """Unreal's physical sky (atmosphere + real-time sky light), for exports without a CS2 sky."""
+    spawn(unreal.SkyAtmosphere)
+    light = spawn(unreal.SkyLight)
+    light.light_component.set_mobility(unreal.ComponentMobility.MOVABLE)
+    light.light_component.set_editor_property("real_time_capture", True)
+    log("WARNING: no sky in the manifest; using Unreal's physical sky (not calibrated against CS2)")
+
+
+def setup_sky(manifest):
+    """Visible sky (a big sphere with the CS2 sky) and the Sky Light: lit by the same cube map, or by the flat sky
+    colour's cube map when the map's ambient comes from `skycolor` (manifest ambient.hdr)."""
+    sky = manifest.get("sky")
+    if not sky:
+        setup_fallback_sky()
+        return
+    cube = import_sky_cube(sky["hdr"], "T_%s_Sky" % NAME)
+    master = ensure_sky_master(cube)
+    instance_path = "/Game/OFAST/%s/MI_%s_Sky" % (NAME, NAME)
+    if unreal.EditorAssetLibrary.does_asset_exist(instance_path):
+        instance = unreal.EditorAssetLibrary.load_asset(instance_path)
+    else:
+        folder, name = instance_path.rsplit("/", 1)
+        instance = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+            name, folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew()
+        )
+    instance.set_editor_property("parent", master)
+    mel = unreal.MaterialEditingLibrary
+    mel.set_material_instance_texture_parameter_value(instance, "SkyCube", cube)
+    # CS2 radiance → Unreal luminance, and the render-only bias (brightens the visible sky, not the lighting).
+    mel.set_material_instance_scalar_parameter_value(instance, "SkyIntensity", sky.get("sky_intensity", 1.0))
+    unreal.EditorAssetLibrary.save_loaded_asset(instance)
+
+    sphere = spawn(unreal.StaticMeshActor)
+    sphere.set_actor_label("OFAST_SkySphere")
+    component = sphere.static_mesh_component
+    mesh = unreal.load_asset("/Engine/BasicShapes/Sphere")
+    component.set_static_mesh(mesh)
+    component.set_material(0, instance)
+    sphere.set_actor_scale3d(unreal.Vector(1, 1, 1) * (SKY_RADIUS / mesh.get_bounds().sphere_radius))
+    # The sphere is only a backdrop: it must not shadow, occlude or bounce light (it encloses the whole map).
+    component.set_editor_properties(
+        {
+            "cast_shadow": False,
+            "affect_dynamic_indirect_lighting": False,
+            "affect_distance_field_lighting": False,
+            "visible_in_ray_tracing": False,
+        }
+    )
+
+    ambient = manifest.get("ambient") or {}
+    ambient_cube = import_sky_cube(ambient["hdr"], "T_%s_Ambient" % NAME) if ambient.get("hdr") else cube
+    light = spawn(unreal.SkyLight)
+    component = light.light_component
+    component.set_mobility(unreal.ComponentMobility.MOVABLE)
+    # Below the horizon: CS2's virtual ground (radiance computed by the exporter; black when its albedo is 0).
+    lower = ambient.get("lower_hemisphere_color") or [0, 0, 0]
+    component.set_editor_properties(
+        {
+            "real_time_capture": False,
+            "source_type": unreal.SkyLightSourceType.SLS_SPECIFIED_CUBEMAP,
+            "cubemap": ambient_cube,
+            "intensity": ambient.get("sky_light_intensity", 1.0),
+            "indirect_lighting_intensity": ambient.get("indirect_intensity", 1.0),
+            "lower_hemisphere_is_black": True,
+            "lower_hemisphere_color": unreal.LinearColor(lower[0], lower[1], lower[2], 1.0),
+        }
+    )
+    component.recapture_sky()
+    log("sky: %s, sky light %s × %.3f" % (cube.get_name(), ambient_cube.get_name(), ambient.get("sky_light_intensity", 1.0)))
+
+
 def setup_sun(manifest):
     sun = manifest.get("sun")
     if not sun:
+        # No light_environment: a plain sun so the map is not black (not calibrated against CS2).
+        spawn(unreal.DirectionalLight, rotation=unreal.Rotator(roll=0.0, pitch=-50.0, yaw=30.0))
+        log("WARNING: no sun in the manifest; using a default sun")
         return
     pitch, yaw, roll = sun["rotation"]
-    for actor in actors.get_all_level_actors():
-        if isinstance(actor, unreal.DirectionalLight):
-            actor.set_actor_rotation(unreal.Rotator(roll=roll, pitch=pitch, yaw=yaw), False)
-            color = sun.get("color") or [1, 1, 1]
-            actor.light_component.set_light_color(unreal.LinearColor(color[0], color[1], color[2], 1.0))
-            log("sun rotation pitch %.1f yaw %.1f" % (pitch, yaw))
+    actor = spawn(unreal.DirectionalLight, rotation=unreal.Rotator(roll=roll, pitch=pitch, yaw=yaw))
+    component = actor.light_component
+    component.set_mobility(unreal.ComponentMobility.MOVABLE)
+    color = sun.get("color") or [1, 1, 1]
+    component.set_light_color(unreal.LinearColor(color[0], color[1], color[2], 1.0))
+    component.set_editor_properties(
+        {
+            "intensity": sun["illuminance_lux"],
+            "light_source_angle": sun.get("source_angle", 1.0),
+            "indirect_lighting_intensity": sun.get("indirect_intensity", 1.0),
+            "atmosphere_sun_light": False,
+            "use_temperature": False,
+            "cast_shadows": True,
+        }
+    )
+    log("sun: pitch %.1f yaw %.1f, %.2f lux" % (pitch, yaw, sun["illuminance_lux"]))
+
+
+def setup_post(manifest):
+    """Unbound post-process volume reproducing CS2's picture: fixed exposure (EV100 from the exporter, measured
+    against CS2 screenshots), no tone curve (CS2's is a straight line), no bloom, no vignette."""
+    post = manifest.get("post") or {}
+    # Sunlit views sit at CS2's minimum exposure, the highest EV100.
+    ev100 = post.get("ev100_max", 0.0)
+    volume = spawn(unreal.PostProcessVolume)
+    volume.set_actor_label("OFAST_PostProcess")
+    volume.set_editor_properties({"unbound": True, "priority": 10.0, "blend_weight": 1.0, "enabled": True})
+    settings = volume.settings
+
+    def override(name, value):
+        settings.set_editor_property("override_" + name, True)
+        settings.set_editor_property(name, value)
+
+    override("auto_exposure_method", unreal.AutoExposureMethod.AEM_MANUAL)
+    override("auto_exposure_apply_physical_camera_exposure", False)
+    # Manual exposure without the physical camera: picture = luminance × 2^bias, so bias = −EV100.
+    override("auto_exposure_bias", -ev100)
+    override("tone_curve_amount", 0.0)
+    override("expand_gamut", 0.0)
+    override("blue_correction", 0.0)
+    override("bloom_intensity", 0.0)
+    override("vignette_intensity", 0.0)
+    volume.set_editor_property("settings", settings)
+    log("post: manual exposure EV100 %.3f, tone curve off" % ev100)
+
+
+LIGHT_CLASSES = {"point": unreal.PointLight, "spot": unreal.SpotLight, "rect": unreal.RectLight}
+
+
+def setup_local_lights(manifest, imported):
+    """Replaces the glTF lights (punctual approximations, and Interchange drops their range) with Unreal lights
+    built from the manifest: real rect lights, CS2's fade-out range, source size and bounce strength."""
+    for actor in imported:
+        if isinstance(actor, unreal.Light):
+            actors.destroy_actor(actor)
+    imported[:] = [a for a in imported if not isinstance(a, unreal.Light)]
+    lights = manifest.get("lights") or []
+    for light in lights:
+        pitch, yaw, roll = light["rotation"]
+        actor = spawn(LIGHT_CLASSES[light["shape"]], light["location"], unreal.Rotator(roll=roll, pitch=pitch, yaw=yaw))
+        actor.set_actor_label("%s_%s" % (light["class"], light["shape"]))
+        component = actor.light_component
+        component.set_mobility(unreal.ComponentMobility.MOVABLE)
+        r, g, b = light["color"]
+        component.set_light_color(unreal.LinearColor(r, g, b, 1.0))
+        settings = {
+            "intensity_units": unreal.LightUnits.CANDELAS,
+            "intensity": light["intensity_cd"],
+            "indirect_lighting_intensity": light.get("indirect_intensity", 1.0),
+            "cast_shadows": True,
+        }
+        if light.get("attenuation_radius"):
+            settings["attenuation_radius"] = light["attenuation_radius"]
+        if light["shape"] == "rect":
+            # No barn doors: CS2's rect lights emit over the whole hemisphere in front of them.
+            settings.update(
+                {"source_width": light["source_width"], "source_height": light["source_height"], "barn_door_length": 0.0}
+            )
+        else:
+            settings["source_radius"] = light.get("source_radius", 0.0)
+        if light["shape"] == "spot":
+            settings.update({"inner_cone_angle": light["inner_cone"], "outer_cone_angle": min(light["outer_cone"], 80.0)})
+        component.set_editor_properties(settings)
+    log("local lights: %d from the manifest" % len(lights))
+
+
+def setup_environment(manifest, imported):
+    setup_sun(manifest)
+    setup_sky(manifest)
+    setup_local_lights(manifest, imported)
+    if manifest.get("sun") and manifest.get("sky"):
+        setup_post(manifest)
+    else:
+        # The fixed exposure is only right for CS2's own sun and sky; let Unreal's auto exposure cope otherwise.
+        log("WARNING: exposure left to Unreal (no calibrated sun and sky)")
 
 
 def spawn_camera(location, rotation):
@@ -296,17 +554,39 @@ def spawn_camera(location, rotation):
     return camera
 
 
-def views(manifest, imported):
-    """(name, camera) pairs: first CT spawn, first T spawn, and a high overview of the whole map."""
+def extra_views():
+    """(name, camera) pairs for the views listed in the OFAST_VIEWS JSON file, if set: a list of
+    {"name": ..., "setpos": [x, y, z], "setang": [pitch, yaw, roll]} with the values typed in CS2's console
+    (`setpos` is the player's feet; the eye is 64 units higher), to compare with CS2 screenshots of the same spots."""
+    path = os.environ.get("OFAST_VIEWS")
+    if not path:
+        return []
+    with open(path) as f:
+        listed = json.load(f)
     result = []
+    for view in listed:
+        x, y, z = view["setpos"]
+        pitch, yaw, roll = view["setang"]
+        location = [x * 2.54, -y * 2.54, (z + 64.0) * 2.54]
+        result.append((view["name"], spawn_camera(location, unreal.Rotator(roll=roll, pitch=-pitch, yaw=-yaw))))
+    return result
+
+
+def views(manifest, imported):
+    """(name, camera) pairs: first CT spawn, first T spawn, the OFAST_VIEWS ones, and a high overview of the map."""
+    result = extra_views()
     for team in ("ct", "t"):
         spawns = manifest.get("spawns", {}).get(team) or []
         if spawns:
             pitch, yaw, roll = spawns[0]["rotation_unreal"]
             rotation = unreal.Rotator(roll=roll, pitch=pitch, yaw=yaw)
             result.append((team + "0", spawn_camera(spawns[0]["eye_unreal"], rotation)))
-    # Overview: above the centre of everything imported, looking down at 60°.
-    boxes = [a.get_actor_bounds(False) for a in imported if isinstance(a, unreal.StaticMeshActor)]
+    # Overview: above the centre of the playable map (3D skybox backdrop left out), looking down at 60°.
+    boxes = [
+        a.get_actor_bounds(False)
+        for a in imported
+        if isinstance(a, unreal.StaticMeshActor) and not a.get_actor_label().startswith(SKYBOX_PREFIX)
+    ]
     if boxes:
         lo = [min(o.x - e.x for o, e in boxes), min(o.y - e.y for o, e in boxes), min(o.z - e.z for o, e in boxes)]
         hi = [max(o.x + e.x for o, e in boxes), max(o.y + e.y for o, e in boxes), max(o.z + e.z for o, e in boxes)]
@@ -326,9 +606,11 @@ def main():
     prepare_level()
     imported = import_scene()
     apply_layer_blends(imported)
-    setup_sun(manifest)
+    setup_environment(manifest, imported)
     shots = views(manifest, imported)
-    levels.save_current_level()
+    save_level()
+    # Enough frames per screenshot for Lumen and temporal AA to settle at the screenshot resolution.
+    unreal.SystemLibrary.execute_console_command(None, "r.HighResScreenshotDelay 16")
 
     state = {"ticks": 0, "index": 0, "task": None}
 

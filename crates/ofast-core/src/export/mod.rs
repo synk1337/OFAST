@@ -2,9 +2,11 @@
 //!
 //! - [`gltf`]: models (with materials and textures) as glTF 2.0, and the shared glTF writer.
 //! - [`map`]: whole maps (world, props, lights) as glTF 2.0 plus an OFAST manifest for Unreal.
+//! - [`sky`]: a map's 2D sky cube map as an equirectangular HDR image.
 
 pub mod gltf;
 pub mod map;
+pub mod sky;
 
 use crate::model::ModelError;
 use crate::resource::ResourceError;

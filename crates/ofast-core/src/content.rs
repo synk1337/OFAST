@@ -44,6 +44,11 @@ impl Content {
         Ok(content)
     }
 
+    /// Inserts an archive at `index` in the search order (0 = searched first).
+    pub fn insert(&mut self, index: usize, vpk: Vpk) {
+        self.archives.insert(index.min(self.archives.len()), vpk);
+    }
+
     /// The archives in search order.
     pub fn archives(&self) -> &[Vpk] {
         &self.archives
