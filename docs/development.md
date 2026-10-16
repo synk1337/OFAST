@@ -83,7 +83,7 @@ minute. Imported content in `unreal/Sandbox/Content/` is ignored by git (it come
 
 ```bash
 cargo run --release -p ofast-cli -- export-map de_mirage --out test-data/exports/de_mirage
-powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/import_map.py -Gltf test-data/exports/de_mirage/de_mirage.gltf -Shot test-data/shots -Name de_mirage [-Views test-data/views/de_mirage.json]
+powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/import_map.py -Gltf test-data/exports/de_mirage/de_mirage.gltf -Shot test-data/shots -Name de_mirage [-Views tools/compare/views/de_mirage.json]
 ```
 
 `export-map` also loads the map's 3D skybox (its own archive under `game/csgo/maps/prefabs/`) and writes the sky as
@@ -114,8 +114,8 @@ switching it on recompiles all shaders once (long).
 | Tool | What it answers |
 |---|---|
 | `cargo run --release --example map_raycast -- de_mirage ct0 "x,y;x,y"` (or a view `"x,y,z,pitch,yaw"` from CS2's setpos/setang) | which model/material OFAST's geometry has under a screenshot pixel |
-| `tools/unreal/shoot_views.py` (`-Views <json>`) | re-shoots views of the imported level without importing again (~1 min) |
-| `OFAST_DISABLE=sun,sky,local,bounce` for `import_map.py` | diagnostic renders without some light sources, to see what lights a spot |
+| `tools/unreal/shoot_views.py` (`-Only ct0,palace`) | re-shoots the import's saved cameras without importing again (~1 min) |
+| `run_ue.ps1 … import_map.py … -Disable sun,sky,local,bounce` | diagnostic renders without some light sources, to see what lights a spot (the level keeps that lighting until the next normal import) |
 | `cargo run --release --example map_outliers -- de_mirage [classes]` | stretched geometry, dropped triangles, entity classes with models |
 | `cargo run --release --example model_layout -- formats de_mirage` | vertex attribute formats used by a map |
 | `cargo run --release --example map_entities -- de_mirage [classes…]` | entity classes with counts, or every key of the given classes |

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "palace",
+    "setpos": [1330, -1420, -144],
+    "setang": [5, 215, 0],
+    "note": "palace interior lit by light_rect wall lights; CS2 reference at mat_tonemap_force_scale 0.8"
+  },
+  {
+    "name": "apps",
+    "setpos": [-1250, 745, -40],
+    "setang": [5, 180, 0],
+    "note": "B apartments corridor lit by light_omni2 ceiling lights; CS2's auto exposure goes to 1.0 here, so take the reference at mat_tonemap_force_scale 0.8"
+  }
+]

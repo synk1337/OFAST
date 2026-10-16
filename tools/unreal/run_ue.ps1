@@ -10,6 +10,10 @@ param(
     [string]$Shot = "",
     [string]$Name = "",
     [string]$Views = "",
+    # Diagnostics for import_map.py: light sources to leave out, e.g. "sun,sky" (see diagnostic_manifest).
+    [string]$Disable = "",
+    # For shoot_views.py: only these views, e.g. "ct0,palace".
+    [string]$Only = "",
     [string]$Engine = "C:\Program Files\Epic Games\UE_5.8"
 )
 
@@ -23,6 +27,9 @@ $env:OFAST_GLTF = if ($Gltf) { & $resolve $Gltf } else { "" }
 $env:OFAST_SHOT = if ($Shot) { & $resolve $Shot } else { "" }
 $env:OFAST_NAME = $Name
 $env:OFAST_VIEWS = if ($Views) { & $resolve $Views } else { "" }
+# Always set (empty by default) so a value from an earlier run in the same shell never leaks into this one.
+$env:OFAST_DISABLE = $Disable
+$env:OFAST_ONLY = $Only
 if ($Shot) {
     # -Shot is either a .png file (single screenshot) or a folder (scripts that take several).
     if ($env:OFAST_SHOT.ToLower().EndsWith(".png")) {

@@ -494,12 +494,24 @@ impl<'a> LocalLight<'a> {
                     .min(outer);
                 LightShape::Spot { inner, outer }
             }
-            // `size_params` holds half-sizes: Hammer's defaults (16, 16) with 80 cd and 120 nits only agree for a
-            // 32 × 32 rectangle (lights2.fgd).
-            "light_rect" | "light_barn" => LightShape::Rect {
+            // A rect light's `size_params` holds half-sizes: Hammer's defaults (16, 16) with 80 cd and 120 nits only
+            // agree for a 32 × 32 rectangle (lights2.fgd).
+            "light_rect" => LightShape::Rect {
                 width: 2.0 * size(0).unwrap_or(16.0),
                 height: 2.0 * size(1).unwrap_or(16.0),
             },
+            // A barn light's `size_params` is its barn-door aperture; the emitter is `luminaire_size` across (the
+            // barn doors themselves are not reproduced yet).
+            "light_barn" => {
+                let side = entity
+                    .number("luminaire_size")
+                    .filter(|s| *s > 0.0)
+                    .unwrap_or(4.0);
+                LightShape::Rect {
+                    width: side,
+                    height: side,
+                }
+            }
             _ => return None,
         };
         let brightness = entity.number("brightness").unwrap_or(1.0);
@@ -720,9 +732,20 @@ fn post_manifest(content: &Content, map: &Map, warnings: &mut Vec<String>) -> Js
                 }
                 let params = root.get("m_bloomParams");
                 if root.get("m_bHasBloomParams").is_some_and(kv3_true) {
+                    let weights: Vec<f32> = params
+                        .and_then(|p| p.get("m_flBlurWeight"))
+                        .and_then(|w| w.as_array())
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|v| v.as_f64().map(|v| v as f32))
+                        .collect();
                     bloom = json!({
+                        "blend_mode": params.and_then(|p| p.get("m_blendMode")).and_then(|v| v.as_str()),
                         "screen_strength": float(params, "m_flScreenBloomStrength"),
+                        "bloom_strength": float(params, "m_flBloomStrength"),
                         "threshold": float(params, "m_flBloomThreshold"),
+                        "threshold_width": float(params, "m_flBloomThresholdWidth"),
+                        "blur_weights": weights,
                     });
                 }
             }
@@ -740,6 +763,8 @@ fn post_manifest(content: &Content, map: &Map, warnings: &mut Vec<String>) -> Js
         "ev100_min": ev100(max),
         "ev100_max": ev100(min),
         "tonemap": tonemap,
+        // For reference: turning CS2's bloom off (r_csgo_render_post_bloom 0) changes nothing measurable on
+        // de_mirage, so the Unreal side does not reproduce it.
         "bloom": bloom,
     })
 }

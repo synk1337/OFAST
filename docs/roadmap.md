@@ -49,13 +49,14 @@ Ordered so that **Demo → Unreal scene** works first. Every milestone ends in s
   (`sky_to_world`, [map.md](formats/map.md#3d-skybox)); the hotel and rooftops sit where CS2 shows them.
 - [x] **Sky**: the `env_sky` BC6H cube map → equirect `.hdr` → Unreal TextureCube for the visible sky and the Sky Light.
 - [x] **Lighting calibrated against CS2** ([lighting.md](formats/lighting.md)): one unit constant, sun and sky light
-  from the map, local lights rebuilt as Unreal point/spot/rect lights, fixed exposure measured on CS2 screenshots.
-  Outdoors 0.95 / 0.86 of CS2's brightness; interiors lit by wall lights still ~1.4× too bright.
+  from the map, local lights rebuilt as Unreal point/spot/rect lights (rect lights halved: Unreal shines them at 2×
+  their candela), fixed exposure measured on CS2 screenshots. Four views: CT 0.95, T 0.86, palace 0.81,
+  B apartments 0.74 of CS2's brightness. CS2's bloom, colour correction and fog measured to have no visible effect.
 
 ### Still to do (M1 → M2)
 
-- Interior local-light brightness (see the calibration notes in [lighting.md](formats/lighting.md)).
-- CS2's bloom, colour LUT and cubemap fog in Unreal.
+- Indirect light 10 – 25 % weaker than CS2's bake in shade and interiors (Lumen settings, or a bounce boost
+  measured like the rest — see [lighting.md](formats/lighting.md)).
 - Materials with more than two layers, detail textures, vertex colour tint (`COLOR` attribute), glass.
 - Rebuild `csgo_effects` dust / light-shaft cards as Unreal effects.
 - Colour texture alpha mask on weapons: find what it drives.

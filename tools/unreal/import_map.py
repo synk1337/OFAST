@@ -7,8 +7,8 @@ Inputs (environment variables):
     OFAST_SHOT   folder for screenshots: <map>_ct0.png, <map>_t0.png, <map>_top.png
     OFAST_NAME   map name (asset folder /Game/OFAST/<name>, level /Game/OFAST/Maps/<name>)
     OFAST_VIEWS  optional JSON file of extra viewpoints given as CS2 setpos/setang (see extra_views)
-    OFAST_DISABLE  optional, diagnostics only: comma list of light sources to leave out (sun, sky, local, and
-                 bounce = the local lights' indirect light)
+    OFAST_DISABLE  optional, diagnostics only (run_ue.ps1 -Disable): comma list of light sources to leave out —
+                 sun, sky (ambient), local, bounce (the local lights' surface-cache bounce); see diagnostic_manifest
 
 Steps: level made once from the Basic template, its environment (sky, clouds, fog, sun, floor) removed →
 Interchange *scene* import of the glTF (one actor per placement) → layer-blend materials → CS2's environment from the
@@ -383,7 +383,8 @@ def setup_sky(manifest):
     colour's cube map when the map's ambient comes from `skycolor` (manifest ambient.hdr)."""
     sky = manifest.get("sky")
     if not sky:
-        setup_fallback_sky()
+        if not manifest.get("no_ambient"):
+            setup_fallback_sky()
         return
     cube = import_sky_cube(sky["hdr"], "T_%s_Sky" % NAME)
     master = ensure_sky_master(cube)
@@ -489,6 +490,8 @@ def setup_post(manifest):
     override("tone_curve_amount", 0.0)
     override("expand_gamut", 0.0)
     override("blue_correction", 0.0)
+    # CS2's bloom, colour correction and fog change nothing measurable on de_mirage (toggled in CS2:
+    # r_csgo_render_post_bloom, r_csgo_render_post_colorcorrection, fog_enable), so none of them is added here.
     override("bloom_intensity", 0.0)
     override("vignette_intensity", 0.0)
     volume.set_editor_property("settings", settings)
@@ -539,20 +542,35 @@ def setup_local_lights(manifest, imported):
     log("local lights: %d from the manifest" % len(lights))
 
 
-def setup_environment(manifest, imported):
-    # Diagnostics: OFAST_DISABLE="sun,sky,local,bounce" leaves those light sources out, to see what lights a spot.
-    disabled = set(filter(None, os.environ.get("OFAST_DISABLE", "").split(",")))
-    if disabled:
-        log("WARNING: diagnostic run without %s" % ", ".join(sorted(disabled)))
-    if "sun" in disabled:
-        manifest = dict(manifest, sun={**manifest["sun"], "illuminance_lux": 0.0})
+DIAGNOSTIC_SWITCHES = {"sun", "sky", "local", "bounce"}
+
+
+def diagnostic_manifest(manifest):
+    """Applies OFAST_DISABLE (diagnostics only): a comma list of sun, sky, local, bounce. "sky" turns the ambient
+    light off (the sky stays visible), "bounce" turns off the local lights' Lumen surface-cache bounce (screen traces
+    still pick up some of their light)."""
+    disabled = {s.strip() for s in os.environ.get("OFAST_DISABLE", "").split(",") if s.strip()}
+    unknown = disabled - DIAGNOSTIC_SWITCHES
+    if unknown:
+        raise RuntimeError("unknown OFAST_DISABLE switch: %s" % ", ".join(sorted(unknown)))
+    if not disabled:
+        return manifest
+    log("WARNING: diagnostic run without %s; the saved level keeps this lighting" % ", ".join(sorted(disabled)))
+    manifest = dict(manifest)
+    if "sun" in disabled and manifest.get("sun"):
+        manifest["sun"] = dict(manifest["sun"], illuminance_lux=0.0)
     if "sky" in disabled:
-        manifest = dict(manifest, ambient={**manifest.get("ambient", {}), "sky_light_intensity": 0.0})
+        manifest["ambient"] = dict(manifest.get("ambient") or {}, sky_light_intensity=0.0)
+        manifest["no_ambient"] = True
     if "local" in disabled:
-        manifest = dict(manifest, lights=[])
+        manifest["lights"] = []
     if "bounce" in disabled:
-        # Local lights without their bounce (Lumen GI): direct light only.
-        manifest = dict(manifest, lights=[dict(l, indirect_intensity=0.0) for l in manifest.get("lights", [])])
+        manifest["lights"] = [dict(light, indirect_intensity=0.0) for light in manifest.get("lights") or []]
+    return manifest
+
+
+def setup_environment(manifest, imported):
+    manifest = diagnostic_manifest(manifest)
     setup_sun(manifest)
     setup_sky(manifest)
     setup_local_lights(manifest, imported)
@@ -563,9 +581,14 @@ def setup_environment(manifest, imported):
         log("WARNING: exposure left to Unreal (no calibrated sun and sky)")
 
 
-def spawn_camera(location, rotation):
+# Label prefix of the screenshot cameras, saved with the level so tools/unreal/shoot_views.py can reuse them.
+CAMERA_PREFIX = "OFAST_cam_"
+
+
+def spawn_camera(name, location, rotation):
     camera = actors.spawn_actor_from_class(unreal.CameraActor, unreal.Vector(*location), rotation)
     camera.tags = [TAG]
+    camera.set_actor_label(CAMERA_PREFIX + name)
     component = camera.camera_component
     component.set_editor_property("field_of_view", HFOV_16_9)
     component.set_editor_property("aspect_ratio", 16 / 9)
@@ -587,7 +610,8 @@ def extra_views():
         x, y, z = view["setpos"]
         pitch, yaw, roll = view["setang"]
         location = [x * 2.54, -y * 2.54, (z + 64.0) * 2.54]
-        result.append((view["name"], spawn_camera(location, unreal.Rotator(roll=roll, pitch=-pitch, yaw=-yaw))))
+        rotation = unreal.Rotator(roll=roll, pitch=-pitch, yaw=-yaw)
+        result.append((view["name"], spawn_camera(view["name"], location, rotation)))
     return result
 
 
@@ -599,7 +623,7 @@ def views(manifest, imported):
         if spawns:
             pitch, yaw, roll = spawns[0]["rotation_unreal"]
             rotation = unreal.Rotator(roll=roll, pitch=pitch, yaw=yaw)
-            result.append((team + "0", spawn_camera(spawns[0]["eye_unreal"], rotation)))
+            result.append((team + "0", spawn_camera(team + "0", spawns[0]["eye_unreal"], rotation)))
     # Overview: above the centre of the playable map (3D skybox backdrop left out), looking down at 60°.
     boxes = [
         a.get_actor_bounds(False)
@@ -614,7 +638,7 @@ def views(manifest, imported):
         log("map bounds (cm): min %s max %s" % ([round(v) for v in lo], [round(v) for v in hi]))
         location = [centre[0] - size * 0.45, centre[1], hi[2] + size * 0.55]
         rotation = unreal.MathLibrary.find_look_at_rotation(unreal.Vector(*location), unreal.Vector(*centre))
-        result.append(("top", spawn_camera(location, rotation)))
+        result.append(("top", spawn_camera("top", location, rotation)))
     return result
 
 

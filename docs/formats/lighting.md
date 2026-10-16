@@ -49,8 +49,10 @@ hemisphere average); black on de_mirage (albedo 0).
 - `colormode` 1 means the colour comes from `colortemperature` (kelvin) instead of `color`.
 - Shapes: `light_omni2` lights a cone of half-angle `outer_angle` (180 = all around) from a sphere of radius
   `size_params[0]`; `light_rect` / `light_barn` are rectangles lighting the hemisphere in front of them, and their
-  `size_params` are **half**-sizes (Hammer's defaults 16 × 16 with 80 cd and 120 nits only agree for 32 × 32 units;
-  likewise the omni2 default 9816 nits ↔ a sphere of radius 2); `light_spot` uses `innerconeangle` / `outerconeangle`.
+  `light_rect` `size_params` are **half**-sizes (Hammer's defaults 16 × 16 with 80 cd and 120 nits only agree for
+  32 × 32 units; likewise the omni2 default 9816 nits ↔ a sphere of radius 2). A `light_barn`'s `size_params` is its
+  barn-door aperture instead; its emitter is `luminaire_size` (default 4) — OFAST uses that as a square and ignores
+  the barn doors for now. `light_spot` uses `innerconeangle` / `outerconeangle`.
 - `range` is where the light has faded out (linearly over the last `skirt` fraction); `bouncescale` scales its bounce
   in the bake (≈ Unreal's Indirect Lighting Intensity).
 - de_mirage's lights are `directlight` 1 ("Static": fully baked into the lightmaps, bounce included).
@@ -103,11 +105,11 @@ The tone curve is Hable's (Uncharted 2) filmic curve (Source 2 Viewer's `post_pr
 stock parameters above it is a straight line. **Measured** on CS2 screenshots, the picture is
 
 ```text
-display = clamp(exposure × scene, 0, 1)   then sRGB (then a light screen-blended bloom and the colour LUT)
+display = clamp(exposure × scene, 0, 1)   then sRGB
 ```
 
 The measurement: in a sunlit de_mirage view, pure-sky pixels — whose radiance is known exactly from the exported sky
-— display at 0.80 × radiance (blue channel; red and green a little higher from the bloom), and 0.80 is the volume's
+— display at 0.80 × radiance (blue channel; red and green read a few percent higher), and 0.80 is the volume's
 `minexposure`. Source 2 Viewer's reading, `exposure × scene / white_point`, would give 0.53: the white point does
 not scale the picture (tool: `tools/compare/sky_exposure.py`). Auto exposure is clamped to [0.8, 1.0]; sunlit views
 sit at 0.8, the palace too, the dark B apartments go up to 1.0. Its controller is Source 1's histogram tonemap
@@ -131,7 +133,7 @@ de_mirage: EV100 0.322 at exposure 0.8 (sunlit, used for screenshots), 0 at 1.0.
 
 Same viewpoints in CS2 (`-insecure`, `setpos`/`setang`, HUD off, interiors at `mat_tonemap_force_scale 0.8` like
 Unreal) and Unreal, compared cell by cell on a 4 × 3 grid with `tools/compare/compare_shots.py` (ratio of mean
-linear luminance, Unreal / CS2). Views: `test-data/views/de_mirage.json` plus the two spawns.
+linear luminance, Unreal / CS2). Views: `tools/compare/views/de_mirage.json` plus the two spawns.
 
 | View | Whole image | Cells | Notes |
 |---|---|---|---|
@@ -144,24 +146,34 @@ Before calibration (Unreal template lighting) the CT view was 0.91 overall but 0
 Before the rect-light fix the palace was 1.48.
 
 How the interior was pinned down (palace): exposure ruled out (`mat_tonemap_force_scale`), sky and sun ruled out
-(`OFAST_DISABLE=sun,sky`: still 1.41), bounce ruled out (`OFAST_DISABLE=…,bounce`: direct light alone already 1.3× CS2's
-total). CS2's actual light on the wall, from lit ÷ albedo against the sunlit CT ground, is 1.7× the formula's direct
-light (its bounce), so the formula was right and Unreal over-delivered: the rect-light factor above.
+(`-Disable sun,sky`: still 1.41), bounce ruled out (`-Disable sun,sky,bounce`, which turns off the local lights'
+Lumen surface-cache bounce — screen traces still add a little: the wall facing the lights stays at 1.3× CS2's total).
+CS2's actual light on the wall, from lit ÷ albedo against the sunlit CT ground, is 1.7× the formula's direct light
+(its bounce), so the formula was right and Unreal over-delivered: the rect-light factor above.
 
 What remains is **shade and indirect light 10 – 25 % darker** than CS2, everywhere: CS2's baked bounce (lightmaps,
-per-light `bouncescale`) is stronger than Lumen's, and its screen-blended bloom (strength 0.126) lifts dark tones.
-No colour LUT (CS2's is close to identity, slightly more saturated) and no fog yet.
+per-light `bouncescale`) is stronger than Lumen's.
+
+**Bloom, colour correction and fog: no measurable effect.** Toggled in CS2 at the CT spawn (exposure locked):
+`r_csgo_render_post_bloom 0` (default 1), and switching `r_csgo_render_post_colorcorrection` between 0 (default) and
+1, change the picture by less than 0.1 sRGB level on average; `fog_enable 0; fog_enableskybox 0` changes nothing
+either (the only differing pixels are palms moving in the wind; the 3D-skybox hotel is identical). So the Unreal side
+reproduces none of them: doing so would add differences, not remove them. The bloom and fog settings stay in the
+manifest for reference; the colour LUT is not exported.
 
 ## Fog — `env_cubemap_fog`
 
 Distance fog coloured by the sky cube map: opacity = `max_opacity × ((distance − start) / (end − start))^falloff`,
 faded with height between `heightstart` and `heightend`. de_mirage: start 384, end 8000, falloff 1.6, height
-−500 … 5000. Written to the manifest; not reproduced in Unreal yet (Unreal's height fog falls off exponentially).
+−500 … 5000. Written to the manifest; not reproduced in Unreal because it has no visible effect on de_mirage (see the
+calibration notes above). Maps with heavy fog would need it (Unreal's height fog falls off exponentially, CS2's with
+a power law).
 
 ## Not used yet
 
 - Light probes (`env_combined_light_probe_volume`), lightmaps, `env_cubemap` reflections: baked data Lumen replaces.
-- The colour-correction LUT, bloom and fog (in the manifest, not applied).
+- The colour-correction LUT (32³ RGBA8 blob, red fastest, near identity on de_mirage), bloom and fog: no measurable
+  effect in CS2 on de_mirage, so not applied (bloom and fog settings are in the manifest).
 
 ## Sources
 

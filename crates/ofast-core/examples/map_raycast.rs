@@ -78,21 +78,33 @@ fn main() {
     let content = Content::for_map(&install, name).expect("archives open");
     let map = Map::load(&content, name).expect("map loads");
 
-    // The view is a spawn (`ct0` / `t0`) or CS2 console values "x,y,z,pitch,yaw" (setpos feet, setang).
-    let (o, angles) = if view.contains(',') {
-        let v: Vec<f32> = view
-            .split(',')
-            .map(|s| s.trim().parse().expect("number"))
-            .collect();
-        ([v[0], v[1], v[2]], [v[3], v[4], 0.0])
-    } else {
-        let class = if view.starts_with("ct") {
-            "info_player_counterterrorist"
-        } else {
-            "info_player_terrorist"
-        };
-        let spawn = map.entities_of(class).next().expect("spawn exists");
-        (spawn.origin(), spawn.angles())
+    // The view is a spawn (`ct0` / `t0`) or CS2 console values "x y z pitch yaw [roll]" (setpos feet, setang),
+    // separated by commas or spaces.
+    let (o, angles) = match view.to_ascii_lowercase().as_str() {
+        "ct0" | "t0" => {
+            let class = if view.eq_ignore_ascii_case("ct0") {
+                "info_player_counterterrorist"
+            } else {
+                "info_player_terrorist"
+            };
+            let spawn = map.entities_of(class).next().expect("spawn exists");
+            (spawn.origin(), spawn.angles())
+        }
+        _ => {
+            let v: Vec<f32> = view
+                .split([',', ' '])
+                .filter(|s| !s.is_empty())
+                .map(|s| s.parse().expect("view: ct0, t0 or numbers"))
+                .collect();
+            assert!(
+                v.len() == 5 || v.len() == 6,
+                "view: ct0, t0 or \"x y z pitch yaw [roll]\""
+            );
+            (
+                [v[0], v[1], v[2]],
+                [v[3], v[4], v.get(5).copied().unwrap_or(0.0)],
+            )
+        }
     };
     let eye = [o[0], o[1], o[2] + 64.0];
     let cam = entity_transform(eye, angles, [1.0; 3]);
