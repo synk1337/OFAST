@@ -4,6 +4,8 @@
 //! ofast find ak47                                  list files in CS2's archives whose path contains "ak47"
 //! ofast export-model weapons/models/ak47/weapon_rif_ak47.vmdl_c --out exports/ak47
 //! ofast export-map de_mirage --out exports/de_mirage
+//! ofast demo-rounds match.dem                      a demo's rounds and their ticks
+//! ofast export-demo match.dem --round 3 --out exports/demos   one round as a replay file for Unreal
 //! ofast vpk verify                                 check CS2's archive checksums
 //! ```
 //!
@@ -15,8 +17,10 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand};
 use ofast_core::content::Content;
+use ofast_core::demo::players::list_rounds;
 use ofast_core::export::gltf::{ExportReport, export_model};
 use ofast_core::export::map::{Skybox, export_map};
+use ofast_core::export::replay::export_round;
 use ofast_core::game::Cs2Install;
 use ofast_core::map::{Map, sky_to_world};
 use ofast_core::vpk::Vpk;
@@ -55,6 +59,22 @@ enum Command {
     ExportMap {
         /// Map name, e.g. `de_mirage` (reads `game/csgo/maps/<name>.vpk`).
         map: String,
+        /// Output folder (created if needed).
+        #[arg(long, short)]
+        out: PathBuf,
+    },
+    /// List a demo's rounds with their tick ranges.
+    DemoRounds {
+        /// The `.dem` file.
+        demo: PathBuf,
+    },
+    /// Export one round of a demo (players' movement, kills, milestones) as a replay file for Unreal.
+    ExportDemo {
+        /// The `.dem` file.
+        demo: PathBuf,
+        /// Round number (1 = first round after warmup; see `demo-rounds`).
+        #[arg(long, short)]
+        round: u32,
         /// Output folder (created if needed).
         #[arg(long, short)]
         out: PathBuf,
@@ -107,14 +127,46 @@ fn print_report(report: &ExportReport, started: Instant) {
 }
 
 fn run(cli: Cli) -> Result<(), String> {
+    let started = Instant::now();
+    // Demos are plain files: no CS2 install needed.
+    match &cli.command {
+        Command::DemoRounds { demo } => {
+            let data = std::fs::read(demo).map_err(|e| format!("{}: {e}", demo.display()))?;
+            for r in list_rounds(&data).map_err(|e| e.to_string())? {
+                println!(
+                    "round {:2}: ticks {:6} ..= {:6}",
+                    r.round, r.start_tick, r.end_tick
+                );
+            }
+            return Ok(());
+        }
+        Command::ExportDemo { demo, round, out } => {
+            let data = std::fs::read(demo).map_err(|e| format!("{}: {e}", demo.display()))?;
+            let name = demo.file_stem().and_then(|s| s.to_str()).unwrap_or("demo");
+            let report = export_round(&data, name, *round, out).map_err(|e| e.to_string())?;
+            println!("wrote {}", report.path.display());
+            println!(
+                "{} round {round}: {} players, {} ticks ({:.0} s), {} kills in {:.1}s",
+                report.map,
+                report.players,
+                report.ticks,
+                report.seconds,
+                report.kills,
+                started.elapsed().as_secs_f32()
+            );
+            return Ok(());
+        }
+        _ => {}
+    }
+
     let install = match &cli.cs2 {
         Some(root) => Cs2Install::from_root(root),
         None => Cs2Install::locate(),
     }
     .ok_or("CS2 not found — pass --cs2 <folder> or set OFAST_CS2_DIR")?;
-    let started = Instant::now();
 
     match cli.command {
+        Command::DemoRounds { .. } | Command::ExportDemo { .. } => unreachable!("handled above"),
         Command::Find { text } => {
             let content = Content::game(&install).map_err(|e| e.to_string())?;
             for vpk in content.archives() {

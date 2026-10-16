@@ -63,6 +63,18 @@ and the largest differences.
 Developer tools for poking at demos: `cargo run --release --example demo_inspect -- <demo> [rounds | fields <Class>…]`
 and `cargo run --release --example demo_round -- <demo> <round> > round.csv`.
 
+### A demo round in Unreal
+
+```bash
+cargo run --release -p ofast-cli -- demo-rounds <demo.dem>
+cargo run --release -p ofast-cli -- export-demo <demo.dem> --round 2 --out test-data/exports/demos
+powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/import_demo.py -Replay test-data/exports/demos/<demo>_r2.ofast-replay.json -Shot test-data/shots
+```
+
+The map must be imported first (below). `import_demo.py` builds `/Game/OFAST/Replays/<demo>_r<round>` in the map's
+level: player proxies in team colours, a first-person camera per player, camera cuts on each killer, kill markers —
+see [replay.md](formats/replay.md). `-Shot` adds verification screenshots (killer's view before the first kills).
+
 Developer tools for game files: `cargo run --release --example resource_dump -- find <text>` lists archive paths,
 `cargo run --release --example resource_dump -- <path>_c` dumps a compiled file's blocks (KV3 as text), and
 `cargo run --release --example kv3_inspect -- <path>_c` prints raw KV3 headers.
@@ -127,6 +139,7 @@ switching it on recompiles all shaders once (long).
 | `cargo run --release --example map_blockers -- de_mirage [x,y,z radius]` | the map's light blockers (invisible "block light" meshes), optionally near a point |
 | `cargo run --release --example sky_faces -- <cube .vtex_c> <out.png>` | the six faces of a cube map (sky), tone-mapped |
 | `cargo run --release --example texture_png -- <.vtex_c> <out.png>` | a 2D texture's four channels as stored, and its stored average colour |
+| `cargo run --release --example shader_census [maps…]` | which material shaders every map uses (all playable maps by default, ~20 s): what OFAST must handle to import any official map |
 | `tools/unreal/probe_vertex_color.py` (`-Shot <png>`) | whether Unreal hands glTF vertex colours to materials linear or sRGB-encoded (linear) |
 | `cargo run --release --example vpk_list -- <archive.vpk> [text]` | files inside any VPK (map, skybox) |
 | `tools/unreal/probe_actors.py` (`OFAST_FILTER=<text>`, `@empty` or `@lights` + `OFAST_NEAR=x,y,z`) | imported actors, their meshes and materials, or lights (direction, units, radius) in Unreal |

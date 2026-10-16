@@ -1,4 +1,4 @@
-//! Per-tick player positions and eye angles for one round — the M0 demo spike.
+//! Per-tick player positions and eye angles for one round, and the round's game events (deaths, round end, bomb…).
 //!
 //! Players are two linked entities:
 //!
@@ -21,6 +21,7 @@
 
 use super::decoder::FieldValue;
 use super::entity::{Entity, handle_to_index};
+use super::events::GameEvent;
 use super::fieldpath::FieldPath;
 use super::parser::{DemoError, DemoParser};
 use super::serializer::Serializers;
@@ -97,6 +98,9 @@ pub struct RoundTrack {
     pub map_name: String,
     /// One sample per tick that had entity updates.
     pub samples: Vec<TickSample>,
+    /// The game events of the round (`player_death`, `round_freeze_end`, `round_end`, `bomb_planted`, …), oldest
+    /// first. See [`super::events`].
+    pub events: Vec<GameEvent>,
 }
 
 /// Where one round is in the demo.
@@ -244,15 +248,30 @@ impl RoundDetector {
     }
 }
 
-/// Calls `on_tick` with the parser and the detected round events after every tick that changed entities.
+/// What [`walk_rounds`] hands its callback after every tick that changed entities.
+struct TickView<'p, 'd> {
+    parser: &'p DemoParser<'d>,
+    paths: &'p Paths,
+    tick: u32,
+    /// Round starts / ends detected at this tick.
+    rounds: &'p [RoundEvent],
+    /// The round running now, if any.
+    current: Option<RoundInfo>,
+    /// Game events read since the previous call (they can be from earlier ticks without entity changes).
+    events: &'p [GameEvent],
+}
+
+/// Calls `on_tick` after every tick that changed entities; it returns `false` to stop reading.
 fn walk_rounds(
     data: &[u8],
-    mut on_tick: impl FnMut(&DemoParser<'_>, &Paths, u32, &[RoundEvent], Option<RoundInfo>) -> bool,
+    mut on_tick: impl FnMut(TickView<'_, '_>) -> bool,
 ) -> Result<Option<RoundInfo>, TrackError> {
     let mut parser = DemoParser::new(data)?;
     let mut paths: Option<Paths> = None;
     let mut detector = RoundDetector::default();
+    let mut events = Vec::new();
     while let Some(frame) = parser.next_frame()? {
+        events.extend(parser.take_events());
         let (Some(tick), true) = (frame.tick, frame.entities_changed) else {
             continue;
         };
@@ -264,8 +283,17 @@ fn walk_rounds(
         let Some(rules) = read_rules(&parser, paths) else {
             continue;
         };
-        let events = detector.update(tick, rules);
-        if !on_tick(&parser, paths, tick, &events, detector.current) {
+        let rounds = detector.update(tick, rules);
+        let go_on = on_tick(TickView {
+            parser: &parser,
+            paths,
+            tick,
+            rounds: &rounds,
+            current: detector.current,
+            events: &events,
+        });
+        events.clear();
+        if !go_on {
             return Ok(None);
         }
     }
@@ -275,8 +303,8 @@ fn walk_rounds(
 /// Lists every round in the demo with its tick range (reads the whole demo).
 pub fn list_rounds(data: &[u8]) -> Result<Vec<RoundInfo>, TrackError> {
     let mut rounds = Vec::new();
-    let last = walk_rounds(data, |_, _, _, events, _| {
-        rounds.extend(events.iter().filter_map(|e| match e {
+    let last = walk_rounds(data, |view| {
+        rounds.extend(view.rounds.iter().filter_map(|e| match e {
             RoundEvent::Ended(info) => Some(*info),
             RoundEvent::Started(_) => None,
         }));
@@ -287,14 +315,28 @@ pub fn list_rounds(data: &[u8]) -> Result<Vec<RoundInfo>, TrackError> {
 }
 
 /// Reads the demo up to the end of `round` and returns every player's position, view offset and eye angles for each
-/// tick of it.
+/// tick of it, and the round's game events.
 pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
     let mut track: Option<RoundTrack> = None;
-    walk_rounds(data, |parser, paths, tick, events, current| {
-        if events
-            .iter()
-            .any(|e| matches!(e, RoundEvent::Ended(info) if info.round == round))
-        {
+    walk_rounds(data, |view| {
+        let TickView {
+            parser,
+            paths,
+            tick,
+            rounds,
+            current,
+            events,
+        } = view;
+        if let Some(done) = rounds.iter().find_map(|e| match e {
+            RoundEvent::Ended(info) if info.round == round => Some(*info),
+            _ => None,
+        }) {
+            // Events read up to now can still belong to the round's last ticks.
+            if let Some(track) = track.as_mut() {
+                track
+                    .events
+                    .extend(events.iter().filter(|e| e.tick <= done.end_tick).cloned());
+            }
             return false; // our round is complete
         }
         if current.is_some_and(|c| c.round == round) {
@@ -305,7 +347,12 @@ pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
                 tick_interval: parser.tick_interval().unwrap_or(1.0 / 64.0),
                 map_name: parser.header().map_name().to_owned(),
                 samples: Vec::new(),
+                events: Vec::new(),
             });
+            let start = track.start_tick;
+            track
+                .events
+                .extend(events.iter().filter(|e| e.tick >= start).cloned());
             let sample = TickSample {
                 tick,
                 players: read_players(parser, paths),

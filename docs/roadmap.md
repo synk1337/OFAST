@@ -50,12 +50,36 @@ Ordered so that **Demo → Unreal scene** works first. Every milestone ends in s
 - [x] **Sky**: the `env_sky` BC6H cube map → equirect `.hdr` → Unreal TextureCube for the visible sky and the Sky Light.
 - [x] **Lighting calibrated against CS2** ([lighting.md](formats/lighting.md)): one unit constant, sun and sky light
   from the map, local lights rebuilt as Unreal point/spot/rect lights (rect lights halved: Unreal shines them at 2×
-  their candela), fixed exposure measured on CS2 screenshots, measured bounce gains for Lumen. Four views: CT 0.99,
-  T 0.96, palace 0.93, B apartments 0.75 of CS2's brightness. Sunlight no longer leaks through
+  their candela), fixed exposure measured on CS2 screenshots, measured bounce gains for Lumen. Four views: CT 1.00,
+  T 0.97, palace 0.965, B apartments 0.75 of CS2's brightness. Sunlight no longer leaks through
   single-sided walls (shadow proxies, light blockers). CS2's bloom, colour correction and fog measured to have
   no visible effect.
 - [x] **Two import styles**: `standard` (CS2's picture) and `realistic` (Unreal sky, real-world light units, auto
   exposure, filmic tone curve) — [lighting.md](formats/lighting.md#import-styles).
+- [x] **Same pipeline on de_dust2, de_inferno, de_nuke**: all import and render with no sunlight leaks; the bugs it
+  found were fixed for every map (layer detection, screenshot timing, shadow-proxy count, GPU crash on re-import).
+- [x] **CS2's environment shaders** (`csgo_environment`, `csgo_environment_blend`): colour adjustments baked,
+  height blend in Unreal ([material.md](formats/material.md)).
+
+### Every official map, not one script per map
+
+The pipeline is generic: it reads everything from each map's own files, and a fix is per *feature* (a shader, a
+light type), never per map. `cargo run --release --example shader_census` lists the material shaders of all 24
+playable maps: 20 shaders in total.
+
+| Shader | Maps | Materials | State |
+|---|---|---|---|
+| `csgo_environment` | 23 | 1346 | done (colour adjustments baked) |
+| `csgo_complex`, `csgo_vertexlitgeneric` | 24 | 2137 | done |
+| `csgo_environment_blend` | 20 | 1041 | done (height blend) |
+| `csgo_lightmappedgeneric` | 24 | 635 | done (layer blend) |
+| `csgo_foliage`, `csgo_static_overlay`, `csgo_simple`, `csgo_glass` | 15 – 23 | 796 | basic (glTF PBR) |
+| `csgo_effects`, `csgo_simple_3layer_parallax`, `csgo_simple_2way_blend`, `csgo_water_fancy`, liquids, … | 1 – 17 | ~110 | to do |
+
+Plan: handle the remaining shaders by impact, then a regression suite that exports, imports and screenshots the
+spawns of every map, against CS2 reference shots taken once per map (a console `.cfg` can chain `setpos` / `setang`
+/ `screenshot`). Also to explain: 576 materials the census cannot read (180 on de_boulder, 101 on cs_shelter and
+de_fachwerk) — probably stored in another archive.
 
 ### Still to do (M1 → M2)
 
@@ -64,6 +88,18 @@ Ordered so that **Demo → Unreal scene** works first. Every milestone ends in s
 - Rebuild `csgo_effects` dust / light-shaft cards as Unreal effects.
 - Colour texture alpha mask on weapons: find what it drives.
 - Move the Unreal Python into the `ofast-unreal` plugin (M2).
+
+## M3 progress
+
+- [x] Game events (`player_death`, round milestones, bomb) — every kill of a 20-round match equals demoparser2's.
+- [x] `ofast demo-rounds` and `ofast export-demo --round N`: one round as a replay file
+  ([replay.md](formats/replay.md)).
+- [x] Unreal: `import_demo.py` builds a Level Sequence in the map's level — player proxies in team colours, a
+  first-person camera per player (CS2's field of view), camera cuts on each killer, kill markers. Checked: each
+  killer's camera has the victim at the crosshair just before the kill.
+- [ ] Compare first-person frames with CS2 itself (`demo_gototick`, `spec_player`).
+- [ ] Several rounds / a whole match in one sequence; weapons in hand; grenades (M6).
+- [ ] Studio demo browser (Tauri app).
 
 ## Hard problems we know about
 

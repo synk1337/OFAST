@@ -21,6 +21,7 @@ use std::process::Command;
 
 use ofast_core::demo::DemoParser;
 use ofast_core::demo::players::{RoundTrack, list_rounds, track_round};
+use ofast_core::export::replay::replay_json;
 use ofast_core::game::Cs2Install;
 
 /// Largest believable movement of a living player between two ticks (CS2 caps speed far below this).
@@ -214,6 +215,64 @@ fn round_starts_match_demoparser2() {
         .collect();
     let ours: Vec<u32> = rounds.iter().map(|r| r.start_tick).collect();
     assert_eq!(ours, expected, "round start ticks (ours vs demoparser2)");
+}
+
+/// Every kill of every round, as the replay export writes it (victim and attacker resolved from the event's player
+/// slots), against demoparser2's `player_death` events: same tick, victim, attacker, weapon and headshot flag.
+#[test]
+fn kills_match_demoparser2() {
+    let Some((path, data)) = load() else { return };
+    let Some(oracle) = run_oracle(&["deaths", &path.to_string_lossy()]) else {
+        return;
+    };
+    let rounds = list_rounds(&data).expect("rounds");
+    let mut ours = Vec::new();
+    for round in &rounds {
+        let track = track_round(&data, round.round).expect("round tracks");
+        let replay = replay_json(&track, "demo");
+        let names: HashMap<u64, String> = replay["players"]
+            .as_array()
+            .expect("players")
+            .iter()
+            .map(|p| {
+                (
+                    p["controller"].as_u64().expect("controller"),
+                    p["name"].as_str().expect("name").replace(',', ";"),
+                )
+            })
+            .collect();
+        let name =
+            |v: &serde_json::Value| v.as_u64().map(|c| names[&c].clone()).unwrap_or_default();
+        for kill in replay["kills"].as_array().expect("kills") {
+            ours.push(format!(
+                "{},{},{},{},{}",
+                kill["tick"],
+                if kill["headshot"] == true {
+                    "True"
+                } else {
+                    "False"
+                },
+                kill["weapon"].as_str().expect("weapon"),
+                name(&kill["victim"]),
+                name(&kill["attacker"]),
+            ));
+        }
+    }
+    // demoparser2 lists every death of the demo; keep those inside the rounds (not warmup).
+    let expected: Vec<String> = oracle
+        .lines()
+        .skip(1)
+        .filter(|line| {
+            let tick: u32 = line.split(',').next().expect("tick").parse().expect("tick");
+            rounds
+                .iter()
+                .any(|r| (r.start_tick..=r.end_tick).contains(&tick))
+        })
+        .map(str::to_owned)
+        .collect();
+    println!("{} kills in {} rounds", ours.len(), rounds.len());
+    assert!(!ours.is_empty());
+    assert_eq!(ours, expected, "kills (ours vs demoparser2)");
 }
 
 /// File name of the demo the [`CS2_READINGS`] were taken from (the developer's de_nuke match, build 10847).

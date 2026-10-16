@@ -18,7 +18,10 @@ Reading a demo is a stack of layers. Each section below is one layer, outermost 
 | field values | [Field decoders](#field-decoders) | `decoder.rs` |
 | which fields changed | [Field paths](#field-paths) | `fieldpath.rs` |
 | entities | [Entities](#entities) | `entity.rs` |
+| game events (kills, rounds, bomb) | [Game events](#game-events) | `events.rs` |
 | players and rounds | [Players and rounds](#players-and-rounds) | `players.rs` |
+
+The Unreal side reads one round at a time from a replay file (`ofast export-demo`): [replay.md](replay.md).
 
 ## What CS2 actually uses
 
@@ -374,6 +377,26 @@ never trips this check). The stored value of a polymorphic pointer selects the s
 
 **Handles** (`CHandle`, `CEntityHandle`) are `serial << 14 | index`: index = `handle & 0x3FFF`; `0xFFFFFF` = none.
 
+## Game events
+
+CS2 still sends most gameplay events the Source 1 way, as "legacy game events" inside ordinary packets:
+
+- `GE_Source1LegacyGameEventList` (message 205), once near the start: every event type with its id, name and keys
+  (name + type).
+- `GE_Source1LegacyGameEvent` (message 207), per event: the event id and the key values **in descriptor order**.
+  Each key holds one value field chosen by its type: 1 string, 2 float, 3 long, 4 short, 5 byte, 6 bool, 7 uint64,
+  8 long holding an entity handle (`*_pawn` keys), 9 short holding a player slot.
+
+Player keys (`userid`, `attacker`, `assister`) are **player slots**: the controller's entity index minus one;
+65535 means nobody (fall damage, the bomb, the world). OFAST keeps events from ordinary packets only (full packets
+are snapshots for seeking) and stamps them with the frame's tick; `DemoParser::take_events()` hands them over.
+
+The checked match (de_nuke, 20 rounds) has 148 `player_death` events. The 147 inside rounds give exactly
+demoparser2's tick, victim, attacker, weapon and headshot flag (`tests/cs2_demo.rs`, `kills_match_demoparser2`; the
+148th is in warmup). Event names seen there include `player_death`, `round_freeze_end`, `round_end`,
+`round_officially_ended`, `bomb_beginplant` / `planted` / `begindefuse` / `defused` / `exploded`, `bomb_pickup` /
+`dropped`, `weapon_reload`, `smokegrenade_expired`.
+
 ## Players and rounds
 
 - **Controller** (`CCSPlayerController`, entity index = player slot + 1): `m_iszPlayerName`, `m_steamID`,
@@ -428,7 +451,7 @@ allocation. Limits, each far above what a real CS2 match uses (measured on the d
 
 ## Not implemented yet
 
-Game events (kills, round events — M3), user commands, `userinfo` decoding, animation data frames, alternate
+Grenades and their trajectories, weapons in hand, user commands, `userinfo` decoding, animation data frames, alternate
 baselines (`"12:3"` keys), seeking via full packets, the `coord_size_params` overrides in the serializer message
 (absent in the CS2 demo checked, so the bit sizes above apply).
 

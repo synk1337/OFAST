@@ -22,11 +22,13 @@ use prost::Message;
 
 use super::bits::{BitReader, BitsEof};
 use super::entity::{Entities, EntityContext, EntityError, ServerClass};
+use super::events::{EventDescriptors, GameEvent};
 use super::frame::{FrameError, Frames};
 use super::proto::{
     CDemoClassInfo, CDemoFileHeader, CDemoFullPacket, CDemoPacket, CDemoSendTables,
-    CDemoStringTables, CsvcMsgCreateStringTable, CsvcMsgPacketEntities, CsvcMsgServerInfo,
-    CsvcMsgUpdateStringTable, EDemoCommands, NetMessages, SvcMessages,
+    CDemoStringTables, CMsgSource1LegacyGameEvent, CMsgSource1LegacyGameEventList,
+    CsvcMsgCreateStringTable, CsvcMsgPacketEntities, CsvcMsgServerInfo, CsvcMsgUpdateStringTable,
+    EBaseGameEvents, EDemoCommands, NetMessages, SvcMessages,
 };
 use super::serializer::{SerializerError, Serializers};
 use super::stringtable::{StringTableError, StringTables};
@@ -113,6 +115,9 @@ pub struct DemoParser<'a> {
     baselines: HashMap<u32, Vec<u8>>,
     entities: Entities,
     tick: Option<u32>,
+    event_descriptors: EventDescriptors,
+    /// Game events read since the last [`DemoParser::take_events`].
+    events: Vec<GameEvent>,
     warnings: Vec<String>,
     warning_count: usize,
 }
@@ -138,6 +143,8 @@ impl<'a> DemoParser<'a> {
             baselines: HashMap::new(),
             entities: Entities::default(),
             tick: None,
+            event_descriptors: EventDescriptors::default(),
+            events: Vec::new(),
             warnings: Vec::new(),
             warning_count: 0,
         })
@@ -209,6 +216,12 @@ impl<'a> DemoParser<'a> {
     /// Current string tables.
     pub fn string_tables(&self) -> &StringTables {
         &self.string_tables
+    }
+
+    /// The game events (deaths, round ends, …) read since the last call, oldest first. Events of a tick are read
+    /// before that tick's entity updates. See [`super::events`].
+    pub fn take_events(&mut self) -> Vec<GameEvent> {
+        std::mem::take(&mut self.events)
     }
 
     /// Class name of an entity.
@@ -360,6 +373,23 @@ impl<'a> DemoParser<'a> {
                 self.baselines.clear();
             } else if kind == NetMessages::NetTick as i32 {
                 // The server tick (frame tick + a constant offset); the frame tick is what we report.
+            } else if kind == EBaseGameEvents::GeSource1LegacyGameEventList as i32 {
+                let list: CMsgSource1LegacyGameEventList =
+                    decode("CMsgSource1LegacyGameEventList", body)?;
+                self.event_descriptors.load(&list);
+            } else if kind == EBaseGameEvents::GeSource1LegacyGameEvent as i32 && !full_packet {
+                // Full packets are snapshots for seeking; events happen in ordinary packets only.
+                let event: CMsgSource1LegacyGameEvent = decode("CMsgSource1LegacyGameEvent", body)?;
+                match self
+                    .event_descriptors
+                    .decode(self.tick.unwrap_or(0), &event)
+                {
+                    Some(decoded) => self.events.push(decoded),
+                    None => self.warn(format!(
+                        "game event id {} has no descriptor",
+                        event.eventid()
+                    )),
+                }
             }
         }
 

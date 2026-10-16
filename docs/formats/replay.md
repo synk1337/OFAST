@@ -1,0 +1,58 @@
+# Replay file (`.ofast-replay.json`) and the Unreal Level Sequence
+
+OFAST's own format: one round of a CS2 demo, written by `ofast export-demo` (`crates/ofast-core/src/export/replay.rs`)
+and turned into an Unreal Level Sequence by `tools/unreal/import_demo.py`. It is plain JSON so any tool can read it.
+
+```bash
+ofast demo-rounds match.dem                                  # rounds and their ticks
+ofast export-demo match.dem --round 2 --out test-data/exports/demos
+powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/import_demo.py -Replay test-data/exports/demos/match_r2.ofast-replay.json -Shot test-data/shots
+```
+
+The map must be imported first (`import_map.py`): the sequence is built in its level.
+
+## Contents (version 1)
+
+Everything is in CS2's own units and axes: Source units (1 unit = 1 inch), x/y/z as in the game, angles in
+degrees (pitch positive = looking down, yaw counter-clockwise from +x, −180..180).
+
+| Key | What |
+|---|---|
+| `format`, `version` | `"ofast-replay"`, 1 |
+| `demo`, `map`, `round` | demo file name (without `.dem`), map name from the demo header, round number |
+| `tick_interval` | seconds per tick (1/64) |
+| `start_tick`, `freeze_end_tick`, `end_tick` | round start (freeze time begins), freeze time end (`round_freeze_end`), last tick of the round |
+| `players` | `controller` (entity index = player slot + 1), `name`, `steam_id` (text: 64-bit ids lose digits in float JSON readers), `team` (2 T, 3 CT) |
+| `samples.ticks` | every tick of the round with entity updates (one per tick in practice) |
+| `samples.players.<controller>` | arrays aligned with `samples.ticks`: `position` (feet, [x, y, z], 0.01 unit), `eye_height` (eye above the feet, networked view offset z), `angles` ([pitch, yaw], 0.01°), `alive`; `null` where the player had no pawn |
+| `kills` | `player_death` events: `tick`, `victim`, `attacker`, `assister` (controllers; `null` = nobody, e.g. fall damage), `weapon`, and the kill-feed flags `headshot`, `penetrated`, `noscope`, `thrusmoke`, `attackerblind`, `assistedflash`, `attackerinair` |
+| `events` | round milestones with their raw keys: `round_freeze_end`, `bomb_beginplant`, `bomb_planted`, `bomb_begindefuse`, `bomb_defused`, `bomb_exploded`, `round_end` |
+
+A 111-second round of de_nuke: 10 players, 7,086 ticks, 9 kills, about 4 MB, written in 0.5 s.
+
+Checked: the kills of all 20 rounds of a real match equal demoparser2's (`kills_match_demoparser2`); positions and
+angles are the round tracks already checked against demoparser2 and CS2 (`docs/formats/demo.md`); in Unreal each
+killer's camera, 8 ticks before the kill, has the victim at the crosshair (within 1° in the data, on screen in the
+verification screenshots).
+
+## In Unreal (`import_demo.py`)
+
+| Element | How |
+|---|---|
+| Sequence | `/Game/OFAST/Replays/<demo>_r<round>`, display rate = tick rate (64 fps: one frame per tick), from the round start to its end |
+| Player proxy | engine cylinder scaled to CS2's 32 × 32 × 72-unit hull, CT blue / T orange, a grey visor at the eyes showing where the player faces; position (x, −y, z) × 2.54 cm, yaw → −yaw |
+| Visibility | hidden while dead or without a pawn, and while the camera looks through that player's own eyes (CS2 does not draw your own body in first person either) |
+| First-person cameras | one per player at feet + eye height, aimed with Rotator(pitch = −pitch, yaw = −yaw), CS2's default field of view (90° at 4:3 = 106.26° horizontally at 16:9) |
+| Camera cuts | each kill in turn: the killer's camera from the previous cut until 0.5 s after the kill (the last one to the end of the round) |
+| Markers | marked frames at freeze time end, every kill (`attacker > victim (weapon, HS)`), bomb events and round end |
+| Keys | linear; keys a straight line through their neighbours reproduces within 0.2 cm / 0.1° are dropped (128,825 keys for that round, written in 3 s); yaw is unwrapped so it never spins the long way round |
+
+Verification screenshots (`-Shot`): the killer's view 8 ticks before each of the first three kills, and a view from
+above the players at the first kill. To compare with CS2: `demo_gototick <tick>`, `spec_player <name>` in first
+person, screenshot.
+
+## Not yet
+
+Real player models and animations (M4), weapons, grenades and their effects (M6), sounds, a name label above each
+proxy (Unreal's text render did not show in the screenshots; the names are the actors' labels in Sequencer), several
+rounds in one sequence.

@@ -4,10 +4,12 @@
 //! - [`map`]: whole maps (world, props, lights) as glTF 2.0 plus an OFAST manifest for Unreal.
 //! - [`sky`]: a map's 2D sky cube map as an equirectangular HDR image.
 //! - `environment` (internal): CS2's `csgo_environment(_blend)` materials, baked for glTF.
+//! - [`replay`]: one round of a demo (players' movement, kills, milestones) for Unreal's Level Sequence.
 
 mod environment;
 pub mod gltf;
 pub mod map;
+pub mod replay;
 pub mod sky;
 
 use crate::model::ModelError;
@@ -39,4 +41,7 @@ pub enum ExportError {
     /// PNG encoding failed.
     #[error("PNG encoding failed: {0}")]
     Png(String),
+    /// A demo could not be read.
+    #[error(transparent)]
+    Demo(#[from] crate::demo::players::TrackError),
 }

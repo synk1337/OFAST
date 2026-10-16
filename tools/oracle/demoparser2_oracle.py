@@ -10,6 +10,10 @@ Usage:
         (name last, unquoted: split each line into at most 8 fields)
     python -I demoparser2_oracle.py round-starts <demo.dem>
         One tick per line: the tick of every round_start game event.
+    python -I demoparser2_oracle.py deaths <demo.dem>
+        CSV, one row per player_death event: tick,headshot,weapon,victim,attacker
+        (names with their commas replaced by ';', so every line splits into exactly 5 fields; an empty attacker
+        means nobody, e.g. fall damage)
 
 Setup (any folder outside the repository; on Linux/macOS use oracle-venv/bin/python instead of Scripts):
     python -m venv oracle-venv
@@ -38,6 +42,17 @@ def round_starts(demo: str) -> None:
         print(int(tick))
 
 
+def deaths(demo: str) -> None:
+    frame = DemoParser(demo).parse_event("player_death")
+    print("tick,headshot,weapon,victim,attacker")
+
+    def name(value) -> str:
+        return "" if value is None or value != value else str(value).replace(",", ";").replace("\n", " ")
+
+    for row in frame.itertuples(index=False):
+        print(f"{int(row.tick)},{bool(row.headshot)},{row.weapon},{name(row.user_name)},{name(row.attacker_name)}")
+
+
 def main() -> None:
     # Player names can contain any Unicode; Windows consoles default to a legacy code page.
     sys.stdout.reconfigure(encoding="utf-8")
@@ -46,6 +61,8 @@ def main() -> None:
         positions(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
     elif command == "round-starts":
         round_starts(sys.argv[2])
+    elif command == "deaths":
+        deaths(sys.argv[2])
     else:
         sys.exit(f"unknown command {command!r}")
 

@@ -18,6 +18,8 @@ param(
     [string]$Only = "",
     # For shoot_views.py: what-if settings, best as a .json file (PowerShell strips the quotes of inline JSON).
     [string]$Try = "",
+    # For import_demo.py: the replay file written by `ofast export-demo`.
+    [string]$Replay = "",
     [string]$Engine = "C:\Program Files\Epic Games\UE_5.8"
 )
 
@@ -37,6 +39,7 @@ $env:OFAST_DISABLE = $Disable
 $env:OFAST_ONLY = $Only
 # A .json file is resolved here: Unreal changes its working directory at startup, so relative paths would break.
 $env:OFAST_TRY = if ($Try.ToLower().EndsWith(".json")) { & $resolve $Try } else { $Try }
+$env:OFAST_REPLAY = if ($Replay) { & $resolve $Replay } else { "" }
 if ($Shot) {
     # -Shot is either a .png file (single screenshot) or a folder (scripts that take several).
     if ($env:OFAST_SHOT.ToLower().EndsWith(".png")) {

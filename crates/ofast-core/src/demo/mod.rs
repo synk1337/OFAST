@@ -14,6 +14,7 @@
 //! | values | [`decoder`] | quantized floats, coords, angles, vectors… |
 //! | field paths | [`fieldpath`] | Huffman-coded list of which fields an update touches |
 //! | entities | [`entity`] | create / update / delete entities from `svc_PacketEntities` |
+//! | events | [`events`] | game events (deaths, round ends, bomb…) with named keys |
 //! | players | [`players`] | per-tick player positions and eye angles for one round |
 //!
 //! The full format description, with sources, is in `docs/formats/demo.md`.
@@ -39,6 +40,7 @@
 pub mod bits;
 pub mod decoder;
 pub mod entity;
+pub mod events;
 pub mod fieldpath;
 pub mod frame;
 pub mod parser;
