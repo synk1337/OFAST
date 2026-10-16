@@ -62,6 +62,10 @@ const OVERLAY_OFFSET: f32 = 0.1;
 /// only shifts Unreal's EV100.
 pub const LUX_PER_UNIT: f32 = std::f32::consts::PI;
 
+/// Real candela per unit of linear local-light brightness, as Hammer states it: EV 0 is 1000 lm from a point light,
+/// i.e. 1000 / 4π cd (lights2.fgd defaults: 80 cd; `brightness_candelas` on de_mirage's lights = 79.6 × 2^EV).
+pub const PHOTOMETRIC_CANDELA_PER_UNIT: f32 = 1000.0 / (4.0 * std::f32::consts::PI);
+
 /// Distance at which CS2 local light brightness is specified: 100 units, in metres.
 const LIGHT_REFERENCE_DISTANCE_M: f32 = 100.0 * coords::INCH_TO_METRE;
 
@@ -443,7 +447,8 @@ enum LightShape {
 /// - `light_omni2`, `light_rect`, `light_barn` give `brightness` in stops (EV): linear = 2^brightness ×
 ///   brightnessscale. Older `light_omni` / `light_spot` give it linear: brightness × brightnessscale.
 /// - The linear value is the illuminance reached 100 units (2.54 m) in front of the light, so in candela
-///   it is linear × [`LUX_PER_UNIT`] × 2.54².
+///   it is linear × [`LUX_PER_UNIT`] × 2.54² — matched to CS2's own sun and sky.
+/// - Hammer also states the light in real photometric units: [`PHOTOMETRIC_CANDELA_PER_UNIT`] × linear.
 /// - The light emits along the entity's forward (+X) axis; `range` (inches) is where it fades out.
 #[derive(Debug, Clone, PartialEq)]
 struct LocalLight<'a> {
@@ -452,7 +457,8 @@ struct LocalLight<'a> {
     /// Source position (inches) and angles.
     origin: [f32; 3],
     angles: [f32; 3],
-    candela: f32,
+    /// Linear brightness (see above).
+    linear: f32,
     /// Linear RGB.
     color: [f32; 3],
     /// Fade-out distance in inches.
@@ -525,10 +531,7 @@ impl<'a> LocalLight<'a> {
             shape,
             origin: entity.origin(),
             angles: entity.angles(),
-            candela: linear
-                * LUX_PER_UNIT
-                * LIGHT_REFERENCE_DISTANCE_M
-                * LIGHT_REFERENCE_DISTANCE_M,
+            linear,
             color: light_color(entity),
             range: entity.number("range").filter(|r| *r > 0.0),
             radius: if matches!(shape, LightShape::Rect { .. }) {
@@ -540,6 +543,11 @@ impl<'a> LocalLight<'a> {
             brightness,
             brightnessscale,
         })
+    }
+
+    /// Candela in OFAST's CS2-matched units (see the type's docs).
+    fn candela(&self) -> f32 {
+        self.linear * LUX_PER_UNIT * LIGHT_REFERENCE_DISTANCE_M * LIGHT_REFERENCE_DISTANCE_M
     }
 
     /// Source-space direction the light shines in.
@@ -554,7 +562,7 @@ impl<'a> LocalLight<'a> {
             "name": self.class,
             "type": if self.shape == LightShape::Point { "point" } else { "spot" },
             "color": self.color.to_vec(),
-            "intensity": self.candela,
+            "intensity": self.candela(),
             "extras": { "ofast": {
                 "class": self.class, "brightness": self.brightness, "brightnessscale": self.brightnessscale,
             } },
@@ -584,7 +592,9 @@ impl<'a> LocalLight<'a> {
             "class": self.class,
             "location": coords::source_point_to_unreal(self.origin).to_vec(),
             "rotation": unreal_rotator(self.angles).to_vec(),
-            "intensity_cd": self.candela,
+            "intensity_cd": self.candela(),
+            // Real-world candela (Hammer's photometric units), for physically lit scenes.
+            "intensity_cd_photometric": self.linear * PHOTOMETRIC_CANDELA_PER_UNIT,
             "color": self.color.to_vec(),
             "attenuation_radius": self.range.map(cm),
             "source_radius": cm(self.radius),

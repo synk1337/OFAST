@@ -3,15 +3,23 @@
 Run with tools/unreal/run_ue.ps1 (-Script tools/unreal/shoot_views.py -Name <map> -Shot <folder>).
 
 Inputs (environment variables):
-    OFAST_NAME   map name: opens /Game/OFAST/Maps/<name>, made by import_map.py
+    OFAST_NAME   level name: opens /Game/OFAST/Maps/<name>, made by import_map.py (<map>, or <map>_realistic for
+                 the realistic style)
     OFAST_SHOT   folder for the screenshots: <map>_<view>.png
     OFAST_ONLY   optional comma list of view names (ct0, t0, top, or names from the -Views file of the import)
+    OFAST_TRY    optional JSON (or a .json file path) of what-if settings applied before shooting (never saved), to
+                 try lighting changes
+                 quickly: {"post": {"lumen_final_gather_quality": 2}, "sun": {"indirect_lighting_intensity": 2},
+                 "sky_light": {...}, "local": {"indirect_lighting_intensity*": 2}}; "post" keys are
+                 PostProcessSettings fields (set with their override flag), the others are light component
+                 properties ("name*" multiplies the current value)
 
 It uses the cameras import_map.py saved with the level (labels OFAST_cam_<view>), so the viewpoints are exactly
 the import's. The level is not changed or saved; its lighting is whatever the last import saved (including a
 diagnostic -Disable run).
 """
 
+import json
 import os
 
 import unreal
@@ -29,11 +37,55 @@ def log(message):
     unreal.log("OFAST: " + message)
 
 
+def apply_try(actors):
+    """Applies the OFAST_TRY what-if settings to the loaded level (in memory only)."""
+    raw = os.environ.get("OFAST_TRY") or "{}"
+    if raw.endswith(".json") and os.path.isfile(raw):
+        with open(raw) as f:
+            raw = f.read()
+    settings = json.loads(raw)
+    if not settings:
+        return
+    log("what-if settings: %s" % json.dumps(settings))
+    groups = {
+        "sun": (unreal.DirectionalLight,),
+        "sky_light": (unreal.SkyLight,),
+        "local": (unreal.PointLight, unreal.SpotLight, unreal.RectLight),
+    }
+    unknown = set(settings) - set(groups) - {"post"}
+    if unknown:
+        raise RuntimeError("unknown OFAST_TRY group: %s (sun, sky_light, local, post)" % ", ".join(sorted(unknown)))
+    if any(prop.endswith("*") for prop in settings.get("post", {})):
+        raise RuntimeError('"name*" (multiply) only works on light properties, not "post"')
+    for group, classes in groups.items():
+        for actor in actors:
+            if isinstance(actor, classes):
+                for prop, value in settings.get(group, {}).items():
+                    # "name*" multiplies the current (numeric) value instead of replacing it.
+                    if prop.endswith("*"):
+                        prop = prop[:-1]
+                        current = actor.light_component.get_editor_property(prop)
+                        if not isinstance(current, (int, float)):
+                            raise RuntimeError('"%s*" needs a numeric property' % prop)
+                        value = current * value
+                    actor.light_component.set_editor_property(prop, value)
+                if group == "sky_light":
+                    actor.light_component.recapture_sky()
+    for actor in actors:
+        if isinstance(actor, unreal.PostProcessVolume) and settings.get("post"):
+            post = actor.settings
+            for prop, value in settings["post"].items():
+                post.set_editor_property("override_" + prop, True)
+                post.set_editor_property(prop, value)
+            actor.set_editor_property("settings", post)
+
+
 def main():
     unreal.EditorPythonScripting.set_keep_python_script_alive(True)
     level = "/Game/OFAST/Maps/" + NAME
     if not unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).load_level(level):
         raise RuntimeError("could not open %s (run import_map.py first)" % level)
+    apply_try(unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors())
     cameras = {
         actor.get_actor_label()[len(CAMERA_PREFIX):]: actor
         for actor in unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()

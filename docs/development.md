@@ -93,6 +93,10 @@ the HDR, local lights from the manifest, fixed exposure — see [lighting.md](fo
 under `/Game/OFAST/<map>` and writes screenshots from the first CT spawn, the first T spawn, the optional `-Views`
 spots (CS2 `setpos`/`setang` values in a JSON list) and above the map. It never saves an engine level.
 
+`-Style realistic` lights the same map physically instead (Unreal sky, 100 000 lux sun, real-world candela, auto
+exposure, filmic tone curve) in its own level `<map>_realistic`; see the styles table in
+[lighting.md](formats/lighting.md#import-styles).
+
 The sandbox needs **DirectX 12 + Shader Model 6** for Nanite (set in `unreal/Sandbox/Config/DefaultEngine.ini`);
 switching it on recompiles all shaders once (long).
 
@@ -114,7 +118,7 @@ switching it on recompiles all shaders once (long).
 | Tool | What it answers |
 |---|---|
 | `cargo run --release --example map_raycast -- de_mirage ct0 "x,y;x,y"` (or a view `"x,y,z,pitch,yaw"` from CS2's setpos/setang) | which model/material OFAST's geometry has under a screenshot pixel |
-| `tools/unreal/shoot_views.py` (`-Only ct0,palace`) | re-shoots the import's saved cameras without importing again (~1 min) |
+| `tools/unreal/shoot_views.py` (`-Name <map>` or `<map>_realistic`, `-Only ct0,palace`, `-Try what-if.json`) | re-shoots the import's saved cameras without importing again (~1 min), optionally with what-if lighting settings (not saved; pass them as a .json file — PowerShell strips the quotes of inline JSON) |
 | `run_ue.ps1 … import_map.py … -Disable sun,sky,local,bounce` | diagnostic renders without some light sources, to see what lights a spot (the level keeps that lighting until the next normal import) |
 | `cargo run --release --example map_outliers -- de_mirage [classes]` | stretched geometry, dropped triangles, entity classes with models |
 | `cargo run --release --example model_layout -- formats de_mirage` | vertex attribute formats used by a map |

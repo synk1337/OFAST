@@ -10,10 +10,14 @@ param(
     [string]$Shot = "",
     [string]$Name = "",
     [string]$Views = "",
+    # For import_map.py: lighting style, "standard" (CS2's look, default) or "realistic" (physical lighting).
+    [string]$Style = "",
     # Diagnostics for import_map.py: light sources to leave out, e.g. "sun,sky" (see diagnostic_manifest).
     [string]$Disable = "",
     # For shoot_views.py: only these views, e.g. "ct0,palace".
     [string]$Only = "",
+    # For shoot_views.py: what-if settings, best as a .json file (PowerShell strips the quotes of inline JSON).
+    [string]$Try = "",
     [string]$Engine = "C:\Program Files\Epic Games\UE_5.8"
 )
 
@@ -28,8 +32,11 @@ $env:OFAST_SHOT = if ($Shot) { & $resolve $Shot } else { "" }
 $env:OFAST_NAME = $Name
 $env:OFAST_VIEWS = if ($Views) { & $resolve $Views } else { "" }
 # Always set (empty by default) so a value from an earlier run in the same shell never leaks into this one.
+$env:OFAST_STYLE = $Style
 $env:OFAST_DISABLE = $Disable
 $env:OFAST_ONLY = $Only
+# A .json file is resolved here: Unreal changes its working directory at startup, so relative paths would break.
+$env:OFAST_TRY = if ($Try.ToLower().EndsWith(".json")) { & $resolve $Try } else { $Try }
 if ($Shot) {
     # -Shot is either a .png file (single screenshot) or a folder (scripts that take several).
     if ($env:OFAST_SHOT.ToLower().EndsWith(".png")) {

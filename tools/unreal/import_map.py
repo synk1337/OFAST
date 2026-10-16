@@ -7,6 +7,8 @@ Inputs (environment variables):
     OFAST_SHOT   folder for screenshots: <map>_ct0.png, <map>_t0.png, <map>_top.png
     OFAST_NAME   map name (asset folder /Game/OFAST/<name>, level /Game/OFAST/Maps/<name>)
     OFAST_VIEWS  optional JSON file of extra viewpoints given as CS2 setpos/setang (see extra_views)
+    OFAST_STYLE  optional lighting style (run_ue.ps1 -Style): "standard" (default, CS2's look) or "realistic"
+                 (physical lighting); screenshots and level are named <map>[_realistic]
     OFAST_DISABLE  optional, diagnostics only (run_ue.ps1 -Disable): comma list of light sources to leave out —
                  sun, sky (ambient), local, bounce (the local lights' surface-cache bounce); see diagnostic_manifest
 
@@ -29,6 +31,13 @@ if SHOT_DIR.lower().endswith(".png"):  # a file path was given: use its folder
     SHOT_DIR = os.path.dirname(SHOT_DIR)
 NAME = os.environ.get("OFAST_NAME") or os.path.splitext(os.path.basename(GLTF))[0]
 MANIFEST = os.path.join(os.path.dirname(GLTF), NAME + ".ofast.json")
+# Lighting style: "standard" reproduces CS2's picture (calibrated against CS2 screenshots); "realistic" lights the
+# same map physically (Unreal sky, real-world light units, auto exposure, filmic tone curve). Each style has its own
+# level (/Game/OFAST/Maps/<name> and <name>_realistic) sharing the imported meshes and materials.
+STYLE = os.environ.get("OFAST_STYLE") or "standard"
+if STYLE not in ("standard", "realistic"):
+    raise RuntimeError("unknown OFAST_STYLE %r (standard or realistic)" % STYLE)
+LEVEL = NAME if STYLE == "standard" else "%s_%s" % (NAME, STYLE)
 WIDTH, HEIGHT = 1920, 1080
 # CS2's default fov is 90° measured horizontally on a 4:3 screen; on 16:9 that is 2·atan(tan(45°)·(16/9)/(4/3)).
 HFOV_16_9 = math.degrees(2 * math.atan(math.tan(math.radians(45)) * (16 / 9) / (4 / 3)))
@@ -46,8 +55,8 @@ actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 
 
 def prepare_level():
-    """Opens /Game/OFAST/Maps/<name> without previous OFAST actors (creates it from the Basic template once)."""
-    level_path = "/Game/OFAST/Maps/" + NAME
+    """Opens /Game/OFAST/Maps/<level> without previous OFAST actors (creates it from the Basic template once)."""
+    level_path = "/Game/OFAST/Maps/" + LEVEL
     if unreal.EditorAssetLibrary.does_asset_exist(level_path):
         levels.load_level(level_path)
         old = [a for a in actors.get_all_level_actors() if TAG in a.tags]
@@ -299,6 +308,13 @@ def apply_layer_blends(imported):
     unreal.EditorAssetLibrary.save_directory("/Game/OFAST", only_if_is_dirty=True, recursive=True)
 
 
+# Lumen carries less bounce light than CS2's path-traced lightmaps. Measured compensation on top of CS2's own bounce
+# scales (light_environment bouncescale / skybouncescale, each light's bouncescale), fitted on de_mirage's four
+# calibration views (docs/formats/lighting.md): CT / T / palace / B apartments at 0.95 / 0.86 / 0.81 / 0.74 of CS2
+# before, 0.98 / 0.95 / 0.93 / 0.76 after (CT and T cells 0.89-1.04; the apartments' corridor bounce stays short).
+OUTDOOR_BOUNCE_GAIN = 1.25  # sun and sky light
+LOCAL_BOUNCE_GAIN = 2.0  # local lights (palace: CS2 bounces 0.7x the direct light, Lumen 0.43x)
+
 # Versioned like BLEND_MASTER.
 SKY_MASTER = "/Game/OFAST/Materials/M_OFAST_Sky_v1"
 # Radius of the sky sphere (cm): beyond the 3D skybox, which reaches about 3 km from the map centre.
@@ -369,12 +385,32 @@ def ensure_sky_master(cube):
     return material
 
 
-def setup_fallback_sky():
-    """Unreal's physical sky (atmosphere + real-time sky light), for exports without a CS2 sky."""
+def spawn_physical_sky(sky_light_intensity=1.0):
+    """Unreal's physical sky: atmosphere + a real-time sky light capturing it."""
     spawn(unreal.SkyAtmosphere)
     light = spawn(unreal.SkyLight)
     light.light_component.set_mobility(unreal.ComponentMobility.MOVABLE)
-    light.light_component.set_editor_property("real_time_capture", True)
+    light.light_component.set_editor_properties({"real_time_capture": True, "intensity": sky_light_intensity})
+
+
+def spawn_post_volume():
+    """An unbound post-process volume; returns (volume, settings, override) — call override(name, value) for each
+    setting, then volume.set_editor_property("settings", settings)."""
+    volume = spawn(unreal.PostProcessVolume)
+    volume.set_actor_label("OFAST_PostProcess")
+    volume.set_editor_properties({"unbound": True, "priority": 10.0, "blend_weight": 1.0, "enabled": True})
+    settings = volume.settings
+
+    def override(name, value):
+        settings.set_editor_property("override_" + name, True)
+        settings.set_editor_property(name, value)
+
+    return volume, settings, override
+
+
+def setup_fallback_sky():
+    """Unreal's physical sky, for exports without a CS2 sky."""
+    spawn_physical_sky()
     log("WARNING: no sky in the manifest; using Unreal's physical sky (not calibrated against CS2)")
 
 
@@ -433,7 +469,7 @@ def setup_sky(manifest):
             "source_type": unreal.SkyLightSourceType.SLS_SPECIFIED_CUBEMAP,
             "cubemap": ambient_cube,
             "intensity": ambient.get("sky_light_intensity", 1.0),
-            "indirect_lighting_intensity": ambient.get("indirect_intensity", 1.0),
+            "indirect_lighting_intensity": ambient.get("indirect_intensity", 1.0) * OUTDOOR_BOUNCE_GAIN,
             "lower_hemisphere_is_black": True,
             "lower_hemisphere_color": unreal.LinearColor(lower[0], lower[1], lower[2], 1.0),
         }
@@ -459,7 +495,7 @@ def setup_sun(manifest):
         {
             "intensity": sun["illuminance_lux"],
             "light_source_angle": sun.get("source_angle", 1.0),
-            "indirect_lighting_intensity": sun.get("indirect_intensity", 1.0),
+            "indirect_lighting_intensity": sun.get("indirect_intensity", 1.0) * OUTDOOR_BOUNCE_GAIN,
             "atmosphere_sun_light": False,
             "use_temperature": False,
             "cast_shadows": True,
@@ -474,14 +510,7 @@ def setup_post(manifest):
     post = manifest.get("post") or {}
     # Sunlit views sit at CS2's minimum exposure, the highest EV100.
     ev100 = post.get("ev100_max", 0.0)
-    volume = spawn(unreal.PostProcessVolume)
-    volume.set_actor_label("OFAST_PostProcess")
-    volume.set_editor_properties({"unbound": True, "priority": 10.0, "blend_weight": 1.0, "enabled": True})
-    settings = volume.settings
-
-    def override(name, value):
-        settings.set_editor_property("override_" + name, True)
-        settings.set_editor_property(name, value)
+    volume, settings, override = spawn_post_volume()
 
     override("auto_exposure_method", unreal.AutoExposureMethod.AEM_MANUAL)
     override("auto_exposure_apply_physical_camera_exposure", False)
@@ -501,9 +530,10 @@ def setup_post(manifest):
 LIGHT_CLASSES = {"point": unreal.PointLight, "spot": unreal.SpotLight, "rect": unreal.RectLight}
 
 
-def setup_local_lights(manifest, imported):
+def setup_local_lights(manifest, imported, physical=False):
     """Replaces the glTF lights (punctual approximations, and Interchange drops their range) with Unreal lights
-    built from the manifest: real rect lights, CS2's fade-out range, source size and bounce strength."""
+    built from the manifest: real rect lights, CS2's fade-out range, source size and bounce strength. `physical`
+    (realistic style) uses Hammer's real candela and plain physical bounce instead of the CS2-matched values."""
     for actor in imported:
         if isinstance(actor, unreal.Light):
             actors.destroy_actor(actor)
@@ -520,11 +550,17 @@ def setup_local_lights(manifest, imported):
         # Unreal's rect lights shine twice their candela value along their axis: RectLightSceneProxy.cpp sets the
         # luminance to intensity / (0.5 × width × height), point and spot lights have no such factor. Halving keeps
         # CS2's candela (measured on de_mirage's palace: rect lights came out ~2× too bright before).
-        candela = light["intensity_cd"] / (2.0 if light["shape"] == "rect" else 1.0)
+        key = "intensity_cd_photometric" if physical else "intensity_cd"
+        if key not in light:
+            raise RuntimeError("the manifest has no %s: re-export the map with this version of OFAST" % key)
+        candela = light[key] / (2.0 if light["shape"] == "rect" else 1.0)
+        scale = light.get("indirect_intensity", 1.0)
+        # Realistic: plain physical bounce (0 only when the light has none, or for the -Disable bounce diagnostic).
+        bounce = (1.0 if scale else 0.0) if physical else scale * LOCAL_BOUNCE_GAIN
         settings = {
             "intensity_units": unreal.LightUnits.CANDELAS,
             "intensity": candela,
-            "indirect_lighting_intensity": light.get("indirect_intensity", 1.0),
+            "indirect_lighting_intensity": bounce,
             "cast_shadows": True,
         }
         if light.get("attenuation_radius"):
@@ -556,7 +592,7 @@ def diagnostic_manifest(manifest):
     if not disabled:
         return manifest
     log("WARNING: diagnostic run without %s; the saved level keeps this lighting" % ", ".join(sorted(disabled)))
-    manifest = dict(manifest)
+    manifest = dict(manifest, disabled=sorted(disabled))
     if "sun" in disabled and manifest.get("sun"):
         manifest["sun"] = dict(manifest["sun"], illuminance_lux=0.0)
     if "sky" in disabled:
@@ -571,6 +607,9 @@ def diagnostic_manifest(manifest):
 
 def setup_environment(manifest, imported):
     manifest = diagnostic_manifest(manifest)
+    if STYLE == "realistic":
+        setup_realistic(manifest, imported)
+        return
     setup_sun(manifest)
     setup_sky(manifest)
     setup_local_lights(manifest, imported)
@@ -579,6 +618,64 @@ def setup_environment(manifest, imported):
     else:
         # The fixed exposure is only right for CS2's own sun and sky; let Unreal's auto exposure cope otherwise.
         log("WARNING: exposure left to Unreal (no calibrated sun and sky)")
+
+
+# "realistic" style: real-world light levels instead of CS2's. The sun is 100 000 lux before the atmosphere (about
+# 80 000 on the ground once the atmosphere has dimmed and tinted it); the sky comes from Unreal's physical atmosphere;
+# local lights use Hammer's photometric candela, which next to a real sun makes them far weaker than CS2 shows them
+# (CS2's own sun is only 9.42 lux in its units) — interiors are then lit mostly by daylight. A camera-like auto
+# exposure and filmic tone curve turn that range into a picture. CS2's sun direction and the map's lights are kept.
+REALISTIC_SUN_LUX = 100000.0
+REALISTIC_SUN_KELVIN = 5800.0
+# Auto exposure range in EV100 (project setting ExtendDefaultLuminanceRange): from dim interiors to bright sun.
+REALISTIC_EV100_RANGE = (2.0, 16.0)
+
+
+def setup_realistic(manifest, imported):
+    """Physically lit environment: atmosphere sky + real-time sky light, real sun, light haze, photometric local
+    lights, auto exposure and Unreal's filmic tone curve."""
+    disabled = set(manifest.get("disabled") or [])  # diagnostics (-Disable), see diagnostic_manifest
+    sun = manifest.get("sun")
+    pitch, yaw, roll = sun["rotation"] if sun else (-50.0, 30.0, 0.0)
+    actor = spawn(unreal.DirectionalLight, rotation=unreal.Rotator(roll=roll, pitch=pitch, yaw=yaw))
+    component = actor.light_component
+    component.set_mobility(unreal.ComponentMobility.MOVABLE)
+    component.set_editor_properties(
+        {
+            "intensity": 0.0 if "sun" in disabled else REALISTIC_SUN_LUX,
+            "use_temperature": True,
+            "temperature": REALISTIC_SUN_KELVIN,
+            # The atmosphere tints and dims the sun by itself (warmer near the horizon) and draws its disc.
+            "atmosphere_sun_light": True,
+            # The real sun is 0.53° across: crisp but not razor-sharp shadows.
+            "light_source_angle": 0.5357,
+            "cast_shadows": True,
+        }
+    )
+
+    spawn_physical_sky(0.0 if "sky" in disabled else 1.0)
+
+    # A light desert haze; the atmosphere already adds aerial perspective to the distant 3D skybox.
+    fog = spawn(unreal.ExponentialHeightFog).get_component_by_class(unreal.ExponentialHeightFogComponent)
+    fog.set_editor_properties({"fog_density": 0.004, "fog_height_falloff": 0.2, "start_distance": 1000.0})
+
+    setup_local_lights(manifest, imported, physical=True)
+
+    volume, settings, override = spawn_post_volume()
+    low, high = REALISTIC_EV100_RANGE
+    override("auto_exposure_method", unreal.AutoExposureMethod.AEM_HISTOGRAM)
+    override("auto_exposure_apply_physical_camera_exposure", False)
+    override("auto_exposure_min_brightness", low)
+    override("auto_exposure_max_brightness", high)
+    override("auto_exposure_bias", 0.0)
+    # Unreal's filmic tone curve stays on (no tone_curve_amount override); local exposure keeps detail in deep
+    # shade and bright sky like a camera would, a little bloom and vignetting finish the lens look.
+    override("local_exposure_highlight_contrast_scale", 0.8)
+    override("local_exposure_shadow_contrast_scale", 0.8)
+    override("bloom_intensity", 0.3)
+    override("vignette_intensity", 0.25)
+    volume.set_editor_property("settings", settings)
+    log("realistic: sun %.0f lux, physical sky, photometric local lights, auto exposure EV100 %.0f-%.0f" % (REALISTIC_SUN_LUX, low, high))
 
 
 # Label prefix of the screenshot cameras, saved with the level so tools/unreal/shoot_views.py can reuse them.
@@ -675,7 +772,7 @@ def main():
             finish()
             return
         name, camera = shots[state["index"]]
-        state["path"] = os.path.join(SHOT_DIR, "%s_%s.png" % (NAME, name))
+        state["path"] = os.path.join(SHOT_DIR, "%s_%s.png" % (LEVEL, name))
         state["task"] = unreal.AutomationLibrary.take_high_res_screenshot(
             WIDTH, HEIGHT, state["path"], camera=camera, delay=2.0
         )

@@ -50,13 +50,15 @@ Ordered so that **Demo → Unreal scene** works first. Every milestone ends in s
 - [x] **Sky**: the `env_sky` BC6H cube map → equirect `.hdr` → Unreal TextureCube for the visible sky and the Sky Light.
 - [x] **Lighting calibrated against CS2** ([lighting.md](formats/lighting.md)): one unit constant, sun and sky light
   from the map, local lights rebuilt as Unreal point/spot/rect lights (rect lights halved: Unreal shines them at 2×
-  their candela), fixed exposure measured on CS2 screenshots. Four views: CT 0.95, T 0.86, palace 0.81,
-  B apartments 0.74 of CS2's brightness. CS2's bloom, colour correction and fog measured to have no visible effect.
+  their candela), fixed exposure measured on CS2 screenshots, measured bounce gains for Lumen. Four views: CT 0.98,
+  T 0.95, palace 0.93, B apartments 0.76 of CS2's brightness. CS2's bloom, colour correction and fog measured to have
+  no visible effect.
+- [x] **Two import styles**: `standard` (CS2's picture) and `realistic` (Unreal sky, real-world light units, auto
+  exposure, filmic tone curve) — [lighting.md](formats/lighting.md#import-styles).
 
 ### Still to do (M1 → M2)
 
-- Indirect light 10 – 25 % weaker than CS2's bake in shade and interiors (Lumen settings, or a bounce boost
-  measured like the rest — see [lighting.md](formats/lighting.md)).
+- Deep interiors lit by sunlight bouncing down corridors (B apartments, 0.76 of CS2): Lumen carries less of it.
 - Materials with more than two layers, detail textures, vertex colour tint (`COLOR` attribute), glass.
 - Rebuild `csgo_effects` dust / light-shaft cards as Unreal effects.
 - Colour texture alpha mask on weapons: find what it drives.

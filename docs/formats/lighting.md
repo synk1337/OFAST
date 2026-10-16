@@ -24,7 +24,7 @@ derived from it, so any other constant would give the same picture; π keeps Unr
 | `color` | 255 223 179 | sRGB colour | light colour |
 | `brightness` × `brightnessscale` | 3 × 1 | **linear** multiplier | intensity = 3 × π = 9.42 lux |
 | `angulardiameter` | 1 | "sun spread angle", shadow softness (degrees) | Source Angle |
-| `bouncescale` | 1.3 | bounce strength in the bake | Indirect Lighting Intensity |
+| `bouncescale` | 1.3 | bounce strength in the bake | Indirect Lighting Intensity (× 1.25, see the bounce gains) |
 | `skytexture` | `mirage_sky` | ambient comes from that `env_sky`'s HDR | Sky Light cube map |
 | `skycolor` × `skyintensity` | 130 205 255 × 1 | flat ambient, **only used when `skytexture` is empty** (Hammer's `lights_base.fgd`) | — |
 | `skyambientbounce` | 0 0 0 | albedo of a virtual ground below the horizon | Sky Light lower hemisphere colour |
@@ -54,7 +54,7 @@ hemisphere average); black on de_mirage (albedo 0).
   barn-door aperture instead; its emitter is `luminaire_size` (default 4) — OFAST uses that as a square and ignores
   the barn doors for now. `light_spot` uses `innerconeangle` / `outerconeangle`.
 - `range` is where the light has faded out (linearly over the last `skirt` fraction); `bouncescale` scales its bounce
-  in the bake (≈ Unreal's Indirect Lighting Intensity).
+  in the bake (≈ Unreal's Indirect Lighting Intensity, × 2 — see the bounce gains).
 - de_mirage's lights are `directlight` 1 ("Static": fully baked into the lightmaps, bounce included).
 
 In the glTF they are `KHR_lights_punctual` approximations (rect → wide spot) for any tool. Unreal's Interchange drops
@@ -63,7 +63,8 @@ Spot and **Rect** lights built from the manifest's `lights` list: exact shape, s
 
 **Unreal rect lights shine twice their candela value** along their axis: `RectLightSceneProxy.cpp` sets the luminance
 to intensity / (0.5 × width × height), while point and spot lights use the intensity as is. `import_map.py` halves
-rect lights' candela; without it de_mirage's palace came out 1.48× too bright, with it 0.81× (like the other views).
+rect lights' candela; without it de_mirage's palace came out 1.48× too bright, with it 0.81× (then 0.93 with the
+bounce gains).
 
 ## Sky — `env_sky`
 
@@ -137,13 +138,13 @@ linear luminance, Unreal / CS2). Views: `tools/compare/views/de_mirage.json` plu
 
 | View | Whole image | Cells | Notes |
 |---|---|---|---|
-| CT spawn (sunlit street, sky) | 0.95 | 0.86 – 1.00 | sunlit ground 0.97 – 1.00, sky 0.96; shade 0.86 – 0.90 |
-| T spawn (sunlit + large shaded walls) | 0.86 | 0.76 – 1.00 | sunlit ground 0.98 – 1.00; shaded walls 0.76 – 0.83 |
-| Palace interior (`light_rect` wall lights) | 0.81 | 0.51 – 0.88 | wall facing the lights 0.84 |
-| B apartments (`light_omni2` ceiling lights) | 0.74 | 0.52 – 0.92 | lit walls 0.74 – 0.92, floor 0.55 – 0.63 |
+| CT spawn (sunlit street, sky) | 0.98 | 0.92 – 1.04 | sunlit ground 0.99 – 1.04, sky 0.97 |
+| T spawn (sunlit + large shaded walls) | 0.95 | 0.89 – 1.03 | shaded walls 0.91 – 0.96 |
+| Palace interior (`light_rect` wall lights) | 0.93 | | wall facing the lights ≈ 0.95 |
+| B apartments (`light_omni2` ceiling lights) | 0.76 | 0.55 – 0.92 | see below |
 
-Before calibration (Unreal template lighting) the CT view was 0.91 overall but 0.38 in shade and 0.61 in the sky.
-Before the rect-light fix the palace was 1.48.
+History: Unreal's template lighting gave the CT view 0.91 overall but 0.38 in shade and 0.61 in the sky; before the
+rect-light fix the palace was 1.48; before the bounce gains (below) the four views were 0.95 / 0.86 / 0.81 / 0.74.
 
 How the interior was pinned down (palace): exposure ruled out (`mat_tonemap_force_scale`), sky and sun ruled out
 (`-Disable sun,sky`: still 1.41), bounce ruled out (`-Disable sun,sky,bounce`, which turns off the local lights'
@@ -151,8 +152,17 @@ Lumen surface-cache bounce — screen traces still add a little: the wall facing
 CS2's actual light on the wall, from lit ÷ albedo against the sunlit CT ground, is 1.7× the formula's direct light
 (its bounce), so the formula was right and Unreal over-delivered: the rect-light factor above.
 
-What remains is **shade and indirect light 10 – 25 % darker** than CS2, everywhere: CS2's baked bounce (lightmaps,
-per-light `bouncescale`) is stronger than Lumen's.
+**Bounce gains.** With CS2's own bounce scales applied (sun `bouncescale`, sky `skybouncescale`, each light's
+`bouncescale` → Unreal's Indirect Lighting Intensity), shade and interiors were still 10 – 25 % darker: CS2's
+path-traced lightmaps carry more bounce light than Lumen. Measured with `shoot_views.py -Try` (what-if settings on the
+saved level): Lumen's quality settings change nothing (+0.5 %); the sun and sky bounce move the outdoor shade (×2 →
+CT 1.09, T 1.21, too far) but not interiors; the local lights' bounce moves the palace. In the palace CS2 bounces
+0.7× the direct light, Lumen 0.43×. `import_map.py` therefore multiplies the bounce scales by **1.25 for sun and
+sky** and **2.0 for local lights** (`OUTDOOR_BOUNCE_GAIN`, `LOCAL_BOUNCE_GAIN`), which gives the table above.
+
+The B apartments stay at 0.76: CS2's light on their walls (lit ÷ albedo, 0.46) is several times what the ceiling
+lights send directly (≈ 0.08) — it is sunlight bouncing down the corridors from the sunlit rooms, which Lumen carries
+only partly whatever its settings or the sun's bounce gain (×2 moved it by 0.01).
 
 **Bloom, colour correction and fog: no measurable effect.** Toggled in CS2 at the CT spawn (exposure locked):
 `r_csgo_render_post_bloom 0` (default 1), and switching `r_csgo_render_post_colorcorrection` between 0 (default) and
@@ -160,6 +170,27 @@ per-light `bouncescale`) is stronger than Lumen's.
 either (the only differing pixels are palms moving in the wind; the 3D-skybox hotel is identical). So the Unreal side
 reproduces none of them: doing so would add differences, not remove them. The bloom and fog settings stay in the
 manifest for reference; the colour LUT is not exported.
+
+## Import styles
+
+`import_map.py` builds one of two lighting setups on the same imported geometry and materials (`run_ue.ps1 -Style`):
+
+| | **standard** (default) | **realistic** |
+|---|---|---|
+| Goal | the picture CS2 shows | a physically lit version of the map |
+| Level / screenshots | `/Game/OFAST/Maps/<map>`, `<map>_<view>.png` | `<map>_realistic`, `<map>_realistic_<view>.png` |
+| Sun | CS2's `light_environment` × `LUX_PER_UNIT` (9.42 lux on de_mirage), CS2's colour | 100 000 lux at 5800 K, tinted by the atmosphere, CS2's direction |
+| Sky | CS2's `env_sky` HDR on a sphere + Sky Light from it | Unreal's Sky Atmosphere + real-time Sky Light, light height fog |
+| Local lights | CS2-matched candela (`intensity_cd`), CS2 bounce × gain | Hammer's real candela (`intensity_cd_photometric` = 79.6 × linear), plain bounce |
+| Exposure | fixed, measured on CS2 (EV100 0.322 on de_mirage) | auto (histogram), EV100 2 – 16 |
+| Tone curve | none (CS2's is a straight line) | Unreal's filmic curve, local exposure, light bloom and vignette |
+
+The realistic style does **not** keep CS2's light ratios: it pairs Hammer's photometric candela with a real-world
+sun (100 000 lux before the atmosphere, about 80 000 on the ground), so a 121 cd wall lamp is far fainter next to the
+sun than CS2 shows it (CS2's sun is 9.42 lux in its own units). Interiors are lit mostly by daylight coming in, and
+the auto exposure brightens them like a camera would. `-Disable` works in this style too. It needs
+the project setting `r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange` (set in the sandbox's
+`DefaultEngine.ini`) for its EV100 limits.
 
 ## Fog — `env_cubemap_fog`
 
