@@ -19,6 +19,15 @@
 //! glTF has no place for the per-layer colour adjustments, so OFAST bakes them: [`bake_color`] writes the adjusted
 //! colour, [`bake_surface`] a glTF metallic-roughness texture (R occlusion, G roughness, B metalness). The height
 //! blend itself depends on per-vertex paint and is rebuilt in Unreal (`import_map.py`) from [`HeightBlend`].
+//!
+//! A bake is keyed only by what changes its pixels ([`ColorJob::new`], [`SurfaceJob::new`]): a colour bake ignores
+//! the surface settings and a surface bake the colour ones, a model tint counts only where the layer takes one
+//! (`g_bModelTintN`, a tint mask that is not zero), and a colour that nothing changes is not baked at all — the
+//! material uses the plain colour texture. de_inferno's placements carry 100+ different tints on one plaster texture,
+//! most of them on layers with the model tint switched off; before this rule each wrote its own 2048² copy (1049
+//! colour bakes, 8.9 GB; now 555 files, 3.3 GB). The glTF writer then stores identical pixels once, whatever made
+//! them, and names a bake after its pixel hash (see "Texture files" in `gltf.rs`). The table of what counts is in
+//! `docs/formats/material.md`.
 
 use crate::content::Content;
 use crate::export::ExportError;
@@ -209,9 +218,7 @@ const GREY_WEIGHTS: [f32; 3] = {
 /// multiplies the tint matrix with the colour-correction one; OFAST applies the correction first, then the tint —
 /// the order is not checked against the game yet.
 pub(crate) fn color_tint(rgb: [f32; 3], tint: [f32; 3]) -> [f32; 3] {
-    let max = tint[0].max(tint[1]).max(tint[2]);
-    let min = tint[0].min(tint[1]).min(tint[2]);
-    let s = if max > 0.0 { (max - min) / max } else { 0.0 };
+    let s = saturation(tint);
     if s == 0.0 {
         return rgb;
     }
@@ -300,14 +307,28 @@ impl HeightBlend {
     }
 }
 
-/// A baked colour texture to write: a layer's colour after its adjustments and a model tint.
+/// Settings that change nothing (the neutral value of each), put in place of the settings a bake does not read so
+/// that two layers differing only there make the same job.
+const NEUTRAL: Layer = Layer {
+    csb: [1.0; 3],
+    texture_tint: [1.0; 3],
+    mask_only_tint: false,
+    tint_mask: [1.0, 1.0],
+    roughness: [1.0, 1.0],
+    metalness: true,
+    ao_levels: [0.0, 1.0, 1.0],
+    model_tint: 0.0,
+};
+
+/// A baked colour texture to write: a layer's colour after its adjustments and a model tint. Made by
+/// [`ColorJob::new`], which keeps only what changes the result.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ColorJob {
     /// `g_tColorN`.
     pub(crate) color: String,
     /// `g_tHeightN` (tint mask in G).
     pub(crate) height: Option<String>,
-    /// The layer's settings.
+    /// The layer's colour settings (the surface settings are [`NEUTRAL`]).
     pub(crate) layer: Layer,
     /// Model tint, sRGB bytes (white = none).
     pub(crate) tint: [u8; 3],
@@ -315,7 +336,69 @@ pub(crate) struct ColorJob {
     pub(crate) keep_alpha: bool,
 }
 
-/// A baked glTF metallic-roughness texture to write for a layer.
+impl ColorJob {
+    /// The bake of layer colour `color` with tint mask texture `height`, or `None` when the adjustments and the
+    /// model tint `tint` (sRGB bytes) leave every texel as it is: the plain colour texture is then exact (a bake would
+    /// round dark values through the linear table, `linear_to_srgb`).
+    ///
+    /// Settings that cannot change the result are reset, so layers that differ only there share one bake:
+    /// - the surface settings (roughness, metalness, occlusion);
+    /// - the model tint when it is white or the layer takes none (`g_bModelTintN` 0 or `g_flModelTintAmount` 0) —
+    ///   de_inferno's tinted placements mostly use layers without it;
+    /// - a texture tint without saturation (white or grey), which [`color_tint`] leaves alone.
+    pub(crate) fn new(
+        color: String,
+        height: Option<String>,
+        layer: Layer,
+        tint: [u8; 3],
+        keep_alpha: bool,
+    ) -> Option<Self> {
+        let corrects = layer.csb != NEUTRAL.csb;
+        let tints = saturation(layer.texture_tint) != 0.0;
+        // The mode only matters with a correction: without one, "corrected" is the colour itself.
+        let mask_only_tint = layer.mask_only_tint && corrects;
+        // Without a height texture the mask is one value everywhere; at 0 it hides everything it governs.
+        let masked_out = height.is_none() && layer.tint_mask_at(1.0) == 0.0;
+        let model_tinted = layer.model_tint != 0.0 && tint != [255; 3] && !masked_out;
+        // "Mask All" multiplies every adjustment by the mask; "Mask only Tint" applies the correction everywhere.
+        let adjusted = if masked_out {
+            mask_only_tint
+        } else {
+            corrects || tints
+        };
+        if !adjusted && !model_tinted {
+            return None;
+        }
+        // The mask governs the model tint, the texture tint and, in "Mask All", the correction.
+        let masked = model_tinted || tints || (corrects && !mask_only_tint);
+        let layer = Layer {
+            csb: layer.csb,
+            texture_tint: if tints {
+                layer.texture_tint
+            } else {
+                NEUTRAL.texture_tint
+            },
+            mask_only_tint,
+            tint_mask: if masked {
+                layer.tint_mask
+            } else {
+                NEUTRAL.tint_mask
+            },
+            model_tint: if model_tinted { layer.model_tint } else { 0.0 },
+            ..NEUTRAL
+        };
+        Some(Self {
+            color,
+            height: if masked { height } else { None },
+            layer,
+            tint: if model_tinted { tint } else { [255; 3] },
+            keep_alpha,
+        })
+    }
+}
+
+/// A baked glTF metallic-roughness texture to write for a layer. Made by [`SurfaceJob::new`], which keeps only what
+/// changes the result.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SurfaceJob {
     /// `g_tColorN` (occlusion in A, unless alpha-tested).
@@ -324,10 +407,47 @@ pub(crate) struct SurfaceJob {
     pub(crate) normal: Option<String>,
     /// `g_tHeightN` (metalness in A, occlusion in B when alpha-tested).
     pub(crate) height: Option<String>,
-    /// The layer's settings.
+    /// The layer's surface settings (the colour settings are [`NEUTRAL`]).
     pub(crate) layer: Layer,
     /// `F_ALPHA_TEST`: the colour's alpha is translucency, occlusion comes from the height texture.
     pub(crate) alpha_test: bool,
+}
+
+impl SurfaceJob {
+    /// The surface bake of a layer. The colour settings are reset, and a texture the bake does not read is left
+    /// out: the colour texture when alpha-tested (occlusion then comes from the height texture), the height texture
+    /// when it holds neither metalness nor occlusion.
+    pub(crate) fn new(
+        color: Option<String>,
+        normal: Option<String>,
+        height: Option<String>,
+        layer: Layer,
+        alpha_test: bool,
+    ) -> Self {
+        Self {
+            color: if alpha_test { None } else { color },
+            normal,
+            height: if layer.metalness || alpha_test {
+                height
+            } else {
+                None
+            },
+            layer: Layer {
+                roughness: layer.roughness,
+                metalness: layer.metalness,
+                ao_levels: layer.ao_levels,
+                ..NEUTRAL
+            },
+            alpha_test,
+        }
+    }
+}
+
+/// A colour's saturation as [`color_tint`] reads it: (max − min) / max, 0 for black.
+fn saturation(rgb: [f32; 3]) -> f32 {
+    let max = rgb[0].max(rgb[1]).max(rgb[2]);
+    let min = rgb[0].min(rgb[1]).min(rgb[2]);
+    if max > 0.0 { (max - min) / max } else { 0.0 }
 }
 
 /// sRGB byte → linear, as a table.
@@ -524,6 +644,104 @@ mod tests {
         info.vectors
             .insert("g_vAmbientOcclusionLevels1".into(), [0.0, 0.5, 1.0, 0.0]);
         assert!(close(Layer::read(&info, 1).ao_levels, [0.0, 1.0, 1.0]));
+    }
+
+    /// Layers covering every case [`ColorJob::new`] tells apart.
+    fn layer_variants() -> Vec<Layer> {
+        let mut layers = Vec::new();
+        for csb in [[1.0; 3], [1.3, 0.6, 0.9]] {
+            for texture_tint in [[1.0; 3], [0.5; 3], [1.0, 0.7, 0.4]] {
+                for mask_only_tint in [false, true] {
+                    for tint_mask in [[1.0, 1.0], [0.7, 1.2], [1.0, 0.0]] {
+                        for model_tint in [0.0, 1.0] {
+                            layers.push(Layer {
+                                csb,
+                                texture_tint,
+                                mask_only_tint,
+                                tint_mask,
+                                model_tint,
+                                roughness: [1.2, 0.8],
+                                ..NEUTRAL
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        layers
+    }
+
+    #[test]
+    fn colour_jobs_keep_the_pixels_they_canonicalize() {
+        // What bake_color computes for a texel, with the mask from the height texture's G (or 1 without one).
+        let texel = |layer: &Layer, height: bool, g: f32, rgb: [f32; 3], tint: [u8; 3]| {
+            let mask = layer.tint_mask_at(if height { g } else { 1.0 });
+            let tint = tint.map(|c| SRGB_TO_LINEAR[usize::from(c)]);
+            layer.adjust_color(rgb, [0.3, 0.4, 0.2], mask, tint)
+        };
+        let mut plain = 0;
+        for layer in layer_variants() {
+            for height in [false, true] {
+                for tint in [[255; 3], [200, 120, 60]] {
+                    let path = height.then(|| "height.vtex".to_owned());
+                    let job = ColorJob::new("color.vtex".into(), path, layer, tint, false);
+                    for rgb in [[0.1, 0.5, 0.9], [0.8, 0.2, 0.3]] {
+                        for g in [0.0, 0.4, 1.0] {
+                            let expected = texel(&layer, height, g, rgb, tint);
+                            let actual = match &job {
+                                Some(job) => {
+                                    texel(&job.layer, job.height.is_some(), g, rgb, job.tint)
+                                }
+                                None => rgb,
+                            };
+                            assert!(
+                                close(actual, expected),
+                                "{layer:?} {height} {tint:?}: {actual:?} vs {expected:?}"
+                            );
+                        }
+                    }
+                    plain += usize::from(job.is_none());
+                }
+            }
+        }
+        assert!(plain > 0, "some variants need no bake");
+    }
+
+    #[test]
+    fn a_tint_the_layer_ignores_shares_the_untinted_bake() {
+        let layer = Layer {
+            csb: [1.2, 1.0, 1.0],
+            ..NEUTRAL
+        };
+        let job =
+            |layer: Layer, tint| ColorJob::new("c".into(), Some("h".into()), layer, tint, false);
+        // Model tint off: every tint is the untinted bake.
+        assert_eq!(job(layer, [10, 200, 30]), job(layer, [255; 3]));
+        // Nothing adjusted and no tint: no bake at all.
+        assert_eq!(job(NEUTRAL, [255; 3]), None);
+        let tinted = Layer {
+            model_tint: 1.0,
+            ..NEUTRAL
+        };
+        assert_eq!(job(tinted, [255; 3]), None);
+        assert_ne!(job(tinted, [10, 200, 30]), None);
+        // Surface settings do not split colour bakes, nor colour settings surface bakes.
+        let rough = Layer {
+            roughness: [2.0, 0.5],
+            ..layer
+        };
+        assert_eq!(job(layer, [255; 3]), job(rough, [255; 3]));
+        let surface = |layer| {
+            SurfaceJob::new(
+                Some("c".into()),
+                Some("n".into()),
+                Some("h".into()),
+                layer,
+                false,
+            )
+        };
+        assert_eq!(surface(NEUTRAL), surface(layer));
+        assert_ne!(surface(NEUTRAL), surface(rough));
     }
 
     #[test]

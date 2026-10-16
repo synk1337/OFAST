@@ -121,6 +121,18 @@ fn print_report(report: &ExportReport, started: Instant) {
             report.degenerate_triangles
         );
     }
+    if report.shared_textures > 0 {
+        println!(
+            "{} textures equal to another one share its file",
+            report.shared_textures
+        );
+    }
+    if report.removed_textures > 0 {
+        println!(
+            "removed {} texture files no glTF in the folder uses",
+            report.removed_textures
+        );
+    }
     for warning in &report.warnings {
         println!("warning: {warning}");
     }

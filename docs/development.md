@@ -99,7 +99,9 @@ powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/import_map.py -Glt
 ```
 
 `export-map` also loads the map's 3D skybox (its own archive under `game/csgo/maps/prefabs/`) and writes the sky as
-`<map>_sky.hdr`. `import_map.py` imports the glTF as a scene (one actor per placement), swaps two-layer materials for
+`<map>_sky.hdr`. Re-exporting into the same folder is the normal way to update a map: the exporter owns
+`<out>/textures/`, writes each distinct image once and deletes the PNGs no `.gltf` in `<out>` uses any more (see
+"Texture files" in `crates/ofast-core/src/export/gltf.rs`; de_inferno went from 13 GB to 5.4 GB). `import_map.py` imports the glTF as a scene (one actor per placement), swaps two-layer materials for
 the layer-blend and height-blend materials ([material.md](formats/material.md)), hides CS2's light blockers and adds invisible shadow copies of single-sided world geometry
 (so sunlight cannot leak through walls; see [lighting.md](formats/lighting.md#shadows-from-the-back-of-walls)), replaces the template's sky, fog and lights with CS2's (sun, sky sphere + Sky Light from
 the HDR, local lights from the manifest, fixed exposure — see [lighting.md](formats/lighting.md)), saves everything

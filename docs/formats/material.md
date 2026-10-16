@@ -83,10 +83,35 @@ occlusion = saturate(lerp(x, z, a^y)), g_vAmbientOcclusionLevelsN → (−x, −
 "Mask All" means the tint mask limits every adjustment, not only the tint. Unset occlusion levels are (0, 0.5, 0), so
 occlusion = saturate(2a); most materials set (0, 0.5, 1), i.e. occlusion = a.
 
-glTF has no place for these, so the exporter bakes each layer: `<colour>_cc.png` (colour after all adjustments and
-the model tint — tinted variants get their own baked texture instead of a `baseColorFactor`) and
-`<normal>_surface.png` (glTF metallic-roughness: R occlusion, G roughness, B metalness; also the occlusion texture).
-Layer 1 is the glTF material.
+glTF has no place for these, so the exporter bakes each layer: `<colour>_cc_<hash>.png` (colour after all
+adjustments and the model tint — tinted variants get their own baked texture instead of a `baseColorFactor`) and
+`<normal>_surface_<hash>.png` (glTF metallic-roughness: R occlusion, G roughness, B metalness; also the occlusion
+texture). Layer 1 is the glTF material.
+
+### Which bakes are written
+
+A bake is keyed by what changes its pixels, nothing else (`ColorJob::new`, `SurfaceJob::new` in `environment.rs`):
+
+| Setting | Counts for the colour bake when | Counts for the surface bake |
+|---|---|---|
+| contrast / saturation / brightness | not all 1 | never |
+| `g_vTextureColorTintN` | it has a saturation (white and greys change nothing) | never |
+| `g_nColorCorrectionModeN` | there is a colour correction | never |
+| tint mask (`g_tHeightN`.G, its contrast and brightness) | something reads the mask (a tint, a model tint, or a correction in "Mask All") | never |
+| model tint (`rendercolor`, scene-object tint) | not white, and the layer takes one (`g_bModelTintN` × `g_flModelTintAmount` ≠ 0) | never |
+| roughness, metalness, occlusion levels | never | always |
+| `g_tColorN` alpha / `g_tHeightN` | — | colour alpha unless alpha-tested; height when it holds metalness or (alpha-tested) occlusion |
+
+A colour that nothing changes is not baked: the material uses the plain colour texture (exact, where a bake would
+round dark values through the linear table). The height texture is written only for `csgo_environment_blend`, which
+needs it in Unreal. Then the glTF writer stores identical pixels once, whatever made them, and names a bake after
+the first 8 hex digits of its pixel hash, so a file name always means the same pixels (`import_map.py` imports each
+texture name once and would otherwise keep a stale bake after a re-export).
+
+Why it matters: de_inferno's placements give one plaster texture over 100 tints, mostly on layers whose model tint
+is off. Baking every (texture, settings, tint) wrote 1049 colour bakes (8.9 GB, at 2048² mostly); now 555 files
+(3.3 GB), and the whole export fell from 13 GB to 5.4 GB. What remains is mostly real model-tint variants: applying
+the model tint in Unreal's material instead of baking it would leave about 270 colour textures (≈ 1.2 GB).
 
 `csgo_environment_blend` mixes its two layers by height. The weights are painted per vertex in `TEXCOORD 4`
 (`VertexPaintBlendParams`): x = layer 2, w = extra softness; OFAST writes them as `COLOR_0`. Layer 2's weight
@@ -119,7 +144,7 @@ colour overlay (`F_SHARED_COLOR_OVERLAY`, 167: a grime texture on a second UV se
 | `F_ALPHA_TEST` | glTF `MASK`, cutoff 0.5 |
 | overlays (decals, `OBJECT_TYPE_OVERLAY`) | pushed 0.1 inch along their normal so they win the depth test |
 | `csgo_effects` (dust and light-shaft cards) | not exported (they appeared as white sheets; to be rebuilt as Unreal effects) |
-| tints (`m_vTintColor`, `rendercolor`) | `baseColorFactor` (sRGB → linear), material named `<name>_tintRRGGBB` |
+| tints (`m_vTintColor`, `rendercolor`) | `baseColorFactor` (sRGB → linear), material named `<name>_tintRRGGBB`; environment shaders bake it instead (above) |
 | same file name in two folders | the second material is renamed `<name>_<folder>` (Unreal matches slots by name) |
 
 ## Unreal project requirement

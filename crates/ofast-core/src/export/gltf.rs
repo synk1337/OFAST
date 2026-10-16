@@ -5,7 +5,7 @@
 //! ```text
 //! <out>/<name>.gltf        scene description (JSON)
 //! <out>/<name>.bin         vertex + index data
-//! <out>/textures/*.png     decoded textures
+//! <out>/textures/*.png     decoded textures (the folder belongs to the exporter: see "Texture files" below)
 //! ```
 //!
 //! # Conversions applied
@@ -18,8 +18,28 @@
 //!   Translucent and alpha-tested CS2 materials map to glTF `BLEND` / `MASK`.
 //! - **Textures**: see [`TextureRole`]. Textures are decoded and written as PNG at the end, in parallel; a texture
 //!   that fails to decode is replaced by a 1×1 neutral image and reported as a warning.
+//!
+//! # Texture files
+//!
+//! The last step of every export (`GltfWriter::finish`) keeps the `textures` folder to exactly what the glTF files
+//! in `<out>` use:
+//!
+//! - **One file per distinct image.** Every texture is hashed (BLAKE3 of its size and pixels) once decoded or baked;
+//!   textures with equal pixels share one file, image and glTF texture, whatever produced them (two CS2 textures
+//!   with the same content, two bakes whose settings differ only where it changes nothing).
+//! - **Names.** A CS2 texture keeps its file name plus the role's suffix (`_normal`, `_raw`, …; `_2`, `_3` when
+//!   two differ). A texture OFAST computes for an environment material (`environment`) is named
+//!   `<texture>_cc_<hash>.png` or `<texture>_surface_<hash>.png`, `<hash>` being the first 8 hex digits of its pixel
+//!   hash: the same name always holds the same pixels, so a tool that imports each file name once (`import_map.py`'s
+//!   `import_texture`) never keeps a stale bake after a re-export.
+//! - **No leftovers.** After writing, PNGs that no `.gltf` in `<out>` references are deleted from `<out>/textures`
+//!   (several exports may share the folder, a model next to a map), and so are `.part` files of an interrupted
+//!   export. Re-exports used to pile up: de_inferno's folder held 325 unused files (1 GB) from older runs.
+//! - **Encoding.** Lossless PNG, 8 bits per channel like the BC-compressed sources: RGB when every alpha is 255,
+//!   RGBA otherwise, zlib's default level with adaptive filters ([`write_png`]). Textures keep their full size: CS2
+//!   draws them at that size, and a size cap is better chosen in Unreal (per texture group) than baked into the files.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
@@ -51,8 +71,12 @@ pub struct ExportReport {
     pub triangles: usize,
     /// Materials written.
     pub materials: usize,
-    /// Texture files written.
+    /// Texture files written (one per distinct image).
     pub textures: usize,
+    /// Textures whose pixels equalled an earlier one's: they share its file instead of writing their own.
+    pub shared_textures: usize,
+    /// Files of earlier exports removed from the `textures` folder (no glTF there used them any more).
+    pub removed_textures: usize,
     /// Lights written.
     pub lights: usize,
     /// Zero-area triangles removed (see `GltfWriter::mesh`).
@@ -149,6 +173,23 @@ enum TextureJob {
     EnvSurface(environment::SurfaceJob),
 }
 
+impl TextureJob {
+    /// Textures OFAST computes rather than converts: named after their pixel hash (see "Texture files").
+    fn is_baked(&self) -> bool {
+        matches!(self, TextureJob::EnvColor(_) | TextureJob::EnvSurface(_))
+    }
+}
+
+/// A registered texture (glTF texture index = position in [`GltfWriter::texture_jobs`]).
+struct RegisteredTexture {
+    job: TextureJob,
+    /// File name without `.png` given at registration, unique among the export's textures: the final name of a
+    /// converted texture, a placeholder (in `extras.ofast`) for a baked one until [`GltfWriter::finish`] names it.
+    name: String,
+    /// Name the file of a baked texture starts with (`<texture>_cc`, `<texture>_surface`).
+    base: String,
+}
+
 /// glTF texture indices of one `csgo_environment(_blend)` layer.
 struct EnvironmentLayer {
     /// Adjusted colour (sRGB).
@@ -213,16 +254,14 @@ pub(crate) struct GltfWriter<'c> {
     material_ids: BTreeMap<(String, [u8; 4]), usize>,
     /// material path → parsed info (or None when unreadable).
     material_infos: BTreeMap<String, Option<MaterialInfo>>,
-    images: Vec<Json>,
-    textures: Vec<Json>,
-    /// texture job → glTF texture index.
+    /// texture job → glTF texture index (before `finish` merges textures with equal pixels).
     texture_ids: BTreeMap<TextureJob, usize>,
-    /// Textures to decode and write in `finish`: (job, output file name).
-    texture_jobs: Vec<(TextureJob, String)>,
+    /// Textures to decode and write in `finish`, by glTF texture index.
+    texture_jobs: Vec<RegisteredTexture>,
+    /// Registered file names (without `.png`), to keep them unique.
+    texture_names: BTreeSet<String>,
     /// glTF material name → CS2 material path, to keep names unique (Unreal matches material slots by name).
     material_names: BTreeMap<String, String>,
-    /// Relative PNG path of each glTF texture (same index as `textures`).
-    texture_files: Vec<String>,
     pub(crate) report: ExportReport,
 }
 
@@ -266,12 +305,10 @@ impl<'c> GltfWriter<'c> {
             materials: Vec::new(),
             material_ids: BTreeMap::new(),
             material_infos: BTreeMap::new(),
-            images: Vec::new(),
-            textures: Vec::new(),
             texture_ids: BTreeMap::new(),
             texture_jobs: Vec::new(),
+            texture_names: BTreeSet::new(),
             material_names: BTreeMap::new(),
-            texture_files: Vec::new(),
             report: ExportReport::default(),
         })
     }
@@ -687,7 +724,8 @@ impl<'c> GltfWriter<'c> {
         keep_alpha: bool,
     ) {
         let alpha_test = info.flag("F_ALPHA_TEST");
-        let layer1 = self.environment_layer(info, 1, tint, keep_alpha, alpha_test);
+        let blend = info.shader == environment::ENVIRONMENT_BLEND;
+        let layer1 = self.environment_layer(info, 1, tint, keep_alpha, alpha_test, blend);
         if let Some(id) = layer1.color {
             material["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": id });
         }
@@ -700,8 +738,8 @@ impl<'c> GltfWriter<'c> {
             pbr["metallicFactor"] = json!(1.0);
             material["occlusionTexture"] = json!({ "index": id });
         }
-        if info.shader == environment::ENVIRONMENT_BLEND {
-            let layer2 = self.environment_layer(info, 2, tint, keep_alpha, alpha_test);
+        if blend {
+            let layer2 = self.environment_layer(info, 2, tint, keep_alpha, alpha_test, blend);
             let blend = environment::HeightBlend::read(info);
             material["extras"]["ofast"]["height_blend"] = json!({
                 "layer1": self.layer_files(&layer1),
@@ -714,7 +752,8 @@ impl<'c> GltfWriter<'c> {
         }
     }
 
-    /// Registers the textures of an environment material's layer `n` (1 or 2).
+    /// Registers the textures of an environment material's layer `n` (1 or 2). `blend`: the material is a
+    /// `csgo_environment_blend`, whose height textures Unreal needs for the blend (the others' are only baked from).
     fn environment_layer(
         &mut self,
         info: &MaterialInfo,
@@ -722,44 +761,38 @@ impl<'c> GltfWriter<'c> {
         tint: [u8; 3],
         keep_alpha: bool,
         alpha_test: bool,
+        blend: bool,
     ) -> EnvironmentLayer {
         let path = |kind: &str| info.textures.get(&format!("g_t{kind}{n}")).cloned();
         let (color, normal, height) = (path("Color"), path("Normal"), path("Height"));
         let layer = environment::Layer::read(info, n);
-        let stem = |p: &str| {
-            Path::new(p)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("texture")
-                .to_owned()
-        };
         let color_id = color.as_ref().map(|c| {
-            let job = environment::ColorJob {
-                color: c.clone(),
-                height: height.clone(),
-                layer,
-                tint,
-                keep_alpha,
-            };
-            self.register(TextureJob::EnvColor(job), format!("{}_cc.png", stem(c)))
+            match environment::ColorJob::new(c.clone(), height.clone(), layer, tint, keep_alpha) {
+                Some(job) => self.register(TextureJob::EnvColor(job), format!("{}_cc", stem(c))),
+                // Nothing changes the colour: the plain texture, shared with any other material using it.
+                None => self.texture(c, TextureRole::Color { keep_alpha }),
+            }
         });
         let normal_id = normal
             .as_ref()
             .map(|p| self.texture(p, TextureRole::Normal { hemi_oct: true }));
         let surface_id = normal.as_ref().or(color.as_ref()).cloned().map(|from| {
-            let job = environment::SurfaceJob {
-                color: color.clone(),
-                normal: normal.clone(),
-                height: height.clone(),
+            let job = environment::SurfaceJob::new(
+                color.clone(),
+                normal.clone(),
+                height.clone(),
                 layer,
                 alpha_test,
-            };
+            );
             self.register(
                 TextureJob::EnvSurface(job),
-                format!("{}_surface.png", stem(&from)),
+                format!("{}_surface", stem(&from)),
             )
         });
-        let height_id = height.as_ref().map(|p| self.texture(p, TextureRole::Raw));
+        let height_id = height
+            .as_ref()
+            .filter(|_| blend)
+            .map(|p| self.texture(p, TextureRole::Raw));
         EnvironmentLayer {
             color: color_id,
             normal: normal_id,
@@ -768,9 +801,15 @@ impl<'c> GltfWriter<'c> {
         }
     }
 
+    /// The PNG file of a registered texture, relative to the glTF, as it goes into `extras.ofast` (a placeholder for
+    /// a baked texture, replaced in `finish`).
+    fn texture_file(&self, id: usize) -> String {
+        format!("textures/{}.png", self.texture_jobs[id].name)
+    }
+
     /// The PNG files of an environment layer, for `extras.ofast.height_blend`.
     fn layer_files(&self, layer: &EnvironmentLayer) -> Json {
-        let file = |id: Option<usize>| id.map(|id| self.texture_files[id].clone());
+        let file = |id: Option<usize>| id.map(|id| self.texture_file(id));
         json!({
             "color": file(layer.color),
             "normal": file(layer.normal),
@@ -791,7 +830,7 @@ impl<'c> GltfWriter<'c> {
             let (_, path) = info.first_texture(param_names)?;
             let path = path.to_owned();
             let id = self.texture(&path, role);
-            Some(self.texture_files[id].clone())
+            Some(self.texture_file(id))
         };
         let layer1_normal = ["g_tLayer1NormalRoughness", "g_tNormal"];
         let layer2_normal = ["g_tLayer2NormalRoughness", "g_tNormal2"];
@@ -815,7 +854,7 @@ impl<'c> GltfWriter<'c> {
                 roughness: Some((path.to_owned(), 2)),
                 metalness: None,
             });
-            Some(self.texture_files[id].clone())
+            Some(self.texture_file(id))
         };
         let layers = json!({
             "layer1": { "color": layer1.0, "normal": layer1.1, "roughness": roughness(&layer1_normal) },
@@ -832,12 +871,8 @@ impl<'c> GltfWriter<'c> {
 
     /// Registers a texture for a role and returns its glTF texture index; it is decoded and written in `finish`.
     fn texture(&mut self, path: &str, role: TextureRole) -> usize {
-        let stem = Path::new(path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("texture");
-        let file_name = format!("{stem}{}.png", role.suffix());
-        self.register(TextureJob::Single(path.to_owned(), role), file_name)
+        let name = format!("{}{}", stem(path), role.suffix());
+        self.register(TextureJob::Single(path.to_owned(), role), name)
     }
 
     /// Registers a metallic-roughness texture assembled from channels of other textures.
@@ -846,82 +881,171 @@ impl<'c> GltfWriter<'c> {
             .roughness
             .as_ref()
             .or(source.metalness.as_ref())
-            .map(|(p, _)| p.as_str());
-        let stem = from
-            .and_then(|p| Path::new(p).file_stem())
-            .and_then(|s| s.to_str())
-            .unwrap_or("texture");
-        let file_name = match (&source.roughness, &source.metalness) {
-            (Some(_), Some(_)) => format!("{stem}_orm.png"),
-            (Some(_), None) => format!("{stem}_rough.png"),
-            _ => format!("{stem}_metal.png"),
+            .map_or("texture", |(p, _)| stem(p));
+        let name = match (&source.roughness, &source.metalness) {
+            (Some(_), Some(_)) => format!("{from}_orm"),
+            (Some(_), None) => format!("{from}_rough"),
+            _ => format!("{from}_metal"),
         };
-        self.register(TextureJob::Orm(source), file_name)
+        self.register(TextureJob::Orm(source), name)
     }
 
-    fn register(&mut self, job: TextureJob, file_name: String) -> usize {
+    /// Registers a texture job under file name `name` (without `.png`) and returns its glTF texture index; the same
+    /// job registered again gets the same index.
+    fn register(&mut self, job: TextureJob, name: String) -> usize {
         if let Some(&id) = self.texture_ids.get(&job) {
             return id;
         }
         // Two different jobs can derive the same file name (e.g. one roughness map combined with two metalness
         // maps): number the later ones.
-        let mut file_name = file_name;
-        let base = file_name.trim_end_matches(".png").to_owned();
-        let mut n = 2;
-        while self
-            .texture_files
-            .iter()
-            .any(|f| f.ends_with(&format!("/{file_name}")))
-        {
-            file_name = format!("{base}_{n}.png");
-            n += 1;
-        }
-        let stem = file_name.trim_end_matches(".png").to_owned();
-        self.texture_jobs.push((job.clone(), file_name.clone()));
-        self.texture_files.push(format!("textures/{file_name}"));
-        self.images
-            .push(json!({ "uri": format!("textures/{file_name}"), "name": stem }));
-        self.textures
-            .push(json!({ "source": self.images.len() - 1, "sampler": 0 }));
-        let id = self.textures.len() - 1;
+        let unique = (1..)
+            .map(|n| match n {
+                1 => name.clone(),
+                n => format!("{name}_{n}"),
+            })
+            .find(|candidate| !self.texture_names.contains(candidate))
+            .expect("the candidate list is endless");
+        self.texture_names.insert(unique.clone());
+        self.texture_jobs.push(RegisteredTexture {
+            job: job.clone(),
+            name: unique,
+            base: name,
+        });
+        let id = self.texture_jobs.len() - 1;
         self.texture_ids.insert(job, id);
         id
     }
 
-    /// Decodes and writes every registered texture (in parallel), then the `.bin` and `.gltf` files.
+    /// Decodes or bakes every registered texture (in parallel) and writes each distinct image once (see "Texture
+    /// files" in the module docs). Returns the file name of each registered texture; textures with equal pixels get
+    /// the same one.
+    ///
+    /// Threads finish in any order, so the first thread to produce an image writes it to a temporary
+    /// `<index>.part`; once all are done the file is renamed after the first texture, in registration order, that
+    /// has those pixels — the names never depend on thread timing.
+    fn write_textures(&mut self) -> Vec<String> {
+        let warnings = Mutex::new(Vec::new());
+        let textures_dir = self.out_dir.join("textures");
+        let part = |index: usize| textures_dir.join(format!("{index}.part"));
+        let content = self.content;
+        // Pixel hash → the texture whose thread wrote the image.
+        let writers: Mutex<HashMap<blake3::Hash, usize>> = Mutex::default();
+        let hashes: Vec<blake3::Hash> = self
+            .texture_jobs
+            .par_iter()
+            .enumerate()
+            .map(|(index, texture)| {
+                let warn = |e: &dyn std::fmt::Display| {
+                    warnings
+                        .lock()
+                        .expect("lock")
+                        .push(format!("texture {}: {e}", texture.name));
+                };
+                let image = match &texture.job {
+                    TextureJob::Single(path, role) => decode_texture(content, path, *role),
+                    TextureJob::Orm(source) => assemble_orm(content, source),
+                    TextureJob::EnvColor(job) => environment::bake_color(content, job),
+                    TextureJob::EnvSurface(job) => environment::bake_surface(content, job),
+                }
+                .unwrap_or_else(|e| {
+                    warn(&e);
+                    Image::new(1, 1, vec![128, 128, 255, 255]) // neutral stand-in
+                });
+                let hash = pixel_hash(&image);
+                let first = match writers.lock().expect("lock").entry(hash) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(index);
+                        true
+                    }
+                    std::collections::hash_map::Entry::Occupied(_) => false,
+                };
+                if first && let Err(e) = write_png(&part(index), &image) {
+                    warn(&e);
+                }
+                hash
+            })
+            .collect();
+        let writers = writers.into_inner().expect("lock");
+
+        let mut file_of: HashMap<blake3::Hash, String> = HashMap::new();
+        let mut taken: HashSet<String> = HashSet::new();
+        for (texture, hash) in self.texture_jobs.iter().zip(&hashes) {
+            if file_of.contains_key(hash) {
+                self.report.shared_textures += 1;
+                continue;
+            }
+            let preferred = if texture.job.is_baked() {
+                format!("{}_{}", texture.base, &hash.to_hex()[..8])
+            } else {
+                texture.name.clone()
+            };
+            // A clash only happens when a CS2 texture is itself named like another one's bake, or two hashes share
+            // their first 8 digits: number the later file.
+            let file = (1..)
+                .map(|n| match n {
+                    1 => format!("{preferred}.png"),
+                    n => format!("{preferred}_{n}.png"),
+                })
+                .find(|candidate| !taken.contains(candidate))
+                .expect("the candidate list is endless");
+            if let Err(e) = fs::rename(part(writers[hash]), textures_dir.join(&file)) {
+                warnings
+                    .lock()
+                    .expect("lock")
+                    .push(format!("texture {file}: {e}"));
+            }
+            taken.insert(file.clone());
+            file_of.insert(*hash, file);
+        }
+        self.report
+            .warnings
+            .extend(warnings.into_inner().expect("lock"));
+        self.report.textures = file_of.len();
+        hashes.iter().map(|hash| file_of[hash].clone()).collect()
+    }
+
+    /// Writes every registered texture, then the `.bin` and `.gltf` files, then removes texture files no glTF in the
+    /// folder uses any more (see "Texture files" in the module docs).
     pub(crate) fn finish(
         mut self,
         name: &str,
         roots: Vec<usize>,
     ) -> Result<ExportReport, ExportError> {
-        let warnings = Mutex::new(Vec::new());
-        let textures_dir = self.out_dir.join("textures");
-        let content = self.content;
-        self.texture_jobs.par_iter().for_each(|(job, file_name)| {
-            let image = match job {
-                TextureJob::Single(path, role) => decode_texture(content, path, *role),
-                TextureJob::Orm(source) => assemble_orm(content, source),
-                TextureJob::EnvColor(job) => environment::bake_color(content, job),
-                TextureJob::EnvSurface(job) => environment::bake_surface(content, job),
+        let files = self.write_textures();
+        // One glTF image and texture per file, in order of first use; materials are pointed at them.
+        let mut images: Vec<Json> = Vec::new();
+        let mut textures: Vec<Json> = Vec::new();
+        let mut texture_of_file: HashMap<&str, usize> = HashMap::new();
+        let texture_of: Vec<usize> = files
+            .iter()
+            .map(|file| {
+                *texture_of_file.entry(file).or_insert_with(|| {
+                    let uri = format!("textures/{file}");
+                    images.push(json!({ "uri": uri, "name": file.trim_end_matches(".png") }));
+                    textures.push(json!({ "source": images.len() - 1, "sampler": 0 }));
+                    textures.len() - 1
+                })
+            })
+            .collect();
+        // Placeholder file names in `extras.ofast` → the files written.
+        let renamed: HashMap<String, String> = self
+            .texture_jobs
+            .iter()
+            .zip(&files)
+            .map(|(texture, file)| {
+                (
+                    format!("textures/{}.png", texture.name),
+                    format!("textures/{file}"),
+                )
+            })
+            .filter(|(from, to)| from != to)
+            .collect();
+        for material in &mut self.materials {
+            remap_texture_indices(material, &texture_of);
+            if let Some(extras) = material.get_mut("extras") {
+                rename_files(extras, &renamed);
             }
-            .unwrap_or_else(|e| {
-                warnings
-                    .lock()
-                    .expect("lock")
-                    .push(format!("texture {file_name}: {e}"));
-                Image::new(1, 1, vec![128, 128, 255, 255]) // neutral stand-in
-            });
-            if let Err(e) = write_png(&textures_dir.join(file_name), &image) {
-                warnings
-                    .lock()
-                    .expect("lock")
-                    .push(format!("texture {file_name}: {e}"));
-            }
-        });
-        self.report
-            .warnings
-            .extend(warnings.into_inner().expect("lock"));
-        self.report.textures = self.texture_jobs.len();
+        }
 
         let bin_name = format!("{name}.bin");
         fs::write(self.out_dir.join(&bin_name), &self.bin)?;
@@ -936,9 +1060,9 @@ impl<'c> GltfWriter<'c> {
             "bufferViews": self.buffer_views,
             "buffers": [{ "uri": bin_name, "byteLength": self.bin.len() }],
         });
-        if !self.textures.is_empty() {
-            document["textures"] = json!(self.textures);
-            document["images"] = json!(self.images);
+        if !textures.is_empty() {
+            document["textures"] = json!(textures);
+            document["images"] = json!(images);
             // Linear filtering with mipmaps, repeat wrapping.
             document["samplers"] =
                 json!([{ "magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497 }]);
@@ -953,8 +1077,125 @@ impl<'c> GltfWriter<'c> {
             serde_json::to_string(&document).expect("JSON serializes"),
         )?;
         self.report.gltf = gltf;
+        self.report.removed_textures =
+            remove_stale_textures(&self.out_dir, &mut self.report.warnings);
         Ok(self.report)
     }
+}
+
+/// File stem of a CS2 path (`materials/a/b_color_tga_1234.vtex` → `b_color_tga_1234`).
+fn stem(path: &str) -> &str {
+    Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("texture")
+}
+
+/// BLAKE3 of an image's size and pixels: equal hashes mean equal images.
+fn pixel_hash(image: &Image) -> blake3::Hash {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&(image.width as u64).to_le_bytes());
+    hasher.update(&(image.height as u64).to_le_bytes());
+    hasher.update(&image.rgba);
+    hasher.finalize()
+}
+
+/// Points a glTF material's texture slots (`baseColorTexture`, `normalTexture`, … and those in
+/// `pbrMetallicRoughness`) from registered texture indices to the merged ones: `texture_of[registered]`.
+fn remap_texture_indices(material: &mut Json, texture_of: &[usize]) {
+    fn remap(object: &mut Json, texture_of: &[usize]) {
+        let Some(object) = object.as_object_mut() else {
+            return;
+        };
+        for (key, slot) in object.iter_mut() {
+            if key.ends_with("Texture")
+                && let Some(index) = slot.get("index").and_then(Json::as_u64)
+            {
+                slot["index"] = json!(texture_of[index as usize]);
+            }
+        }
+    }
+    remap(material, texture_of);
+    if let Some(pbr) = material.get_mut("pbrMetallicRoughness") {
+        remap(pbr, texture_of);
+    }
+}
+
+/// Replaces every string in `value` (recursively) that is a key of `renamed` by its value.
+fn rename_files(value: &mut Json, renamed: &HashMap<String, String>) {
+    match value {
+        Json::String(s) => {
+            if let Some(new) = renamed.get(s.as_str()) {
+                *s = new.clone();
+            }
+        }
+        Json::Array(items) => items.iter_mut().for_each(|v| rename_files(v, renamed)),
+        Json::Object(map) => map.values_mut().for_each(|v| rename_files(v, renamed)),
+        _ => {}
+    }
+}
+
+/// Deletes from `<out_dir>/textures` the PNGs that no `.gltf` in `out_dir` references, and the `.part` files of an
+/// interrupted export; returns how many files went. Several exports may share the folder (a model next to a map),
+/// so every glTF there is read — if one cannot be, nothing is deleted and a warning says why. Only files directly in
+/// the folder are touched.
+fn remove_stale_textures(out_dir: &Path, warnings: &mut Vec<String>) -> usize {
+    let mut used: HashSet<String> = HashSet::new();
+    let entries = match fs::read_dir(out_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            warnings.push(format!("stale textures not checked: {e}"));
+            return 0;
+        }
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "gltf") {
+            continue;
+        }
+        let document = fs::read(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| serde_json::from_slice::<Json>(&bytes).map_err(|e| e.to_string()));
+        match document {
+            Ok(document) => {
+                for image in document["images"].as_array().into_iter().flatten() {
+                    if let Some(file) = image["uri"]
+                        .as_str()
+                        .and_then(|uri| uri.strip_prefix("textures/"))
+                    {
+                        used.insert(file.to_owned());
+                    }
+                }
+            }
+            Err(e) => {
+                warnings.push(format!(
+                    "stale textures not removed: {} unreadable ({e})",
+                    path.display()
+                ));
+                return 0;
+            }
+        }
+    }
+    let Ok(files) = fs::read_dir(out_dir.join("textures")) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in files.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let stale = match path.extension().and_then(|ext| ext.to_str()) {
+            Some("png") => !used.contains(&name),
+            Some("part") => true,
+            _ => false,
+        };
+        if stale && entry.file_type().is_ok_and(|t| t.is_file()) {
+            match fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(e) => warnings.push(format!("stale texture {name} not removed: {e}")),
+            }
+        }
+    }
+    removed
 }
 
 pub(crate) fn read_material(content: &Content, path: &str) -> Result<MaterialInfo, ExportError> {
@@ -1186,7 +1427,13 @@ pub(crate) fn srgb_to_linear(c: f32) -> f32 {
     }
 }
 
-/// Writes an RGBA8 image as PNG (fast compression: these are intermediate files for Unreal).
+/// Writes an RGBA8 image as PNG, without its alpha channel when every alpha is 255.
+///
+/// Lossless; zlib's default level with adaptive filters (a filter chosen per row). Measured on de_inferno's
+/// textures against the earlier RGBA + fast compression: a 2048² baked colour 12.3 → 9.5 MB (16.1 → 10.2 MB for a
+/// noisier one), a 4096² surface texture 15.9 → 5.1 MB, for about 0.3–0.9 s instead of 20–70 ms per texture,
+/// spread over all cores. Decoded BC textures are noisy, so a colour texture stays near 60 % of its raw size: the big
+/// savings come from writing each image once (see "Texture files" in the module docs).
 pub fn write_png(path: &Path, image: &Image) -> Result<(), ExportError> {
     let file = fs::File::create(path)?;
     let mut encoder = png::Encoder::new(
@@ -1194,14 +1441,30 @@ pub fn write_png(path: &Path, image: &Image) -> Result<(), ExportError> {
         image.width as u32,
         image.height as u32,
     );
-    encoder.set_color(png::ColorType::Rgba);
+    let opaque = image.rgba.as_chunks::<4>().0.iter().all(|px| px[3] == 255);
+    let rgb: Vec<u8>;
+    let data = if opaque {
+        rgb = image
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|px| [px[0], px[1], px[2]])
+            .collect();
+        encoder.set_color(png::ColorType::Rgb);
+        &rgb
+    } else {
+        encoder.set_color(png::ColorType::Rgba);
+        &image.rgba
+    };
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_compression(png::Compression::Fast);
+    encoder.set_compression(png::Compression::Default);
+    encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
     let mut writer = encoder
         .write_header()
         .map_err(|e| ExportError::Png(e.to_string()))?;
     writer
-        .write_image_data(&image.rgba)
+        .write_image_data(data)
         .map_err(|e| ExportError::Png(e.to_string()))?;
     Ok(())
 }
@@ -1250,6 +1513,115 @@ mod tests {
         for k in 0..3 {
             assert!((-m[8 + k] - dir[k] / len).abs() < 1e-5);
         }
+    }
+
+    /// A fresh, empty folder under the system temp folder.
+    fn temp_folder(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ofast-test-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("textures")).expect("temp folder");
+        dir
+    }
+
+    #[test]
+    fn stale_textures_go_unless_a_gltf_in_the_folder_uses_them() {
+        let dir = temp_folder("stale");
+        let gltf = |images: &[&str]| {
+            let images: Vec<Json> = images
+                .iter()
+                .map(|f| json!({ "uri": format!("textures/{f}") }))
+                .collect();
+            json!({ "images": images }).to_string()
+        };
+        // A map and a model exported into the same folder; an older export left old.png and an interrupted one 7.part.
+        fs::write(dir.join("map.gltf"), gltf(&["a.png", "shared.png"])).expect("write");
+        fs::write(dir.join("model.gltf"), gltf(&["b.png", "shared.png"])).expect("write");
+        for file in [
+            "a.png",
+            "b.png",
+            "shared.png",
+            "old.png",
+            "7.part",
+            "notes.txt",
+        ] {
+            fs::write(dir.join("textures").join(file), b"x").expect("write");
+        }
+        let mut warnings = Vec::new();
+        assert_eq!(remove_stale_textures(&dir, &mut warnings), 2);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let mut left: Vec<String> = fs::read_dir(dir.join("textures"))
+            .expect("list")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["a.png", "b.png", "notes.txt", "shared.png"]);
+
+        // A glTF that cannot be read could be using anything: nothing is removed.
+        fs::write(dir.join("broken.gltf"), "{").expect("write");
+        fs::write(dir.join("textures").join("old.png"), b"x").expect("write");
+        assert_eq!(remove_stale_textures(&dir, &mut warnings), 0);
+        assert_eq!(warnings.len(), 1);
+        assert!(dir.join("textures").join("old.png").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opaque_images_are_written_without_alpha() {
+        let dir = temp_folder("png");
+        let read = |path: &Path| {
+            let decoder = png::Decoder::new(fs::File::open(path).expect("open"));
+            let mut reader = decoder.read_info().expect("PNG");
+            let mut pixels = vec![0; reader.output_buffer_size()];
+            let info = reader.next_frame(&mut pixels).expect("frame");
+            pixels.truncate(info.buffer_size());
+            (info.color_type, pixels)
+        };
+        let opaque = Image::new(2, 1, vec![10, 20, 30, 255, 40, 50, 60, 255]);
+        let path = dir.join("opaque.png");
+        write_png(&path, &opaque).expect("write");
+        assert_eq!(
+            read(&path),
+            (png::ColorType::Rgb, vec![10, 20, 30, 40, 50, 60])
+        );
+        let translucent = Image::new(2, 1, vec![10, 20, 30, 255, 40, 50, 60, 128]);
+        write_png(&path, &translucent).expect("write");
+        assert_eq!(
+            read(&path),
+            (png::ColorType::Rgba, translucent.rgba.clone())
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merged_textures_are_renamed_in_materials() {
+        let mut material = json!({
+            "pbrMetallicRoughness": { "baseColorTexture": { "index": 2 }, "metallicRoughnessTexture": { "index": 1 } },
+            "normalTexture": { "index": 0 },
+            "extras": { "ofast": { "height_blend": { "layer2": { "color": "textures/a_cc.png" } }, "textures": {
+                "g_tColor1": "materials/a_cc.png"
+            } } },
+        });
+        remap_texture_indices(&mut material, &[0, 1, 0]);
+        assert_eq!(
+            material["pbrMetallicRoughness"]["baseColorTexture"]["index"],
+            0
+        );
+        assert_eq!(
+            material["pbrMetallicRoughness"]["metallicRoughnessTexture"]["index"],
+            1
+        );
+        let renamed = HashMap::from([(
+            "textures/a_cc.png".to_owned(),
+            "textures/a_cc_0badcafe.png".to_owned(),
+        )]);
+        rename_files(&mut material["extras"], &renamed);
+        let ofast = &material["extras"]["ofast"];
+        assert_eq!(
+            ofast["height_blend"]["layer2"]["color"],
+            "textures/a_cc_0badcafe.png"
+        );
+        // CS2 paths are not file names, even when they look alike.
+        assert_eq!(ofast["textures"]["g_tColor1"], "materials/a_cc.png");
     }
 
     #[test]
