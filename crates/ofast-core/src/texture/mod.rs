@@ -204,6 +204,9 @@ pub struct Texture {
     pub depth: u16,
     /// Pixel format.
     pub format: Format,
+    /// Average colour (linear RGBA) the compiler stored. Shaders read it as `TextureAverageColor`, e.g. the pivot of
+    /// csgo_environment's contrast adjustment.
+    pub reflectivity: [f32; 4],
     /// Number of mips stored.
     pub mip_count: u8,
     /// Texture flags.
@@ -237,7 +240,10 @@ impl Texture {
             return Err(TextureError::UnsupportedVersion(version));
         }
         let flags = Flags(r.u16("texture flags")?);
-        r.skip(16, "texture reflectivity")?;
+        let mut reflectivity = [0.0; 4];
+        for c in &mut reflectivity {
+            *c = r.f32("texture reflectivity")?;
+        }
         let width = r.u16("texture width")?;
         let height = r.u16("texture height")?;
         let depth = r.u16("texture depth")?;
@@ -254,6 +260,7 @@ impl Texture {
             height,
             depth: depth.max(1),
             format,
+            reflectivity,
             mip_count: mip_count.max(1),
             flags,
             conversions: read_conversions(resource),

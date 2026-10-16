@@ -27,6 +27,9 @@ pub struct Geometry {
     /// Vertex-painted layer blend weights (0–1, RGBA), from `TEXCOORD 4` stored as `R8G8B8A8_UNORM` on layered
     /// world materials. In de_mirage the four channels hold the same value: 0 = layer 1, 1 = layer 2.
     pub blend: Vec<[f32; 4]>,
+    /// Vertex colour (0–1, RGBA) from `COLOR 0` stored as `R8G8B8A8_UNORM`. On `csgo_environment(_blend)` meshes it
+    /// is the painted tint (semantic `VertexPaintTintColor`): colour × lerp(1, rgb, a).
+    pub colors: Vec<[f32; 4]>,
     /// Triangle list indices into the arrays above.
     pub indices: Vec<u32>,
 }
@@ -151,6 +154,18 @@ impl Geometry {
             && attr.format == dxgi::R8G8B8A8_UNORM
         {
             geometry.blend = vertices
+                .clone()
+                .map(|i| {
+                    let b = &vertex_bytes(vb, i)[attr.offset..];
+                    [b[0], b[1], b[2], b[3]].map(|c| f32::from(c) / 255.0)
+                })
+                .collect();
+        }
+
+        if let Some((vb, attr)) = streams.find("COLOR", 0)
+            && attr.format == dxgi::R8G8B8A8_UNORM
+        {
+            geometry.colors = vertices
                 .clone()
                 .map(|i| {
                     let b = &vertex_bytes(vb, i)[attr.offset..];

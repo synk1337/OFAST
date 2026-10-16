@@ -203,10 +203,19 @@ fn main() {
                             let winding = cross(sub(b, a), sub(c, a));
                             let vertex_normal =
                                 g.normals.get(tri[0] as usize).copied().unwrap_or([0.0; 3]);
+                            // Per-vertex data at the triangle's first corner: COLOR 0 and TEXCOORD 4 (blend paint).
+                            let rgba = |v: Option<&[f32; 4]>| {
+                                v.map(|c| {
+                                    format!(" {:.2}/{:.2}/{:.2}/{:.2}", c[0], c[1], c[2], c[3])
+                                })
+                                .unwrap_or_default()
+                            };
+                            let color = rgba(g.colors.get(tri[0] as usize));
+                            let paint = rgba(g.blend.get(tri[0] as usize));
                             best[r] = Some((
                                 t,
                                 format!(
-                                    "{label} {model_path} draw {i} {} | winding·ray {:+.2} normal·ray {:+.2}",
+                                    "{label} {model_path} draw {i} {} | winding·ray {:+.2} normal·ray {:+.2} | colour{color} paint{paint}",
                                     draw.material,
                                     dot(winding, *dir).signum(),
                                     dot(vertex_normal, *dir)

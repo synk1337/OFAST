@@ -29,6 +29,7 @@ use rayon::prelude::*;
 use serde_json::{Value as Json, json};
 
 use super::ExportError;
+use super::environment;
 use crate::content::Content;
 use crate::coords;
 use crate::kv3::Value;
@@ -142,6 +143,22 @@ enum TextureJob {
     Single(String, TextureRole),
     /// A metallic-roughness texture assembled from channels of other textures.
     Orm(OrmSource),
+    /// A `csgo_environment(_blend)` layer's colour with its adjustments baked in.
+    EnvColor(environment::ColorJob),
+    /// A `csgo_environment(_blend)` layer's occlusion / roughness / metalness texture.
+    EnvSurface(environment::SurfaceJob),
+}
+
+/// glTF texture indices of one `csgo_environment(_blend)` layer.
+struct EnvironmentLayer {
+    /// Adjusted colour (sRGB).
+    color: Option<usize>,
+    /// Normal map.
+    normal: Option<usize>,
+    /// Occlusion (R), roughness (G), metalness (B).
+    surface: Option<usize>,
+    /// The height texture as stored (height in R).
+    height: Option<usize>,
 }
 
 /// Material information read from a `.vmat_c`.
@@ -151,6 +168,8 @@ pub(crate) struct MaterialInfo {
     pub(crate) textures: BTreeMap<String, String>,
     pub(crate) ints: BTreeMap<String, i64>,
     pub(crate) floats: BTreeMap<String, f64>,
+    /// `g_v*` parameters (colours, UV scales…), always four components.
+    pub(crate) vectors: BTreeMap<String, [f64; 4]>,
 }
 
 impl MaterialInfo {
@@ -170,6 +189,12 @@ impl MaterialInfo {
     fn is_vertex_blend(&self) -> bool {
         VERTEX_BLEND_SHADERS.contains(&self.shader.as_str())
             && self.textures.contains_key("g_tLayer2Color")
+    }
+
+    /// The material reads per-vertex blend weights (`TEXCOORD 4`): the two-layer blends above and
+    /// `csgo_environment_blend`.
+    fn reads_blend_weights(&self) -> bool {
+        self.is_vertex_blend() || self.shader == environment::ENVIRONMENT_BLEND
     }
 }
 
@@ -383,12 +408,21 @@ impl<'c> GltfWriter<'c> {
             let layered = !draw.material.is_empty()
                 && self
                     .material_info(&draw.material)
-                    .is_some_and(|info| info.is_vertex_blend());
-            if layered && g.blend.len() == g.positions.len() {
-                // Layer blend weights travel as vertex colour; Unreal's layer-blend material reads them back.
+                    .is_some_and(|info| info.reads_blend_weights());
+            if layered {
+                // Layer blend weights travel as vertex colour; Unreal's blend materials read them back. A draw
+                // without painted weights (14 on de_mirage + de_inferno) gets zeros, i.e. layer 1 like the glTF
+                // stand-in: without COLOR_0 Unreal would read white, layer 2.
+                let unpainted;
+                let weights: &[[f32; 4]] = if g.blend.len() == g.positions.len() {
+                    &g.blend
+                } else {
+                    unpainted = vec![[0.0, 0.0, 0.0, 1.0]; g.positions.len()];
+                    &unpainted
+                };
                 attributes.insert(
                     "COLOR_0".into(),
-                    json!(self.float_accessor(&g.blend, "VEC4", false)),
+                    json!(self.float_accessor(weights, "VEC4", false)),
                 );
             }
             let index_bytes: Vec<u8> = g.indices.iter().flat_map(|i| i.to_le_bytes()).collect();
@@ -480,7 +514,11 @@ impl<'c> GltfWriter<'c> {
             "name": name,
             "pbrMetallicRoughness": { "metallicFactor": 0.0, "roughnessFactor": 1.0 },
         });
-        if tint_key != [255; 4] {
+        // csgo_environment(_blend) tint only their tint-masked area, keeping its luminance: baked into the colour.
+        let baked_tint = info
+            .as_ref()
+            .is_some_and(|info| environment::is_environment(&info.shader));
+        if tint_key != [255; 4] && !baked_tint {
             // Tints are authored in sRGB; glTF factors are linear.
             let linear = [
                 srgb_to_linear(tint[0]),
@@ -491,7 +529,11 @@ impl<'c> GltfWriter<'c> {
             material["pbrMetallicRoughness"]["baseColorFactor"] = json!(linear.to_vec());
         }
         if let Some(info) = info {
-            self.fill_material(&mut material, &info);
+            self.fill_material(
+                &mut material,
+                &info,
+                [tint_key[0], tint_key[1], tint_key[2]],
+            );
         }
         self.materials.push(material);
         let id = self.materials.len() - 1;
@@ -549,9 +591,17 @@ impl<'c> GltfWriter<'c> {
         info
     }
 
-    fn fill_material(&mut self, material: &mut Json, info: &MaterialInfo) {
+    /// Fills a glTF material from a CS2 material. `tint` is the model tint (sRGB bytes, white = none), which only
+    /// the environment shaders bake in (the others get it as `baseColorFactor` from [`Self::material`]).
+    fn fill_material(&mut self, material: &mut Json, info: &MaterialInfo, tint: [u8; 3]) {
         material["extras"] = json!({
-            "ofast": { "shader": info.shader, "textures": info.textures, "floats": info.floats }
+            "ofast": {
+                "shader": info.shader,
+                "textures": info.textures,
+                "floats": info.floats,
+                "ints": info.ints,
+                "vectors": info.vectors,
+            }
         });
         let translucent = info.flag("F_TRANSLUCENT")
             || info.flag("F_BLEND_MODE")
@@ -566,6 +616,10 @@ impl<'c> GltfWriter<'c> {
         }
         if info.flag("F_RENDER_BACKFACES") || info.flag("F_DOUBLE_SIDED") {
             material["doubleSided"] = json!(true);
+        }
+        if environment::is_environment(&info.shader) {
+            self.fill_environment(material, info, tint, translucent || alpha_test);
+            return;
         }
 
         if let Some((_, path)) = info.first_texture(COLOR_PARAMS) {
@@ -619,6 +673,110 @@ impl<'c> GltfWriter<'c> {
         if let Some(layers) = self.layer_textures(info) {
             material["extras"]["ofast"]["layers"] = layers;
         }
+    }
+
+    /// `csgo_environment(_blend)` (see [`environment`]): layer 1 becomes the glTF material, with its colour
+    /// adjustments and the model tint baked into the colour, and its occlusion, roughness and metalness into one
+    /// texture. A blend material also lists both layers' files and its height-blend settings in
+    /// `extras.ofast.height_blend`, for Unreal's height-blend material.
+    fn fill_environment(
+        &mut self,
+        material: &mut Json,
+        info: &MaterialInfo,
+        tint: [u8; 3],
+        keep_alpha: bool,
+    ) {
+        let alpha_test = info.flag("F_ALPHA_TEST");
+        let layer1 = self.environment_layer(info, 1, tint, keep_alpha, alpha_test);
+        if let Some(id) = layer1.color {
+            material["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": id });
+        }
+        if let Some(id) = layer1.normal {
+            material["normalTexture"] = json!({ "index": id });
+        }
+        if let Some(id) = layer1.surface {
+            let pbr = &mut material["pbrMetallicRoughness"];
+            pbr["metallicRoughnessTexture"] = json!({ "index": id });
+            pbr["metallicFactor"] = json!(1.0);
+            material["occlusionTexture"] = json!({ "index": id });
+        }
+        if info.shader == environment::ENVIRONMENT_BLEND {
+            let layer2 = self.environment_layer(info, 2, tint, keep_alpha, alpha_test);
+            let blend = environment::HeightBlend::read(info);
+            material["extras"]["ofast"]["height_blend"] = json!({
+                "layer1": self.layer_files(&layer1),
+                "layer2": self.layer_files(&layer2),
+                "softness": blend.softness,
+                "zero_point": blend.zero_point,
+                "scale": blend.scale,
+                "mask_with_height": blend.mask_with_height,
+            });
+        }
+    }
+
+    /// Registers the textures of an environment material's layer `n` (1 or 2).
+    fn environment_layer(
+        &mut self,
+        info: &MaterialInfo,
+        n: u8,
+        tint: [u8; 3],
+        keep_alpha: bool,
+        alpha_test: bool,
+    ) -> EnvironmentLayer {
+        let path = |kind: &str| info.textures.get(&format!("g_t{kind}{n}")).cloned();
+        let (color, normal, height) = (path("Color"), path("Normal"), path("Height"));
+        let layer = environment::Layer::read(info, n);
+        let stem = |p: &str| {
+            Path::new(p)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("texture")
+                .to_owned()
+        };
+        let color_id = color.as_ref().map(|c| {
+            let job = environment::ColorJob {
+                color: c.clone(),
+                height: height.clone(),
+                layer,
+                tint,
+                keep_alpha,
+            };
+            self.register(TextureJob::EnvColor(job), format!("{}_cc.png", stem(c)))
+        });
+        let normal_id = normal
+            .as_ref()
+            .map(|p| self.texture(p, TextureRole::Normal { hemi_oct: true }));
+        let surface_id = normal.as_ref().or(color.as_ref()).cloned().map(|from| {
+            let job = environment::SurfaceJob {
+                color: color.clone(),
+                normal: normal.clone(),
+                height: height.clone(),
+                layer,
+                alpha_test,
+            };
+            self.register(
+                TextureJob::EnvSurface(job),
+                format!("{}_surface.png", stem(&from)),
+            )
+        });
+        let height_id = height.as_ref().map(|p| self.texture(p, TextureRole::Raw));
+        EnvironmentLayer {
+            color: color_id,
+            normal: normal_id,
+            surface: surface_id,
+            height: height_id,
+        }
+    }
+
+    /// The PNG files of an environment layer, for `extras.ofast.height_blend`.
+    fn layer_files(&self, layer: &EnvironmentLayer) -> Json {
+        let file = |id: Option<usize>| id.map(|id| self.texture_files[id].clone());
+        json!({
+            "color": file(layer.color),
+            "normal": file(layer.normal),
+            "surface": file(layer.surface),
+            "height": file(layer.height),
+        })
     }
 
     /// For two-layer blend materials ([`MaterialInfo::is_vertex_blend`]), the PNG files of both layers and the
@@ -743,6 +901,8 @@ impl<'c> GltfWriter<'c> {
             let image = match job {
                 TextureJob::Single(path, role) => decode_texture(content, path, *role),
                 TextureJob::Orm(source) => assemble_orm(content, source),
+                TextureJob::EnvColor(job) => environment::bake_color(content, job),
+                TextureJob::EnvSurface(job) => environment::bake_surface(content, job),
             }
             .unwrap_or_else(|e| {
                 warnings
@@ -845,11 +1005,27 @@ pub(crate) fn read_material(content: &Content, path: &str) -> Result<MaterialInf
             info.floats.insert(name.to_owned(), value);
         }
     }
+    for param in root
+        .get("m_vectorParams")
+        .and_then(Value::as_array)
+        .unwrap_or_default()
+    {
+        if let (Some(name), Some(value)) = (
+            param.get("m_name").and_then(Value::as_str),
+            param.get("m_value").and_then(Value::as_array),
+        ) {
+            let mut vector = [0.0; 4];
+            for (v, c) in vector.iter_mut().zip(value) {
+                *v = c.as_f64().unwrap_or_default();
+            }
+            info.vectors.insert(name.to_owned(), vector);
+        }
+    }
     Ok(info)
 }
 
 /// Reads and decodes a CS2 texture to RGBA8 without any role-specific conversion.
-fn decode_raw(content: &Content, path: &str) -> Result<(Texture, Image), ExportError> {
+pub(crate) fn decode_raw(content: &Content, path: &str) -> Result<(Texture, Image), ExportError> {
     let data = content.read_resource(path)?;
     let resource = Resource::parse(&data)?;
     let header = Texture::parse(&resource)?;

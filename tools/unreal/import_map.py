@@ -13,7 +13,8 @@ Inputs (environment variables):
                  sun, sky (ambient), local, bounce (the local lights' surface-cache bounce); see diagnostic_manifest
 
 Steps: level made once from the Basic template, its environment (sky, clouds, fog, sun, floor) removed →
-Interchange *scene* import of the glTF (one actor per placement) → layer-blend materials → light blockers hidden and
+Interchange *scene* import of the glTF (one actor per placement) → layer-blend and height-blend materials (two-layer
+CS2 materials, which glTF cannot describe) → light blockers hidden and
 shadow proxies added (no sunlight through single-sided walls) → CS2's environment from the manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
 exposure with no tone curve (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
 default field of view → screenshots → quit. Everything the script adds is tagged "OFAST" and rebuilt on every run.
@@ -141,30 +142,38 @@ def hide_light_blockers(imported):
 # Versioned name: bump when the graph changes so existing projects get the new master.
 BLEND_MASTER = "/Game/OFAST/Materials/M_OFAST_LayerBlend_v2"
 EXPORT_DIR = os.path.dirname(GLTF)
+# Blend material instances and the layer textures they sample.
+BLEND_FOLDER = "/Game/OFAST/%s/Blend" % NAME
 
 
 def import_texture(relative_png, folder, kind):
-    """Imports one exported PNG as a texture asset. kind: 'color' (sRGB), 'normal', or 'linear' (masks)."""
+    """Imports one exported PNG as a texture asset (once). kind: 'color' (sRGB), 'normal', or 'linear' (masks).
+
+    Normal maps: the exported PNGs follow glTF's convention (+Y up), Unreal's is DirectX (+Y down), so they get
+    flip_green_channel like the ones Interchange imports for the glTF materials (checked: Interchange sets it)."""
     name = os.path.splitext(os.path.basename(relative_png))[0]
     path = folder + "/" + name
-    if unreal.EditorAssetLibrary.does_asset_exist(path):
-        return unreal.EditorAssetLibrary.load_asset(path)
-    task = unreal.AssetImportTask()
-    task.filename = os.path.join(EXPORT_DIR, relative_png)
-    task.destination_path = folder
-    task.automated = True
-    task.replace_existing = True
-    task.save = False
-    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+    if not unreal.EditorAssetLibrary.does_asset_exist(path):
+        task = unreal.AssetImportTask()
+        task.filename = os.path.join(EXPORT_DIR, relative_png)
+        task.destination_path = folder
+        task.automated = True
+        task.replace_existing = True
+        task.save = False
+        unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
     texture = unreal.EditorAssetLibrary.load_asset(path)
     if texture is None:
         raise RuntimeError("texture import failed: " + relative_png)
-    if kind == "normal":
-        texture.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_NORMALMAP)
-        texture.set_editor_property("srgb", False)
-    elif kind == "linear":
-        texture.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_MASKS)
-        texture.set_editor_property("srgb", False)
+    settings = {
+        "color": {},
+        "normal": {"compression_settings": unreal.TextureCompressionSettings.TC_NORMALMAP, "srgb": False,
+                   "flip_green_channel": True},
+        "linear": {"compression_settings": unreal.TextureCompressionSettings.TC_MASKS, "srgb": False},
+    }[kind]
+    # Only changed settings are written: each write rebuilds the texture. Also fixes textures imported by older runs.
+    for prop, value in settings.items():
+        if texture.get_editor_property(prop) != value:
+            texture.set_editor_property(prop, value)
     return texture
 
 
@@ -256,6 +265,183 @@ def ensure_blend_master(defaults):
     unreal.EditorAssetLibrary.save_asset(BLEND_MASTER)
     log("created " + BLEND_MASTER)
     return material
+
+
+# Versioned like BLEND_MASTER: csgo_environment_blend's height blend.
+HEIGHT_BLEND_MASTER = "/Game/OFAST/Materials/M_OFAST_HeightBlend_v1"
+
+# Layer 2's weight, as in Valve's csgo_environment_blend pixel shader (default path, without its view-distance
+# softening). The reference is HeightBlend::weight in crates/ofast-core/src/export/environment.rs, which has tests;
+# keep the two identical. px / pw: the vertex paint (x = layer 2, w = extra softness), h1 / h2: the height maps' R.
+HEIGHT_BLEND_HLSL = """
+float paint = saturate(px * 1.1 - 0.05);
+float soft = clamp(pw + Softness, 0.0001, 1.0);
+float S1 = Scale1 + soft;
+float S2 = Scale2 + soft;
+float H1 = (h1 - Zero1) * S1;
+float slope = S2 - 2.0 * soft;
+if (slope == 0.0) slope = 0.0001;
+float low = -Zero1 * S1 - (1.0 - Zero2) * S2 - soft;
+float high = (1.0 - Zero1) * S1 + Zero2 * S2;
+float H2 = (h2 - Zero2) * slope + lerp(low, high, paint);
+float top = max(H1, H2);
+float w1 = max(H1 - top + soft, 0.0);
+float w2 = max(H2 - top + soft, 0.0);
+return saturate(w2 / (w1 + w2 + 0.0001) * lerp(0.5, h2, MaskWithHeight) * 2.0);
+"""
+HEIGHT_BLEND_SCALARS = {  # parameter -> (manifest key, index or None, default)
+    "Softness": ("softness", None, 0.01),
+    "Zero1": ("zero_point", 0, 0.5),
+    "Zero2": ("zero_point", 1, 0.5),
+    "Scale1": ("scale", 0, 1.0),
+    "Scale2": ("scale", 1, 1.0),
+    "MaskWithHeight": ("mask_with_height", None, 0.0),
+}
+# Texture parameters of the height-blend master: (parameter pattern, file key in the layer, import kind).
+HEIGHT_BLEND_TEXTURES = [
+    ("%sColor", "color", "color"),
+    ("%sNormal", "normal", "normal"),
+    ("%sSurface", "surface", "linear"),
+    ("%sHeight", "height", "linear"),
+]
+
+
+def ensure_height_blend_master(defaults):
+    """csgo_environment_blend's material, built once by script. Per layer: colour (adjustments already baked by
+    the exporter), normal, surface (R occlusion, G roughness, B metalness) and height (R). The vertex colour carries
+    the paint (R = layer 2 weight, A = extra softness; Unreal hands it over linear — see probe_vertex_color.py).
+    A Custom node computes layer 2's weight (HEIGHT_BLEND_HLSL); every output is lerp(layer 1, layer 2, weight).
+    `defaults` maps texture parameter names to texture assets (a sampler parameter needs a matching texture)."""
+    if unreal.EditorAssetLibrary.does_asset_exist(HEIGHT_BLEND_MASTER):
+        return unreal.EditorAssetLibrary.load_asset(HEIGHT_BLEND_MASTER)
+    folder, name = HEIGHT_BLEND_MASTER.rsplit("/", 1)
+    material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, folder, unreal.Material, unreal.MaterialFactoryNew()
+    )
+    mel = unreal.MaterialEditingLibrary
+    sampler = unreal.MaterialSamplerType
+    sampler_of = {"color": sampler.SAMPLERTYPE_COLOR, "normal": sampler.SAMPLERTYPE_NORMAL,
+                  "linear": sampler.SAMPLERTYPE_MASKS}
+    textures = {}
+    for row, (pattern, _key, kind) in enumerate(HEIGHT_BLEND_TEXTURES):
+        for column, layer in enumerate(("Layer1", "Layer2")):
+            param = pattern % layer
+            node = mel.create_material_expression(
+                material, unreal.MaterialExpressionTextureSampleParameter2D, -1400, -700 + (row * 2 + column) * 260
+            )
+            node.set_editor_property("parameter_name", param)
+            node.set_editor_property("sampler_type", sampler_of[kind])
+            node.set_editor_property("texture", defaults[param])
+            textures[param] = node
+    weight = mel.create_material_expression(material, unreal.MaterialExpressionCustom, -800, 900)
+    weight.set_editor_property("description", "HeightBlendWeight")
+    weight.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT1)
+    weight.set_editor_property("code", HEIGHT_BLEND_HLSL)
+    names = ["h1", "h2", "px", "pw"] + list(HEIGHT_BLEND_SCALARS)
+    inputs = []
+    for input_name in names:
+        custom_input = unreal.CustomInput()
+        custom_input.set_editor_property("input_name", input_name)
+        inputs.append(custom_input)
+    weight.set_editor_property("inputs", inputs)
+    vertex = mel.create_material_expression(material, unreal.MaterialExpressionVertexColor, -1100, 1300)
+    mel.connect_material_expressions(textures["Layer1Height"], "R", weight, "h1")
+    mel.connect_material_expressions(textures["Layer2Height"], "R", weight, "h2")
+    mel.connect_material_expressions(vertex, "R", weight, "px")
+    mel.connect_material_expressions(vertex, "A", weight, "pw")
+    for index, (param, (_key, _i, default)) in enumerate(HEIGHT_BLEND_SCALARS.items()):
+        scalar = mel.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -1100,
+                                                1450 + index * 120)
+        scalar.set_editor_property("parameter_name", param)
+        scalar.set_editor_property("default_value", default)
+        mel.connect_material_expressions(scalar, "", weight, param)
+
+    def lerp(param, output, y):
+        node = mel.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate, -400, y)
+        mel.connect_material_expressions(textures["Layer1" + param], output, node, "A")
+        mel.connect_material_expressions(textures["Layer2" + param], output, node, "B")
+        mel.connect_material_expressions(weight, "", node, "Alpha")
+        return node
+
+    prop = unreal.MaterialProperty
+    mel.connect_material_property(lerp("Color", "RGB", -600), "", prop.MP_BASE_COLOR)
+    mel.connect_material_property(lerp("Normal", "RGB", -300), "", prop.MP_NORMAL)
+    mel.connect_material_property(lerp("Surface", "R", 0), "", prop.MP_AMBIENT_OCCLUSION)
+    mel.connect_material_property(lerp("Surface", "G", 300), "", prop.MP_ROUGHNESS)
+    mel.connect_material_property(lerp("Surface", "B", 600), "", prop.MP_METALLIC)
+    mel.recompile_material(material)
+    unreal.EditorAssetLibrary.save_asset(HEIGHT_BLEND_MASTER)
+    log("created " + HEIGHT_BLEND_MASTER)
+    return material
+
+
+def height_blend_instances():
+    """An instance of the height-blend master for every csgo_environment_blend material (glTF stand-in: layer 1
+    only), with both layers' textures and its blend settings (extras.ofast.height_blend, written by the exporter).
+    Returns glTF material name -> instance; main() puts them on the meshes after the scene import."""
+    with open(GLTF) as f:
+        document = json.load(f)
+    blends = {}
+    for material in document.get("materials", []):
+        blend = material.get("extras", {}).get("ofast", {}).get("height_blend")
+        if not blend:
+            continue
+        missing = ["%s.%s" % (layer, key) for layer in ("layer1", "layer2") for _p, key, _k in HEIGHT_BLEND_TEXTURES
+                   if not blend[layer].get(key)]
+        if missing:
+            log("height blend: %s keeps layer 1 only (no %s)" % (material["name"], ", ".join(missing)))
+            continue
+        blends[material["name"]] = blend
+    instances = {}
+    master = None
+    for name, blend in blends.items():
+        textures = {}
+        for pattern, key, kind in HEIGHT_BLEND_TEXTURES:
+            for layer in ("Layer1", "Layer2"):
+                textures[pattern % layer] = import_texture(blend[layer.lower()][key], BLEND_FOLDER, kind)
+        master = master or ensure_height_blend_master(textures)
+        instance = blend_instance(name, master)
+        for param, texture in textures.items():
+            set_texture_parameter(instance, param, texture)
+        for param, (key, index, default) in HEIGHT_BLEND_SCALARS.items():
+            value = blend.get(key, default)
+            if index is not None:
+                value = value[index]
+            set_scalar_parameter(instance, param, value)
+        instances[name] = instance
+    if instances:
+        log("height blend: %d materials" % len(instances))
+    return instances
+
+
+def blend_instance(name, master):
+    """The blend material instance MI_<name> (created on first use), parented to `master`."""
+    path = BLEND_FOLDER + "/MI_" + name
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        instance = unreal.EditorAssetLibrary.load_asset(path)
+    else:
+        instance = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+            "MI_" + name, BLEND_FOLDER, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew()
+        )
+    if instance.get_editor_property("parent") != master:
+        unreal.MaterialEditingLibrary.set_material_instance_parent(instance, master)
+    return instance
+
+
+# Material-instance parameters are only written when they change: every write updates the instance. When the
+# instances were set up after the scene import, a re-run (instances already on the meshes) took 8 minutes for
+# de_inferno's 369 instances × 14 writes and crashed the GPU twice (DXGI_ERROR_DEVICE_HUNG during the GPU scene
+# update); set up before the import and written only when changed, it takes 2 seconds.
+def set_texture_parameter(instance, param, texture):
+    mel = unreal.MaterialEditingLibrary
+    if mel.get_material_instance_texture_parameter_value(instance, param) != texture:
+        mel.set_material_instance_texture_parameter_value(instance, param, texture)
+
+
+def set_scalar_parameter(instance, param, value):
+    mel = unreal.MaterialEditingLibrary
+    if abs(mel.get_material_instance_scalar_parameter_value(instance, param) - float(value)) > 1e-6:
+        mel.set_material_instance_scalar_parameter_value(instance, param, float(value))
 
 
 # Versioned like BLEND_MASTER: the material of the shadow proxies (opaque, two-sided, never seen).
@@ -360,8 +546,9 @@ def make_shadow_only(component, material, slot_count, affect_lumen):
     )
 
 
-def apply_layer_blends(imported):
-    """Replaces the glTF stand-in material (layer 1 only) of every two-layer CS2 material by a blend instance."""
+def layer_blend_instances():
+    """A blend instance for every two-layer csgo_lightmappedgeneric material (glTF stand-in: layer 1 only).
+    Returns glTF material name -> instance; main() puts them on the meshes after the scene import."""
     with open(GLTF) as f:
         document = json.load(f)
     layered = {}
@@ -376,48 +563,42 @@ def apply_layer_blends(imported):
             log("layer blend: %s keeps layer 1 only (no %s)" % (material["name"], ", ".join(missing)))
             continue
         layered[material["name"]] = layers
-    if not layered:
-        return
-    folder = "/Game/OFAST/%s/Blend" % NAME
-    tools = unreal.AssetToolsHelpers.get_asset_tools()
-    mel = unreal.MaterialEditingLibrary
     instances = {}
     master = None
     for name, layers in layered.items():
         textures = {
-            "c1": import_texture(layers["layer1"]["color"], folder, "color"),
-            "c2": import_texture(layers["layer2"]["color"], folder, "color"),
-            "n1": import_texture(layers["layer1"]["normal"], folder, "normal"),
-            "n2": import_texture(layers["layer2"]["normal"], folder, "normal"),
-            "r1": import_texture(layers["layer1"]["roughness"], folder, "linear"),
-            "r2": import_texture(layers["layer2"]["roughness"], folder, "linear"),
-            "mod": import_texture(layers["modulation"], folder, "linear") if layers.get("modulation") else None,
+            "c1": import_texture(layers["layer1"]["color"], BLEND_FOLDER, "color"),
+            "c2": import_texture(layers["layer2"]["color"], BLEND_FOLDER, "color"),
+            "n1": import_texture(layers["layer1"]["normal"], BLEND_FOLDER, "normal"),
+            "n2": import_texture(layers["layer2"]["normal"], BLEND_FOLDER, "normal"),
+            "r1": import_texture(layers["layer1"]["roughness"], BLEND_FOLDER, "linear"),
+            "r2": import_texture(layers["layer2"]["roughness"], BLEND_FOLDER, "linear"),
+            "mod": import_texture(layers["modulation"], BLEND_FOLDER, "linear") if layers.get("modulation") else None,
         }
         if textures["mod"] is None:
             textures["mod"] = textures["r1"]
         master = master or ensure_blend_master(textures)
-        instance_path = folder + "/MI_" + name
-        if unreal.EditorAssetLibrary.does_asset_exist(instance_path):
-            instance = unreal.EditorAssetLibrary.load_asset(instance_path)
-        else:
-            instance = tools.create_asset(
-                "MI_" + name, folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew()
-            )
-        mel.set_material_instance_parent(instance, master)
+        instance = blend_instance(name, master)
         for param, key in (("Layer1Color", "c1"), ("Layer2Color", "c2"), ("Layer1Normal", "n1"),
                            ("Layer2Normal", "n2"), ("Layer1Rough", "r1"), ("Layer2Rough", "r2"),
                            ("BlendModulation", "mod")):
-            mel.set_material_instance_texture_parameter_value(instance, param, textures[key])
+            set_texture_parameter(instance, param, textures[key])
         if layers.get("softness") is not None:
-            mel.set_material_instance_scalar_parameter_value(instance, "BlendSoftness", float(layers["softness"]))
+            set_scalar_parameter(instance, "BlendSoftness", layers["softness"])
         mode = int(layers.get("fancy_blending") or 0)
         has_mask = layers.get("modulation") is not None
-        mel.set_material_instance_scalar_parameter_value(instance, "UseModulation", 1.0 if (mode > 0 and has_mask) else 0.0)
-        mel.set_material_instance_scalar_parameter_value(instance, "UseAlphaMask", 1.0 if mode == 3 else 0.0)
-        mel.set_material_instance_scalar_parameter_value(instance, "UseParamSoftness", 1.0 if mode in (2, 3) else 0.0)
+        set_scalar_parameter(instance, "UseModulation", 1.0 if (mode > 0 and has_mask) else 0.0)
+        set_scalar_parameter(instance, "UseAlphaMask", 1.0 if mode == 3 else 0.0)
+        set_scalar_parameter(instance, "UseParamSoftness", 1.0 if mode in (2, 3) else 0.0)
         instances[name] = instance
+    if instances:
+        log("layer blend: %d materials" % len(instances))
+    return instances
 
-    # Swap materials on the imported static meshes (shared by every actor that uses them).
+
+def swap_material_slots(imported, instances):
+    """Puts `instances` (glTF material name -> material) on the imported static meshes' slots that use those glTF
+    materials (meshes are shared by every actor that places them). Returns the number of slots changed."""
     swapped = 0
     seen = set()
     for actor in imported:
@@ -436,9 +617,7 @@ def apply_layer_blends(imported):
                     mesh.set_material(index, instances[candidate])
                     swapped += 1
                     break
-    log("layer blend: %d materials, %d mesh slots swapped" % (len(instances), swapped))
-    # Save the blend material, its instances, the imported layer textures and the swapped meshes.
-    unreal.EditorAssetLibrary.save_directory("/Game/OFAST", only_if_is_dirty=True, recursive=True)
+    return swapped
 
 
 # Lumen carries less bounce light than CS2's path-traced lightmaps. Measured compensation on top of CS2's own bounce
@@ -877,8 +1056,15 @@ def main():
     with open(MANIFEST) as f:
         manifest = json.load(f)
     prepare_level()
+    # Two-layer materials glTF cannot describe: their instances are set up before the scene import, while no mesh in
+    # the level uses them yet, then put on the imported meshes.
+    blends = layer_blend_instances()
+    blends.update(height_blend_instances())
+    unreal.EditorAssetLibrary.save_directory("/Game/OFAST", only_if_is_dirty=True, recursive=True)
     imported = import_scene()
-    apply_layer_blends(imported)
+    if blends:
+        log("blend materials: %d mesh slots swapped" % swap_material_slots(imported, blends))
+        unreal.EditorAssetLibrary.save_directory("/Game/OFAST/" + NAME, only_if_is_dirty=True, recursive=True)
     # Sunlight must not leak into interiors: CS2's light blockers and two-sided shadows for single-sided walls.
     hide_light_blockers(imported)
     add_shadow_proxies(imported)
