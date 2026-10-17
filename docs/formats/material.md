@@ -325,13 +325,18 @@ translucency volume, both coarse grids around the camera. de_nuke's yellow paint
 lies on and turned orange-brown; the white lines before it were grey (175 on 167).
 
 So `import_map.py` turns the overlays blended with plain alpha into **mesh decals**: `csgo_lightmappedgeneric` with
-`F_OVERLAY` + `F_TRANSLUCENT`, and lit `csgo_static_overlay` with `F_BLEND_MODE` 1 (`is_decal_overlay`). Each gets an
-instance of `M_OFAST_OverlayDecal_v1` (Deferred Decal domain, translucent): colour texture × `baseColorFactor` (the
-draw-call or placement tint), opacity = colour alpha × the factor's alpha (a draw call's alpha), normal, roughness and
-metalness with their factors. Unreal draws a decal material on a static mesh as a mesh decal: it blends colour, normal
-and roughness into the GBuffer before lighting (DBuffer decals), which is CS2's arrangement. The instances go on the
-world's placements as component overrides; the 3D skybox's copies keep the translucent material. The glTF is not
-changed.
+`F_OVERLAY` + `F_TRANSLUCENT`, lit `csgo_static_overlay` with `F_BLEND_MODE` 1, and translucent `csgo_complex` with
+`F_DEPTH_BIAS` (`is_decal_overlay`). The last are models lying on a wall or floor, placed by Hammer's mesh overlays:
+de_inferno's trim decals (plaster patches, leaks and cracks over the house fronts, 67 placements), de_nuke's drain
+covers and the SWAT van's lettering, de_vertigo's `sign_number_0` ([decision
+010](../decisions/010-translucent-decals-and-per-pixel-lighting.md)). Each gets an instance of
+`M_OFAST_OverlayDecal_v2` (Deferred Decal domain, translucent): colour texture × `baseColorFactor` (the draw-call or
+placement tint) × lerp(1, `ModelTint`, `TintMaskTexture`.R) (a tint mask, as for the prop shaders above:
+`inferno_trim_decal_01`'s; white otherwise), opacity = colour alpha × the factor's alpha (a draw call's alpha),
+normal, roughness and metalness with their factors. Unreal draws a decal material on a static mesh as a mesh decal:
+it blends colour, normal and roughness into the GBuffer before lighting (DBuffer decals), which is CS2's arrangement.
+The instances go on the world's placements as component overrides; the 3D skybox's copies keep the translucent
+material. The glTF is not changed.
 
 | de_nuke, paint / asphalt luminance | CT spawn, sun: bays / line | T spawn, shade: bays |
 |---|---|---|
@@ -346,14 +351,30 @@ base-colour view the paint is a plain alpha blend at the texture's opacity (0.43
 
 `csgo_static_overlay`'s other blend modes (`F_BLEND_MODE` 0 Opaque, 2 Alpha Test, 3 Mod2x, 4 Additive, 5 Multiply,
 6 ModThenAdd, from its feature list in GameTracking-CS2) are still exported as plain `BLEND`, which is wrong for
-them; de_nuke has 30 Mod2x overlays (unlit grime). Other translucent materials (glass, fence and foliage cards) keep
-Interchange's lighting mode and are still under-lit in direct sun.
+them; de_nuke has 30 Mod2x overlays (unlit grime).
+
+## Other translucent surfaces: lit per pixel
+
+Translucent surfaces that do not lie on another one (glass, chain-link fence and palm cards, signs such as
+de_dust2's container sign) stay translucent, lit with the translucency lighting mode **Surface ForwardShading**
+(direct light per pixel with its shadows; [lighting.md](lighting.md#translucent-surfaces-and-overlays)). Interchange's
+glTF master uses Surface TranslucencyVolume, which an instance cannot change, and the plugin's content is not edited,
+so `import_map.py` keeps copies in `/Game/OFAST/Materials`: `M_OFAST_glTFDefault_v1` (Interchange's `M_Default` with
+the per-pixel mode) and `MI_OFAST_glTFDefault_Blend_v1` / `MI_OFAST_glTFDefault_Blend_DS_v1` (its one- and two-sided
+translucent instances, parented to the copy). After the scene import, `light_translucent_per_pixel` re-parents the
+Interchange instance of every `BLEND` material `lit_per_pixel` names from `MI_Default_Blend(_DS)` to the copy; the
+parameters are the same, so the instance keeps its textures and factors. Left out: the decal overlays above, the
+static overlays in their other blend modes (Mod2x, alpha test …; neither lighting mode is right for them, they await
+their own handling) and the unlit `csgo_unlitgeneric` cards. OFAST's environment and tint-mask
+masters, whose instances can be translucent through `set_alpha_overrides`, have the per-pixel mode too. Measured in
+[decision 010](../decisions/010-translucent-decals-and-per-pixel-lighting.md): in the sun the SWAT lettering and the
+container sign were at 0.81 and 0.70 of their per-pixel luminance before.
 
 ## Other rules
 
 | Case | Handling |
 |---|---|
-| `F_TRANSLUCENT`, `F_BLEND_MODE`, `csgo_static_overlay` | glTF `BLEND`; in Unreal, overlays blended with plain alpha are mesh decals ("Translucent overlays" above) |
+| `F_TRANSLUCENT`, `F_BLEND_MODE`, `csgo_static_overlay` | glTF `BLEND`; in Unreal, overlays blended with plain alpha and `csgo_complex` decals (`F_DEPTH_BIAS`) are mesh decals ("Translucent overlays" above), the other translucent surfaces are lit per pixel ("Other translucent surfaces" above) |
 | `F_ALPHA_TEST` | glTF `MASK`, cutoff 0.5 |
 | overlays (decals, `OBJECT_TYPE_OVERLAY`) | pushed 0.1 inch along their normal so they win the depth test |
 | `csgo_effects` (dust and light-shaft cards) | not exported (they appeared as white sheets; to be rebuilt as Unreal effects) |

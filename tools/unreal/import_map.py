@@ -18,7 +18,9 @@ re-run always shows the current glTF: evict_stale_interchange_assets) → layer-
 CS2 materials, which glTF cannot describe), single-layer environment materials (their model tint is applied in the
 material, not baked into the textures) and tinted props with a tint mask (the tint only where the mask is set;
 OFAST's instances and textures no export uses any more are deleted: delete_unused_ofast_assets) → translucent overlays
-(road paint, signs) as mesh decals, lit with the surface under them as in CS2 (put_overlay_decals) → light blockers hidden and
+(road paint, signs, csgo_complex decals) as mesh decals, lit with the surface under them as in CS2
+(put_overlay_decals) → the other translucent surfaces (glass, fence and foliage cards) lit per pixel
+(light_translucent_per_pixel) → light blockers hidden and
 shadow proxies added (no sunlight through single-sided walls) → 3D skybox drawn behind the world → CS2's environment from the manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
 exposure, no tone curve or CS2's Hable curve (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
 default field of view → screenshots → quit. Everything the script adds is tagged "OFAST" and rebuilt on every run.
@@ -807,6 +809,29 @@ def set_model_tint(instance, environment, layers):
         set_scalar_parameter(instance, prefix + "TintMaskBrightness", brightness)
 
 
+# How every translucent surface that is not an overlay is lit (glass, fence and foliage cards, signs): Surface
+# ForwardShading, i.e. the direct light per pixel with its shadows, as opaque surfaces get it (the indirect light
+# still comes from Lumen's translucency volume). Interchange's glTF master uses Surface TranslucencyVolume and a new
+# Unreal material Volumetric NonDirectional: both take the direct light from the translucency lighting volume, a
+# coarse grid around the camera, so a sunlit translucent surface got less sun than the opaque ones next to it
+# (decision 010). Overlays and csgo_complex decals, which lie on another surface, are mesh decals instead (decisions
+# 009 and 010): lit per pixel they still got the coarse indirect light, darker than their wall in the shade.
+TRANSLUCENCY_LIGHTING = unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING
+
+
+def ensure_translucency_lighting(material, path):
+    """Sets TRANSLUCENCY_LIGHTING on an OFAST master whose instances may be translucent (set_alpha_overrides) and
+    saves it, if it is not set yet. Masters an older OFAST made are changed in place, without a new version: the
+    mode is a property of the material, not of its graph, and opaque and masked instances look the same with any.
+    Returns the material."""
+    if material.get_editor_property("translucency_lighting_mode") != TRANSLUCENCY_LIGHTING:
+        material.set_editor_property("translucency_lighting_mode", TRANSLUCENCY_LIGHTING)
+        unreal.MaterialEditingLibrary.recompile_material(material)
+        unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+        log("%s: translucent instances lit per pixel" % path)
+    return material
+
+
 # Versioned like BLEND_MASTER: every csgo_environment material (one layer), tinted or not. Interchange's glTF
 # materials cannot be relied on for them: a re-import keeps existing material instances as they are, and de_inferno's
 # project still held the conversion from before the environment bakes (plain colour x the tint as a factor, an old
@@ -826,13 +851,16 @@ def ensure_environment_master(defaults):
     """csgo_environment's material, built once by script: colour (adjustments baked by the exporter) through
     MODEL_TINT_FUNCTION, normal, surface (R occlusion, G roughness, B metalness), and the colour's alpha as opacity
     (mask) for the instances that override the blend mode (alpha-tested and translucent materials, see
-    set_alpha_overrides). `defaults` maps texture parameter names to texture assets."""
+    set_alpha_overrides; translucent ones lit per pixel, TRANSLUCENCY_LIGHTING). `defaults` maps texture parameter
+    names to texture assets."""
     if unreal.EditorAssetLibrary.does_asset_exist(ENVIRONMENT_MASTER):
-        return unreal.EditorAssetLibrary.load_asset(ENVIRONMENT_MASTER)
+        master = unreal.EditorAssetLibrary.load_asset(ENVIRONMENT_MASTER)
+        return ensure_translucency_lighting(master, ENVIRONMENT_MASTER)
     folder, name = ENVIRONMENT_MASTER.rsplit("/", 1)
     material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
         name, folder, unreal.Material, unreal.MaterialFactoryNew()
     )
+    material.set_editor_property("translucency_lighting_mode", TRANSLUCENCY_LIGHTING)
     mel = unreal.MaterialEditingLibrary
     prop = unreal.MaterialProperty
     textures = {}
@@ -943,13 +971,15 @@ def ensure_tint_mask_master(defaults):
     occlusion = OcclusionTexture.R, opacity = colour alpha x factor alpha) with the colour multiplied by
     lerp(1, ModelTint, TintMaskTexture.R). The mask is sampled with UV set 0 or 1 (TintMaskUV, the shaders'
     g_bUseSecondaryUvForTintMask). Opaque and one-sided: instances override the blend mode and sidedness
-    (set_alpha_overrides). `defaults` maps texture parameter names to texture assets."""
+    (set_alpha_overrides; translucent ones lit per pixel, TRANSLUCENCY_LIGHTING).
+    `defaults` maps texture parameter names to texture assets."""
     if unreal.EditorAssetLibrary.does_asset_exist(TINT_MASK_MASTER):
-        return unreal.EditorAssetLibrary.load_asset(TINT_MASK_MASTER)
+        return ensure_translucency_lighting(unreal.EditorAssetLibrary.load_asset(TINT_MASK_MASTER), TINT_MASK_MASTER)
     folder, name = TINT_MASK_MASTER.rsplit("/", 1)
     material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
         name, folder, unreal.Material, unreal.MaterialFactoryNew()
     )
+    material.set_editor_property("translucency_lighting_mode", TRANSLUCENCY_LIGHTING)
     mel = unreal.MaterialEditingLibrary
     prop = unreal.MaterialProperty
 
@@ -1015,7 +1045,9 @@ def tint_mask_instances():
     """An instance of TINT_MASK_MASTER for every glTF material with a tint mask to apply (extras.ofast.tint_mask,
     not baked by the exporter): the glTF material's textures and factors, the mask, its UV set and the tint, its
     alpha mode and sidedness. Returns glTF material name -> instance; main() puts them on the meshes after the scene
-    import. Materials whose placements are untinted have no tint_mask and keep Interchange's glTF material."""
+    import. Materials whose placements are untinted have no tint_mask and keep Interchange's glTF material. Decal
+    overlays (is_decal_overlay) are left to overlay_instances, whose master applies the tint mask too: both would
+    otherwise write the same instance, MI_<name>, with a different parent on every run."""
     with open(GLTF) as f:
         document = json.load(f)
     defaults = default_textures()
@@ -1028,7 +1060,7 @@ def tint_mask_instances():
     master = None
     for material in document.get("materials", []):
         tint = material.get("extras", {}).get("ofast", {}).get("tint_mask")
-        if not tint or tint.get("baked") or not tint.get("texture"):
+        if not tint or tint.get("baked") or not tint.get("texture") or is_decal_overlay(material):
             continue
         pbr = material.get("pbrMetallicRoughness", {})
         files = {
@@ -1502,16 +1534,19 @@ def swap_material_slots(imported, instances):
 # is lit apart instead, through the translucency lighting volume and Lumen's translucency volume (coarse grids, a
 # per-pixel normal at best): de_nuke's yellow road paint came out at 0.97x the luminance of the sunlit asphalt under
 # it (CS2: 2.35x, as a decal 2.07x) and orange-brown in the shade. A material in the Deferred Decal domain on the overlay's own mesh
-# (a "mesh decal") blends into the GBuffer before lighting, which is CS2's arrangement (decision 009).
-OVERLAY_MASTER = "/Game/OFAST/Materials/M_OFAST_OverlayDecal_v1"
+# (a "mesh decal") blends into the GBuffer before lighting, which is CS2's arrangement (decision 009). v2: an optional
+# tint mask, for csgo_complex decals with F_TINT_MASK (de_inferno's trim decals, decision 010).
+OVERLAY_MASTER = "/Game/OFAST/Materials/M_OFAST_OverlayDecal_v2"
 
 
 def is_decal_overlay(material):
     """Whether a glTF material is a CS2 overlay blended with plain alpha over the surface under it, i.e. one that
-    becomes a mesh decal: csgo_lightmappedgeneric with F_OVERLAY (always with F_TRANSLUCENT on the maps checked), and
-    lit csgo_static_overlay in its Translucent blend mode (F_BLEND_MODE 1). Not the static overlays' other modes:
-    0 Opaque, 2 Alpha Test, 3 Mod2x (unlit; Valve's DstBlend One), 4 Additive, 5 Multiply, 6 ModThenAdd (from the
-    shader's feature list in GameTracking-CS2), which the exporter still writes as plain BLEND (decision 009)."""
+    becomes a mesh decal: csgo_lightmappedgeneric with F_OVERLAY (always with F_TRANSLUCENT on the maps checked),
+    lit csgo_static_overlay in its Translucent blend mode (F_BLEND_MODE 1), and translucent csgo_complex with
+    F_DEPTH_BIAS: models that lie on a wall or floor, placed by Hammer's mesh overlays (de_inferno's trim decals,
+    de_nuke's drain covers and van cards; decision 010). Not the static overlays' other modes: 0 Opaque, 2 Alpha
+    Test, 3 Mod2x (unlit; Valve's DstBlend One), 4 Additive, 5 Multiply, 6 ModThenAdd (from the shader's feature
+    list in GameTracking-CS2), which the exporter still writes as plain BLEND (decision 009)."""
     if material.get("alphaMode") != "BLEND":
         return False
     ofast = material.get("extras", {}).get("ofast", {})
@@ -1520,6 +1555,8 @@ def is_decal_overlay(material):
         return bool(ints.get("F_OVERLAY")) and bool(ints.get("F_TRANSLUCENT"))
     if ofast.get("shader") == "csgo_static_overlay.vfx":
         return ints.get("F_BLEND_MODE") == 1 and bool(ints.get("F_LIT"))
+    if ofast.get("shader") == "csgo_complex.vfx":
+        return bool(ints.get("F_TRANSLUCENT")) and bool(ints.get("F_DEPTH_BIAS"))
     return False
 
 
@@ -1530,7 +1567,9 @@ def ensure_overlay_master(defaults):
     roughness = MetallicRoughnessTexture.G x RoughnessFactor, metalness = .B x MetallicFactor. The decal blends all
     of them by the opacity into what lies under it (DBuffer decals: colour, normal, roughness / metalness /
     specular). No occlusion texture: DBuffer decals cannot write ambient occlusion (the overlays checked use
-    default_ao anyway). `defaults` holds the "color", "normal" and "orm" default textures."""
+    default_ao anyway). The colour is also multiplied by lerp(1, ModelTint, TintMaskTexture.R), the mask on UV set
+    TintMaskUV, as in TINT_MASK_MASTER: a csgo_complex decal's tint under its tint mask (white mask and tint, i.e.
+    nothing, for the others). `defaults` holds the "color", "normal", "orm" and "mask" default textures."""
     if unreal.EditorAssetLibrary.does_asset_exist(OVERLAY_MASTER):
         return unreal.EditorAssetLibrary.load_asset(OVERLAY_MASTER)
     folder, name = OVERLAY_MASTER.rsplit("/", 1)
@@ -1543,21 +1582,42 @@ def ensure_overlay_master(defaults):
     color = texture_parameter(material, "BaseColorTexture", "color", defaults["color"], -900, -400)
     normal = texture_parameter(material, "NormalTexture", "normal", defaults["normal"], -900, 0)
     orm = texture_parameter(material, "MetallicRoughnessTexture", "linear", defaults["orm"], -900, 400)
+    mask = texture_parameter(material, "TintMaskTexture", "linear", defaults["mask"], -1200, -1100)
     factor = mel.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -900, -700)
     factor.set_editor_property("parameter_name", "BaseColorFactor")
     factor.set_editor_property("default_value", unreal.LinearColor(1, 1, 1, 1))
     roughness_factor = scalar_parameter(material, "RoughnessFactor", 1.0, -600, 500)
     metallic_factor = scalar_parameter(material, "MetallicFactor", 1.0, -600, 650)
 
-    def multiply(a, a_out, b, b_out, y):
-        node = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, -300, y)
-        for source, output, pin in ((a, a_out, "A"), (b, b_out, "B")):
-            if not mel.connect_material_expressions(source, output, node, pin):
-                raise RuntimeError("overlay master: could not connect %s" % pin)
+    def connect(source, output, target, pin):
+        if not mel.connect_material_expressions(source, output, target, pin):
+            raise RuntimeError("overlay master: could not connect %s" % pin)
+
+    def multiply(a, a_out, b, b_out, y, x=-300):
+        node = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, x, y)
+        connect(a, a_out, node, "A")
+        connect(b, b_out, node, "B")
         return node
 
+    # The tint mask's UVs: set 0 or 1 by a scalar (0 / 1), so every instance shares one shader.
+    uv = mel.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate, -1500, -1100)
+    for pin, index in (("A", 0), ("B", 1)):
+        coordinate = mel.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -1800,
+                                                    -1200 + index * 120)
+        coordinate.set_editor_property("coordinate_index", index)
+        connect(coordinate, "", uv, pin)
+    connect(scalar_parameter(material, "TintMaskUV", 0.0, -1800, -950), "", uv, "Alpha")
+    connect(uv, "", mask, "UVs")
+    white = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, -900, -1000)
+    white.set_editor_property("constant", unreal.LinearColor(1, 1, 1, 1))
+    tint = mel.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate, -600, -900)
+    connect(white, "", tint, "A")
+    connect(model_tint_parameter(material, -900, -850), "", tint, "B")
+    connect(mask, "R", tint, "Alpha")
+    tinted = multiply(multiply(color, "RGB", factor, "", -500, -600), "", tint, "", -600)
+
     for source, output, target in (
-        (multiply(color, "RGB", factor, "", -500), "", prop.MP_BASE_COLOR),
+        (tinted, "", prop.MP_BASE_COLOR),
         (multiply(color, "A", factor, "A", -300), "", prop.MP_OPACITY),
         (normal, "RGB", prop.MP_NORMAL),
         (multiply(orm, "G", roughness_factor, "", 400), "", prop.MP_ROUGHNESS),
@@ -1574,8 +1634,9 @@ def ensure_overlay_master(defaults):
 def overlay_instances():
     """An instance of OVERLAY_MASTER for every overlay that becomes a mesh decal (is_decal_overlay): the glTF
     material's colour, normal and metallic-roughness textures (imported like the other OFAST instances' textures;
-    the exporter writes every texture with one repeating sampler) and its factors. Returns glTF material name ->
-    instance; main() puts them on the world's overlay meshes after the scene import (put_overlay_decals)."""
+    the exporter writes every texture with one repeating sampler), its factors, and its tint mask when it has one to
+    apply (extras.ofast.tint_mask, as tint_mask_instances; white otherwise). Returns glTF material name -> instance;
+    main() puts them on the world's overlay meshes after the scene import (put_overlay_decals)."""
     with open(GLTF) as f:
         document = json.load(f)
 
@@ -1586,15 +1647,19 @@ def overlay_instances():
     defaults = default_textures()
     instances = {}
     master = None
+    tinted = 0
     for material in document.get("materials", []):
         if not is_decal_overlay(material):
             continue
         pbr = material.get("pbrMetallicRoughness", {})
+        tint = material.get("extras", {}).get("ofast", {}).get("tint_mask") or {}
+        masked = bool(tint.get("texture")) and not tint.get("baked")
         textures = {}
         for param, uri, kind, default in (
             ("BaseColorTexture", image(pbr.get("baseColorTexture")), "color", "color"),
             ("NormalTexture", image(material.get("normalTexture")), "normal", "normal"),
             ("MetallicRoughnessTexture", image(pbr.get("metallicRoughnessTexture")), "linear", "orm"),
+            ("TintMaskTexture", tint["texture"] if masked else None, "linear", "mask"),
         ):
             textures[param] = import_texture(uri, BLEND_FOLDER, kind) if uri else defaults[default]
         master = master or ensure_overlay_master(defaults)
@@ -1605,9 +1670,13 @@ def overlay_instances():
         set_vector_parameter(instance, "BaseColorFactor", unreal.LinearColor(r, g, b, a))
         set_scalar_parameter(instance, "RoughnessFactor", pbr.get("roughnessFactor", 1.0))
         set_scalar_parameter(instance, "MetallicFactor", pbr.get("metallicFactor", 1.0))
+        r, g, b = tint["tint"] if masked else (1.0, 1.0, 1.0)
+        set_vector_parameter(instance, "ModelTint", unreal.LinearColor(r, g, b, 1.0))
+        set_scalar_parameter(instance, "TintMaskUV", 1.0 if masked and tint.get("uv") == 1 else 0.0)
         instances[material["name"]] = instance
+        tinted += masked
     if instances:
-        log("overlay decals: %d materials" % len(instances))
+        log("overlay decals: %d materials (%d with a tint mask)" % (len(instances), tinted))
     return instances
 
 
@@ -1633,6 +1702,108 @@ def put_overlay_decals(imported, instances):
                     swapped += 1
                     break
     return swapped
+
+
+# Interchange makes every glTF BLEND material an instance of /InterchangeAssets/gltf/MaterialInstances/MI_Default_Blend
+# (MI_Default_Blend_DS when double-sided), whose parent /InterchangeAssets/gltf/M_Default lights translucency with
+# Surface TranslucencyVolume. An instance cannot change that mode (it is not among the overridable base properties),
+# and the plugin's content is never edited, so OFAST keeps its own copies: GLTF_MASTER is M_Default with
+# TRANSLUCENCY_LIGHTING, and GLTF_BLEND_PARENTS maps each of Interchange's translucent instances to a copy of it
+# parented to GLTF_MASTER (same blend mode and sidedness overrides, same parameters). Versioned like BLEND_MASTER;
+# made once by duplicating the plugin's assets, so a newer engine's M_Default is picked up only by a new version.
+INTERCHANGE_MASTER = "/InterchangeAssets/gltf/M_Default"
+GLTF_MASTER = "/Game/OFAST/Materials/M_OFAST_glTFDefault_v1"
+GLTF_BLEND_PARENTS = {
+    "/InterchangeAssets/gltf/MaterialInstances/MI_Default_Blend": "/Game/OFAST/Materials/MI_OFAST_glTFDefault_Blend_v1",
+    "/InterchangeAssets/gltf/MaterialInstances/MI_Default_Blend_DS":
+        "/Game/OFAST/Materials/MI_OFAST_glTFDefault_Blend_DS_v1",
+}
+
+
+def duplicate_once(source, path):
+    """The asset at `path`, made as a copy of `source` (both package paths) when it does not exist yet; the second
+    value says whether it was just made."""
+    library = unreal.EditorAssetLibrary
+    if library.does_asset_exist(path):
+        return library.load_asset(path), False
+    copy = library.duplicate_asset(source, path)
+    if copy is None:
+        raise RuntimeError("could not copy %s to %s" % (source, path))
+    return copy, True
+
+
+def ensure_gltf_blend_parents():
+    """OFAST's copies of Interchange's glTF master and translucent instances (see GLTF_MASTER), made on first use.
+    Returns Interchange's instance (object path) -> OFAST's copy."""
+    master, made = duplicate_once(INTERCHANGE_MASTER, GLTF_MASTER)
+    if made:
+        master.set_editor_property("translucency_lighting_mode", TRANSLUCENCY_LIGHTING)
+        unreal.MaterialEditingLibrary.recompile_material(master)
+        unreal.EditorAssetLibrary.save_asset(GLTF_MASTER, only_if_is_dirty=False)
+        log("created %s (copy of %s, translucency lit per pixel)" % (GLTF_MASTER, INTERCHANGE_MASTER))
+    parents = {}
+    for source, path in GLTF_BLEND_PARENTS.items():
+        instance, made = duplicate_once(source, path)
+        if made or instance.get_editor_property("parent") != master:
+            unreal.MaterialEditingLibrary.set_material_instance_parent(instance, master)
+            unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+            log("%s %s (copy of %s) under %s" % ("created" if made else "re-parented", path, source, GLTF_MASTER))
+        parents[unreal.EditorAssetLibrary.load_asset(source).get_path_name()] = instance
+    return parents
+
+
+def lit_per_pixel(material):
+    """Whether a glTF material's Interchange instance is lit per pixel (light_translucent_per_pixel): BLEND, and
+    none of
+    - a decal overlay (is_decal_overlay): a mesh decal on the world's placements;
+    - csgo_static_overlay in its other blend modes (Mod2x, alpha test, opaque …, still exported as plain BLEND):
+      neither lighting mode is right for them; per pixel, de_nuke's Mod2x scuff on a shaded pillar at the CT spawn
+      got darker still, where CS2 barely changes the pillar (decision 010). They await their own handling;
+    - csgo_unlitgeneric: unlit in CS2 (exported without KHR_materials_unlit yet)."""
+    if material.get("alphaMode") != "BLEND" or is_decal_overlay(material):
+        return False
+    shader = material.get("extras", {}).get("ofast", {}).get("shader")
+    return shader not in ("csgo_static_overlay.vfx", "csgo_unlitgeneric.vfx")
+
+
+def light_translucent_per_pixel(skip):
+    """Gives the Interchange instance of every BLEND material of the glTF not in `skip` (the materials whose slots
+    got OFAST's own instances) the parent lit_per_pixel asks for: OFAST's copy of its Interchange parent
+    (ensure_gltf_blend_parents) when it is lit per pixel, Interchange's own parent otherwise (back from the copy,
+    should an earlier run have re-parented it). Runs after the scene import (Interchange makes the instances);
+    instances that already have the right parent are left alone, so a re-run changes nothing. Returns the number of
+    instances re-parented to the copies, of those already there, and of those given back to Interchange's parent."""
+    with open(GLTF) as f:
+        document = json.load(f)
+    wanted = {m["name"]: lit_per_pixel(m) for m in document.get("materials", [])
+              if m.get("alphaMode") == "BLEND" and m["name"] not in skip}
+    parents = ensure_gltf_blend_parents() if wanted else {}
+    copies = {copy.get_path_name(): source for source, copy in parents.items()}  # OFAST copy -> Interchange's
+    changed = kept = restored = 0
+    for name, per_pixel in sorted(wanted.items()):
+        for path in (INTERCHANGE_FOLDER + "/Materials/" + name, INTERCHANGE_FOLDER + "/Materials/MI_" + name):
+            if unreal.EditorAssetLibrary.does_asset_exist(path):
+                break
+        else:
+            log("translucent per pixel: no Interchange material for %s" % name)
+            continue
+        instance = unreal.EditorAssetLibrary.load_asset(path)
+        parent = instance.get_editor_property("parent")
+        parent = parent.get_path_name() if parent else ""
+        if per_pixel and parent in copies:
+            kept += 1
+        elif per_pixel and parent in parents:
+            unreal.MaterialEditingLibrary.set_material_instance_parent(instance, parents[parent])
+            CHANGED_INSTANCES.add(instance.get_path_name())
+            changed += 1
+        elif not per_pixel and parent in copies:
+            unreal.MaterialEditingLibrary.set_material_instance_parent(
+                instance, unreal.EditorAssetLibrary.load_asset(copies[parent]))
+            CHANGED_INSTANCES.add(instance.get_path_name())
+            restored += 1
+        elif per_pixel:
+            log("translucent per pixel: %s keeps its parent %s" % (name, parent or "(none)"))
+    return changed, kept, restored
 
 
 # Lumen carries less bounce light than CS2's path-traced lightmaps. Measured compensation on top of CS2's own bounce
@@ -2177,8 +2348,8 @@ def main():
     blends.update(height_blend_instances())
     blends.update(environment_instances())
     blends.update(tint_mask_instances())
-    # Translucent overlays become mesh decals, lit with the surface under them (put on the meshes' placements, not
-    # the meshes: the 3D skybox keeps the translucent material).
+    # Translucent overlays and csgo_complex decals become mesh decals, lit with the surface under them (put on the
+    # meshes' placements, not the meshes: the 3D skybox keeps the translucent material).
     overlays = overlay_instances()
     delete_unused_ofast_assets(BLEND_FOLDER)
     prepare_level()
@@ -2189,6 +2360,12 @@ def main():
         unreal.EditorAssetLibrary.save_directory("/Game/OFAST/" + NAME, only_if_is_dirty=True, recursive=True)
     if overlays:
         log("overlay decals: %d placement slots" % put_overlay_decals(imported, overlays))
+    # The other translucent surfaces (glass, fence and foliage cards, signs) get the sun per pixel, like the opaque
+    # surfaces around them.
+    changed, kept, restored = light_translucent_per_pixel(blends)
+    if changed or kept or restored:
+        log("translucent per pixel: %d Interchange materials re-parented, %d already were, %d given back to "
+            "Interchange's parent" % (changed, kept, restored))
     # Sunlight must not leak into interiors: CS2's light blockers and two-sided shadows for single-sided walls.
     hide_light_blockers(imported)
     add_shadow_proxies(imported)

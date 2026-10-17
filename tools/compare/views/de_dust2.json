@@ -22,5 +22,11 @@
     "setpos": [-1620, 278, 13],
     "setang": [0, 0, 0],
     "note": "Salmon door (dust_door_46x106_04, tint ffb4ab) behind a grille, green window bars (b6eab4, 79c677), blue awning (6fbfd8) and the green and blue garbage containers (c4cd9b, 7fb6e0)"
+  },
+  {
+    "name": "dumpster",
+    "setpos": [-1618, -14, 28],
+    "setang": [17, 0, 0],
+    "note": "Sunlit garbage container with its translucent sign (dust_garbage_dumpster_signage, csgo_vertexlitgeneric F_TRANSLUCENT): translucent surfaces lit per pixel (decision 010)"
   }
 ]

@@ -1,0 +1,8 @@
+[
+  {
+    "name": "trike",
+    "setpos": [-2520, 1160, -70],
+    "setang": [18, 218, 0],
+    "note": "Sunlit street with a trike, its windscreen (trike_glass, csgo_complex F_TRANSLUCENT) and the trim decals on the houses: translucent surfaces lit per pixel (decision 010)"
+  }
+]

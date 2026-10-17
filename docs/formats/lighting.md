@@ -313,18 +313,38 @@ masked: Lumen's surface cache sees nothing of them now.
 
 ## Translucent surfaces and overlays
 
-Unreal lights a translucent material apart from the opaque scene. Interchange's glTF material for `BLEND` uses the
-translucency lighting mode Surface TranslucencyVolume: the direct light comes from the translucency lighting volume
-and the indirect light from Lumen's translucency volume, coarse grids around the camera instead of the per-pixel
-light and virtual shadow maps of opaque surfaces. A translucent surface lying on an opaque one is therefore lit
-less than its ground in direct sun: de_nuke's road paint came out at 0.97× the sunlit asphalt's luminance (CS2
-2.35×; 2.07× now). CS2 lights an overlay with its ground's lightmap texel, so OFAST draws overlays as mesh decals,
-blended into the GBuffer before lighting ([material.md](material.md#translucent-overlays-mesh-decals),
-[decision 009](../decisions/009-overlays-as-mesh-decals.md)). Surface ForwardShading
-(`TLM_SURFACE_PER_PIXEL_LIGHTING`) gives the direct sun per pixel with shadows but keeps Lumen's translucency volume
-for the indirect light (paint 1.95× in the sun, but 1.50× and orange-brown in the shade, where the decal gives 1.86×
-and CS2's hue); it is the candidate for the other translucent materials (glass, fence and foliage cards), not applied
-yet.
+Unreal lights a translucent material apart from the opaque scene, with its **translucency lighting mode**:
+
+| Mode | Direct light | Indirect light (Lumen) | Who used it |
+|---|---|---|---|
+| Volumetric NonDirectional | translucency lighting volume, no normal | translucency volume | a new Unreal material: OFAST's environment and tint-mask masters before decision 010 |
+| Surface TranslucencyVolume (`TLM_SURFACE`) | translucency lighting volume (blurry, diffuse only) | translucency volume | Interchange's glTF master for `BLEND` (`/InterchangeAssets/gltf/M_Default`) |
+| Surface ForwardShading (`TLM_SURFACE_PER_PIXEL_LIGHTING`) | per pixel, with the shadow maps, specular | translucency volume | OFAST's translucent surfaces now |
+
+The translucency lighting volume and Lumen's translucency volume are coarse grids around the camera, not the
+per-pixel light and virtual shadow maps of opaque surfaces. A translucent surface was therefore lit less than the
+opaque ones next to it in direct sun: de_nuke's road paint came out at 0.97× the sunlit asphalt's luminance (CS2
+2.35×), the SWAT van's lettering and de_dust2's container sign at 0.81 and 0.70 of what per-pixel lighting gives.
+
+OFAST now handles translucent surfaces in two ways ([material.md](material.md#translucent-overlays-mesh-decals)):
+
+- **Surfaces lying on another one are mesh decals**, blended into the GBuffer before lighting, so they are lit with
+  their ground as CS2 lights them with their ground's lightmap texel: the overlays
+  ([decision 009](../decisions/009-overlays-as-mesh-decals.md); road paint 2.07× now) and the `csgo_complex`
+  decals with `F_DEPTH_BIAS` ([decision 010](../decisions/010-translucent-decals-and-per-pixel-lighting.md):
+  de_inferno's plaster patches, de_nuke's drain covers and van lettering).
+- **Every other translucent surface is lit with Surface ForwardShading** (glass, fence and foliage cards, signs):
+  `import_map.py` re-parents Interchange's instances to an OFAST copy of its master with that mode
+  (`M_OFAST_glTFDefault_v1`), and sets it on OFAST's own masters whose instances can be translucent. Static overlays
+  in their other blend modes (Mod2x …) and the unlit `csgo_unlitgeneric` cards keep Interchange's mode for now:
+  neither mode is right for them (a Mod2x scuff got brighter per pixel in the sun, darker in the shade).
+
+Per-pixel lighting fixes the direct sun only: the indirect light still comes from Lumen's translucency volume, so
+in the shade a translucent surface stays darker than the screen and surface-cache lighting of the wall beside it.
+That is why decals are decals: de_inferno's plaster patch on a shaded wall gets 0.62 of the wall's light factor
+(luminance / base colour, `tools/compare/light_factor.py`) per pixel and 0.80 as a decal, CS2 about 0.88 (CS2
+shows it brighter than the wall, as the decal does); the road paint in the shade was 1.50× per pixel and 1.86× as
+a decal (CS2 2.29×).
 
 ## Import styles
 

@@ -10,5 +10,11 @@
     "setpos": [-1808, -1025, -400.634],
     "setang": [3, -165, 0],
     "note": "T spawn looking at the blue metal doors (metal_door_001, tint 7ea7bc) and orange recycle bins: csgo_complex with F_TINT_MASK"
+  },
+  {
+    "name": "ctvan",
+    "setpos": [3250, -650, -300],
+    "setang": [10, 40, 0],
+    "note": "CT spawn: the SWAT van's sunlit side with its lettering (generic_swat_cards_color_tintd4ab0b, csgo_complex F_TRANSLUCENT F_DEPTH_BIAS: a mesh decal), the chain-link fence cards of the substation (chainlink_fence_001_card, translucent, lit per pixel) and the asphalt (decision 010)"
   }
 ]
