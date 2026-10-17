@@ -368,7 +368,8 @@ static overlays in their other blend modes (Mod2x, alpha test …; neither light
 their own handling) and the unlit `csgo_unlitgeneric` cards. OFAST's environment and tint-mask
 masters, whose instances can be translucent through `set_alpha_overrides`, have the per-pixel mode too. Measured in
 [decision 010](../decisions/010-translucent-decals-and-per-pixel-lighting.md): in the sun the SWAT lettering and the
-container sign were at 0.81 and 0.70 of their per-pixel luminance before.
+container sign were at 0.81 and 0.70 of their per-pixel luminance before; against CS2 their contrast with the
+surface around them went from 0.70 and 0.68 of CS2's to 0.87 and 0.91.
 
 ## Other rules
 

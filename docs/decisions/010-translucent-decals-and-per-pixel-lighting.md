@@ -128,6 +128,22 @@ Result of the imports with this change (renders in `test-data/shots/translucent_
 - **de_inferno CT spawn**: the first import with decisions 009 and 010; 10 % of the frame changed (the painted
   "SINI" advert and the "A" overlays, the plaster patches on the house corners), those pixels from 0.56 to 0.83 of
   CS2's luminance.
+- **Against CS2** (Steam F12 shots of the new views, `mat_tonemap_force_scale` at the manifest's `min_exposure`:
+  de_nuke 1.0, de_dust2 0.925, de_inferno 0.8; `test-data/shots/translucent_lighting/cs2/`). Luminance of the
+  surface over the rest of a box around it, the surface being the pixels the before and per-pixel renders disagree
+  on:
+
+  | View, surface (box) | CS2 | before | imported | of CS2: before → imported |
+  |---|---|---|---|---|
+  | de_nuke `ctvan`, SWAT lettering (`0.25,0.3,0.6,0.75`) | 1.76 | 1.24 | 1.53 | 0.70 → 0.87 |
+  | de_dust2 `dumpster`, the container's sign (`0.3,0.35,0.75,0.65`) | 1.87 | 1.27 | 1.70 | 0.68 → 0.91 |
+  | de_inferno `trike`, the cab's windows (`0,0.25,0.4,0.8`) | 0.46 | 0.37 | 0.41 | 0.80 → 0.89 |
+  | de_nuke `ctvan`, the substation's fence cards (`0,0,0.27,0.45`) | 0.92 | 0.61 | 0.65 | 0.66 → 0.71 |
+
+  The lettering's colour is now CS2's (sRGB 176, 170, 124; CS2 176, 180, 132; before 158, 157, 125). The fence
+  cards gained least and stay darker than CS2's: their thin wires do not line up to the pixel between the two
+  renderers and the background shows through, so that row is the least certain. Whole views against CS2
+  (`compare_shots.py`): `ctvan` 1.13, `dumpster` 1.00, `trike` 0.96, each within 0.01 of the render before.
 - de_nuke's CT view still differs from decision 009's render on a shaded silo pillar (4 % of the frame); the pillar
   has no translucent surface, and its luminance varied between 0.083 and 0.098 across this session's renders before
   any change was imported (bounce light settling, other sessions' imports in between). de_dust2's CT spawn (0.11 of
@@ -160,4 +176,7 @@ Result of the imports with this change (renders in `test-data/shots/translucent_
 - DBuffer decals cannot write ambient occlusion: the decals drop their occlusion texture (de_nuke's drain covers
   have one of their own; the SWAT lettering and the overlays of decision 009 use `default_ao`).
 - New views for these checks: de_nuke `ctvan`, de_dust2 `dumpster`, de_inferno `trike` (`tools/compare/views`, CS2
-  cfgs in `tools/cs2/cfg`). No CS2 shot of them yet; the CS2 comparison above uses the view-checks session's banana.
+  cfgs in `tools/cs2/cfg`), with CS2 shots in `test-data/shots/translucent_lighting/cs2/` (local only); the shaded
+  banana view is the view-checks session's.
+- Still less contrast than CS2 in the sun (0.87–0.91 of it): like decision 009's road paint (0.88–0.90), which
+  points at the same open question there (CS2's opacity or albedo for these surfaces), not at the lighting mode.
