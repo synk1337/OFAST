@@ -11,8 +11,10 @@ For each pixel the script looks up the sky radiance in that view direction and p
 radiance. With no tone curve this ratio *is* the exposure the picture was taken with, so running it on a CS2
 screenshot and on the matching Unreal one tells whether the two exposures agree, independently of any lighting.
 This is how OFAST found that CS2 shows `exposure x scene` (de_mirage, sunlit: 0.80 = minexposure) and not
-`exposure x scene / white_point` (docs/formats/lighting.md). The sky's own bloom slightly lifts the darker
-channels in CS2 (red more than blue), so read the blue channel first.
+`exposure x scene / white_point` (docs/formats/lighting.md). The red and green channels reading a few percent
+higher than blue was CS2's brightness setting, not bloom: shots taken with `r_fullscreen_gamma` below its default 2.2
+are brighter, most in the darker channels. This script reads shots as they are and ignores the colour-correction
+table; `tone_fit.py sky` handles both (`--cs2-gamma`).
 """
 
 import math

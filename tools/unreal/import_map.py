@@ -2267,14 +2267,16 @@ def setup_post(manifest):
 # Versioned like BLEND_MASTER: OFAST's replacement tone mapper (CS2's curve, then CS2's colour-correction table).
 TONEMAPPER = "/Game/OFAST/Materials/M_OFAST_Tonemap_v3"
 # Hable maps: shown = LUT(srgb(H(INPUT x) / H(WHITE W))), x = exposure x scene (what Unreal shows linearly with the
-# manual exposure above), W the .vpost white point, LUT the .vpost's colour-correction table. Measured on de_anubis,
-# whose visible sky is the sky that lights it (docs/formats/lighting.md): with the table inverted, CS2's sky pixels
-# follow the stock Hable shape; three exposure pairs (de_anubis CT and T, de_inferno CT) fix the white at 22 – 24
-# (WHITE 6, W = 4), and sky pixels of known radiance then give INPUT 3.37 – 3.44 on both de_anubis spawns. Its lit
-# surfaces agree (3.27 and 3.41), so OFAST's light is right there. The earlier rule (H(2.5 x) / H(1.25 W), no table)
-# was fitted on de_inferno's surfaces, whose light OFAST underestimates; it made de_anubis 1.3x too bright.
-HABLE_INPUT_SCALE = 3.4
-HABLE_WHITE_SCALE = 6.0
+# manual exposure above), W the .vpost white point, LUT the .vpost's colour-correction table. Measured on CS2's
+# default picture (brightness r_fullscreen_gamma 2.2; docs/formats/lighting.md) with tools/compare/tone_fit.py:
+# exposure pairs, every pixel through the table and the curve, fix the white at 4.1 – 4.2 W on de_anubis (both
+# spawns), 3.7 – 5.6 W on de_vertigo and 3.2 – 3.4 W on de_inferno; at 4.2 W the sky pixels of known radiance give the
+# same INPUT at every exposure, 2.84 on de_anubis (its visible sky is the sky that lights it) and 2.86 – 2.93 on
+# de_vertigo. The previous values (3.4, 6) were measured on shots taken with this machine's brightness setting (2.013),
+# which raises CS2's whole picture to the power 0.915; the one before (H(2.5 x) / H(1.25 W), no table) was fitted on
+# de_inferno's surfaces.
+HABLE_INPUT_SCALE = 2.85
+HABLE_WHITE_SCALE = 4.2
 TONEMAP_SCALES = {"InputScale": HABLE_INPUT_SCALE, "WhiteScale": HABLE_WHITE_SCALE}
 HABLE_PARAMETERS = {  # material parameter -> .vpost tone map key (manifest post.tonemap)
     "ShoulderStrength": "shoulder_strength",

@@ -156,7 +156,8 @@ switching it on recompiles all shaders once (long).
    `python tools/compare/compare_shots.py <cs2.jpg> <unreal.png> <out.png>` (CS2 on top, Unreal below, per-cell
    brightness ratios) and, for exposure, `python tools/compare/sky_exposure.py <map>_sky.hdr <shot> <yaw> <pitch>
    x,y …` on pure-sky pixels (linear maps; on Hable maps the curve and colour table come first, see
-   [lighting.md](formats/lighting.md#exposure-and-tone-mapping--post_processing_volume--vpost)).
+   [lighting.md](formats/lighting.md#exposure-and-tone-mapping--post_processing_volume--vpost)). To check or fit the
+   tone rule itself (exposure, curve, colour table), use `tools/compare/tone_fit.py` (debug tools below).
 4. Albedo: CS2's `mat_fullbright 1` shows the albedo × 1 whatever the locked exposure and tone curve; the matching
    Unreal render is `shoot_views.py -Try '{"console": ["ShowFlag.Lighting 0"]}'`, which runs at exposure 1 but through
    OFAST's tone mapper.
@@ -186,6 +187,7 @@ to the whole picture as shown ^ (gamma / 2.2): references taken at 2.013 show CS
 | `python tools/compare/overlay_contrast.py --box l,t,r,b <cs2.jpg> <unreal.png> [--albedo 237,179,63] [--crop out.png]` | how strong a coloured overlay (road paint) is against the ground beside it in each shot: paint and ground colour and their linear luminance ratio, in which the light cancels out; with `--albedo`, the effective opacity from base-colour shots (CS2 `mat_fullbright 1`, Unreal `ShowFlag.Lighting 0`) |
 | `python tools/compare/mark_contrast.py --box l,t,r,b <cs2.jpg> <unreal.png> [--share 0.05] [--bright] [--crop out.png]` | the same for grey marks (Mod2x grime, floor arrows, tyre marks): the darkest (`--bright`: brightest) share of the box against its median, linear luminance |
 | `run_ue.ps1 … import_map.py … -Disable sun,sky,local,bounce` | diagnostic renders without some light sources, to see what lights a spot (the level keeps that lighting until the next normal import) |
+| `python tools/compare/tone_fit.py <command> -m test-data/exports/<map> …` | whether CS2's shots follow OFAST's tone rule ([lighting.md](formats/lighting.md#exposure-and-tone-mapping--post_processing_volume--vpost)): every command inverts shots through a rule (the map's `<map>_lut.png` table, sRGB, the manifest's `post.tonemap` curve) back to exposure × scene. `pair <hi> <e> <lo> <e>`: the white from an exposure pair of one CS2 view (also without the table, to test whether it applies); `sky --view <cfg> --unreal <png> <shot> <e> … [--fit]`: k from sky pixels of known radiance; `lit <shot> <e> <png>`: k × CS2 scene / Unreal scene per cell; `light <shot> <e> <fullbright> <png> <unlit png>`: lit ÷ albedo in both engines; `simulate <png> <out> [--compare <shot>]`: an Unreal shot re-toned to another rule; `table`: the colour table. `--rule` / `--ue-rule` change OFAST's rule for CS2's / Unreal's shots (`table=0`, `table=1`, `k=3.4,white=6`, `curve=linear`); `--cs2-gamma 2.013074` reads this machine's references as CS2's default picture; `python tools/compare/tone_fit.py -h` has examples |
 | `cargo run --release --example map_outliers -- de_mirage [classes]` | stretched geometry, dropped triangles, entity classes with models |
 | `cargo run --release --example model_layout -- formats de_mirage` | vertex attribute formats used by a map |
 | `cargo run --release --example map_entities -- de_mirage [classes…]` | entity classes with counts, or every key of the given classes |

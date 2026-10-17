@@ -121,16 +121,22 @@ masks, the tone curve measured on de_anubis — H(3.4 x) / H(6 W), the colour ta
 fixes), the five maps re-exported and imported with all their views, compared the same way (`--cs2-gamma 2.013074`;
 renders in `test-data/shots/merged/`). Nearly every view reads within 0.05 of the "After" columns above. What moved:
 
-| Map | View | After (above) | Merged | Why |
-|---|---|---|---|---|
-| de_inferno | ct0 / t0 | 0.92 / 1.81 | 0.81 / 1.44 | the new tone curve (the old H(2.5 x) / H(1.25 W) was fitted on these surfaces) |
-| de_inferno | asite / bsite / middle / pit / balcony | 1.06 / 1.00 / 1.10 / 0.97 / 1.03 | 0.92 / 0.86 / 0.93 / 0.82 / 0.86 | same; de_inferno's base colours are 0.60× CS2's albedo (lighting.md) |
-| de_inferno | apartments / apartments2 / underpass / ruins / banana | 2.18 / 1.75 / 2.87 / 2.79 / 1.66 | 1.93 / 1.30 / 2.38 / 2.08 / 1.44 | same; still item 9 |
-| de_inferno | arch / library | 0.84 / 1.09 | 0.64 / 0.75 | same |
-| de_nuke | bsite | 1.00 (what-if) | 0.85 | the fixes for real (bounce-only lights, start-disabled entities); still patchy: items 6 and 7 |
-| de_nuke | observation / tunnels | 1.76 / 2.30 | 1.66 / 2.17 | same |
-| de_mirage | underpass / shop | 1.36 / 0.79 | 1.42 / 0.82 | |
-| de_anubis | ct0 / t0 | — | 1.11 / 1.08 | 1.01 / 1.01 against the uncorrected references the curve was fitted on: the fit predates the brightness correction and should be redone with it |
+| Map | View | After (above) | Merged | Refit level | Why |
+|---|---|---|---|---|---|
+| de_inferno | ct0 / t0 | 0.92 / 1.81 | 0.81 / 1.44 | 0.75 / 1.30 | the new tone curve (the old H(2.5 x) / H(1.25 W) was fitted on these surfaces) |
+| de_inferno | asite / bsite / middle / pit / balcony | 1.06 / 1.00 / 1.10 / 0.97 / 1.03 | 0.92 / 0.86 / 0.93 / 0.82 / 0.86 | 0.86 / 0.79 / 0.85 / 0.76 / 0.79 | same; de_inferno's base colours are 0.60× CS2's albedo (lighting.md) |
+| de_inferno | apartments / apartments2 / underpass / ruins / banana | 2.18 / 1.75 / 2.87 / 2.79 / 1.66 | 1.93 / 1.30 / 2.38 / 2.08 / 1.44 | 1.49 / 1.18 / 2.15 / 1.85 / 1.32 | same; still item 9 |
+| de_inferno | arch / library | 0.84 / 1.09 | 0.64 / 0.75 | 0.57 / 0.65 | same |
+| de_nuke | bsite | 1.00 (what-if) | 0.85 | — | the fixes for real (bounce-only lights, start-disabled entities); still patchy: items 6 and 7 |
+| de_nuke | observation / tunnels | 1.76 / 2.30 | 1.66 / 2.17 | — | same |
+| de_mirage | underpass / shop | 1.36 / 0.79 | 1.42 / 0.82 | — | |
+| de_anubis | ct0 / t0 | — | 1.11 / 1.08 | 1.04 / 1.02 | the merged curve was fitted on references at the brighter setting (1.01 / 1.01 against them) |
+
+**Refit level** (2026-10-18): the Hable level measured again on CS2's default picture with `tools/compare/tone_fit.py`
+— H(2.85 x) / H(4.2 W) instead of H(3.4 x) / H(6 W) ([lighting.md](formats/lighting.md#non-linear-hable-curves)) —
+and de_anubis and de_inferno re-imported with it (renders in `test-data/shots/refit/`). The linear maps (de_mirage,
+de_dust2, de_nuke) do not use it. With the level right, de_inferno's sunlit views read 0.76 – 0.86: what remains is
+its materials, and its bright interiors (item 9) come down by 10 – 25 %.
 
 New views without a CS2 reference yet: de_dust2 `dumpster`, de_inferno `trike`, de_nuke `ctvan`. de_dust2's tint
 views read 1.18 – 1.26 (sunlit, as the tint checks found).

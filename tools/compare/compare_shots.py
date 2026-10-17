@@ -10,6 +10,11 @@ ratios drawn on the Unreal half, so lighting differences can be located at a gla
 
 This is a calibration aid, not a pixel diff: the two renderers never line up to the pixel, and cells are big enough
 that small framing differences do not matter.
+
+OFAST reproduces CS2's default picture. CS2's brightness setting (`r_fullscreen_gamma`, default 2.2, in
+`cs2_machine_convars.vcfg`) raises CS2's whole picture to the power gamma / 2.2: take references at 2.2, or pass the
+value they were taken with as `--cs2-gamma` and the CS2 shot is brought back to the default picture first
+(docs/formats/lighting.md).
 """
 
 import argparse
@@ -35,11 +40,16 @@ def main():
     parser.add_argument("--cols", type=int, default=4)
     parser.add_argument("--rows", type=int, default=3)
     parser.add_argument("--width", type=int, default=1280)
+    parser.add_argument("--cs2-gamma", type=float, default=2.2,
+                        help="r_fullscreen_gamma the CS2 shot was taken with (default 2.2, CS2's own)")
     args = parser.parse_args()
 
     cs2 = Image.open(args.cs2).convert("RGB")
     height = round(args.width * cs2.height / cs2.width)
     cs2 = cs2.resize((args.width, height), Image.LANCZOS)
+    if args.cs2_gamma != 2.2:
+        default = (np.asarray(cs2, dtype=np.float64) / 255.0) ** (2.2 / args.cs2_gamma)
+        cs2 = Image.fromarray((default * 255.0 + 0.5).astype(np.uint8))
     ue = Image.open(args.unreal).convert("RGB").resize((args.width, height), Image.LANCZOS)
     a = np.asarray(cs2, dtype=np.float64)
     b = np.asarray(ue, dtype=np.float64)
