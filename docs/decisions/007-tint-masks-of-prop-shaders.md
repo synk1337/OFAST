@@ -75,8 +75,7 @@ The two maps that use the rule most, re-exported (their exports predated decisio
 - **de_dust2's T spawn**, against CS2's screenshot. The kerb's white segments are `dust_curbs_001_painted_notint`
   (`F_NOTINT`): OFAST tinted them pink, mean sRGB (214, 154, 143); now (255, 250, 236), CS2 (252, 241, 229). The red
   segments (masked, tint d8d2c7) went from (212, 154, 141) to (217, 167, 153), CS2 (213, 166, 151). 1.8 % of the
-  view's pixels changed, the CT view 0.2 %, the overview 0.4 %. The T spawn's green door (`tdoor` view, masked
-  a5e9b9) renders green behind its grille; there is no CS2 shot of that view yet (below).
+  view's pixels changed, the CT view 0.2 %, the overview 0.4 %.
 - **de_nuke's T spawn** (`summary_cs2_before_now.jpg`). The blue door (`metal_door_001`, masked, tint 7ea7bc) has
   a light kick plate again, as in CS2 (the factor had painted it blue), and CS2's hue (203°, CS2 202°, before 210°).
   The orange-yellow bin's sticker (masked, edb33f) is white and blue as in CS2 instead of yellow, and the bin's hue
@@ -102,11 +101,24 @@ have no vertex colour, and the asphalt under them is grey. The yellow turned out
 tint (`m_vTintColor` inside the model's `MDAT`), which OFAST did not read: see
 [decision 008](008-draw-call-tints.md).
 
-Views of tinted props were added, chosen from the export's placements and tried with `shoot_views.py -Views`
-(no re-import needed): de_dust2 `tdoor`, `tbluedoor`, `tcar`, `tsalmon` (doors, frames, awnings, window bars, the
-taxi, bins), de_nuke `ctcrates` and `tdoors` (`tools/compare/views/<map>.json`, and `tools/cs2/cfg/ofast_v_<map>_<view>.cfg`
-for CS2). Their CS2 screenshots were not taken: driving CS2 was declined for this session. The Unreal renders are
-in the same folder.
+**Six views of tinted props**, chosen from the export's placements and tried with `shoot_views.py -Views` (no
+re-import needed): de_dust2 `tdoor`, `tbluedoor`, `tcar`, `tsalmon`, de_nuke `ctcrates`, `tdoors`
+(`tools/compare/views/<map>.json`, `tools/cs2/cfg/ofast_v_<map>_<view>.cfg`). CS2 at `mat_tonemap_force_scale` 0.8
+(de_dust2) and 1 (de_nuke), captured with Steam's F12 screenshot (`cs2_<map>_<view>.jpg`,
+`summary_tint_views_cs2_vs_unreal.jpg`):
+
+- **Every masked tint matches CS2 by eye**: the green, light-blue and salmon doors (painted panels tinted, brass
+  knobs not), door frames, awnings, green window bars, the taxi, the green and blue bins, de_nuke's red
+  crate, yellow bins and blue door. Measured: the salmon door (127, 100, 90) in CS2, (128, 100, 88) in Unreal; the
+  light-blue door's frame (198, 172, 141) and (202, 173, 141); the green bin (139, 131, 90) and (137, 128, 91); the
+  red crate's hue 9° and 8°; the taxi's hue 33° and 34°.
+- **Blue tints in the shade stay less saturated** (de_dust2's blue bin 0.17, CS2 0.25; de_nuke's door 0.18, CS2
+  0.28), as at the T spawn above: the shade's colour, not the mask.
+- **Brightness**: de_nuke's views 1.02 and 0.98 of CS2; de_dust2's four sunlit views 1.12 – 1.19 (the T spawn view:
+  0.96). A desktop screenshot and the Steam capture of the same CS2 frame agree within 3 %, so the capture method
+  is not the cause; it is the light level of sunlit facades, outside this decision.
+- Other differences, not tints: de_nuke's distant backdrop (mountains in CS2, green hills in Unreal) and the white
+  road paint (above).
 
 ## Alternatives considered
 

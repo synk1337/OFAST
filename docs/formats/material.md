@@ -235,7 +235,8 @@ How OFAST writes them:
   Checked on de_inferno against CS2: the T-spawn tree and the CT spawn's flower boxes have green leaves and red
   flowers, as in CS2, instead of being red all over (decision 007). On de_dust2 the T spawn's kerb is red and white
   as in CS2 (its white segments are `F_NOTINT` and were tinted pink), and on de_nuke the T spawn's blue door has
-  CS2's hue. Tinted props on de_nuke stay a little less saturated than CS2, masked or not, like its untinted shaded
+  CS2's hue. Six views aimed at tinted doors, window bars, bins, a taxi and crates on the two maps
+  (`tools/compare/views/`) match CS2 by eye and within a few sRGB levels where measured. Tinted props on de_nuke stay a little less saturated than CS2, masked or not, like its untinted shaded
   walls: lighting or CS2's colour LUT, not the tint (decision 007).
 - **`ofast export-map --bake-model-tints`**: the masked tint is baked into a colour texture of its own
   (`<texture>_tint_<hash>.png`, `"baked": true`), for other glTF readers. Masks on the second UV set have another
