@@ -152,11 +152,23 @@ switching it on recompiles all shaders once (long).
    brightness ratios) and, for exposure, `python tools/compare/sky_exposure.py <map>_sky.hdr <shot> <yaw> <pitch>
    x,y …` on pure-sky pixels.
 
+Many views at once ([checks.md](checks.md)): `python tools/cs2/make_view_cfgs.py <map> <exposure> [views]` writes
+`ofast_v_<map>_<view>.cfg` for every view of `tools/compare/views/<map>.json` and a tour, `ofast_tour_<map>.cfg`, that
+locks the exposure and binds **F8** to the next view and **F9** to the current one. In CS2: `exec ofast_setup`,
+`exec ofast_tour_<map>`, close the console, then per view F8, a moment for the picture to settle, F9, Steam's F12
+(the console echoes `OFAST view n/N <name>`); `unbind F8; unbind F9` at the end. A changed map keeps `noclip` on
+after the round restart, so check its state (`noclip` prints it) instead of running the setup twice. Rename the
+captures to `cs2_<map>_<view>.jpg` in capture order and compare them all with
+`python tools/compare/compare_views.py --cs2-gamma <r_fullscreen_gamma> <cs2 dir> <unreal dir> <out dir> <map>…`.
+`--cs2-gamma` undoes CS2's brightness setting (`r_fullscreen_gamma` in Steam's
+`userdata/<id>/730/local/cfg/cs2_machine_convars.vcfg`, default 2.2; this machine's is 2.013074), which CS2 applies
+to the whole picture as shown ^ (gamma / 2.2): references taken at 2.013 show CS2's darks about 13 % too bright.
+
 ### Debug tools for maps
 
 | Tool | What it answers |
 |---|---|
-| `cargo run --release --example map_raycast -- de_mirage ct0 "x,y;x,y"` (or a view `"x,y,z,pitch,yaw"` from CS2's setpos/setang) | which model/material OFAST's geometry has under a screenshot pixel, and where (Source units). A view placed at that point, with z − 64 and the angles toward the sun, shows what shades it |
+| `cargo run --release --example map_raycast -- de_mirage ct0 "x,y;x,y"` (or a view `"x,y,z,pitch,yaw"` from CS2's setpos/setang) | which model/material OFAST's geometry has under a screenshot pixel, and where (Source units). A view placed at that point, with z − 64 and the angles toward the sun, shows what shades it. Looking straight down (pitch 89.99) from a guessed spot gives the floor height for a new view's `setpos`; `map_entities -- <map> env_cs_place point_devshot_camera` gives the map's named places and Valve's own screenshot cameras to start from |
 | `tools/unreal/shoot_views.py` (`-Name <map>` or `<map>_realistic`, `-Only ct0,palace`, `-Views tools/compare/views/<map>.json`, `-Try what-if.json`) | re-shoots the import's saved cameras without importing again (~1 min), plus cameras for a `-Views` file (added for that run only, so new viewpoints can be tried without an import), optionally with what-if settings (not saved; pass them as a .json file — PowerShell strips the quotes of inline JSON): light properties, `sun_rotation`, `meshes` (component properties), `blockers` (light blockers only), `proxies` (shadow proxies only; in these three groups `"visible"` and `"material"` work too), `post`, `console` (commands such as `ShowFlag.Lighting 0` for a base-colour render to compare with CS2's `mat_fullbright 1`) — see the script's docstring. A changed `cast_shadow` alone did not reach the renderer in one test; change `visible` with it |
 | `run_ue.ps1 … import_map.py … -Disable sun,sky,local,bounce` | diagnostic renders without some light sources, to see what lights a spot (the level keeps that lighting until the next normal import) |
 | `cargo run --release --example map_outliers -- de_mirage [classes]` | stretched geometry, dropped triangles, entity classes with models |

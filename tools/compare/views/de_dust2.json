@@ -22,5 +22,77 @@
     "setpos": [-1620, 278, 13],
     "setang": [0, 0, 0],
     "note": "Salmon door (dust_door_46x106_04, tint ffb4ab) behind a grille, green window bars (b6eab4, 79c677), blue awning (6fbfd8) and the green and blue garbage containers (c4cd9b, 7fb6e0)"
+  },
+  {
+    "name": "asite",
+    "setpos": [1156, 2356, 99],
+    "setang": [3, 135, 0],
+    "note": "A site, sunlit: the A marking, crates and the white building of A short"
+  },
+  {
+    "name": "longa",
+    "setpos": [1428, 1544, -6],
+    "setang": [3, 45, 0],
+    "note": "Long A looking up the road toward A: sunlit asphalt, car, long shadows"
+  },
+  {
+    "name": "pit",
+    "setpos": [1360, 456, -123],
+    "setang": [-5, 30, 0],
+    "note": "Pit, looking up the slope toward long: shaded white wall, sunlit road"
+  },
+  {
+    "name": "outsidelong",
+    "setpos": [416, -188, -3],
+    "setang": [3, 45, 0],
+    "note": "Outside long: the ornate gate and the yellow car"
+  },
+  {
+    "name": "bsite",
+    "setpos": [-1764, 2660, 32],
+    "setang": [3, 180, 0],
+    "note": "B site, sunlit, looking at the B doors and the barrels"
+  },
+  {
+    "name": "bwindow",
+    "setpos": [-1316, 2660, 129],
+    "setang": [10, 180, 0],
+    "note": "From the B window ledge looking down over B site"
+  },
+  {
+    "name": "uppertunnel",
+    "setpos": [-1660, 832, 31],
+    "setang": [0, 90, 0],
+    "note": "Upper tunnels, inside: dark plaster corridor (hr_dust_plaster_18b_bounce)"
+  },
+  {
+    "name": "uppertunnel2",
+    "setpos": [-1984, 1604, 32],
+    "setang": [0, 90, 0],
+    "note": "Upper tunnels' exit to B: dark tunnel walls framing the sunlit site"
+  },
+  {
+    "name": "lowertunnel",
+    "setpos": [-872, 1408, -111],
+    "setang": [0, 0, 0],
+    "note": "Lower tunnels: dim corridor with crates, looking at the arch to mid"
+  },
+  {
+    "name": "middle",
+    "setpos": [-384, 1136, -94],
+    "setang": [3, 90, 0],
+    "note": "Middle, looking at mid doors: shaded walls, sunlit sand"
+  },
+  {
+    "name": "middoors",
+    "setpos": [-384, 2036, -127],
+    "setang": [3, 90, 0],
+    "note": "Past mid doors toward CT: the flatbed truck, covered passage"
+  },
+  {
+    "name": "undera",
+    "setpos": [892, 2156, -24],
+    "setang": [3, 0, 0],
+    "note": "Under A / CT side street toward A: shaded street, sunlit buildings"
   }
 ]

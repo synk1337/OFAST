@@ -10,5 +10,77 @@
     "setpos": [-1808, -1025, -400.634],
     "setang": [3, -165, 0],
     "note": "T spawn looking at the blue metal doors (metal_door_001, tint 7ea7bc) and orange recycle bins: csgo_complex with F_TINT_MASK"
+  },
+  {
+    "name": "bsite",
+    "setpos": [412, -100, -639],
+    "setang": [4, 304, 0],
+    "note": "B site (lower level) from the ramp side, Valve's devshot camera interiord: lit only by light_barn fixtures (13000 K fluorescent panels with a 5078-unit range, bell lamps)"
+  },
+  {
+    "name": "bsite2",
+    "setpos": [976, -520, -639],
+    "setang": [4, 143.3, 0],
+    "note": "B site from the far corner, looking back at the reactor and the fluorescent panels under the ramp room"
+  },
+  {
+    "name": "observation",
+    "setpos": [1212, -500, -639],
+    "setang": [3, 200, 0],
+    "note": "Observation room next to B site (lower level): window onto the site, warm light_barn panels"
+  },
+  {
+    "name": "decon",
+    "setpos": [188, -1388, -775],
+    "setang": [3, 225, 0],
+    "note": "Decontamination room, the lowest level under A: small dark room, frosted glass window"
+  },
+  {
+    "name": "decondoor",
+    "setpos": [268, -1624, -767],
+    "setang": [3, 135, 0],
+    "note": "Lower tunnels at the decontamination door: bright corridor beside a dark room with the B sign"
+  },
+  {
+    "name": "tunnels",
+    "setpos": [1324, -972, -767],
+    "setang": [3, 180, 0],
+    "note": "Lower tunnels under the main building, looking along the corridor to a lit doorway"
+  },
+  {
+    "name": "secret",
+    "setpos": [1512, -2125, -639],
+    "setang": [3, 45, 0],
+    "note": "Secret (lower level, outside-to-B route): tanks and pipes in a painted concrete room"
+  },
+  {
+    "name": "ramproom",
+    "setpos": [636, -133, -415],
+    "setang": [5, 45, 0],
+    "note": "Ramp room above B site: polished floor, roll-up door, ceiling lights"
+  },
+  {
+    "name": "asite",
+    "setpos": [916, -1406, -450],
+    "setang": [-3, 119.5, 0],
+    "note": "A site inside the main building, Valve's devshot camera interiorc: barrels, crane, light from the roof"
+  },
+  {
+    "name": "lobby",
+    "setpos": [-274, -1096, -408],
+    "setang": [3, 24, 0],
+    "note": "Lobby (T entrance to the main building), Valve's devshot camera interiorb"
+  },
+  {
+    "name": "outside",
+    "setpos": [1082, -1140, -298],
+    "setang": [5, 317.5, 0],
+    "note": "Outside yard, sunlit, Valve's devshot camera warehouse"
+  },
+  {
+    "name": "garage",
+    "setpos": [2018, -1656, -446],
+    "setang": [0, 214.5, 0],
+    "note": "Garage interior by the yard, Valve's devshot camera warehouseinterior: sunlight through the open door"
   }
 ]

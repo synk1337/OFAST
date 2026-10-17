@@ -53,13 +53,44 @@ hemisphere average); black on de_mirage (albedo 0).
   32 × 32 units; likewise the omni2 default 9816 nits ↔ a sphere of radius 2). A `light_barn`'s `size_params` is its
   barn-door aperture instead; its emitter is `luminaire_size` (default 4) — OFAST uses that as a square and ignores
   the barn doors for now. `light_spot` uses `innerconeangle` / `outerconeangle`.
-- `range` is where the light has faded out (linearly over the last `skirt` fraction); `bouncescale` scales its bounce
-  in the bake (≈ Unreal's Indirect Lighting Intensity, × 2 — see the bounce gains).
-- de_mirage's lights are `directlight` 1 ("Static": fully baked into the lightmaps, bounce included).
+- `range` is where the light has faded out: full strength up to `range × (1 − skirt)`, then linear down to nothing
+  at `range` (Source 2 Viewer's `SceneLight.ComputeDistanceFade`; `skirt` defaults to 0.1, and 0 means no fade before
+  the cut — most of de_nuke's lights). `bouncescale` scales its bounce in the bake (≈ Unreal's Indirect Lighting
+  Intensity, × 2 — see the bounce gains).
+- `directlight`: 1 "Static" (fully baked into the lightmaps, bounce included; all of de_mirage's lights but six),
+  3 "Stationary" (direct light at run time, baked shadows), 2 "Dynamic", and **0 "None": no direct light at all, the
+  light only adds bounce to the bake** (de_mirage 6, de_dust2 1, de_inferno 17, de_nuke 6 — fill lights by windows
+  and doors, e.g. the one 94 units from de_dust2's pit wall).
 
 In the glTF they are `KHR_lights_punctual` approximations (rect → wide spot) for any tool. Unreal's Interchange drops
 the glTF `range` (every light gets a 10 m attenuation radius), so `import_map.py` replaces them with Unreal Point,
-Spot and **Rect** lights built from the manifest's `lights` list: exact shape, size, range, colour and bounce, movable.
+Spot and **Rect** lights built from the manifest's `lights` list: exact shape, size, range (`attenuation_radius`,
+with `skirt`), colour, bounce and `direct` (the `directlight` value), movable.
+
+**Range.** Unreal's inverse-square lights do not keep full strength up to a cut: they fade over their whole
+attenuation radius with the window (1 − (d / radius)⁴)², which is 0.35 at 80 % of the radius and 0.01 at 97 %. CS2
+maps often set a range just long enough to reach the floor (de_dust2's lower-tunnel lamp: range 205, 199 units above
+the floor), so a radius equal to the range left those floors almost unlit: de_dust2's lower tunnel 0.32 of CS2,
+de_nuke's B site 0.50 and its decontamination room 0.24 ([checks.md](../checks.md)). `import_map.py`
+(`light_radius`) sets the radius to range × (1.375 − 0.725 × skirt): the factor that fits the window to CS2's fade
+best (least squares, weighted by 1 / distance²), within 0.04 for any skirt from 0 to 1 — 1.375 for skirt 0, 1.3 for
+the default 0.1. Some light then reaches a little past CS2's cut, and a little less arrives just before it.
+
+**Bounce-only lights (`directlight` 0).** Unreal has no light that only bounces, but Lumen lights its surface cache
+with the light's colour × Indirect Lighting Intensity × Diffuse Scale (`LumenSceneDirectLighting.cpp` / `.ush`),
+where the direct light gets colour × Diffuse Scale only. `import_map.py` gives these lights a Diffuse Scale of 0.02,
+no specular, and an Indirect Lighting Intensity 50× higher: the bounce stays as for any light, 2 % of the direct
+light is left. Before, they lit their surroundings directly in Unreal, where CS2 shows only their bounce.
+
+**Many shadowed lights.** With the engine's virtual shadow map limits (a pool of 4096 pages, 16 lights per pixel in
+one-pass projection) de_nuke's 174 shadowed local lights overflow both ("Virtual Shadow Map Page Pool overflow (1413
+page allocations were not served), this will produce visual artifacts (missing shadow)" in the log): whole pages of
+shadow go missing, which showed as blocky patches of light on de_nuke's B site that changed shape from one render to
+the next. The sandbox's `DefaultEngine.ini` (`[SystemSettings]`) and `import_map.py` / `shoot_views.py`
+(`RENDER_CVARS`) raise them to 16384 pages and 32 lights per pixel: the page pool no longer overflows. 32 is the
+engine's maximum (`VirtualShadowMapArray.cpp` clamps it); de_nuke still logs one light-list overflow per render, which
+only costs the lights beyond 32 at a pixel their full shadow filtering. CS2 itself logs "failed to allocate … shadow
+from atlas" on de_nuke.
 
 **Unreal rect lights shine twice their candela value** along their axis: `RectLightSceneProxy.cpp` sets the luminance
 to intensity / (0.5 × width × height), while point and spot lights use the intensity as is. `import_map.py` halves
@@ -263,6 +294,10 @@ curve on de_inferno (Unreal / CS2, whole image):
 | de_inferno CT | 1.08 (linear picture) | 0.85 | ground 0.93 – 1.01; façades and loggia in the shade 0.75 – 0.85 |
 | de_inferno T | 2.7 | 1.46 | the street is shaded as in CS2 (0.98 – 1.18); a pillar and the floor by the arch get sunlight that CS2 shades (1.4 – 2.3) |
 | de_nuke CT / T | 1.05 / 0.97 | 0.98 / 0.96 | |
+
+Ten to fourteen more views per map (bomb sites, routes, interiors, lower levels) are in [checks.md](../checks.md),
+with the fixes they led to (light range, bounce-only lights, shadow-map limits, start-disabled entities). Its numbers
+undo CS2's brightness setting in the references, which the tables above do not.
 
 ## Shadows from the back of walls
 
