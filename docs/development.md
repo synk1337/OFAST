@@ -148,7 +148,11 @@ switching it on recompiles all shaders once (long).
    and the view drifts once the console closes: bind a key to the view (`bind F8 "exec ofast_v_…"`, `unbind F8`
    afterwards), press it right before the screenshot, and check `getpos`. After `map` from the main menu the player
    has no team: `jointeam 3; mp_restartgame 1`.
-3. Screenshot (CS2's own captures repeat to within 0.1 %), then compare:
+3. Screenshot (CS2's own captures repeat to within 0.1 %). CS2 has no `jpeg`/`screenshot` console command; Steam's
+   F12 overlay capture saves the full game frame to `Steam/userdata/<id>/760/remote/730/screenshots/`, unaffected
+   by windows over the game (a desktop screenshot of the same frame agreed within 3 %). Lock the exposure for
+   comparisons (`mat_tonemap_force_scale`, see [lighting.md](formats/lighting.md)). Views can be several keys at once
+   (`bind F6 "exec ofast_v_<map>_<view>"`, …; restore the user's binds afterwards). Then compare:
    `python tools/compare/compare_shots.py <cs2.jpg> <unreal.png> <out.png>` (CS2 on top, Unreal below, per-cell
    brightness ratios) and, for exposure, `python tools/compare/sky_exposure.py <map>_sky.hdr <shot> <yaw> <pitch>
    x,y …` on pure-sky pixels.
