@@ -17,7 +17,8 @@ Interchange *scene* import of the glTF (one actor per placement; what an older e
 re-run always shows the current glTF: evict_stale_interchange_assets) → layer-blend and height-blend materials (two-layer
 CS2 materials, which glTF cannot describe), single-layer environment materials (their model tint is applied in the
 material, not baked into the textures) and tinted props with a tint mask (the tint only where the mask is set;
-OFAST's instances and textures no export uses any more are deleted: delete_unused_ofast_assets) → translucent overlays
+OFAST's instances and textures no export uses any more are deleted: delete_unused_ofast_assets), and Mod2x overlays
+(grime, scuffs: a Modulate material multiplying what lies under them, mod2x_instances) → translucent overlays
 (road paint, signs) as mesh decals, lit with the surface under them as in CS2 (put_overlay_decals) → light blockers hidden and
 shadow proxies added (no sunlight through single-sided walls) → 3D skybox drawn behind the world → CS2's environment from the manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
 exposure, no tone curve or CS2's Hable curve (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
@@ -1509,9 +1510,10 @@ OVERLAY_MASTER = "/Game/OFAST/Materials/M_OFAST_OverlayDecal_v1"
 def is_decal_overlay(material):
     """Whether a glTF material is a CS2 overlay blended with plain alpha over the surface under it, i.e. one that
     becomes a mesh decal: csgo_lightmappedgeneric with F_OVERLAY (always with F_TRANSLUCENT on the maps checked), and
-    lit csgo_static_overlay in its Translucent blend mode (F_BLEND_MODE 1). Not the static overlays' other modes:
-    0 Opaque, 2 Alpha Test, 3 Mod2x (unlit; Valve's DstBlend One), 4 Additive, 5 Multiply, 6 ModThenAdd (from the
-    shader's feature list in GameTracking-CS2), which the exporter still writes as plain BLEND (decision 009)."""
+    lit csgo_static_overlay in its Translucent blend mode (F_BLEND_MODE 1). Not the static overlays' other modes
+    (OverlayBlend in ofast-core's glTF writer): 0 Opaque and 2 Alpha Test are exported as OPAQUE and MASK and keep
+    Interchange's lit materials (the exporter lifts overlays 2.5 mm off their surface, so they win the depth test),
+    3 Mod2x gets the Modulate material of is_mod2x_overlay (decision 010)."""
     if material.get("alphaMode") != "BLEND":
         return False
     ofast = material.get("extras", {}).get("ofast", {})
@@ -1633,6 +1635,167 @@ def put_overlay_decals(imported, instances):
                     swapped += 1
                     break
     return swapped
+
+
+# Versioned like BLEND_MASTER: csgo_static_overlay's Mod2x blend mode (F_BLEND_MODE 3: de_nuke's 30 grime, scuff,
+# floor-marking and caustics overlays, 1-4 on the other maps). CS2 draws it unlit, after the lit surfaces, with
+# DstBlend One and its colour texture read without sRGB decoding (SrgbRead(false)): what lies under the overlay is
+# multiplied by lerp(1, 2 x colour x tint, colour alpha x tint alpha) — Source 2 Viewer's renderer writes
+# lerp(0.5, colour, alpha) for a 2 x source x destination blend, Source 1's decal modulate did the same. 128 grey
+# changes nothing, footprints and tyre marks darken, scratches and caustics brighten up to 2x. Unreal's Modulate blend
+# multiplies the scene colour by the material's output the same way (BF_DestColor x source, on the HDR scene colour
+# before the tone curve, so values above 1 brighten). A Modulate *decal* cannot: with DBuffer decals (r.DBuffer, which
+# the overlay decals need) Unreal turns it into a plain translucent decal (FinalizeBlendDesc in
+# DecalRenderingCommon.cpp), and the DBuffer can only scale the base colour by one value from 0 to 1 and add a colour
+# (ApplyDBufferData: BaseColor x ColorOpacity + PreMulColor): no brightening, no per-channel multiply (decision 010).
+# Rendered before depth of field, so it is blurred with the surface it lies on.
+MOD2X_MASTER = "/Game/OFAST/Materials/M_OFAST_OverlayMod2x_v1"
+# The texture animation of an overlay (F_TEXTURE_ANIMATION; de_nuke's caustics: 60 cells of an 8 x 8 atlas, 0.05 s
+# each) in its sequential mode: the cell shown at a time, cells row by row from the top left. A still overlay has a
+# 1 x 1 grid: the UV is unchanged. Inputs UV, Grid (cells across, down), Cells (how many are used), SecondsPerFrame,
+# TimeOffset, Time.
+MOD2X_FLIPBOOK_HLSL = """float frame = floor(fmod(max(Time + TimeOffset, 0.0) / max(SecondsPerFrame, 0.0001), max(Cells, 1.0)));
+float2 grid = max(Grid.xy, float2(1.0, 1.0));
+float2 cell = float2(fmod(frame, grid.x), floor(frame / grid.x));
+return (UV + cell) / grid;"""
+# The multiplier. Inputs Color (the texture's raw RGB), Alpha, Tint (BaseColorFactor RGB, linear like the tint CS2's
+# vertex shader decodes) and TintAlpha (a draw call's alpha).
+MOD2X_HLSL = "return lerp(float3(1.0, 1.0, 1.0), 2.0 * Color.rgb * Tint.rgb, Alpha * TintAlpha);"
+
+
+def is_mod2x_overlay(material):
+    """Whether a glTF material is a csgo_static_overlay in its Mod2x blend mode (F_BLEND_MODE 3). The exporter writes
+    it as BLEND (glTF has no multiply blend); Unreal gets an instance of MOD2X_MASTER (mod2x_instances)."""
+    ofast = material.get("extras", {}).get("ofast", {})
+    return ofast.get("shader") == "csgo_static_overlay.vfx" and ofast.get("ints", {}).get("F_BLEND_MODE") == 3
+
+
+def custom_node(material, description, output_type, code, inputs, x, y):
+    """A Custom (HLSL) expression whose inputs [(input name, source node, source output)] are created and
+    connected."""
+    mel = unreal.MaterialEditingLibrary
+    node = mel.create_material_expression(material, unreal.MaterialExpressionCustom, x, y)
+    node.set_editor_property("description", description)
+    node.set_editor_property("output_type", output_type)
+    node.set_editor_property("code", code)
+    custom_inputs = []
+    for input_name, _source, _output in inputs:
+        custom_input = unreal.CustomInput()
+        custom_input.set_editor_property("input_name", input_name)
+        custom_inputs.append(custom_input)
+    node.set_editor_property("inputs", custom_inputs)
+    for input_name, source, output in inputs:
+        if not mel.connect_material_expressions(source, output, node, input_name):
+            raise RuntimeError("%s: could not connect %s" % (description, input_name))
+    return node
+
+
+def ensure_mod2x_master(defaults):
+    """MOD2X_MASTER, built once by script: Surface domain, Modulate blend, unlit, translucency before depth of field.
+    Emissive (what Modulate multiplies the scene colour by) = MOD2X_HLSL of BaseColorTexture, sampled as linear (the
+    instances' textures are imported without sRGB, as CS2 reads them) at MOD2X_FLIPBOOK_HLSL's UV, and of
+    BaseColorFactor. The animation parameters AnimationGrid (R cells across, G down), AnimationCells,
+    AnimationSecondsPerFrame and AnimationTimeOffset default to a still 1 x 1 grid. `defaults` holds the "mask"
+    default texture (white: an instance always sets its own texture)."""
+    if unreal.EditorAssetLibrary.does_asset_exist(MOD2X_MASTER):
+        return unreal.EditorAssetLibrary.load_asset(MOD2X_MASTER)
+    folder, name = MOD2X_MASTER.rsplit("/", 1)
+    material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, folder, unreal.Material, unreal.MaterialFactoryNew())
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MODULATE)
+    material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    material.set_editor_property("translucency_pass", unreal.MaterialTranslucencyPass.MTP_BEFORE_DOF)
+    mel = unreal.MaterialEditingLibrary
+    uv = mel.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate, -1500, -200)
+    grid = mel.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -1500, 0)
+    grid.set_editor_property("parameter_name", "AnimationGrid")
+    grid.set_editor_property("default_value", unreal.LinearColor(1, 1, 0, 0))
+    cells = scalar_parameter(material, "AnimationCells", 1.0, -1500, 250)
+    seconds = scalar_parameter(material, "AnimationSecondsPerFrame", 1.0, -1500, 350)
+    offset = scalar_parameter(material, "AnimationTimeOffset", 0.0, -1500, 450)
+    clock = mel.create_material_expression(material, unreal.MaterialExpressionTime, -1500, 550)
+    flipbook = custom_node(material, "FlipbookUV", unreal.CustomMaterialOutputType.CMOT_FLOAT2,
+                           MOD2X_FLIPBOOK_HLSL, [("UV", uv, ""), ("Grid", grid, ""), ("Cells", cells, ""),
+                                                 ("SecondsPerFrame", seconds, ""), ("TimeOffset", offset, ""),
+                                                 ("Time", clock, "")], -1100, 0)
+    color = texture_parameter(material, "BaseColorTexture", "linear", defaults["mask"], -800, 0)
+    if not mel.connect_material_expressions(flipbook, "", color, "UVs"):
+        raise RuntimeError("mod2x master: could not connect the UVs")
+    factor = mel.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -800, 350)
+    factor.set_editor_property("parameter_name", "BaseColorFactor")
+    factor.set_editor_property("default_value", unreal.LinearColor(1, 1, 1, 1))
+    multiplier = custom_node(material, "Mod2x", unreal.CustomMaterialOutputType.CMOT_FLOAT3, MOD2X_HLSL,
+                             [("Color", color, "RGB"), ("Alpha", color, "A"), ("Tint", factor, ""),
+                              ("TintAlpha", factor, "A")], -400, 0)
+    if not mel.connect_material_property(multiplier, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR):
+        raise RuntimeError("mod2x master: could not connect the emissive colour")
+    mel.recompile_material(material)
+    unreal.EditorAssetLibrary.save_asset(MOD2X_MASTER)
+    log("created " + MOD2X_MASTER)
+    return material
+
+
+def set_two_sided_override(instance, two_sided):
+    """The glTF material's doubleSided as an override of the instance's (single-sided) master, written only when it
+    changes. Not set_alpha_overrides: that would also override the Modulate blend mode with glTF's BLEND."""
+    overrides = instance.get_editor_property("base_property_overrides")
+    if (overrides.get_editor_property("override_two_sided") != two_sided
+            or overrides.get_editor_property("two_sided") != two_sided):
+        overrides.set_editor_property("override_two_sided", two_sided)
+        overrides.set_editor_property("two_sided", two_sided)
+        instance.set_editor_property("base_property_overrides", overrides)
+        CHANGED_INSTANCES.add(instance.get_path_name())
+
+
+def mod2x_instances():
+    """An instance of MOD2X_MASTER for every Mod2x overlay with a colour texture (is_mod2x_overlay): the texture
+    imported as linear (no Mod2x PNG is shared with another material on the six exported maps, so this import kind
+    does not clash with a colour import of the same file), BaseColorFactor, the glTF material's doubleSided, and the
+    texture animation of F_TEXTURE_ANIMATION: g_vAnimationGrid, g_nNumAnimationCells, g_flAnimationTimePerFrame and
+    g_flAnimationTimeOffset (the shader's defaults 1 x 1, the whole grid, 0.1 s, 0), shown in the sequential mode
+    whatever F_TEXTURE_ANIMATION_MODE says (de_nuke's three caustics materials are sequential). Returns glTF material
+    name -> instance; main() puts them on the meshes with the other OFAST materials (swap_material_slots): unlike a
+    decal, a Modulate surface also works on the 3D skybox's copies (none on the maps checked)."""
+    with open(GLTF) as f:
+        document = json.load(f)
+
+    def image(slot):
+        info = slot and document["textures"][slot["index"]]
+        return document["images"][info["source"]]["uri"] if info else None
+
+    instances = {}
+    master = None
+    animated = 0
+    for material in document.get("materials", []):
+        if not is_mod2x_overlay(material):
+            continue
+        pbr = material.get("pbrMetallicRoughness", {})
+        uri = image(pbr.get("baseColorTexture"))
+        if not uri:
+            continue  # nothing to multiply by: keeps Interchange's material
+        master = master or ensure_mod2x_master(default_textures())
+        instance = blend_instance(material["name"], master)
+        set_texture_parameter(instance, "BaseColorTexture", import_texture(uri, BLEND_FOLDER, "linear"))
+        r, g, b, a = pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])
+        set_vector_parameter(instance, "BaseColorFactor", unreal.LinearColor(r, g, b, a))
+        ofast = material["extras"]["ofast"]
+        ints, floats, vectors = ofast.get("ints", {}), ofast.get("floats", {}), ofast.get("vectors", {})
+        grid, cells, seconds, offset = (1.0, 1.0), 1, 1.0, 0.0
+        if ints.get("F_TEXTURE_ANIMATION"):
+            grid = tuple(max(1.0, float(v)) for v in vectors.get("g_vAnimationGrid", [1.0, 1.0])[:2])
+            cells = ints.get("g_nNumAnimationCells") or int(grid[0] * grid[1])
+            seconds = floats.get("g_flAnimationTimePerFrame", 0.1)
+            offset = floats.get("g_flAnimationTimeOffset", 0.0)
+            animated += 1
+        set_vector_parameter(instance, "AnimationGrid", unreal.LinearColor(grid[0], grid[1], 0.0, 0.0))
+        set_scalar_parameter(instance, "AnimationCells", cells)
+        set_scalar_parameter(instance, "AnimationSecondsPerFrame", seconds)
+        set_scalar_parameter(instance, "AnimationTimeOffset", offset)
+        set_two_sided_override(instance, bool(material.get("doubleSided")))
+        instances[material["name"]] = instance
+    if instances:
+        log("Mod2x overlays: %d materials (%d animated)" % (len(instances), animated))
+    return instances
 
 
 # Lumen carries less bounce light than CS2's path-traced lightmaps. Measured compensation on top of CS2's own bounce
@@ -2177,6 +2340,8 @@ def main():
     blends.update(height_blend_instances())
     blends.update(environment_instances())
     blends.update(tint_mask_instances())
+    # Mod2x overlays (grime, scuffs) multiply what lies under them: a Modulate material, on the meshes like the above.
+    blends.update(mod2x_instances())
     # Translucent overlays become mesh decals, lit with the surface under them (put on the meshes' placements, not
     # the meshes: the 3D skybox keeps the translucent material).
     overlays = overlay_instances()

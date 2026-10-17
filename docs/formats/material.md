@@ -344,17 +344,69 @@ beside them, linear luminance; details, the per-pixel translucent alternative an
 opacity or its asphalt's albedo, open) in [decision 009](../decisions/009-overlays-as-mesh-decals.md). In Unreal's
 base-colour view the paint is a plain alpha blend at the texture's opacity (0.43–0.45 measured, texture 0.49).
 
-`csgo_static_overlay`'s other blend modes (`F_BLEND_MODE` 0 Opaque, 2 Alpha Test, 3 Mod2x, 4 Additive, 5 Multiply,
-6 ModThenAdd, from its feature list in GameTracking-CS2) are still exported as plain `BLEND`, which is wrong for
-them; de_nuke has 30 Mod2x overlays (unlit grime). Other translucent materials (glass, fence and foliage cards) keep
-Interchange's lighting mode and are still under-lit in direct sun.
+`csgo_static_overlay`'s other blend modes are handled apart (next section). Other translucent materials (glass, fence
+and foliage cards) keep Interchange's lighting mode and are still under-lit in direct sun.
+
+## Static overlay blend modes and Mod2x
+
+`csgo_static_overlay` (Hammer's overlays) chooses its blend with `F_BLEND_MODE`, numbered as in the shader's feature
+list (decompiled in GameTracking-CS2): `0="Opaque", 1="Translucent", 2="Alpha Test", 3="Mod2x", 4="Additive",
+5="Multiply", 6="ModThenAdd"`. Only modes 0–2 can be lit (`F_LIT`). The exporter reads it (`OverlayBlend` in
+`crates/ofast-core/src/export/gltf.rs`); other shaders keep their features (`csgo_unlitgeneric`'s own `F_BLEND_MODE`
+is not checked and stays `BLEND`).
+
+| `F_BLEND_MODE` | How CS2 draws it | glTF | Unreal (`import_map.py`) |
+|---|---|---|---|
+| 0 Opaque | a lit surface, the colour's alpha unused | `OPAQUE`, colour without alpha | Interchange's opaque material |
+| 1 Translucent | alpha blend | `BLEND` | lit: mesh decal (section above) |
+| 2 Alpha Test | cut where the colour's alpha is below `g_flAlphaTestReference` | `MASK` at that reference | Interchange's masked material |
+| 3 Mod2x | unlit multiply (below) | `BLEND` (glTF has no multiply blend; `extras.ofast.ints.F_BLEND_MODE` = 3) | `M_OFAST_OverlayMod2x_v1` (Modulate) |
+| 4 Additive, 5 Multiply, 6 ModThenAdd | not on the six exported maps, not checked | `BLEND` | Interchange's translucent material |
+
+Opaque and alpha-tested overlays need no decal: the exporter lifts every overlay 0.1 inch off its surface (it wins the
+depth test), and opaque or masked surfaces are lit per pixel like the wall under them. de_nuke has 2 opaque (its red
+"A" / "B" bombsite signs), 7 translucent, 1 alpha-tested and 30 Mod2x static overlay materials; de_inferno 13 / 6
+alpha-tested / 1 Mod2x, de_anubis 7 alpha-tested / 4 Mod2x, de_vertigo 1 / 3, de_mirage and de_dust2 one Mod2x each.
+
+**Mod2x.** The shader reads the colour texture without sRGB decoding in this mode (`SrgbRead(false)`, a texel of 128 is
+0.502) and blends with `DstBlend One`; Source 2 Viewer's renderer writes `mix(0.5, colour, alpha)` for a
+2 × source × destination blend, as Source 1's decal modulate did. The vertex shader decodes the placement / draw-call
+tint to linear and multiplies the colour by it. So whatever is drawn under the overlay is multiplied by
+
+```text
+m = lerp(1, 2 × colour × tint, colour alpha × tint alpha)     colour: raw texture value, tint: linear
+```
+
+128 grey changes nothing, footprints and tyre marks darken (a texel of 40: × 0.31), scratches and caustics brighten up
+to 2×. de_nuke's floor arrows are white under the draw-call tint 767676 (linear 0.18): × 0.36. Drawn as a plain alpha
+blend, as before, these textures laid grey veils over the floors.
+
+Unreal's **Modulate** blend does the same multiply on the HDR scene colour (`BF_DestColor` × the material's output,
+not pre-exposed, faded to 1 by fog), so `M_OFAST_OverlayMod2x_v1` is an unlit Modulate surface rendered before depth of
+field, whose emissive is `m` (`MOD2X_HLSL`) of the colour texture (imported as linear, i.e. raw) and
+`BaseColorFactor`. Its instances go on the meshes like the other OFAST materials, so 3D-skybox copies get them too.
+A decal cannot do it: with DBuffer decals on (the mesh decals above need them) Unreal turns a Modulate decal into a
+translucent one (`FinalizeBlendDesc` in `DecalRenderingCommon.cpp`), and the DBuffer applies one 8-bit coverage value
+to the base colour, `BaseColor × ColorOpacity + PreMulColor` (`ApplyDBufferData`): a grey darkening at most, no
+brightening and no tinted multiply.
+
+**Texture animation** (`F_TEXTURE_ANIMATION`: `g_vAnimationGrid`, `g_nNumAnimationCells`, `g_flAnimationTimePerFrame`,
+`g_flAnimationTimeOffset`; de_nuke's caustics, 60 cells of an 8 × 8 atlas at 0.05 s) plays as a flipbook in the same
+material (`MOD2X_FLIPBOOK_HLSL`), cells row by row from the top left; the random and scripted modes play sequentially
+too. Not done for the other overlay materials (none animated on the six maps).
+
+Checked on de_nuke against CS2 ([decision 010](../decisions/010-static-overlay-blend-modes.md), measured with
+`tools/compare/mark_contrast.py`): floor arrows and marking squares darken the floor to 0.37–0.47 of its luminance
+(CS2 0.35–0.47; 0.11–0.25 as a plain blend before), a marking's light band brightens it to 1.24 (CS2 1.24), and the
+grey veils of the scuff quads are gone.
 
 ## Other rules
 
 | Case | Handling |
 |---|---|
-| `F_TRANSLUCENT`, `F_BLEND_MODE`, `csgo_static_overlay` | glTF `BLEND`; in Unreal, overlays blended with plain alpha are mesh decals ("Translucent overlays" above) |
-| `F_ALPHA_TEST` | glTF `MASK`, cutoff 0.5 |
+| `F_TRANSLUCENT`, `F_BLEND_MODE` (other shaders) | glTF `BLEND`; in Unreal, overlays blended with plain alpha are mesh decals ("Translucent overlays" above) |
+| `csgo_static_overlay` | by its `F_BLEND_MODE`: `OPAQUE`, `BLEND`, `MASK`, Mod2x as `BLEND` with a Modulate material in Unreal ("Static overlay blend modes" above) |
+| `F_ALPHA_TEST` | glTF `MASK`, cut at the material's `g_flAlphaTestReference` (0.5 when not set; 0.05–0.9 on the six maps) |
 | overlays (decals, `OBJECT_TYPE_OVERLAY`) | pushed 0.1 inch along their normal so they win the depth test |
 | `csgo_effects` (dust and light-shaft cards) | not exported (they appeared as white sheets; to be rebuilt as Unreal effects) |
 | tints (`m_vTintColor`, `rendercolor`, a draw call's own tint) | material named `<name>_tintRRGGBB` (`<name>_tintRRGGBBAA` when the alpha is not full); `baseColorFactor` (sRGB → linear) when the tint covers the whole surface; environment shaders tint only their tint mask, in Unreal's material ("Model tint" above), and so do prop shaders with `F_TINT_MASK` ("Model tint of prop shaders" above); the draw call's tint multiplies the placement's first ("Draw-call tint" above) |
@@ -368,8 +420,12 @@ enables both.
 
 ## Sources
 
-- ValveResourceFormat (MIT): `Renderer/Shaders/complex.frag.slang` (also the masked model tint),
+- ValveResourceFormat (MIT): `Renderer/Shaders/complex.frag.slang` (also the masked model tint, and the static
+  overlays' Mod2x: raw colour, `mix(0.5, colour, alpha)`),
   `Renderer/Shaders/common/utils.slang` (`ApplyBlendModulation`) — https://github.com/ValveResourceFormat/ValveResourceFormat
+- Unreal Engine 5.8 source (installed with the engine): `Renderer/Private/DecalRenderingCommon.cpp` (decal blend
+  modes on DBuffer platforms), `Shaders/Private/DBufferDecalShared.ush` (`ApplyDBufferData`),
+  `Renderer/Private/TranslucentRendering.cpp` and `Shaders/Private/BasePassPixelShader.usf` (the Modulate blend)
 - Valve's shaders decompiled by Source 2 Viewer, in SteamDatabase's GameTracking-CS2:
   `game/csgo/shaders_vulkan_dir/shaders/vfx/<shader>.slang` (parameter declarations and defaults, each shader's
   default variant) — https://github.com/SteamDatabase/GameTracking-CS2
