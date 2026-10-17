@@ -162,6 +162,7 @@ switching it on recompiles all shaders once (long).
 | `cargo run --release --example sky_faces -- <cube .vtex_c> <out.png>` | the six faces of a cube map (sky), tone-mapped |
 | `cargo run --release --example texture_png -- <.vtex_c> <out.png>` | a 2D texture's four channels as stored, and its stored average colour |
 | `cargo run --release --example shader_census [maps…]` | which material shaders every map uses (all playable maps by default, ~20 s): what OFAST must handle to import any official map |
+| `cargo run --release --example drawcall_tints -- de_nuke [maps…]` | which draw calls carry their own colour or opacity (Hammer's painted colour, e.g. de_nuke's yellow road paint), per placement kind, with each material's shader and tint as linear floats and sRGB bytes ([material.md](formats/material.md#draw-call-tint)) |
 | `tools/unreal/probe_vertex_color.py` (`-Shot <png>`) | whether Unreal hands glTF vertex colours to materials linear or sRGB-encoded (linear) |
 | `cargo run --release --example vpk_list -- <archive.vpk> [text]` | files inside any VPK (map, skybox) |
 | `tools/unreal/probe_actors.py` (`OFAST_FILTER=<text>`, `@empty` or `@lights` + `OFAST_NEAR=x,y,z`) | imported actors, their meshes and materials, or lights (direction, units, radius) in Unreal |

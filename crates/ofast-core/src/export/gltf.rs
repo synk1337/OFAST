@@ -380,8 +380,10 @@ impl<'c> GltfWriter<'c> {
         self.accessors.len() - 1
     }
 
-    /// Writes a glTF mesh made of the given draw calls of `mesh`, all tinted with `tint`.
-    /// Returns `None` when no draw call has any triangle.
+    /// Writes a glTF mesh made of the given draw calls of `mesh`, all placed with the tint `tint` (sRGB RGBA 0–1).
+    /// Each draw call's own tint and alpha multiply it ([`DrawCall::placement_tint`]): Hammer paints mesh faces and
+    /// overlays that way (de_nuke's yellow road paint is a white material). Returns `None` when no draw call has
+    /// any triangle.
     ///
     /// `normal_offset` (inches) pushes every vertex along its normal: used for overlays/decals so they sit just in
     /// front of the surface they decorate instead of fighting with it for depth (CS2 uses a depth bias instead).
@@ -489,7 +491,8 @@ impl<'c> GltfWriter<'c> {
             let mut primitive =
                 json!({ "attributes": attributes, "indices": self.accessors.len() - 1, "mode": 4 });
             if !draw.material.is_empty() {
-                primitive["material"] = json!(self.material(&draw.material, tint));
+                primitive["material"] =
+                    json!(self.material(&draw.material, draw.placement_tint(tint)));
             }
             primitives.push(primitive);
         }
@@ -554,14 +557,12 @@ impl<'c> GltfWriter<'c> {
         }
         let info = self.material_info(path);
         let base = self.unique_material_name(path);
-        // Tinted variants get their own name so Unreal's material slots can be told apart.
-        let name = if tint_key == [255; 4] {
-            base
-        } else {
-            format!(
-                "{base}_tint{:02x}{:02x}{:02x}",
-                tint_key[0], tint_key[1], tint_key[2]
-            )
+        // Tinted variants get their own name so Unreal's material slots can be told apart; a variant with less
+        // than full opacity (a draw call's `m_flAlpha`: de_nuke's scuff decals) adds its alpha byte.
+        let name = match tint_key {
+            [255, 255, 255, 255] => base,
+            [r, g, b, 255] => format!("{base}_tint{r:02x}{g:02x}{b:02x}"),
+            [r, g, b, a] => format!("{base}_tint{r:02x}{g:02x}{b:02x}{a:02x}"),
         };
         let mut material = json!({
             "name": name,
@@ -1926,6 +1927,114 @@ mod tests {
             factor(&info("csgo_static_overlay.vfx", &[])),
             json!([0.0, 0.0, 0.0, 1.0])
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// de_nuke's road paint: a white `csgo_lightmappedgeneric` overlay (`hr_nuke_parkingstripe_single`, colour =
+    /// translucency only) that Hammer paints yellow through its draw call's `m_vTintColor`. One triangle drawn three
+    /// times: with that yellow, with a scuff decal's `m_flAlpha`, and untinted.
+    #[test]
+    fn draw_call_tints_colour_their_material() {
+        use crate::model::{Attribute, VertexBuffer, dxgi};
+
+        let path = "materials/de_nuke/hr_nuke_parkingstripe_single.vmat";
+        let info = MaterialInfo {
+            shader: "csgo_lightmappedgeneric.vfx".into(),
+            textures: [(
+                "g_tColor".to_owned(),
+                "materials/de_nuke/hr_nuke_parkingstripe_single_trans_psd_3aa6a8d1.vtex".to_owned(),
+            )]
+            .into(),
+            ints: [("F_OVERLAY".to_owned(), 1), ("F_TRANSLUCENT".to_owned(), 1)].into(),
+            floats: [("g_flModelTintAmount".to_owned(), 1.0)].into(),
+            ..Default::default()
+        };
+        let draw = |tint: [f32; 3], alpha: f32| DrawCall {
+            material: path.into(),
+            vertex_buffers: vec![0],
+            index_buffer: 0,
+            base_vertex: 0,
+            start_index: 0,
+            index_count: 3,
+            compressed_normal_tangent: false,
+            tint,
+            alpha,
+        };
+        let positions = [[0.0f32; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mesh = Mesh {
+            name: "overlay".into(),
+            mesh_index: 0,
+            vertex_buffers: vec![VertexBuffer {
+                count: 3,
+                stride: 12,
+                attributes: vec![Attribute {
+                    semantic: "POSITION".into(),
+                    semantic_index: 0,
+                    format: dxgi::R32G32B32_FLOAT,
+                    offset: 0,
+                }],
+                data: positions
+                    .iter()
+                    .flatten()
+                    .flat_map(|f| f.to_le_bytes())
+                    .collect(),
+            }],
+            index_buffers: vec![vec![0, 1, 2]],
+            draw_calls: vec![
+                draw([0.851_251_7, 0.459_079_9, 0.046_148_84], 1.0),
+                draw([1.0; 3], 0.25),
+                draw([1.0; 3], 1.0),
+            ],
+        };
+        let content = Content::new();
+        let dir = temp_folder("draw-tint");
+        let mut writer = GltfWriter::new(&content, &dir, ExportOptions::default()).expect("writer");
+        writer
+            .material_infos
+            .insert(path.to_owned(), Some(info.clone()));
+        let draws: Vec<&DrawCall> = mesh.draw_calls.iter().collect();
+        // The scene object places it untinted (m_vTintColor 1, 1, 1, 1).
+        let gltf_mesh = writer
+            .mesh("overlay", &mesh, &draws, [1.0; 4], 0.0)
+            .expect("mesh")
+            .expect("triangles");
+        let materials: Vec<Json> = writer.meshes[gltf_mesh]["primitives"]
+            .as_array()
+            .expect("primitives")
+            .iter()
+            .map(|p| writer.materials[p["material"].as_u64().expect("material") as usize].clone())
+            .collect();
+        let factor = |m: &Json| -> Vec<f32> {
+            m["pbrMetallicRoughness"]["baseColorFactor"]
+                .as_array()
+                .map(|f| {
+                    f.iter()
+                        .map(|c| c.as_f64().expect("number") as f32)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        // Yellow as CS2 draws it: sRGB (237, 179, 63), linear in the glTF factor.
+        assert_eq!(
+            materials[0]["name"],
+            "hr_nuke_parkingstripe_single_tintedb33f"
+        );
+        let yellow = [237.0, 179.0, 63.0].map(|c| srgb_to_linear(c / 255.0));
+        let got = factor(&materials[0]);
+        assert_eq!(got.len(), 4);
+        for (g, w) in got.iter().zip(yellow.iter().chain([1.0].iter())) {
+            assert!((g - w).abs() < 1e-3, "{got:?}");
+        }
+        // The alpha makes a variant of its own (named with its alpha byte) and goes into the factor's opacity.
+        assert_eq!(
+            materials[1]["name"],
+            "hr_nuke_parkingstripe_single_tintffffff40"
+        );
+        assert!((factor(&materials[1])[3] - 64.0 / 255.0).abs() < 1e-6);
+        // An untinted draw call keeps the plain material.
+        assert_eq!(materials[2]["name"], "hr_nuke_parkingstripe_single");
+        assert!(factor(&materials[2]).is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 

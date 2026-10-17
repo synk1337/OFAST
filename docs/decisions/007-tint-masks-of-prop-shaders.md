@@ -98,7 +98,9 @@ Not a tint mask, found on the way: de_nuke's yellow road paint (parking bays, "n
 Unreal, before and after. The overlays are `csgo_lightmappedgeneric` (`hr_nuke_parkingstripe_single`,
 `hr_nuke_noparking_tiled`) whose colour is white: the texture is translucency only with a white
 `TextureLayer1Color`, and the scene object's `m_vTintColor`, `g_vColorTint` and `g_vLayer1Tint` are white. The meshes
-have no vertex colour, and the asphalt under them is grey. Where CS2 takes the yellow from is open.
+have no vertex colour, and the asphalt under them is grey. The yellow turned out to be the overlay model's draw-call
+tint (`m_vTintColor` inside the model's `MDAT`), which OFAST did not read: see
+[decision 008](008-draw-call-tints.md).
 
 Views of tinted props were added, chosen from the export's placements and tried with `shoot_views.py -Views`
 (no re-import needed): de_dust2 `tdoor`, `tbluedoor`, `tcar`, `tsalmon` (doors, frames, awnings, window bars, the

@@ -51,7 +51,12 @@ Decompression order: ZSTD first (if flagged), then meshopt (if flagged and the s
 `m_sceneObjects[].m_drawCalls[]`:
 `m_material` (resource path), `m_nPrimitiveType` (`RENDER_PRIM_TRIANGLES`), `m_nBaseVertex`, `m_nStartIndex`,
 `m_nIndexCount`, `m_vertexBuffers[0].m_hBuffer` / `m_indexBuffer.m_hBuffer` (indices into the mesh's buffer lists),
-`m_bUseCompressedNormalTangent` or `m_nFlags & 2` (packed normals).
+`m_bUseCompressedNormalTangent` or `m_nFlags & 2` (packed normals), `m_vTintColor` (three floats, **linear**: the
+colour Hammer painted on that mesh face or overlay, white for most models) and `m_flAlpha` (its opacity, 1 for most).
+The tint is how map meshes get a colour their material does not have: de_nuke's yellow road paint is a white
+material drawn with (0.851, 0.459, 0.046) = sRGB (237, 179, 63) through gamma 2.2. See
+[material.md](material.md#draw-call-tint) for how it reaches the shader; the scene object above the draw call has
+an `m_vTintColor` too (four floats, 0 0 0 0 on map meshes), unused by OFAST.
 
 Triangle `k` of a draw call uses `IB[m_nStartIndex + k] + m_nBaseVertex`.
 

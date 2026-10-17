@@ -7,8 +7,11 @@
 //!
 //! Builds the camera of the first CT (`ct0`) or T (`t0`) spawn, or of CS2 `setpos x y z; setang pitch yaw` values,
 //! exactly like the Unreal script (eye 64 units above the origin, CS2's 90° fov on 16:9), casts a ray through each pixel of a 1920×1080 frame and prints the nearest
-//! triangle hit: which placement (scene object, aggregate fragment or entity), model and material. "nothing" means
-//! the exported geometry has a hole there.
+//! triangle hit: which placement (scene object, aggregate fragment or entity), model and material, and the draw
+//! call's own tint when it has one. "nothing" means the exported geometry has a hole there.
+//!
+//! `OFAST_LAYERS=2` also lists every surface up to 2 units behind the nearest one: overlays and decals stacked on a
+//! wall or floor, and what they lie on.
 
 use ofast_core::content::Content;
 use ofast_core::game::Cs2Install;
@@ -164,7 +167,8 @@ fn main() {
         }
     }
 
-    let mut best: Vec<Option<(f32, String)>> = vec![None; rays.len()];
+    // Every hit per ray (distance, description); the nearest is what the camera sees.
+    let mut hits: Vec<Vec<(f32, String)>> = vec![Vec::new(); rays.len()];
     for (label, model_path, transform, draws) in &placements {
         let Ok(data) = content.read_resource(model_path) else {
             continue;
@@ -196,9 +200,7 @@ fn main() {
                         world[tri[2] as usize],
                     ];
                     for (r, dir) in rays.iter().enumerate() {
-                        if let Some(t) = hit(eye, *dir, a, b, c)
-                            && best[r].as_ref().is_none_or(|(d, _)| t < *d)
-                        {
+                        if let Some(t) = hit(eye, *dir, a, b, c) {
                             // Facing: winding normal and stored vertex normal against the view ray (< 0 = faces us).
                             let winding = cross(sub(b, a), sub(c, a));
                             let vertex_normal =
@@ -212,10 +214,19 @@ fn main() {
                             };
                             let color = rgba(g.colors.get(tri[0] as usize));
                             let paint = rgba(g.blend.get(tri[0] as usize));
-                            best[r] = Some((
+                            // The draw call's own tint (linear) and alpha, when it has one.
+                            let tint = if draw.is_untinted() {
+                                String::new()
+                            } else {
+                                format!(
+                                    " | draw tint {:.3}/{:.3}/{:.3} alpha {:.2}",
+                                    draw.tint[0], draw.tint[1], draw.tint[2], draw.alpha
+                                )
+                            };
+                            hits[r].push((
                                 t,
                                 format!(
-                                    "{label} {model_path} draw {i} {} | winding·ray {:+.2} normal·ray {:+.2} | colour{color} paint{paint}",
+                                    "{label} {model_path} draw {i} {} | winding·ray {:+.2} normal·ray {:+.2} | colour{color} paint{paint}{tint}",
                                     draw.material,
                                     dot(winding, *dir).signum(),
                                     dot(vertex_normal, *dir)
@@ -227,8 +238,15 @@ fn main() {
             }
         }
     }
-    for (((x, y), dir), b) in pixels.iter().zip(&rays).zip(best) {
-        match b {
+    // OFAST_LAYERS=<units>: also list the surfaces up to that far behind the nearest (stacked overlays, decals).
+    let layers: f32 = std::env::var("OFAST_LAYERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+    for (((x, y), dir), mut ray_hits) in pixels.iter().zip(&rays).zip(hits) {
+        ray_hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let nearest = ray_hits.first().cloned();
+        match nearest {
             // The hit point in Source units: as a view "x y z-64 pitch yaw" it starts a new ray there (e.g. toward
             // the sun, to find what shades a spot).
             Some((t, what)) => {
@@ -240,7 +258,10 @@ fn main() {
                 println!(
                     "pixel ({x}, {y}): {t:.0} units at {:.1} {:.1} {:.1} — {what}",
                     p[0], p[1], p[2]
-                )
+                );
+                for (behind, what) in ray_hits.iter().skip(1).filter(|(d, _)| d - t <= layers) {
+                    println!("    +{:.2} units: {what}", behind - t);
+                }
             }
             None => println!("pixel ({x}, {y}): nothing"),
         }

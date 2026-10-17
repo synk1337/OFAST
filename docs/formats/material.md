@@ -259,6 +259,61 @@ materials sit in skyboxes: de_anubis `venice_boat_2_tintc7c5c5`, de_dust2 `dust_
 floor), so they were checked by reading the three imported instances back (parent v4, `MaskedTint` = the tint,
 `TintMaskTexture` = the mask), not in a render.
 
+## Draw-call tint
+
+A model's draw call can carry a colour of its own, next to its material: `m_vTintColor` (three floats) and
+`m_flAlpha` in the mesh's `MDAT` ([model.md](model.md#mdat-mesh--draw-calls)). Hammer stores there the colour picked
+for a mesh face or an overlay (materials whose searchable user data has `VertexPaintUIPickColor`), so the material
+can stay white and be reused in any colour. de_nuke's road paint is the case that showed it: the parking bays,
+"no parking" lines and "NO-IDLE ZONE" text are `hr_nuke_parkingstripe_single`, `hr_nuke_noparking_tiled` and
+friends, `csgo_lightmappedgeneric` overlays whose colour texture is translucency only (RGB white,
+`TextureLayer1Color` white), placed by scene objects with a white `m_vTintColor`, yet CS2 draws them yellow. The
+yellow is the draw call's (0.851, 0.459, 0.046) in the overlay model (`n0_lr0_c202_s_mesh_overlay202.vmdl`).
+
+- **The floats are linear.** Through gamma 2.2 every value found gives whole sRGB bytes (the road paint 237.0,
+  179.0, 63.0; the floor arrows 118.0), through the sRGB curve they do not (237.5, 180.5, 60.7): Hammer's colour
+  picker bytes, raised to 2.2.
+- **How CS2 applies it.** Its shaders get one 8-bit sRGB tint per instance and decode it in the vertex shader
+  (`csgo_complex`, `csgo_static_overlay`: `lerp(1, tint, g_flModelTintAmount) × g_vColorTint`, opacity × the tint's
+  alpha). The draw call's colour reaches them that way, like a placement tint.
+- **How OFAST applies it.** The draw call's tint is encoded back to sRGB (gamma 2.2) and multiplies the placement's
+  tint (a scene object's `m_vTintColor`, an aggregate fragment's, an entity's `rendercolor`), its alpha the
+  placement's alpha (`DrawCall::placement_tint` in `crates/ofast-core/src/model/mod.rs`). The product then goes
+  through the material's tint rules like any placement tint (the sections above): a `baseColorFactor` for most,
+  `extras.ofast.tint_mask` for masked prop shaders, `extras.ofast.environment.model_tint` for environment shaders
+  (which ignore the alpha; no tinted draw call of theirs has one below 1). Materials with `g_flModelTintAmount` 0 or
+  `F_NOTINT` ignore it, as in CS2 (de_nuke's `airduct_hvac_001` and `hr_metal_railing_001_card`, painted grey,
+  stay as their texture), and a masked one tints its mask only (`hazard_stripe_001_metal_railing`, painted the road
+  paint's yellow). A variant with less than full alpha is named `<name>_tintRRGGBBAA`.
+- **Which order the engine multiplies them in is not known**: on the nine maps counted below, every tinted draw call
+  is placed with a white tint, and no aggregate fragment draws a tinted draw call (the fragments' own `m_vTintColor`
+  carries Hammer's colour there).
+
+Tinted draw calls in the main world (`cargo run --release --example drawcall_tints -- <map>`, which lists each
+material with its tint, alpha and shader; the 3D skybox adds its own, e.g. de_nuke's tinted far buildings):
+
+| Map | Overlays | Other scene objects |
+|---|---|---|
+| de_train | 578 of 707 | 72 of 378 |
+| de_overpass | 148 of 384 | 22 of 214 |
+| de_nuke | 145 of 237 | 31 of 149 |
+| de_anubis | 75 of 135 | 55 of 127 |
+| de_vertigo | 44 of 92 | 8 of 52 |
+| de_inferno | 32 of 263 | 23 of 203 |
+| de_dust2 | 14 of 56 | 37 of 88 |
+| de_ancient | 9 of 25 | 2 of 92 |
+| de_mirage | 8 of 301 | 3 of 56 |
+
+Checked on de_nuke against CS2 ([decision 008](../decisions/008-draw-call-tints.md)): the parking bays and
+"no parking" lines are yellow at both spawns (hue 36–38°, CS2 43–44° in the sun; white before). In the shade the
+paint is as strong as CS2's; in direct sun it stays paler, as the white lines did before: a separate issue with
+translucent overlays in the sun, not the tint (same decision).
+
+Many are opacity only: de_nuke's 35 scuff decals (`scuffs_overlay_001`, alpha 0.12–0.73) were drawn at full
+strength before. Others are colours: de_nuke's grey floor arrows (118), red stripes and "X" marks, its silo and pipe
+trims. Most shaders are involved (`csgo_static_overlay`, `csgo_lightmappedgeneric`, `csgo_complex`, `csgo_glass`,
+a few `csgo_environment(_blend)` on de_train and de_overpass; `csgo_effects` is not exported).
+
 ## Other rules
 
 | Case | Handling |
@@ -267,7 +322,7 @@ floor), so they were checked by reading the three imported instances back (paren
 | `F_ALPHA_TEST` | glTF `MASK`, cutoff 0.5 |
 | overlays (decals, `OBJECT_TYPE_OVERLAY`) | pushed 0.1 inch along their normal so they win the depth test |
 | `csgo_effects` (dust and light-shaft cards) | not exported (they appeared as white sheets; to be rebuilt as Unreal effects) |
-| tints (`m_vTintColor`, `rendercolor`) | material named `<name>_tintRRGGBB`; `baseColorFactor` (sRGB → linear) when the tint covers the whole surface; environment shaders tint only their tint mask, in Unreal's material ("Model tint" above), and so do prop shaders with `F_TINT_MASK` ("Model tint of prop shaders" above) |
+| tints (`m_vTintColor`, `rendercolor`, a draw call's own tint) | material named `<name>_tintRRGGBB` (`<name>_tintRRGGBBAA` when the alpha is not full); `baseColorFactor` (sRGB → linear) when the tint covers the whole surface; environment shaders tint only their tint mask, in Unreal's material ("Model tint" above), and so do prop shaders with `F_TINT_MASK` ("Model tint of prop shaders" above); the draw call's tint multiplies the placement's first ("Draw-call tint" above) |
 | same file name in two folders | the second material is renamed `<name>_<folder>` (Unreal matches slots by name) |
 
 ## Unreal project requirement

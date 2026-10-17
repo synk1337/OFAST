@@ -123,7 +123,7 @@ impl VertexBuffer {
 }
 
 /// One draw call: a range of triangles drawn with one material.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DrawCall {
     /// Material path, e.g. `weapons/models/ak47/materials/weapon_rif_ak47.vmat` (no `_c`).
     pub material: String,
@@ -140,6 +140,40 @@ pub struct DrawCall {
     pub index_count: u32,
     /// Normals and tangents are stored in a packed format.
     pub compressed_normal_tangent: bool,
+    /// The draw call's own tint (`m_vTintColor`), **linear** RGB, white when absent. Hammer stores the colour picked
+    /// for a mesh or overlay face here (`VertexPaintUIPickColor` materials), not in the material: de_nuke's yellow
+    /// road paint is a white `hr_nuke_parkingstripe_single` drawn with (0.851, 0.459, 0.046) = sRGB (237, 179, 63)
+    /// through gamma 2.2. It multiplies the placement's tint ([`DrawCall::placement_tint`]).
+    pub tint: [f32; 3],
+    /// The draw call's opacity (`m_flAlpha`), 1 when absent.
+    pub alpha: f32,
+}
+
+impl DrawCall {
+    /// True when the draw call recolours nothing: white tint, full opacity.
+    pub fn is_untinted(&self) -> bool {
+        self.tint == [1.0; 3] && self.alpha == 1.0
+    }
+
+    /// The tint this draw call is drawn with when its model is placed with `placement` (sRGB RGBA 0–1: a scene
+    /// object's `m_vTintColor`, an aggregate fragment's, an entity's `rendercolor`).
+    ///
+    /// CS2 hands its shaders one 8-bit **sRGB** tint per instance (decoded to linear in the vertex shader, e.g.
+    /// `csgo_complex`'s), so the draw call's linear tint is encoded back to sRGB and the two multiply there;
+    /// gamma 2.2 is the encoding the stored values round-trip with (de_nuke's road paint: 237.0, 179.0, 63.0). A
+    /// white draw call returns `placement` unchanged.
+    pub fn placement_tint(&self, placement: [f32; 4]) -> [f32; 4] {
+        if self.is_untinted() {
+            return placement;
+        }
+        let encode = |linear: f32| linear.clamp(0.0, 1.0).powf(1.0 / 2.2);
+        [
+            placement[0] * encode(self.tint[0]),
+            placement[1] * encode(self.tint[1]),
+            placement[2] * encode(self.tint[2]),
+            placement[3] * self.alpha.clamp(0.0, 1.0),
+        ]
+    }
 }
 
 /// One mesh of a model.
@@ -566,10 +600,28 @@ fn read_draw_calls(mesh_data: &Value) -> Vec<DrawCall> {
                 start_index: int(draw, &["m_nStartIndex"]).unwrap_or(0).max(0) as u32,
                 index_count: int(draw, &["m_nIndexCount"]).unwrap_or(0).max(0) as u32,
                 compressed_normal_tangent: compressed,
+                tint: draw_tint(draw),
+                alpha: field(draw, &["m_flAlpha"])
+                    .and_then(Value::as_f64)
+                    .map_or(1.0, |a| a as f32),
             });
         }
     }
     calls
+}
+
+/// A draw call's `m_vTintColor` (three floats, linear), white when absent or malformed.
+fn draw_tint(draw: &Value) -> [f32; 3] {
+    let values: Vec<f32> = field(draw, &["m_vTintColor"])
+        .and_then(Value::as_array)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|v| v.as_f64().map(|f| f as f32))
+        .collect();
+    match values.as_slice() {
+        [r, g, b, ..] => [*r, *g, *b],
+        _ => [1.0; 3],
+    }
 }
 
 /// Parses an older binary `VBIB` / `MBUF` block holding all vertex and index buffers of a mesh.
@@ -663,4 +715,87 @@ fn read_vbib(block: &[u8], mesh: &str) -> Result<(Vec<VertexBuffer>, Vec<Vec<u32
         ibs.push(raw.into_indices());
     }
     Ok((vbs, ibs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `MDAT` with one scene object holding the given draw calls.
+    fn mesh_data(draws: Vec<Value>) -> Value {
+        let object = Value::Object([("m_drawCalls", Value::Array(draws))].into_iter().collect());
+        Value::Object(
+            [("m_sceneObjects", Value::Array(vec![object]))]
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    fn floats(values: &[f64]) -> Value {
+        Value::Array(values.iter().map(|&v| Value::Float(v)).collect())
+    }
+
+    #[test]
+    fn draw_calls_keep_their_tint_and_alpha() {
+        // de_nuke's parking stripe overlay (n0_lr0_c202_s_mesh_overlay202) and a draw call with neither key.
+        let stripe = Value::Object(
+            [
+                (
+                    "m_material",
+                    Value::String("materials/de_nuke/hr_nuke_parkingstripe_single.vmat".into()),
+                ),
+                ("m_nIndexCount", Value::Int(351)),
+                (
+                    "m_vTintColor",
+                    floats(&[
+                        0.851_251_661_777_496_3,
+                        0.459_079_921_245_574_95,
+                        0.046_148_840_337_991_714,
+                    ]),
+                ),
+                ("m_flAlpha", Value::Float(0.25)),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let plain = Value::Object(
+            [("m_material", Value::String("materials/plain.vmat".into()))]
+                .into_iter()
+                .collect(),
+        );
+        let draws = read_draw_calls(&mesh_data(vec![stripe, plain]));
+        assert_eq!(draws.len(), 2);
+        assert!((draws[0].tint[0] - 0.851_25).abs() < 1e-5);
+        assert_eq!(draws[0].alpha, 0.25);
+        assert!(!draws[0].is_untinted());
+        assert_eq!((draws[1].tint, draws[1].alpha), ([1.0; 3], 1.0));
+        assert!(draws[1].is_untinted());
+    }
+
+    #[test]
+    fn draw_tints_meet_the_placement_tint_in_srgb() {
+        let draw = |tint: [f32; 3], alpha: f32| DrawCall {
+            material: String::new(),
+            vertex_buffers: Vec::new(),
+            index_buffer: 0,
+            base_vertex: 0,
+            start_index: 0,
+            index_count: 0,
+            compressed_normal_tangent: false,
+            tint,
+            alpha,
+        };
+        // The stored linear floats are Hammer's colour picker bytes through gamma 2.2: (237, 179, 63) exactly.
+        let yellow = draw([0.851_251_7, 0.459_079_9, 0.046_148_84], 1.0);
+        let bytes = yellow.placement_tint([1.0; 4]).map(|c| c * 255.0);
+        for (got, want) in bytes.iter().zip([237.0, 179.0, 63.0, 255.0]) {
+            assert!((got - want).abs() < 0.01, "{bytes:?}");
+        }
+        // It multiplies the placement's own tint and alpha.
+        let half = draw([1.0; 3], 0.5).placement_tint([0.5, 1.0, 1.0, 0.8]);
+        assert_eq!(half, [0.5, 1.0, 1.0, 0.4]);
+        // White leaves the placement as it is.
+        let placement = [0.2, 0.4, 0.6, 1.0];
+        assert_eq!(draw([1.0; 3], 1.0).placement_tint(placement), placement);
+    }
 }
