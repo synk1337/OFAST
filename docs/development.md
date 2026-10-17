@@ -99,7 +99,7 @@ powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/import_map.py -Glt
 ```
 
 `export-map` also loads the map's 3D skybox (its own archive under `game/csgo/maps/prefabs/`) and writes the sky as
-`<map>_sky.hdr`. Re-exporting into the same folder is the normal way to update a map: the exporter owns
+`<map>_sky.hdr` and CS2's colour-correction table as `<map>_lut.png`. Re-exporting into the same folder is the normal way to update a map: the exporter owns
 `<out>/textures/`, writes each distinct image once and deletes the PNGs no `.gltf` in `<out>` uses any more (see
 "Texture files" in `crates/ofast-core/src/export/gltf.rs`; de_inferno went from 13 GB to 3.3 GB). Placement tints that
 recolour only part of a surface (environment materials, props with a tint mask) are applied by Unreal's materials, not
@@ -155,7 +155,14 @@ switching it on recompiles all shaders once (long).
    (`bind F6 "exec ofast_v_<map>_<view>"`, …; restore the user's binds afterwards). Then compare:
    `python tools/compare/compare_shots.py <cs2.jpg> <unreal.png> <out.png>` (CS2 on top, Unreal below, per-cell
    brightness ratios) and, for exposure, `python tools/compare/sky_exposure.py <map>_sky.hdr <shot> <yaw> <pitch>
-   x,y …` on pure-sky pixels.
+   x,y …` on pure-sky pixels (linear maps; on Hable maps the curve and colour table come first, see
+   [lighting.md](formats/lighting.md#exposure-and-tone-mapping--post_processing_volume--vpost)).
+4. Albedo: CS2's `mat_fullbright 1` shows the albedo × 1 whatever the locked exposure and tone curve; the matching
+   Unreal render is `shoot_views.py -Try '{"console": ["ShowFlag.Lighting 0"]}'`, which runs at exposure 1 but through
+   OFAST's tone mapper.
+
+While CS2 runs, do not start it again (a second `cs2.exe` only shows "Only one instance of the game can be running"
+and keeps the game from getting focus); leave it in the main menu before long Unreal runs, which it slows down.
 
 Many views at once ([checks.md](checks.md)): `python tools/cs2/make_view_cfgs.py <map> <exposure> [views]` writes
 `ofast_v_<map>_<view>.cfg` for every view of `tools/compare/views/<map>.json` and a tour, `ofast_tour_<map>.cfg`, that

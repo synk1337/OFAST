@@ -23,7 +23,7 @@ OFAST's instances and textures no export uses any more are deleted: delete_unuse
 (put_overlay_decals) → the other translucent surfaces (glass, fence and foliage cards) lit per pixel
 (light_translucent_per_pixel) → light blockers hidden and
 shadow proxies added (no sunlight through single-sided walls) → 3D skybox drawn behind the world → CS2's environment from the manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
-exposure, no tone curve or CS2's Hable curve (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
+exposure, CS2's tone curve (straight or Hable) and colour-correction table (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
 default field of view → screenshots → quit. Everything the script adds is tagged "OFAST" and rebuilt on every run.
 """
 
@@ -2170,8 +2170,9 @@ def setup_sun(manifest):
 
 def setup_post(manifest):
     """Unbound post-process volume reproducing CS2's picture: fixed exposure (EV100 from the exporter, measured
-    against CS2 screenshots), no tone curve when the map's is a straight line (a shoulder of 0) and CS2's Hable curve
-    otherwise (hable_tonemapper_instance), no bloom, no vignette."""
+    against CS2 screenshots), then OFAST's tone mapper (cs2_tonemapper_instance): a straight line when the map's curve
+    is one (a shoulder of 0), CS2's Hable curve otherwise, then the map's colour-correction table. No bloom, no
+    vignette."""
     post = manifest.get("post") or {}
     # Sunlit views sit at CS2's minimum exposure, the highest EV100.
     ev100 = post.get("ev100_max", 0.0)
@@ -2190,30 +2191,37 @@ def setup_post(manifest):
     override("vignette_intensity", 0.0)
     # Keys the .vpost lacks are written as null: drop them so the defaults below apply.
     tonemap = {key: value for key, value in (post.get("tonemap") or {}).items() if value is not None}
-    curve = "tone curve off"
-    if tonemap.get("shoulder_strength", 0.0) > 0.0:
-        # A real Hable curve (de_inferno): CS2's picture is not linear, so Unreal's tone mapper is replaced.
-        tonemapper = hable_tonemapper_instance(tonemap)
-        settings.set_editor_property(
-            "weighted_blendables",
-            unreal.WeightedBlendables(array=[unreal.WeightedBlendable(weight=1.0, object=tonemapper)]),
-        )
+    # Unreal's own tone mapper is always replaced: CS2 applies its colour-correction table after the curve, on every
+    # map with one (measured on de_anubis), and a replacing tone mapper is the last step Unreal runs.
+    hable = tonemap.get("shoulder_strength", 0.0) > 0.0
+    color_correction = post.get("color_correction") or {}
+    lut = import_lut(color_correction)
+    tonemapper = cs2_tonemapper_instance(tonemap, hable, lut, color_correction.get("size", 32))
+    settings.set_editor_property(
+        "weighted_blendables",
+        unreal.WeightedBlendables(array=[unreal.WeightedBlendable(weight=1.0, object=tonemapper)]),
+    )
+    curve = "straight tone curve"
+    if hable:
         curve = "Hable tone curve (shoulder %.2f, white point %.2f)" % (tonemap["shoulder_strength"],
                                                                      tonemap.get("white_point", 1.0))
     volume.set_editor_property("settings", settings)
-    log("post: manual exposure EV100 %.3f, %s" % (ev100, curve))
+    log("post: manual exposure EV100 %.3f, %s, %s" % (
+        ev100, curve, "colour table " + lut.get_name() if lut else "no colour table"))
 
 
-# Versioned like BLEND_MASTER: CS2's Hable (Uncharted 2) filmic curve as a replacement tone mapper.
-HABLE_TONEMAPPER = "/Game/OFAST/Materials/M_OFAST_TonemapHable_v2"
-# display = H(INPUT x) / H(WHITE W), x = exposure x scene (what Unreal shows linearly with the manual exposure
-# above), W the .vpost white point. Fitted on de_inferno (docs/formats/lighting.md): the white scale from one view at
-# exposures 0.4 and 0.8 (the curve's shape, whatever the input level), the input level on lit surfaces of both
-# spawns (median of 16 cells, 1.9 – 3.25). Sky pixels alone gave 2.0 and CS2's mat_fullbright shot 3.8: the level
-# only holds for OFAST's own light and sky values on that map, see lighting.md.
-HABLE_INPUT_SCALE = 2.5
-HABLE_WHITE_SCALE = 1.25
-HABLE_SCALES = {"InputScale": HABLE_INPUT_SCALE, "WhiteScale": HABLE_WHITE_SCALE}
+# Versioned like BLEND_MASTER: OFAST's replacement tone mapper (CS2's curve, then CS2's colour-correction table).
+TONEMAPPER = "/Game/OFAST/Materials/M_OFAST_Tonemap_v3"
+# Hable maps: shown = LUT(srgb(H(INPUT x) / H(WHITE W))), x = exposure x scene (what Unreal shows linearly with the
+# manual exposure above), W the .vpost white point, LUT the .vpost's colour-correction table. Measured on de_anubis,
+# whose visible sky is the sky that lights it (docs/formats/lighting.md): with the table inverted, CS2's sky pixels
+# follow the stock Hable shape; three exposure pairs (de_anubis CT and T, de_inferno CT) fix the white at 22 – 24
+# (WHITE 6, W = 4), and sky pixels of known radiance then give INPUT 3.37 – 3.44 on both de_anubis spawns. Its lit
+# surfaces agree (3.27 and 3.41), so OFAST's light is right there. The earlier rule (H(2.5 x) / H(1.25 W), no table)
+# was fitted on de_inferno's surfaces, whose light OFAST underestimates; it made de_anubis 1.3x too bright.
+HABLE_INPUT_SCALE = 3.4
+HABLE_WHITE_SCALE = 6.0
+TONEMAP_SCALES = {"InputScale": HABLE_INPUT_SCALE, "WhiteScale": HABLE_WHITE_SCALE}
 HABLE_PARAMETERS = {  # material parameter -> .vpost tone map key (manifest post.tonemap)
     "ShoulderStrength": "shoulder_strength",
     "LinearStrength": "linear_strength",
@@ -2223,25 +2231,117 @@ HABLE_PARAMETERS = {  # material parameter -> .vpost tone map key (manifest post
     "ToeDenominator": "toe_denominator",
     "WhitePoint": "white_point",
 }
-HABLE_HLSL = """
-float3 x = max(Color * Exposure, 0.0) * InputScale;
-float A = ShoulderStrength, B = LinearStrength, C = LinearAngle, D = ToeStrength, E = ToeNumerator, F = ToeDenominator;
-float3 h = (x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F) - E / F;
-float w = WhitePoint * WhiteScale;
-float hw = (w * (A * w + C * B) + D * E) / (w * (A * w + B) + D * F) - E / F;
-float3 c = saturate(h / hw);
+# Switches and table size, set per map (cs2_tonemapper_instance).
+TONEMAP_SWITCHES = {"Hable": 1.0, "UseLut": 0.0, "LutSize": 32.0}
+TONEMAP_HLSL = """
+float3 x = max(Color * Exposure, 0.0);
+float3 c;
+if (Hable > 0.5)
+{
+    x *= InputScale;
+    float A = ShoulderStrength, B = LinearStrength, C = LinearAngle, D = ToeStrength, E = ToeNumerator, F = ToeDenominator;
+    float3 h = (x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F) - E / F;
+    float w = WhitePoint * WhiteScale;
+    float hw = (w * (A * w + C * B) + D * E) / (w * (A * w + B) + D * F) - E / F;
+    c = saturate(h / hw);
+}
+else
+{
+    c = saturate(x);
+}
 // sRGB encoding (lerp/step instead of a vector ?: so it compiles under HLSL 2021 too).
-return lerp(1.055 * pow(c, 1.0 / 2.4) - 0.055, c * 12.92, step(c, 0.0031308));
+float3 s = lerp(1.055 * pow(c, 1.0 / 2.4) - 0.055, c * 12.92, step(c, 0.0031308));
+if (UseLut > 0.5)
+{
+    // CS2's 3D table, stored as LutSize blue slices side by side (pixel (b * n + r, g)): trilinear lookup as two
+    // bilinear ones on neighbouring slices, at texel centres so a slice never bleeds into the next.
+    float n = LutSize;
+    float3 p = s * (n - 1.0);
+    float b0 = floor(p.b);
+    float b1 = min(b0 + 1.0, n - 1.0);
+    float v = (p.g + 0.5) / n;
+    float3 l0 = Texture2DSampleLevel(Lut, LutSampler, float2((b0 * n + p.r + 0.5) / (n * n), v), 0).rgb;
+    float3 l1 = Texture2DSampleLevel(Lut, LutSampler, float2((b1 * n + p.r + 0.5) / (n * n), v), 0).rgb;
+    s = lerp(l0, l1, p.b - b0);
+}
+return s;
 """
+LUT_TEXTURE_SETTINGS = {
+    # Uncompressed RGBA8, no sRGB decoding, no mips, bilinear, clamped: the table's bytes as they are.
+    "compression_settings": unreal.TextureCompressionSettings.TC_VECTOR_DISPLACEMENTMAP,
+    "srgb": False,
+    "mip_gen_settings": unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS,
+    "lod_group": unreal.TextureGroup.TEXTUREGROUP_COLOR_LOOKUP_TABLE,
+    "filter": unreal.TextureFilter.TF_BILINEAR,
+    "address_x": unreal.TextureAddress.TA_CLAMP,
+    "address_y": unreal.TextureAddress.TA_CLAMP,
+    "never_stream": True,
+}
 
 
-def ensure_hable_tonemapper():
-    """Post-process material that replaces Unreal's tone mapper with CS2's Hable curve: scene colour x exposure
-    (Unreal's eye adaptation value, the manual exposure) -> H(InputScale x) / H(WhiteScale W) per channel -> sRGB.
-    Unreal applies nothing after a replacing tone mapper, so the sRGB encoding is done here."""
-    if unreal.EditorAssetLibrary.does_asset_exist(HABLE_TONEMAPPER):
-        return unreal.EditorAssetLibrary.load_asset(HABLE_TONEMAPPER)
-    folder, name = HABLE_TONEMAPPER.rsplit("/", 1)
+def import_lut(color_correction):
+    """The exported colour-correction table (<map>_lut.png, see the exporter's lut_strip) as a texture, or None."""
+    if not color_correction or not color_correction.get("lut"):
+        return None
+    task = unreal.AssetImportTask()
+    task.filename = os.path.join(EXPORT_DIR, color_correction["lut"])
+    task.destination_path = "/Game/OFAST/" + NAME
+    task.automated = True
+    task.replace_existing = True
+    task.save = False
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+    paths = list(task.imported_object_paths)
+    texture = unreal.load_asset(paths[0]) if paths else None
+    if not isinstance(texture, unreal.Texture2D):
+        raise RuntimeError("colour table did not import as a texture: %s" % color_correction["lut"])
+    texture.set_editor_properties(LUT_TEXTURE_SETTINGS)
+    unreal.EditorAssetLibrary.save_loaded_asset(texture)
+    return texture
+
+
+def identity_lut():
+    """A 32^3 identity table in the same layout, the Lut parameter's default (maps without a table switch it off)."""
+    import struct
+    import tempfile
+    import zlib
+
+    n = 32
+    rows = []
+    for g in range(n):
+        row = bytearray(b"\x00")  # PNG filter type: none
+        for b in range(n):
+            for r in range(n):
+                row += bytes((round(r * 255 / (n - 1)), round(g * 255 / (n - 1)), round(b * 255 / (n - 1)), 255))
+        rows.append(bytes(row))
+    chunk = lambda kind, data: (struct.pack(">I", len(data)) + kind + data
+                                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+    path = os.path.join(tempfile.mkdtemp(), "T_OFAST_IdentityLut.png")
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", n * n, n, 8, 6, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b""))
+    asset = DEFAULT_TEXTURE_FOLDER + "/T_OFAST_IdentityLut"
+    if not unreal.EditorAssetLibrary.does_asset_exist(asset):
+        task = unreal.AssetImportTask()
+        task.filename = path
+        task.destination_path = DEFAULT_TEXTURE_FOLDER
+        task.automated = True
+        task.replace_existing = True
+        task.save = False
+        unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+    texture = unreal.EditorAssetLibrary.load_asset(asset)
+    texture.set_editor_properties(LUT_TEXTURE_SETTINGS)
+    unreal.EditorAssetLibrary.save_loaded_asset(texture)
+    return texture
+
+
+def ensure_tonemapper():
+    """Post-process material that replaces Unreal's tone mapper with CS2's picture: scene colour x exposure (Unreal's
+    eye adaptation value, the manual exposure) -> straight line or H(InputScale x) / H(WhiteScale W) per channel ->
+    sRGB -> CS2's colour-correction table. Unreal applies nothing after a replacing tone mapper, so the sRGB encoding
+    is done here."""
+    if unreal.EditorAssetLibrary.does_asset_exist(TONEMAPPER):
+        return unreal.EditorAssetLibrary.load_asset(TONEMAPPER)
+    folder, name = TONEMAPPER.rsplit("/", 1)
     material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
         name, folder, unreal.Material, unreal.MaterialFactoryNew())
     material.set_editor_property("material_domain", unreal.MaterialDomain.MD_POST_PROCESS)
@@ -2250,38 +2350,49 @@ def ensure_hable_tonemapper():
     scene = mel.create_material_expression(material, unreal.MaterialExpressionSceneTexture, -900, 0)
     scene.set_editor_property("scene_texture_id", unreal.SceneTextureId.PPI_POST_PROCESS_INPUT0)
     exposure = mel.create_material_expression(material, unreal.MaterialExpressionEyeAdaptation, -900, 200)
+    lut = mel.create_material_expression(material, unreal.MaterialExpressionTextureObjectParameter, -900, 300)
+    lut.set_editor_property("parameter_name", "Lut")
+    lut.set_editor_property("texture", identity_lut())
+    lut.set_editor_property("sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
     curve = mel.create_material_expression(material, unreal.MaterialExpressionCustom, -400, 0)
-    curve.set_editor_property("description", "CS2 Hable tone curve")
+    curve.set_editor_property("description", "CS2 tone curve and colour table")
     curve.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
-    curve.set_editor_property("code", HABLE_HLSL)
+    curve.set_editor_property("code", TONEMAP_HLSL)
+    scalars = list(TONEMAP_SCALES) + list(HABLE_PARAMETERS) + list(TONEMAP_SWITCHES)
     inputs = []
-    for input_name in ["Color", "Exposure"] + list(HABLE_SCALES) + list(HABLE_PARAMETERS):
+    for input_name in ["Color", "Exposure", "Lut"] + scalars:
         custom_input = unreal.CustomInput()
         custom_input.set_editor_property("input_name", input_name)
         inputs.append(custom_input)
     curve.set_editor_property("inputs", inputs)
     mel.connect_material_expressions(scene, "Color", curve, "Color")
     mel.connect_material_expressions(exposure, "", curve, "Exposure")
-    for index, param in enumerate(list(HABLE_SCALES) + list(HABLE_PARAMETERS)):
+    mel.connect_material_expressions(lut, "", curve, "Lut")
+    for index, param in enumerate(scalars):
         scalar = mel.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -900,
-                                                350 + index * 110)
+                                                450 + index * 110)
         scalar.set_editor_property("parameter_name", param)
-        scalar.set_editor_property("default_value", HABLE_SCALES.get(param, 1.0))
+        scalar.set_editor_property("default_value", {**TONEMAP_SCALES, **TONEMAP_SWITCHES}.get(param, 1.0))
         mel.connect_material_expressions(scalar, "", curve, param)
     mel.connect_material_property(curve, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
     mel.recompile_material(material)
-    unreal.EditorAssetLibrary.save_asset(HABLE_TONEMAPPER)
-    log("created " + HABLE_TONEMAPPER)
+    unreal.EditorAssetLibrary.save_asset(TONEMAPPER)
+    log("created " + TONEMAPPER)
     return material
 
 
-def hable_tonemapper_instance(tonemap):
-    """An instance of the Hable tone mapper with a map's .vpost curve parameters."""
-    instance = blend_instance("TonemapHable_" + NAME, ensure_hable_tonemapper(), "/Game/OFAST/%s" % NAME)
-    for param, value in HABLE_SCALES.items():
+def cs2_tonemapper_instance(tonemap, hable, lut, lut_size):
+    """An instance of the tone mapper with a map's .vpost curve parameters and colour table (None: no table)."""
+    instance = blend_instance("Tonemap_" + NAME, ensure_tonemapper(), "/Game/OFAST/%s" % NAME)
+    for param, value in TONEMAP_SCALES.items():
         set_scalar_parameter(instance, param, value)
     for param, key in HABLE_PARAMETERS.items():
         set_scalar_parameter(instance, param, tonemap.get(key, 1.0))
+    set_scalar_parameter(instance, "Hable", 1.0 if hable else 0.0)
+    set_scalar_parameter(instance, "UseLut", 1.0 if lut else 0.0)
+    if lut:
+        set_scalar_parameter(instance, "LutSize", lut_size)
+        set_texture_parameter(instance, "Lut", lut)
     unreal.EditorAssetLibrary.save_loaded_asset(instance)
     return instance
 
