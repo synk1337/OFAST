@@ -318,7 +318,7 @@ translucency lighting mode Surface TranslucencyVolume: the direct light comes fr
 and the indirect light from Lumen's translucency volume, coarse grids around the camera instead of the per-pixel
 light and virtual shadow maps of opaque surfaces. A translucent surface lying on an opaque one is therefore lit
 less than its ground in direct sun: de_nuke's road paint came out at 0.97× the sunlit asphalt's luminance (CS2
-2.35×; 2.07× now). CS2 lights an overlay with its ground's lightmap texel, so OFAST draws overlays as mesh decals,
+2.13–2.35× depending on exposure; 2.07× now). CS2 lights an overlay with its ground's lightmap texel, so OFAST draws overlays as mesh decals,
 blended into the GBuffer before lighting ([material.md](material.md#translucent-overlays-mesh-decals),
 [decision 009](../decisions/009-overlays-as-mesh-decals.md)). Surface ForwardShading
 (`TLM_SURFACE_PER_PIXEL_LIGHTING`) gives the direct sun per pixel with shadows but keeps Lumen's translucency volume

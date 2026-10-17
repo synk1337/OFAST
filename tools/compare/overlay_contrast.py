@@ -9,7 +9,9 @@ shots must share their framing, as CS2's and import_map.py's spawn views do) is 
 - ground: the median colour of its least saturated half,
 and the script prints both mean sRGB colours, the paint's hue and HSV saturation, and the ratio of their linear
 luminance (paint / ground). When paint and ground get the same light, the light cancels out of that ratio, so it
-compares the blend itself between two renderers whose exposure differs a little.
+compares the blend itself between two renderers, as far as the tone curve is linear: a near-white paint sits in its
+shoulder, and on de_nuke's CT spawn two CS2 captures of the same scene at different exposures gave 2.35 and 2.13.
+Compare shots taken at the same exposure, or base-colour shots (--albedo).
 
 --albedo PAINT_SRGB (e.g. 237,179,63) treats the images as base-colour renders (CS2 mat_fullbright 1, Unreal
 ShowFlag.Lighting 0) and also solves blend = k * a * paint + (1 - a) * ground for the effective opacity a, by least

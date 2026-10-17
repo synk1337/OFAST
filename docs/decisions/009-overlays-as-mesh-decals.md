@@ -32,7 +32,7 @@ luminance (paint / asphalt), so the light cancels out when both get the same:
 
 | | CT spawn, sun: bays / line | T spawn, shade: bays |
 |---|---|---|
-| CS2 | 2.35 / 2.07, paint (249, 213, 125) | 2.29, paint (88, 89, 53), hue 62° |
+| CS2 (reference shots `cs2_de_nuke_ct0/t0.jpg`) | 2.35 / 2.07, paint (249, 213, 125) | 2.29, paint (88, 89, 53), hue 62° |
 | translucent, `TLM_SURFACE` (before, decision 008's import) | 0.97 / 0.95, paint (178, 157, 126) | 1.62, hue 38° |
 | translucent, Surface ForwardShading (what-if) | 1.95 / 1.78 | 1.50, hue 40° |
 | mesh decal (what-if on the paint only) | 2.09 / 1.77 | 1.87, hue 58° |
@@ -74,12 +74,27 @@ Result on de_nuke, re-imported with this change (renders in `test-data/shots/ove
   filtering) and 0.34 on the farther line, with a fitted base-colour scale of 1.05–1.14 (the scene's exposure) and a
   residual under 0.5 sRGB steps.
 
-**Still open: 10–20 % less contrast than CS2** (0.88 / 0.90 of CS2's ratio at the CT spawn, 0.81 at the T spawn),
-the same with any lighting. Either CS2 draws the paint more opaque than its texture says (a plain blend would need
-about 0.57 instead of 0.45), which is the second suspect of decision 008 (a blend other than plain alpha in CS2's
-overlay pass), or CS2's asphalt is darker in albedo than Unreal's (the sunlit asphalt is sRGB 146 in CS2 and 161 in
-Unreal, while the whole view matches at 0.99). A CS2 base-colour screenshot (`mat_fullbright 1`) at the CT spawn,
-measured with `overlay_contrast.py --albedo`, separates the two; not taken yet.
+**Checked in CS2 afterwards** (same day, Steam F12 captures at both spawns, normal and `mat_fullbright 1`; in
+`test-data/shots/overlay_decals/cs2/`, local only):
+
+- **Against fresh captures the lit contrast is within 3–7 %:** CS2 2.13 at the CT bays and 2.01 at the T bays
+  (default auto exposure), Unreal 2.07 and 1.86. The older reference shots gave 2.35 and 2.29 for the same scene:
+  the ratio of a near-white paint moves with the exposure, through the tone curve's shoulder, so lit ratios compare
+  only at the same exposure. Hue: CS2 42° / 60°, Unreal 42° / 57°.
+- **CS2 draws the paint more opaque than its texture says.** In the base-colour shots (linear, exposure-free; the
+  fitted scale of CS2's fullbright is 0.94–0.97, i.e. albedo × 1), the per-pixel opacity of the stripes, solved from
+  R − B against the draw tint, peaks at 0.57–0.61 in CS2 against 0.46–0.49 in Unreal (the texture's 0.486). The most
+  opaque 0.5 % of the pixels follow about the same ratio (Unreal 0.51–0.69, CS2 0.63–0.86): **1.2–1.35×, about
+  1.27×**, not a curve such as a square root (0.70), gamma 2.2 (0.72) or two blended layers (0.74), which all
+  overshoot at 0.49. The three channels of
+  CS2's paint also disagree under a plain blend (R 0.56–0.62, G 0.66–0.77, B 0.55–0.60): CS2's paint is a little
+  yellower than the draw tint (extrapolated to full opacity about sRGB 237, 190, 64 against 237, 179, 63), while
+  Unreal's channels agree (R 0.48–0.49, G 0.48–0.51). Where that comes from is not found: the material's
+  `g_flOpacityScale` is 1, the overlay has no vertex alpha, and the decompiled shaders available show no translucent
+  variant of `csgo_lightmappedgeneric`. Not compensated: a factor nobody can explain would be a guess, and with the
+  lighting fixed the lit result is already within 3–7 %.
+- **CS2's asphalt is bluish in base colour** (sRGB 100–106, 107–114, 114–121) where Unreal's is neutral grey
+  (103, 103, 103): a separate question about the ground's material, not the overlay.
 
 ## Alternatives considered
 
@@ -106,3 +121,5 @@ measured with `overlay_contrast.py --albedo`, separates the two; not taken yet.
 - DBuffer decals are needed (`r.DBuffer`, on by default; now stated in the sandbox's `DefaultEngine.ini`). DBuffer
   decals cannot write ambient occlusion; the overlays checked use `default_ao` anyway.
 - Overlapping overlays are blended in Unreal's decal order, not CS2's (none found overlapping on de_nuke's paint).
+- CS2's paint stays about 1.27× more opaque and a little yellower than the export says (see "Checked in CS2"); if
+  other overlays show the same, the opacity rule of `csgo_lightmappedgeneric` overlays needs finding.
