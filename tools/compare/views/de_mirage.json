@@ -10,5 +10,65 @@
     "setpos": [-1250, 745, -40],
     "setang": [5, 180, 0],
     "note": "B apartments corridor lit by light_omni2 ceiling lights; CS2's auto exposure goes to 1.0 here, so take the reference at mat_tonemap_force_scale 0.8"
+  },
+  {
+    "name": "asite",
+    "setpos": [-662, -1612, -171],
+    "setang": [3, 70, 0],
+    "note": "A site, sunlit tiles, looking at the arch to the stairs and the shaded wall of the ramp"
+  },
+  {
+    "name": "stairs",
+    "setpos": [-462, -1575, -39],
+    "setang": [5, 225, 0],
+    "note": "Top of the A-site stairs looking over the site to jungle and the CT side: sunlit plaza, palms, carts"
+  },
+  {
+    "name": "bsite",
+    "setpos": [-2550, 162, -167],
+    "setang": [3, 45, 0],
+    "note": "B site, sunlit, looking at the bench corner and the market awning"
+  },
+  {
+    "name": "bapps",
+    "setpos": [-2012, 762, -47],
+    "setang": [10, 200, 0],
+    "note": "B apartments' balcony looking down onto B site: the van, sunlit and shaded courtyard"
+  },
+  {
+    "name": "middle",
+    "setpos": [-162, -888, -167],
+    "setang": [3, 60, 0],
+    "note": "Middle, looking toward top of mid and the blue house: sunlit cobbles, long shadows"
+  },
+  {
+    "name": "connector",
+    "setpos": [-675, -1225, -167],
+    "setang": [3, 45, 0],
+    "note": "Connector (between A and mid): covered corridor with a wall lamp and a sunlit arch"
+  },
+  {
+    "name": "sniper",
+    "setpos": [-1250, -1088, -167],
+    "setang": [0, 75, 0],
+    "note": "Sniper's nest / window room: interior lit by daylight through the window and doors"
+  },
+  {
+    "name": "shop",
+    "setpos": [-2325, -400, -167],
+    "setang": [3, 45, 0],
+    "note": "Shop (market by B): dark interior with posters, looking out to the sunlit street"
+  },
+  {
+    "name": "tramp",
+    "setpos": [512, -1625, -263],
+    "setang": [3, 180, 0],
+    "note": "T ramp: covered stairs up to the A ramp, warm interior light"
+  },
+  {
+    "name": "underpass",
+    "setpos": [-475, 412, -159],
+    "setang": [5, 180, 0],
+    "note": "Underpass (under mid to B): small enclosed room, lit by a hanging bulb"
   }
 ]

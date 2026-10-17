@@ -52,6 +52,11 @@ HFOV_16_9 = math.degrees(2 * math.atan(math.tan(math.radians(45)) * (16 / 9) / (
 WARM_UP_TICKS = 600
 SHOT_TIMEOUT_S = 45 * 60  # import_map.SHOT_TIMEOUT_S: longest wait for one screenshot (shader compilation)
 SHOT_DELAY_S = 6.0  # import_map.SHOT_DELAY_S: seconds on each camera before its screenshot (Lumen settling)
+# import_map.RENDER_CVARS: virtual shadow map limits for maps with many shadowed local lights.
+RENDER_CVARS = (
+    "r.Shadow.Virtual.MaxPhysicalPages 16384",
+    "r.Shadow.Virtual.OnePassProjection.MaxLightsPerPixel 32",
+)
 
 
 def log(message):
@@ -189,6 +194,8 @@ def main():
     level = "/Game/OFAST/Maps/" + NAME
     if not unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).load_level(level):
         raise RuntimeError("could not open %s (run import_map.py first)" % level)
+    for command in RENDER_CVARS:
+        unreal.SystemLibrary.execute_console_command(None, command)
     apply_try(unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors())
     cameras = {
         actor.get_actor_label()[len(CAMERA_PREFIX):]: actor

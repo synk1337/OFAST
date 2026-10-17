@@ -1,5 +1,77 @@
 [
   {
+    "name": "asite",
+    "setpos": [2000, 292, 161],
+    "setang": [3, 20, 0],
+    "note": "A site, sunlit red tiles and the yellow house with green shutters (Hable map: CS2 reference at mat_tonemap_force_scale 0.8)"
+  },
+  {
+    "name": "bsite",
+    "setpos": [512, 2716, 162],
+    "setang": [3, 315, 0],
+    "note": "B site, sunlit, the yellow façade and the plywood-covered fountain"
+  },
+  {
+    "name": "banana",
+    "setpos": [208, 1396, 105],
+    "setang": [3, 60, 0],
+    "note": "Banana, looking up toward B: shaded walls, the arch, sunlit street"
+  },
+  {
+    "name": "arch",
+    "setpos": [1880, 1116, 159],
+    "setang": [3, 0, 0],
+    "note": "Arch side toward the library: shaded courtyard, dark doorway"
+  },
+  {
+    "name": "library",
+    "setpos": [2480, 1484, 159],
+    "setang": [3, 160, 0],
+    "note": "Library interior: wooden ceiling, shelves, light from the doorways"
+  },
+  {
+    "name": "apartments",
+    "setpos": [1136, -156, 276],
+    "setang": [3, 100, 0],
+    "note": "Apartments (upper floor near A): small room lit by a wall lamp"
+  },
+  {
+    "name": "apartments2",
+    "setpos": [-40, -508, 193],
+    "setang": [3, 135, 0],
+    "note": "Apartments by T side: hall with sunlight falling through an arch onto the tiles"
+  },
+  {
+    "name": "middle",
+    "setpos": [698, 540, 94],
+    "setang": [3, 0, 0],
+    "note": "Middle toward top of mid and A: sunlit street, red A marking"
+  },
+  {
+    "name": "underpass",
+    "setpos": [264, 372, -7],
+    "setang": [0, 270, 0],
+    "note": "Underpass (sewer under mid): concrete tunnel with a grate, light from the far end"
+  },
+  {
+    "name": "pit",
+    "setpos": [2360, -340, 88],
+    "setang": [3, 45, 0],
+    "note": "Pit below A: stone walls with arches, barrels, grass"
+  },
+  {
+    "name": "ruins",
+    "setpos": [1000, 3148, 129],
+    "setang": [3, 45, 0],
+    "note": "Ruins / church by B: dim interior with columns and a lit gate"
+  },
+  {
+    "name": "balcony",
+    "setpos": [954, -116, 257],
+    "setang": [5, 135, 0],
+    "note": "Balcony over second mid / A: red house, distant mountains, the 3D skybox"
+  },
+  {
     "name": "trike",
     "setpos": [-2520, 1160, -70],
     "setang": [18, 218, 0],

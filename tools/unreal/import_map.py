@@ -2289,6 +2289,39 @@ def hable_tonemapper_instance(tonemap):
 LIGHT_CLASSES = {"point": unreal.PointLight, "spot": unreal.SpotLight, "rect": unreal.RectLight}
 
 
+def light_radius(light):
+    """Unreal attenuation radius (cm) for a manifest light whose CS2 `range` is `attenuation_radius`.
+
+    CS2 lights a surface at full strength up to range × (1 − skirt) and then fades it out linearly to nothing at
+    `range` (Source 2 Viewer's SceneLight.ComputeDistanceFade; skirt 0 means no fade before the cut). Unreal's
+    inverse-square lights fade over their whole attenuation radius instead, with the window (1 − (d / radius)⁴)²:
+    0.35 at 80 % of the radius, 0.01 at 97 %. CS2 maps often set a range just long enough to reach the floor
+    (de_dust2's lower tunnel lamp: range 205, 199 units above the floor; most of de_nuke's lights have skirt 0), so
+    a radius equal to the range left those floors nearly unlit. The radius is the range × (1.375 − 0.725 × skirt):
+    the factor that fits Unreal's window to CS2's fade best (least squares, weighted by 1 / distance², the falloff
+    both share), within 0.04 for every skirt from 0 to 1 (1.375 at 0, 1.3 at the default 0.1). Light then reaches a
+    little past CS2's cut, and a little less of it arrives near the range."""
+    skirt = min(max(light.get("skirt", 0.1), 0.0), 1.0)
+    return light["attenuation_radius"] * (1.375 - 0.725 * skirt)
+
+
+# A light with `directlight` 0 ("None") only adds bounce light to CS2's bake. Unreal has no bounce-only light, but
+# Lumen's surface cache takes the light's colour × Indirect Lighting Intensity × Diffuse Scale
+# (LumenSceneDirectLighting.cpp / .ush) where the direct light takes colour × Diffuse Scale: a small Diffuse Scale
+# with a matching Indirect Lighting Intensity keeps the bounce and leaves 2 % of the direct light.
+BOUNCE_ONLY_DIFFUSE_SCALE = 0.02
+
+# Virtual shadow map limits for maps with many shadowed local lights (de_nuke: 174). With the engine's defaults the
+# page pool (4096 pages) and the 16 lights per pixel of one-pass projection overflow ("Virtual Shadow Map Page Pool
+# overflow ... missing shadow" in the log), and whole pages of shadow go missing: blocky patches of light on
+# de_nuke's B site that changed from one render to the next. Also set in the sandbox's DefaultEngine.ini
+# ([SystemSettings]); repeated here so the screenshots get them in any project.
+RENDER_CVARS = (
+    "r.Shadow.Virtual.MaxPhysicalPages 16384",
+    "r.Shadow.Virtual.OnePassProjection.MaxLightsPerPixel 32",
+)
+
+
 def setup_local_lights(manifest, imported, physical=False):
     """Replaces the glTF lights (punctual approximations, and Interchange drops their range) with Unreal lights
     built from the manifest: real rect lights, CS2's fade-out range, source size and bounce strength. `physical`
@@ -2298,6 +2331,7 @@ def setup_local_lights(manifest, imported, physical=False):
             actors.destroy_actor(actor)
     imported[:] = [a for a in imported if not isinstance(a, unreal.Light)]
     lights = manifest.get("lights") or []
+    bounce_only = 0
     for light in lights:
         pitch, yaw, roll = light["rotation"]
         actor = spawn(LIGHT_CLASSES[light["shape"]], light["location"], unreal.Rotator(roll=roll, pitch=pitch, yaw=yaw))
@@ -2322,8 +2356,18 @@ def setup_local_lights(manifest, imported, physical=False):
             "indirect_lighting_intensity": bounce,
             "cast_shadows": True,
         }
+        if light.get("direct") == 0:
+            # CS2 bakes only this light's bounce (see BOUNCE_ONLY_DIFFUSE_SCALE).
+            settings.update(
+                {
+                    "diffuse_scale": BOUNCE_ONLY_DIFFUSE_SCALE,
+                    "specular_scale": 0.0,
+                    "indirect_lighting_intensity": bounce / BOUNCE_ONLY_DIFFUSE_SCALE,
+                }
+            )
+            bounce_only += 1
         if light.get("attenuation_radius"):
-            settings["attenuation_radius"] = light["attenuation_radius"]
+            settings["attenuation_radius"] = light_radius(light)
         if light["shape"] == "rect":
             # No barn doors: CS2's rect lights emit over the whole hemisphere in front of them.
             settings.update(
@@ -2334,7 +2378,7 @@ def setup_local_lights(manifest, imported, physical=False):
         if light["shape"] == "spot":
             settings.update({"inner_cone_angle": light["inner_cone"], "outer_cone_angle": min(light["outer_cone"], 80.0)})
         component.set_editor_properties(settings)
-    log("local lights: %d from the manifest" % len(lights))
+    log("local lights: %d from the manifest (%d bounce only)" % (len(lights), bounce_only))
 
 
 DIAGNOSTIC_SWITCHES = {"sun", "sky", "local", "bounce"}
@@ -2544,6 +2588,8 @@ def main():
     save_level()
     # Enough frames per screenshot for Lumen and temporal AA to settle at the screenshot resolution.
     unreal.SystemLibrary.execute_console_command(None, "r.HighResScreenshotDelay 16")
+    for command in RENDER_CVARS:
+        unreal.SystemLibrary.execute_console_command(None, command)
 
     state = {"ticks": 0, "index": 0, "task": None, "started": time.monotonic()}
 

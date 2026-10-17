@@ -68,7 +68,7 @@ Values are loosely typed: `origin` may be a float array or `"5208.0 -968.0 44.5"
 |---|---|
 | `light_environment` | sun direction (`angles`), `color`, `brightness`, sky colour → manifest |
 | `light_omni2`, `light_rect`, `light_barn` (`light_spot`, `light_omni`) | glTF point/spot lights |
-| `prop_dynamic(_override)`, `prop_physics_multiplayer`, `func_brush`, `func_breakable` | placed models |
+| `prop_dynamic(_override)`, `prop_physics_multiplayer`, `func_brush`, `func_breakable` | placed models, except those with `startdisabled` (other game modes' props and blockers: de_inferno's 31 wingman props `props.2v2` and 24 blocker brushes, de_mirage's 29 retake brushes; not drawn when the map starts) |
 | `info_player_counterterrorist` / `_terrorist` | spawn viewpoints → manifest |
 | `env_sky`, `post_processing_volume`, `env_cubemap_fog` | sky, exposure, fog → manifest ([lighting.md](lighting.md)) |
 | `skybox_reference` | where the 3D skybox is (see below) |

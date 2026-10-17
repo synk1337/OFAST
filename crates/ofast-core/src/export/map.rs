@@ -8,7 +8,7 @@
 //! | "block light" scene objects (invisible light blockers) | same, nodes named `lightblocker_…` |
 //! | aggregate fragments in world space | one mesh per aggregate (per tint and kind), one node |
 //! | aggregate fragments with their own transform (instanced props) | one mesh per (model, draw call), one node each |
-//! | dynamic props, brush entities (`prop_dynamic`, `prop_physics_multiplayer`, `func_brush`, …) | one mesh per model, one node each |
+//! | dynamic props, brush entities (`prop_dynamic`, `prop_physics_multiplayer`, `func_brush`, …), unless `startdisabled` | one mesh per model, one node each |
 //! | `light_omni2`, `light_rect`, `light_barn`, `light_spot` | `KHR_lights_punctual` point / spot lights |
 //!
 //! The 3D skybox (a separate, 1/16-scale world shipped in its own archive) is placed with the same rules, every
@@ -301,7 +301,10 @@ impl MapExporter<'_> {
             let Some(class) = entity.class_name() else {
                 continue;
             };
+            // Entities that start disabled are not drawn when the map starts: other game modes' props and blockers
+            // (de_inferno's 31 wingman props "props.2v2" and 24 blocker brushes, de_mirage's 29 retake brushes).
             if MODEL_ENTITY_CLASSES.contains(&class)
+                && entity.flag("startdisabled") != Some(true)
                 && let Some(model) = entity.string("model").filter(|m| !m.is_empty())
             {
                 let transform = entity_transform(entity.origin(), entity.angles(), entity.scales());
@@ -552,6 +555,13 @@ struct LocalLight<'a> {
     radius: f32,
     /// Strength of this light's bounce in CS2's bake.
     bounce: f32,
+    /// Fraction of `range` over which the light fades out (`skirt`, Hammer's "Far Falloff", default 0.1): CS2 lights
+    /// at full strength up to `range × (1 − skirt)`, then fades linearly to nothing at `range` (Source 2 Viewer's
+    /// `SceneLight.ComputeDistanceFade`).
+    skirt: f32,
+    /// `directlight`: 0 none (the light only adds bounce to the bake), 1 baked, 2 dynamic, 3 stationary
+    /// (`lights_base.fgd`, `lights2.fgd`).
+    direct: i32,
     brightness: f32,
     brightnessscale: f32,
 }
@@ -625,6 +635,9 @@ impl<'a> LocalLight<'a> {
                 size(0).unwrap_or(0.0)
             },
             bounce: entity.number("bouncescale").unwrap_or(1.0),
+            skirt: entity.number("skirt").unwrap_or(0.1).clamp(0.0, 1.0),
+            // Only 0 changes how the light is rebuilt; a missing key is a light that lights directly.
+            direct: entity.number("directlight").map_or(1, |v| v as i32),
             brightness,
             brightnessscale,
         })
@@ -682,8 +695,12 @@ impl<'a> LocalLight<'a> {
             "intensity_cd_photometric": self.linear * PHOTOMETRIC_CANDELA_PER_UNIT,
             "color": self.color.to_vec(),
             "attenuation_radius": self.range.map(cm),
+            // CS2's fade-out: full strength to range × (1 − skirt), then linear to 0 at range.
+            "skirt": self.skirt,
             "source_radius": cm(self.radius),
             "indirect_intensity": self.bounce,
+            // CS2's directlight: 0 = no direct light (the light only adds bounce to CS2's bake).
+            "direct": self.direct,
         });
         match self.shape {
             LightShape::Point => light["shape"] = json!("point"),
