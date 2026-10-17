@@ -16,7 +16,7 @@
 //! - **Materials**: each CS2 material (× tint colour) becomes a glTF PBR material. The CS2 shader name and texture
 //!   parameters are kept in `extras.ofast` so the Unreal plugin can later build matching master materials.
 //!   Translucent and alpha-tested CS2 materials map to glTF `BLEND` / `MASK` (cut at the material's
-//!   `g_flAlphaTestReference`); `csgo_static_overlay` by its blend mode ([`OverlayBlend`]).
+//!   `g_flAlphaTestReference`); `csgo_static_overlay` by its blend mode (`OverlayBlend`, private).
 //! - **Textures**: see [`TextureRole`]. Textures are decoded and written as PNG at the end, in parallel; a texture
 //!   that fails to decode is replaced by a 1×1 neutral image and reported as a warning.
 //!
