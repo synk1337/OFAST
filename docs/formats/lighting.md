@@ -283,19 +283,18 @@ manifest's `post.color_correction` names it. Every official map checked but de_o
 | 15 – 24 | de_ancient 15, de_nuke 17, cs_italy 17, cs_office 22, de_cache 24, de_inferno 24 | 14 – 25 |
 | 27 – 31 | de_vertigo 27, de_anubis 31 | 5 – 19 |
 
-OFAST applies the table on **Hable maps only** (decided 2026-10-18). The reason then: on the linear maps it could not
-be confirmed, and de_nuke's 17 levels moved its spawns from 0.98 / 0.96 to 0.92 / 0.90 of CS2's screenshots.
+OFAST applies the table on **every map** that has one. For a day (2026-10-18) it applied it on Hable maps only: on the
+linear maps it was unconfirmed, and de_nuke's 17 levels moved its spawns from 0.98 / 0.96 to 0.92 / 0.90 of CS2's
+screenshots — screenshots taken at a raised brightness setting, which is where that darkening came from.
 
-**Measured since: CS2 applies it on linear maps too** (de_nuke, whose table lowers the darks by up to 8 levels): at
+**CS2 applies it on linear maps too** (de_nuke, whose table lowers the darks by up to 8 levels): at
 CS2's default brightness, its CT spawn at exposures 1.6, 0.8, 0.4 and 0.2, read back through the table, halves every
 pixel by 0.495 – 0.503 at every brightness, and 0.8 → 0.2 gives 0.246 – 0.251; without the table the same pairs
 fall to 0.44 – 0.46 at the dark end (0.20 for the 4× step) and rise with brightness. Its sky pixels give exposure ×
 radiance in all three channels (0.97 – 1.00) only through the table (without it, at 0.2: red 0.60, green 0.84,
 blue 0.89). The darkening was the references' brightness setting
 ([above](#cs2s-brightness-setting-r_fullscreen_gamma)): against CS2's default picture de_nuke's spawns are 0.99 / 0.98
-of CS2 with the table and 1.06 / 1.05 without it. So the reason for the decision no longer holds; switching the table
-back on for linear maps is one line in `setup_post` (`lut = import_lut(...) if hable else None`), left to the
-project's owner.
+of CS2 with the table and 1.06 / 1.05 without it. The table was switched back on for linear maps (2026-10-18).
 
 `tone_fit.py table` prints a map's table (grey diagonal and largest change); de_vertigo's is an S-curve (input 33 → 19,
 181 → 199, 247 → 255), de_nuke's lowers the darks (16 → 8, 33 → 25).
@@ -304,7 +303,7 @@ project's owner.
 
 A post-process material at `BL_ReplacingTonemapper` (`M_OFAST_Tonemap_v3`), on every map: scene colour ×
 eye-adaptation exposure → a straight line (shoulder 0) or `H(2.85 x) / H(4.2 W)` (`HABLE_INPUT_SCALE`,
-`HABLE_WHITE_SCALE` in `import_map.py`) → sRGB → on Hable maps, the map's table, imported as an uncompressed, non-sRGB texture
+`HABLE_WHITE_SCALE` in `import_map.py`) → sRGB → the map's table, imported as an uncompressed, non-sRGB texture
 without mips and read with two bilinear lookups on neighbouring blue slices. Unreal applies nothing after a replacing
 tone mapper. The curve's parameters come from the manifest's `post.tonemap`. Before this, linear maps used Unreal's
 own tone mapper with its curve off, and Hable maps `M_OFAST_TonemapHable_v2` (H(2.5 x) / H(1.25 W), no table); from
@@ -537,7 +536,7 @@ a decal (CS2 2.29×).
 | Sky | CS2's `env_sky` HDR on a sphere + Sky Light from it | Unreal's Sky Atmosphere + real-time Sky Light, light height fog |
 | Local lights | CS2-matched candela (`intensity_cd`), CS2 bounce × gain | Hammer's real candela (`intensity_cd_photometric` = 79.6 × linear), plain bounce |
 | Exposure | fixed, measured on CS2 (EV100 0.322 on de_mirage) | auto (histogram), EV100 2 – 16 |
-| Tone curve | CS2's (a straight line or Hable's), then on Hable maps CS2's colour-correction table | Unreal's filmic curve, local exposure, light bloom and vignette |
+| Tone curve | CS2's (a straight line or Hable's), then CS2's colour-correction table | Unreal's filmic curve, local exposure, light bloom and vignette |
 
 The realistic style does **not** keep CS2's light ratios: it pairs Hammer's photometric candela with a real-world
 sun (100 000 lux before the atmosphere, about 80 000 on the ground), so a 121 cd wall lamp is far fainter next to the

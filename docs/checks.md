@@ -146,6 +146,21 @@ missing), and de_dust2's `uppertunnel` came out at 0.88. `shoot_views.py` on the
 pictures (1.42; 0.99 and 1.01 in two runs), which the table uses. The import's screenshot loop can therefore drop a
 shot or catch one early; re-shoot with `shoot_views.py` when a number looks off.
 
+### Colour table on every map (2026-10-18)
+
+The colour-correction table applies on the linear maps too again (CS2 applies it there, measured on de_nuke at the
+default brightness: [lighting.md](formats/lighting.md#the-colour-correction-table)). de_nuke, de_dust2 and de_mirage
+re-imported with all their views (`test-data/shots/lut_all/`; all 53 screenshots right this time):
+
+| Map | Spawns (ct0 / t0) | Views, without → with the table |
+|---|---|---|
+| de_nuke | 1.07 / 1.03 → 1.00 / 0.97 | sunlit closer to 1 (ctcrates 1.12 → 1.04, tdoors 1.11 → 1.01, outside 1.00 → 0.95); the table lowers the darks, so dim interiors drop (bsite 0.85 → 0.76, lobby 0.70 → 0.61, decon 0.82 → 0.76) and bright ones too (tunnels 2.17 → 2.05, garage 1.38 → 1.30) |
+| de_dust2 | 0.31 / 1.05 → 0.28 / 1.06 | within 0.05 (lower tunnel 0.68 → 0.63) |
+| de_mirage | 1.05 / 1.05 → 1.05 / 1.06 | within 0.05 (B apartments 0.90 → 0.85, underpass 1.42 → 1.29) |
+
+de_nuke's dim interiors (B site, lobby, decontamination) now sit lower; what keeps them dark is still items 6 and 7
+(unlit lamps and screens, the lights below the floor).
+
 ## What was wrong
 
 ### Fixed
