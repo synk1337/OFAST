@@ -4,6 +4,7 @@
 //! - [`map`]: whole maps (world, props, lights) as glTF 2.0 plus an OFAST manifest for Unreal.
 //! - [`sky`]: a map's 2D sky cube map as an equirectangular HDR image.
 //! - `environment` (internal): CS2's `csgo_environment(_blend)` materials, baked for glTF.
+//! - `tint` (internal): the model tints of CS2's prop shaders, masked by `g_tTintMask`.
 //! - [`replay`]: one round of a demo (players' movement, kills, milestones) for Unreal's Level Sequence.
 
 mod environment;
@@ -11,6 +12,7 @@ pub mod gltf;
 pub mod map;
 pub mod replay;
 pub mod sky;
+mod tint;
 
 use crate::model::ModelError;
 use crate::resource::ResourceError;
@@ -20,11 +22,13 @@ use crate::vpk::VpkError;
 /// Choices a map export leaves to the caller. The default suits OFAST's Unreal import (`import_map.py`).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ExportOptions {
-    /// Bake the model tints (`rendercolor`, scene-object tints) of `csgo_environment(_blend)` materials into their
-    /// colour textures, one texture per tint, as glTF readers other than OFAST's Unreal import need (Blender,
-    /// viewers). Off by default: the colour is baked once without the tint and the tint travels in
-    /// `extras.ofast.environment` for Unreal's material to apply — de_inferno then writes about half the colour
-    /// bakes. See `docs/formats/material.md` ("Model tint").
+    /// Bake the model tints (`rendercolor`, scene-object tints) that only part of a surface takes into the colour
+    /// textures, one texture per tint, as glTF readers other than OFAST's Unreal import need (Blender, viewers):
+    /// those of `csgo_environment(_blend)` materials and those of prop shaders with a tint mask (`F_TINT_MASK`, when
+    /// the mask uses the colour's UV set). Off by default: the colour is written once without the tint and the tint
+    /// travels in `extras.ofast.environment` / `extras.ofast.tint_mask` for Unreal's materials to apply — de_inferno
+    /// then writes about half the colour bakes, de_dust2 saves 261 tinted copies of 44 prop textures. See
+    /// `docs/formats/material.md` ("Model tint", "Model tint of prop shaders and their tint masks").
     pub bake_model_tints: bool,
 }
 

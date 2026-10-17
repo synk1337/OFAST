@@ -15,9 +15,9 @@ Inputs (environment variables):
 Steps: level made once from the Basic template, its environment (sky, clouds, fog, sun, floor) removed →
 Interchange *scene* import of the glTF (one actor per placement; what an older export left is deleted first, so a
 re-run always shows the current glTF: evict_stale_interchange_assets) → layer-blend and height-blend materials (two-layer
-CS2 materials, which glTF cannot describe) and single-layer environment materials (their model tint is applied in the
-material, not baked into the textures; OFAST's instances and textures no export uses any more are deleted:
-delete_unused_ofast_assets) → light blockers hidden and
+CS2 materials, which glTF cannot describe), single-layer environment materials (their model tint is applied in the
+material, not baked into the textures) and tinted props with a tint mask (the tint only where the mask is set;
+OFAST's instances and textures no export uses any more are deleted: delete_unused_ofast_assets) → light blockers hidden and
 shadow proxies added (no sunlight through single-sided walls) → 3D skybox drawn behind the world → CS2's environment from the manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
 exposure, no tone curve or CS2's Hable curve (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
 default field of view → screenshots → quit. Everything the script adds is tagged "OFAST" and rebuilt on every run.
@@ -460,8 +460,8 @@ def skybox_instance(name, material, document, master, defaults, folder):
 # Versioned name: bump when the graph changes so existing projects get the new master.
 BLEND_MASTER = "/Game/OFAST/Materials/M_OFAST_LayerBlend_v2"
 EXPORT_DIR = os.path.dirname(GLTF)
-# The material instances OFAST builds for the glTF materials (layer blends, height blends, tinted environment
-# materials) and the textures they sample.
+# The material instances OFAST builds for the glTF materials (layer blends, height blends, environment materials,
+# tint masks) and the textures they sample.
 BLEND_FOLDER = "/Game/OFAST/%s/Blend" % NAME
 # The same for the 3D skybox (setup_skybox).
 SKYBOX_FOLDER = "/Game/OFAST/%s/Skybox" % NAME
@@ -871,6 +871,146 @@ def set_alpha_overrides(instance, material):
     if changed:
         instance.set_editor_property("base_property_overrides", overrides)
         CHANGED_INSTANCES.add(instance.get_path_name())
+
+
+# Versioned like BLEND_MASTER: the model tint of CS2's prop shaders (csgo_complex, csgo_vertexlitgeneric,
+# csgo_foliage, csgo_simple_3layer_parallax) under a tint mask (F_TINT_MASK). The shaders multiply the colour by the
+# tint only where g_tTintMask.R is set: colour x lerp(1, tint, mask). glTF can only multiply a whole surface, so the
+# exporter keeps the colour untinted and writes extras.ofast.tint_mask (see the tint module in ofast-core); the
+# reference for the graph is tint::apply in crates/ofast-core/src/export/tint.rs, which has tests — keep the two
+# identical. de_inferno's T-spawn tree (csgo_foliage, tint ff0000) had green leaves turned red-brown by the factor;
+# CS2 shows green leaves and red flowers.
+TINT_MASK_MASTER = "/Game/OFAST/Materials/M_OFAST_TintMask_v1"
+# Texture parameters of the tint-mask master: (parameter, import kind, default texture). The first four are the glTF
+# material's own maps; a missing one gets the stand-in that changes nothing.
+TINT_MASK_TEXTURES = [
+    ("BaseColorTexture", "color", "color"),
+    ("NormalTexture", "normal", "normal"),
+    ("MetallicRoughnessTexture", "linear", "orm"),
+    ("OcclusionTexture", "linear", "mask"),
+    ("TintMaskTexture", "linear", "mask"),
+]
+
+
+def ensure_tint_mask_master(defaults):
+    """The tint-mask material, built once by script: glTF's metallic-roughness inputs as Interchange's glTF material
+    uses them (colour x BaseColorFactor, normal, roughness = G x RoughnessFactor, metalness = B x MetallicFactor,
+    occlusion = OcclusionTexture.R, opacity = colour alpha x factor alpha) with the colour multiplied by
+    lerp(1, ModelTint, TintMaskTexture.R). The mask is sampled with UV set 0 or 1 (TintMaskUV, the shaders'
+    g_bUseSecondaryUvForTintMask). Opaque and one-sided: instances override the blend mode and sidedness
+    (set_alpha_overrides). `defaults` maps texture parameter names to texture assets."""
+    if unreal.EditorAssetLibrary.does_asset_exist(TINT_MASK_MASTER):
+        return unreal.EditorAssetLibrary.load_asset(TINT_MASK_MASTER)
+    folder, name = TINT_MASK_MASTER.rsplit("/", 1)
+    material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, folder, unreal.Material, unreal.MaterialFactoryNew()
+    )
+    mel = unreal.MaterialEditingLibrary
+    prop = unreal.MaterialProperty
+
+    def node(cls, x, y):
+        return mel.create_material_expression(material, cls, x, y)
+
+    def connect(source, output, target, pin):
+        if not mel.connect_material_expressions(source, output, target, pin):
+            raise RuntimeError("tint-mask master: could not connect %s" % pin)
+
+    def binary(cls, a, a_out, b, b_out, x, y):
+        result = node(cls, x, y)
+        connect(a, a_out, result, "A")
+        connect(b, b_out, result, "B")
+        return result
+
+    textures = {}
+    for row, (param, kind, _default) in enumerate(TINT_MASK_TEXTURES):
+        textures[param] = texture_parameter(material, param, kind, defaults[param], -1400, -700 + row * 300)
+    # The mask's UVs: set 0 or 1 by a scalar (0 / 1), so every instance shares one shader.
+    uv = node(unreal.MaterialExpressionLinearInterpolate, -1700, 600)
+    for pin, index in (("A", 0), ("B", 1)):
+        coordinate = node(unreal.MaterialExpressionTextureCoordinate, -2000, 500 + index * 120)
+        coordinate.set_editor_property("coordinate_index", index)
+        connect(coordinate, "", uv, pin)
+    connect(scalar_parameter(material, "TintMaskUV", 0.0, -2000, 760), "", uv, "Alpha")
+    connect(uv, "", textures["TintMaskTexture"], "UVs")
+
+    factor = node(unreal.MaterialExpressionVectorParameter, -1100, -900)
+    factor.set_editor_property("parameter_name", "BaseColorFactor")
+    factor.set_editor_property("default_value", unreal.LinearColor(1, 1, 1, 1))
+    white = node(unreal.MaterialExpressionConstant3Vector, -1100, 500)
+    white.set_editor_property("constant", unreal.LinearColor(1, 1, 1, 1))
+    tint = node(unreal.MaterialExpressionLinearInterpolate, -800, 500)
+    connect(white, "", tint, "A")
+    connect(model_tint_parameter(material, -1100, 650), "", tint, "B")
+    connect(textures["TintMaskTexture"], "R", tint, "Alpha")
+    color = binary(unreal.MaterialExpressionMultiply, textures["BaseColorTexture"], "RGB", factor, "", -800, -800)
+    base = binary(unreal.MaterialExpressionMultiply, color, "", tint, "", -500, -700)
+    opacity = binary(unreal.MaterialExpressionMultiply, textures["BaseColorTexture"], "A", factor, "A", -500, -500)
+    rough = binary(unreal.MaterialExpressionMultiply, textures["MetallicRoughnessTexture"], "G",
+                   scalar_parameter(material, "RoughnessFactor", 1.0, -1100, 100), "", -500, 0)
+    metal = binary(unreal.MaterialExpressionMultiply, textures["MetallicRoughnessTexture"], "B",
+                   scalar_parameter(material, "MetallicFactor", 0.0, -1100, 200), "", -500, 200)
+    for source, output, target in (
+        (base, "", prop.MP_BASE_COLOR),
+        (opacity, "", prop.MP_OPACITY),
+        (opacity, "", prop.MP_OPACITY_MASK),
+        (textures["NormalTexture"], "RGB", prop.MP_NORMAL),
+        (rough, "", prop.MP_ROUGHNESS),
+        (metal, "", prop.MP_METALLIC),
+        (textures["OcclusionTexture"], "R", prop.MP_AMBIENT_OCCLUSION),
+    ):
+        if not mel.connect_material_property(source, output, target):
+            raise RuntimeError("tint-mask master: could not connect %s" % target)
+    mel.recompile_material(material)
+    unreal.EditorAssetLibrary.save_asset(TINT_MASK_MASTER)
+    log("created " + TINT_MASK_MASTER)
+    return material
+
+
+def tint_mask_instances():
+    """An instance of TINT_MASK_MASTER for every glTF material with a tint mask to apply (extras.ofast.tint_mask,
+    not baked by the exporter): the glTF material's textures and factors, the mask, its UV set and the tint, its
+    alpha mode and sidedness. Returns glTF material name -> instance; main() puts them on the meshes after the scene
+    import. Materials whose placements are untinted have no tint_mask and keep Interchange's glTF material."""
+    with open(GLTF) as f:
+        document = json.load(f)
+    defaults = default_textures()
+
+    def image(slot):
+        info = slot and document["textures"][slot["index"]]
+        return document["images"][info["source"]]["uri"] if info else None
+
+    instances = {}
+    master = None
+    for material in document.get("materials", []):
+        tint = material.get("extras", {}).get("ofast", {}).get("tint_mask")
+        if not tint or tint.get("baked") or not tint.get("texture"):
+            continue
+        pbr = material.get("pbrMetallicRoughness", {})
+        files = {
+            "BaseColorTexture": image(pbr.get("baseColorTexture")),
+            "NormalTexture": image(material.get("normalTexture")),
+            "MetallicRoughnessTexture": image(pbr.get("metallicRoughnessTexture")),
+            "OcclusionTexture": image(material.get("occlusionTexture")),
+            "TintMaskTexture": tint["texture"],
+        }
+        textures = {param: import_texture(files[param], BLEND_FOLDER, kind) if files[param] else defaults[default]
+                    for param, kind, default in TINT_MASK_TEXTURES}
+        master = master or ensure_tint_mask_master(textures)
+        instance = blend_instance(material["name"], master)
+        for param, texture in textures.items():
+            set_texture_parameter(instance, param, texture)
+        set_vector_parameter(instance, "BaseColorFactor",
+                             unreal.LinearColor(*pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])))
+        set_vector_parameter(instance, "ModelTint", unreal.LinearColor(*(list(tint["tint"]) + [1.0])))
+        # glTF's defaults when a factor is absent: 1.
+        set_scalar_parameter(instance, "RoughnessFactor", pbr.get("roughnessFactor", 1.0))
+        set_scalar_parameter(instance, "MetallicFactor", pbr.get("metallicFactor", 1.0))
+        set_scalar_parameter(instance, "TintMaskUV", 1.0 if tint.get("uv") == 1 else 0.0)
+        set_alpha_overrides(instance, material)
+        instances[material["name"]] = instance
+    if instances:
+        log("tint mask: %d materials" % len(instances))
+    return instances
 
 
 # Versioned like BLEND_MASTER: csgo_environment_blend's height blend.
@@ -1847,11 +1987,12 @@ def main():
     # Deletions happen before the level is opened: with its objects in memory each deleted asset costs far more
     # (de_nuke: 602 instances in 272 s with the level open; de_inferno: 3746 assets in 190 s before it).
     evict_stale_interchange_assets()
-    # Materials glTF cannot describe (two-layer blends, model tints): their instances are set up before the scene
-    # import, while no mesh in the level uses them yet, then put on the imported meshes.
+    # Materials glTF cannot describe (two-layer blends, model tints, tint masks): their instances are set up before
+    # the scene import, while no mesh in the level uses them yet, then put on the imported meshes.
     blends = layer_blend_instances()
     blends.update(height_blend_instances())
     blends.update(environment_instances())
+    blends.update(tint_mask_instances())
     delete_unused_ofast_assets(BLEND_FOLDER)
     prepare_level()
     unreal.EditorAssetLibrary.save_directory("/Game/OFAST", only_if_is_dirty=True, recursive=True)

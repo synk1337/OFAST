@@ -1,6 +1,6 @@
 //! Developer tool: which CS2 material shaders every map uses (world, props, entities; not the 3D skybox), to see
-//! what OFAST must handle to import any official map. Prints, per shader, how many maps and materials use it, then
-//! the shaders per map.
+//! what OFAST must handle to import any official map. Prints the shaders per map, then per shader how many maps and
+//! materials use it and how many of those have a tint mask (`F_TINT_MASK`).
 //!
 //! ```bash
 //! cargo run --release --example shader_census                       # every map archive in game/csgo/maps
@@ -38,6 +38,9 @@ fn main() {
 
     // shader -> map -> material count
     let mut usage: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    // shader -> materials with a tint mask (F_TINT_MASK and a g_tTintMask), all maps (a material used by several
+    // maps counts once per map)
+    let mut tint_masks: BTreeMap<String, usize> = BTreeMap::new();
     for name in &maps {
         let Ok(content) = Content::for_map(&install, name) else {
             eprintln!("{name}: archive does not open");
@@ -83,18 +86,20 @@ fn main() {
         }
         let mut per_shader: BTreeMap<String, usize> = BTreeMap::new();
         for material in &materials {
-            let shader = content
+            let (shader, tint_mask) = content
                 .read_resource(material)
                 .ok()
                 .and_then(|data| {
                     let resource = Resource::parse(&data).ok()?;
                     let root = resource.kv3(BlockKind::DATA).ok()?.root;
-                    root.get("m_shaderName")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
+                    let shader = root.get("m_shaderName").and_then(Value::as_str)?.to_owned();
+                    Some((shader, has_tint_mask(&root)))
                 })
-                .unwrap_or_else(|| "(unreadable)".into());
-            *per_shader.entry(shader).or_default() += 1;
+                .unwrap_or_else(|| ("(unreadable)".into(), false));
+            *per_shader.entry(shader.clone()).or_default() += 1;
+            if tint_mask {
+                *tint_masks.entry(shader).or_default() += 1;
+            }
         }
         println!(
             "{name}: {} models, {} materials: {}",
@@ -110,15 +115,30 @@ fn main() {
             usage.entry(shader).or_default().insert(name.clone(), count);
         }
     }
-    println!("\nshader: maps using it, materials in total");
+    println!("\nshader: maps using it, materials in total, those with a tint mask (F_TINT_MASK)");
     let mut rows: Vec<_> = usage.iter().collect();
     rows.sort_by_key(|(_, maps)| std::cmp::Reverse(maps.values().sum::<usize>()));
     for (shader, maps) in rows {
         println!(
-            "{:<36} {:>2} maps {:>5} materials",
+            "{:<36} {:>2} maps {:>5} materials {:>4} tint-masked",
             shader,
             maps.len(),
-            maps.values().sum::<usize>()
+            maps.values().sum::<usize>(),
+            tint_masks.get(shader).copied().unwrap_or(0)
         );
     }
+}
+
+/// A material (its `DATA` root) whose tint applies only under its tint mask: `F_TINT_MASK` set and a `g_tTintMask`
+/// texture (`docs/formats/material.md`, "Model tint of prop shaders and their tint masks").
+fn has_tint_mask(root: &Value) -> bool {
+    let params = |list: &str| root.get(list).and_then(Value::as_array).unwrap_or_default();
+    let flag = params("m_intParams").iter().any(|p| {
+        p.get("m_name").and_then(Value::as_str) == Some("F_TINT_MASK")
+            && p.get("m_nValue").and_then(Value::as_i64).unwrap_or(0) != 0
+    });
+    let texture = params("m_textureParams")
+        .iter()
+        .any(|p| p.get("m_name").and_then(Value::as_str) == Some("g_tTintMask"));
+    flag && texture
 }

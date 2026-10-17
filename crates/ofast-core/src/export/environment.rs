@@ -459,13 +459,13 @@ fn saturation(rgb: [f32; 3]) -> f32 {
     if max > 0.0 { (max - min) / max } else { 0.0 }
 }
 
-/// sRGB byte → linear, as a table.
-static SRGB_TO_LINEAR: LazyLock<[f32; 256]> = LazyLock::new(|| {
+/// sRGB byte → linear, as a table (also the prop shaders' tint bake, `tint.rs`).
+pub(crate) static SRGB_TO_LINEAR: LazyLock<[f32; 256]> = LazyLock::new(|| {
     std::array::from_fn(|i| crate::export::gltf::srgb_to_linear(i as f32 / 255.0))
 });
 
 /// Linear (0–1) → sRGB byte, through a 4096-step table.
-fn linear_to_srgb(c: f32) -> u8 {
+pub(crate) fn linear_to_srgb(c: f32) -> u8 {
     static TABLE: LazyLock<Vec<u8>> = LazyLock::new(|| {
         (0..4096)
             .map(|i| {
@@ -483,7 +483,14 @@ fn linear_to_srgb(c: f32) -> u8 {
 }
 
 /// Byte `channel` of `image` at output pixel (x, y) of a `width` × `height` output (nearest sample).
-fn sample(image: &Image, x: usize, y: usize, width: usize, height: usize, channel: usize) -> u8 {
+pub(crate) fn sample(
+    image: &Image,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    channel: usize,
+) -> u8 {
     let sx = x * image.width / width;
     let sy = y * image.height / height;
     image.rgba[(sy * image.width + sx) * 4 + channel]

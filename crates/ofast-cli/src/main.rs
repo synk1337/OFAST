@@ -63,9 +63,10 @@ enum Command {
         /// Output folder (created if needed).
         #[arg(long, short)]
         out: PathBuf,
-        /// Bake placement tints into the colour textures of environment materials (one texture per tint), for
-        /// glTF readers other than OFAST's Unreal import (Blender, viewers). Without it Unreal's material applies
-        /// them and the export is smaller (de_inferno: about half the colour textures).
+        /// Bake placement tints that recolour only part of a surface (environment materials, props with a tint
+        /// mask) into the colour textures, one texture per tint, for glTF readers other than OFAST's Unreal import
+        /// (Blender, viewers). Without it Unreal's materials apply them and the export is smaller (de_inferno: about
+        /// half the colour textures).
         #[arg(long)]
         bake_model_tints: bool,
     },

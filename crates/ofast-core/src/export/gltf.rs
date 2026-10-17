@@ -29,7 +29,8 @@
 //!   with the same content, two bakes whose settings differ only where it changes nothing).
 //! - **Names.** A CS2 texture keeps its file name plus the role's suffix (`_normal`, `_raw`, …; `_2`, `_3` when
 //!   two differ). A texture OFAST computes for an environment material (`environment`) is named
-//!   `<texture>_cc_<hash>.png` or `<texture>_surface_<hash>.png`, `<hash>` being the first 8 hex digits of its pixel
+//!   `<texture>_cc_<hash>.png` or `<texture>_surface_<hash>.png` (a prop's colour with its masked tint baked in,
+//!   `tint`: `<texture>_tint_<hash>.png`), `<hash>` being the first 8 hex digits of its pixel
 //!   hash: the same name always holds the same pixels, so a tool that imports each file name once (`import_map.py`'s
 //!   `import_texture`) never keeps a stale bake after a re-export.
 //! - **No leftovers.** After writing, PNGs that no `.gltf` in `<out>` references are deleted from `<out>/textures`
@@ -48,8 +49,8 @@ use std::sync::Mutex;
 use rayon::prelude::*;
 use serde_json::{Value as Json, json};
 
-use super::environment;
 use super::{ExportError, ExportOptions};
+use super::{environment, tint};
 use crate::content::Content;
 use crate::coords;
 use crate::kv3::Value;
@@ -172,12 +173,17 @@ enum TextureJob {
     EnvColor(environment::ColorJob),
     /// A `csgo_environment(_blend)` layer's occlusion / roughness / metalness texture.
     EnvSurface(environment::SurfaceJob),
+    /// A prop shader's colour with its masked model tint baked in (`ExportOptions::bake_model_tints`).
+    TintColor(tint::TintJob),
 }
 
 impl TextureJob {
     /// Textures OFAST computes rather than converts: named after their pixel hash (see "Texture files").
     fn is_baked(&self) -> bool {
-        matches!(self, TextureJob::EnvColor(_) | TextureJob::EnvSurface(_))
+        matches!(
+            self,
+            TextureJob::EnvColor(_) | TextureJob::EnvSurface(_) | TextureJob::TintColor(_)
+        )
     }
 }
 
@@ -223,7 +229,8 @@ impl MaterialInfo {
             .find_map(|n| self.textures.get(*n).map(|path| (*n, path.as_str())))
     }
 
-    fn flag(&self, name: &str) -> bool {
+    /// An integer parameter (`F_*` feature, `g_b*` switch) that is set and not 0.
+    pub(crate) fn flag(&self, name: &str) -> bool {
         self.ints.get(name).is_some_and(|v| *v != 0)
     }
 
@@ -560,27 +567,16 @@ impl<'c> GltfWriter<'c> {
             "name": name,
             "pbrMetallicRoughness": { "metallicFactor": 0.0, "roughnessFactor": 1.0 },
         });
-        // csgo_environment(_blend) tint only their tint-masked area, keeping its luminance: no factor can say that.
-        // Unreal's material applies it from extras.ofast.environment (or it is baked, ExportOptions).
-        let environment_tint = info
-            .as_ref()
-            .is_some_and(|info| environment::is_environment(&info.shader));
-        if tint_key != [255; 4] && !environment_tint {
-            // Tints are authored in sRGB; glTF factors are linear.
-            let linear = [
-                srgb_to_linear(tint[0]),
-                srgb_to_linear(tint[1]),
-                srgb_to_linear(tint[2]),
-                tint[3],
-            ];
-            material["pbrMetallicRoughness"]["baseColorFactor"] = json!(linear.to_vec());
-        }
-        if let Some(info) = info {
-            self.fill_material(
-                &mut material,
-                &info,
-                [tint_key[0], tint_key[1], tint_key[2]],
-            );
+        match info {
+            // The material decides what the tint does (fill_material).
+            Some(info) => self.fill_material(&mut material, &info, tint_key),
+            // Unreadable: the tint on the whole surface (sRGB authored, glTF factors linear).
+            None if tint_key != [255; 4] => {
+                let mut linear = [tint[0], tint[1], tint[2]].map(srgb_to_linear).to_vec();
+                linear.push(tint[3]);
+                material["pbrMetallicRoughness"]["baseColorFactor"] = json!(linear);
+            }
+            None => {}
         }
         self.materials.push(material);
         let id = self.materials.len() - 1;
@@ -638,10 +634,11 @@ impl<'c> GltfWriter<'c> {
         info
     }
 
-    /// Fills a glTF material from a CS2 material. `tint` is the model tint (sRGB bytes, white = none), which the
-    /// environment shaders describe in `extras.ofast.environment` (the others get it as `baseColorFactor` from
-    /// [`Self::material`]).
-    fn fill_material(&mut self, material: &mut Json, info: &MaterialInfo, tint: [u8; 3]) {
+    /// Fills a glTF material from a CS2 material. `tint` is the placement's model tint (sRGB RGBA bytes, white =
+    /// none): the environment shaders describe theirs in `extras.ofast.environment`, the others get it from
+    /// [`Self::fill_model_tint`].
+    fn fill_material(&mut self, material: &mut Json, info: &MaterialInfo, tint: [u8; 4]) {
+        let rgb = [tint[0], tint[1], tint[2]];
         material["extras"] = json!({
             "ofast": {
                 "shader": info.shader,
@@ -666,17 +663,11 @@ impl<'c> GltfWriter<'c> {
             material["doubleSided"] = json!(true);
         }
         if environment::is_environment(&info.shader) {
-            self.fill_environment(material, info, tint, translucent || alpha_test);
+            // They tint only their tint-masked area, keeping its luminance: no factor can say that.
+            self.fill_environment(material, info, rgb, translucent || alpha_test);
             return;
         }
-
-        if let Some((_, path)) = info.first_texture(COLOR_PARAMS) {
-            let role = TextureRole::Color {
-                keep_alpha: translucent || alpha_test,
-            };
-            let id = self.texture(path, role);
-            material["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": id });
-        }
+        self.fill_model_tint(material, info, tint, translucent || alpha_test);
 
         // CS2 shaders (csgo_*): hemi-octahedral normal in RG with roughness in B; metalness in g_tMetalness.G,
         // whose R is the roughness for weapons only (see ValveResourceFormat's complex shader). Otherwise a
@@ -720,6 +711,73 @@ impl<'c> GltfWriter<'c> {
         }
         if let Some(layers) = self.layer_textures(info) {
             material["extras"]["ofast"]["layers"] = layers;
+        }
+    }
+
+    /// The colour texture and model tint of a material that is not an environment one (see [`tint`]). The tint
+    /// multiplies the colour: as `baseColorFactor` when it covers the whole surface. With a tint mask on a colour
+    /// texture, it goes into `extras.ofast.tint_mask` for Unreal's material, the factor staying white, so that
+    /// other glTF readers see the untinted colour; with [`ExportOptions::bake_model_tints`] it is baked into the
+    /// colour instead (a mask on the second UV set cannot be baked: Unreal applies those either way).
+    ///
+    /// ```text
+    /// "tint_mask": {
+    ///   "tint": [r, g, b],     linear: lerp(1, rendercolor, g_flModelTintAmount) × g_vColorTint
+    ///   "texture": "textures/….png" or null when baked (the mask in R)
+    ///   "uv": 0 | 1,           UV set of the mask (g_bUseSecondaryUvForTintMask)
+    ///   "baked": false         true: already in baseColorTexture, do not apply again
+    /// }
+    /// ```
+    fn fill_model_tint(
+        &mut self,
+        material: &mut Json,
+        info: &MaterialInfo,
+        tint: [u8; 4],
+        keep_alpha: bool,
+    ) {
+        let model_tint = tint::ModelTint::read(info, [tint[0], tint[1], tint[2]]);
+        let color = info.first_texture(COLOR_PARAMS).map(|(_, p)| p.to_owned());
+        // A mask matters only under a tint, and needs a colour texture to mask.
+        let mask = model_tint
+            .mask
+            .clone()
+            .filter(|_| !model_tint.is_white() && color.is_some());
+        let baked = mask.is_some() && self.options.bake_model_tints && model_tint.mask_uv == 0;
+        if let Some(path) = &color {
+            let id = match &mask {
+                Some(mask) if baked => {
+                    let job = tint::TintJob::new(
+                        path.clone(),
+                        mask.clone(),
+                        model_tint.color,
+                        keep_alpha,
+                    );
+                    self.register(TextureJob::TintColor(job), format!("{}_tint", stem(path)))
+                }
+                _ => self.texture(path, TextureRole::Color { keep_alpha }),
+            };
+            material["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": id });
+        }
+        if let Some(mask) = &mask {
+            let file = (!baked).then(|| {
+                let id = self.texture(mask, TextureRole::Raw);
+                self.texture_file(id)
+            });
+            material["extras"]["ofast"]["tint_mask"] = json!({
+                "tint": model_tint.color,
+                "texture": file,
+                "uv": model_tint.mask_uv,
+                "baked": baked,
+            });
+        }
+        let rgb = if mask.is_some() {
+            [1.0; 3]
+        } else {
+            model_tint.color
+        };
+        let factor = [rgb[0], rgb[1], rgb[2], f32::from(tint[3]) / 255.0];
+        if factor.iter().any(|c| (c - 1.0).abs() > 1e-5) {
+            material["pbrMetallicRoughness"]["baseColorFactor"] = json!(factor.to_vec());
         }
     }
 
@@ -990,6 +1048,7 @@ impl<'c> GltfWriter<'c> {
                     TextureJob::Orm(source) => assemble_orm(content, source),
                     TextureJob::EnvColor(job) => environment::bake_color(content, job),
                     TextureJob::EnvSurface(job) => environment::bake_surface(content, job),
+                    TextureJob::TintColor(job) => tint::bake_color(content, job),
                 }
                 .unwrap_or_else(|e| {
                     warn(&e);
@@ -1693,9 +1752,9 @@ mod tests {
         let mut writer = GltfWriter::new(&content, &dir, options).expect("writer");
         let materials = tints
             .iter()
-            .map(|&tint| {
+            .map(|&[r, g, b]| {
                 let mut material = json!({});
-                writer.fill_material(&mut material, &info, tint);
+                writer.fill_material(&mut material, &info, [r, g, b, 255]);
                 material
             })
             .collect();
@@ -1742,6 +1801,132 @@ mod tests {
         let pink = &materials[1]["extras"]["ofast"]["environment"];
         assert_eq!(pink["model_tint_baked"], true);
         assert!(pink["layer1"]["height"].is_null(), "only baked from");
+    }
+
+    /// de_inferno's potted tree material (`csgo_foliage`, `F_TINT_MASK`), filled once per placement tint by a
+    /// writer with `options`, the mask on UV set `uv`. Returns the materials and the registered texture jobs.
+    fn tinted_foliage(
+        options: ExportOptions,
+        tints: &[[u8; 3]],
+        uv: i64,
+    ) -> (Vec<Json>, Vec<TextureJob>) {
+        let info = MaterialInfo {
+            shader: "csgo_foliage.vfx".into(),
+            textures: [
+                ("g_tColor", "models/cress_plant_kit_01_color.vtex"),
+                ("g_tTintMask", "models/cress_plant_kit_01_tintmask.vtex"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .into(),
+            ints: [
+                ("F_TINT_MASK".to_owned(), 1),
+                ("F_ALPHA_TEST".to_owned(), 1),
+                ("g_bUseSecondaryUvForTintMask".to_owned(), uv),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        let content = Content::new();
+        let dir = temp_folder(&format!("foliage-{}-{uv}", options.bake_model_tints));
+        let mut writer = GltfWriter::new(&content, &dir, options).expect("writer");
+        let materials = tints
+            .iter()
+            .map(|&[r, g, b]| {
+                let mut material = json!({});
+                writer.fill_material(&mut material, &info, [r, g, b, 255]);
+                material
+            })
+            .collect();
+        let jobs = writer.texture_jobs.iter().map(|t| t.job.clone()).collect();
+        let _ = fs::remove_dir_all(&dir);
+        (materials, jobs)
+    }
+
+    #[test]
+    fn tint_masks_go_to_extras_and_leave_the_colour_untinted() {
+        let tints = [[255; 3], [255, 0, 0]];
+        let (materials, jobs) = tinted_foliage(ExportOptions::default(), &tints, 0);
+        let (white, red) = (&materials[0], &materials[1]);
+        // No factor: it would redden the whole plant (CS2 reddens the flowers under the mask only).
+        for material in [white, red] {
+            assert!(material["pbrMetallicRoughness"]["baseColorFactor"].is_null());
+        }
+        let color = |m: &Json| m["pbrMetallicRoughness"]["baseColorTexture"]["index"].clone();
+        assert_eq!(color(white), color(red));
+        let extras = &red["extras"]["ofast"]["tint_mask"];
+        assert_eq!(extras["tint"], json!([1.0, 0.0, 0.0]));
+        assert_eq!(extras["uv"], 0);
+        assert_eq!(extras["baked"], false);
+        assert_eq!(
+            extras["texture"],
+            "textures/cress_plant_kit_01_tintmask_raw.png"
+        );
+        // Untinted: nothing to apply, no mask written.
+        assert!(white["extras"]["ofast"]["tint_mask"].is_null());
+        assert!(!jobs.iter().any(TextureJob::is_baked));
+        assert_eq!(jobs.len(), 2, "colour (with alpha) and mask: {jobs:?}");
+
+        // Baked for other glTF readers: the red variant gets its own colour, the mask stays out.
+        let baking = ExportOptions {
+            bake_model_tints: true,
+        };
+        let (materials, jobs) = tinted_foliage(baking, &tints, 0);
+        assert_ne!(color(&materials[0]), color(&materials[1]));
+        let extras = &materials[1]["extras"]["ofast"]["tint_mask"];
+        assert_eq!(extras["baked"], true);
+        assert!(extras["texture"].is_null());
+        assert_eq!(
+            jobs.iter()
+                .filter(|j| matches!(j, TextureJob::TintColor(_)))
+                .count(),
+            1
+        );
+        // A mask on the second UV set has another layout than the colour: never baked, Unreal applies it.
+        let (materials, _) = tinted_foliage(baking, &tints, 1);
+        let extras = &materials[1]["extras"]["ofast"]["tint_mask"];
+        assert_eq!(
+            (extras["baked"].clone(), extras["uv"].clone()),
+            (json!(false), json!(1))
+        );
+    }
+
+    #[test]
+    fn whole_surface_tints_stay_factors() {
+        let info = |shader: &str, ints: &[(&str, i64)]| MaterialInfo {
+            shader: shader.into(),
+            textures: [("g_tColor".to_owned(), "props/door_color.vtex".to_owned())].into(),
+            ints: ints.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect(),
+            floats: [("g_flModelTintAmount".to_owned(), 0.5)].into(),
+            ..Default::default()
+        };
+        let content = Content::new();
+        let dir = temp_folder("factors");
+        let mut writer = GltfWriter::new(&content, &dir, ExportOptions::default()).expect("writer");
+        let mut factor = |info: &MaterialInfo| {
+            let mut material = json!({});
+            writer.fill_material(&mut material, info, [0, 0, 0, 255]);
+            material["pbrMetallicRoughness"]["baseColorFactor"].clone()
+        };
+        // Half the amount: halfway to black.
+        assert_eq!(
+            factor(&info("csgo_complex.vfx", &[])),
+            json!([0.5, 0.5, 0.5, 1.0])
+        );
+        assert!(factor(&info("csgo_vertexlitgeneric.vfx", &[("F_NOTINT", 1)])).is_null());
+        // A tint mask without its feature does nothing.
+        assert_eq!(
+            factor(&info(
+                "csgo_complex.vfx",
+                &[("g_bUseSecondaryUvForTintMask", 1)]
+            )),
+            json!([0.5, 0.5, 0.5, 1.0])
+        );
+        // Shaders not checked keep the placement tint as it is.
+        assert_eq!(
+            factor(&info("csgo_static_overlay.vfx", &[])),
+            json!([0.0, 0.0, 0.0, 1.0])
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

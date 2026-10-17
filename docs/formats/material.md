@@ -179,6 +179,76 @@ colour overlay (`F_SHARED_COLOR_OVERLAY`, 167: a grime texture on a second UV se
 (`g_fTextureNormalContrastN`), per-vertex tint (`COLOR0`), UVs scaled by the model's scale
 (`g_nScaleTexCoordUByModelScaleAxis`), and the parallax windows.
 
+## Model tint of prop shaders and their tint masks
+
+`csgo_complex`, `csgo_vertexlitgeneric`, `csgo_foliage` and `csgo_simple_3layer_parallax` (props, plants, doors,
+crates) **multiply** the colour by the placement's tint. Unlike the environment shaders they do not keep luminance:
+white becomes the tint, green under a red tint becomes nearly black. Code: `crates/ofast-core/src/export/tint.rs`.
+
+The tint each placement gets (the shaders' vertex code, decompiled in GameTracking-CS2; colours sRGB → linear):
+
+```
+tint   = lerp(1, rendercolor, g_flModelTintAmount) × g_vColorTint      defaults 1 and white
+         csgo_simple_3layer_parallax has no g_flModelTintAmount (as if 1)
+         csgo_vertexlitgeneric with F_NOTINT ("Prevent Tinting"): no tint at all
+colour = albedo × tint                                   without F_TINT_MASK
+colour = albedo × lerp(1, tint, g_tTintMask.R)           with F_TINT_MASK
+```
+
+`g_flModelTintAmount` 0 means the material ignores placement tints (120 `csgo_complex` materials on the six maps
+exported so far, mostly de_nuke's); `g_vColorTint` tints a material whatever its placement (54 `csgo_complex`
+ones, mostly light greys). `g_tTintMask` is a single-channel texture (BC4), read in R, white by default; with
+`g_bUseSecondaryUvForTintMask` it uses the second UV set (20 materials). It has no contrast or brightness of its
+own. The masked formula is the one part not read from Valve's files: they decompile only each shader's default
+variant, which has no tint mask. It is Source 2 Viewer's reconstruction, and `csgo_vertexlitgeneric`'s default
+variant has the same form (`lerp(albedo, albedo × tint, saturate(colour.a + g_flInverseBlendTint))`, with
+`g_flInverseBlendTint` 1 without a mask, 0 with one, −1 with `F_NOTINT`). Checked in CS2 on de_inferno's T-spawn
+tree ([decision 007](../decisions/007-tint-masks-of-prop-shaders.md)).
+
+Where masks are used (`cargo run --release --example shader_census`, the 24 official maps): `csgo_complex` 426
+materials, `csgo_vertexlitgeneric` 132, `csgo_foliage` 40, `csgo_simple_3layer_parallax` 24, and
+`csgo_static_overlay` 5 (not handled: its "Material Reference" mode takes an environment-style mask, unchecked).
+Each placement tint makes one more glTF material: de_dust2 has 264 tinted `csgo_vertexlitgeneric` ones (doors, window
+frames, crates), de_nuke 198 `csgo_complex` ones, de_inferno 80 (its potted plants and bushes, hanging clothes,
+parasols, luggage), de_anubis 76, de_vertigo 28, de_mirage 1.
+
+How OFAST writes them:
+
+- **Without a tint mask** (or a mask without a colour texture): the tint is the glTF `baseColorFactor`, exact.
+- **With a tint mask** under a tint that is not white: the colour texture stays untinted (shared by every tint, the
+  factor white) and the tint goes into `extras.ofast.tint_mask`:
+
+  ```
+  "tint_mask": {
+    "tint": [r, g, b],     linear, the formula above
+    "texture": "textures/<mask>_raw.png" (the mask in R), null when baked
+    "uv": 0 | 1,           the mask's UV set
+    "baked": false         true: already in baseColorTexture, do not apply again
+  }
+  ```
+
+  `import_map.py` gives these materials an instance of `M_OFAST_TintMask_v1`: glTF's metallic-roughness inputs as
+  Interchange's glTF material uses them (colour × `BaseColorFactor`, normal, roughness and metalness × their
+  factors, occlusion, alpha mode and sidedness as instance overrides) with the colour × lerp(1, `ModelTint`,
+  `TintMaskTexture`.R), the mask sampled with UV set 0 or 1 (`TintMaskUV`; set 1 is not checked in a render yet: no
+  tinted placement on the maps exported so far uses it). Untinted placements keep Interchange's glTF material.
+  Checked on de_inferno against CS2: the T-spawn tree and the CT spawn's flower boxes have green leaves and red
+  flowers, as in CS2, instead of being red all over (decision 007).
+- **`ofast export-map --bake-model-tints`**: the masked tint is baked into a colour texture of its own
+  (`<texture>_tint_<hash>.png`, `"baked": true`), for other glTF readers. Masks on the second UV set have another
+  layout than the colour and are never baked: Unreal applies those either way.
+
+Why not bake by default: de_dust2 has 261 (colour, tint) pairs over 44 prop textures (670 MB of PNGs), de_nuke 190
+over 61 (251 MB); the masks the material reads instead are small (BC4, 512² for de_inferno's plants).
+
+Not reproduced: `csgo_foliage`'s colour correction (`g_vTextureColorCorrectionTint`, contrast / saturation /
+brightness, masked or not by `g_nColorCorrectionMode`; neutral on every map exported so far), its height gradient
+(vertex colour R brightens the colour by up to `g_flHeightGradientAmount`: de_inferno's downey willow bushes have 1)
+and vertex-colour occlusion; the tint of shaders not checked (`csgo_lightmappedgeneric`, `csgo_static_overlay`,
+`csgo_simple`, …) stays a plain multiply by the placement tint over the whole surface, ignoring their
+`g_flModelTintAmount`, `g_vColorTint` and masks; and the 3D skybox's instances (`M_OFAST_Skybox_v3`) show masked props untinted (three materials on
+de_anubis, de_dust2 and de_nuke).
+
 ## Other rules
 
 | Case | Handling |
@@ -187,7 +257,7 @@ colour overlay (`F_SHARED_COLOR_OVERLAY`, 167: a grime texture on a second UV se
 | `F_ALPHA_TEST` | glTF `MASK`, cutoff 0.5 |
 | overlays (decals, `OBJECT_TYPE_OVERLAY`) | pushed 0.1 inch along their normal so they win the depth test |
 | `csgo_effects` (dust and light-shaft cards) | not exported (they appeared as white sheets; to be rebuilt as Unreal effects) |
-| tints (`m_vTintColor`, `rendercolor`) | `baseColorFactor` (sRGB → linear), material named `<name>_tintRRGGBB`; environment shaders tint only their tint mask, in Unreal's material ("Model tint" above) |
+| tints (`m_vTintColor`, `rendercolor`) | material named `<name>_tintRRGGBB`; `baseColorFactor` (sRGB → linear) when the tint covers the whole surface; environment shaders tint only their tint mask, in Unreal's material ("Model tint" above), and so do prop shaders with `F_TINT_MASK` ("Model tint of prop shaders" above) |
 | same file name in two folders | the second material is renamed `<name>_<folder>` (Unreal matches slots by name) |
 
 ## Unreal project requirement
@@ -198,7 +268,10 @@ enables both.
 
 ## Sources
 
-- ValveResourceFormat (MIT): `Renderer/Shaders/complex.frag.slang`, `Renderer/Shaders/common/utils.slang`
-  (`ApplyBlendModulation`) — https://github.com/ValveResourceFormat/ValveResourceFormat
+- ValveResourceFormat (MIT): `Renderer/Shaders/complex.frag.slang` (also the masked model tint),
+  `Renderer/Shaders/common/utils.slang` (`ApplyBlendModulation`) — https://github.com/ValveResourceFormat/ValveResourceFormat
+- Valve's shaders decompiled by Source 2 Viewer, in SteamDatabase's GameTracking-CS2:
+  `game/csgo/shaders_vulkan_dir/shaders/vfx/<shader>.slang` (parameter declarations and defaults, each shader's
+  default variant) — https://github.com/SteamDatabase/GameTracking-CS2
 - CS2 ground truth: de_mirage CT spawn screenshot vs Unreal render (`test-data/shots/compare_de_mirage_ct0.png`,
   local only).
