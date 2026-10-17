@@ -17,7 +17,8 @@ Interchange *scene* import of the glTF (one actor per placement; what an older e
 re-run always shows the current glTF: evict_stale_interchange_assets) → layer-blend and height-blend materials (two-layer
 CS2 materials, which glTF cannot describe), single-layer environment materials (their model tint is applied in the
 material, not baked into the textures) and tinted props with a tint mask (the tint only where the mask is set;
-OFAST's instances and textures no export uses any more are deleted: delete_unused_ofast_assets) → light blockers hidden and
+OFAST's instances and textures no export uses any more are deleted: delete_unused_ofast_assets) → translucent overlays
+(road paint, signs) as mesh decals, lit with the surface under them as in CS2 (put_overlay_decals) → light blockers hidden and
 shadow proxies added (no sunlight through single-sided walls) → 3D skybox drawn behind the world → CS2's environment from the manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
 exposure, no tone curve or CS2's Hable curve (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
 default field of view → screenshots → quit. Everything the script adds is tagged "OFAST" and rebuilt on every run.
@@ -1495,6 +1496,145 @@ def swap_material_slots(imported, instances):
     return swapped
 
 
+# Versioned like BLEND_MASTER: CS2's translucent overlays (road paint, signs, stains lying on another surface) as
+# mesh decals. In CS2 an overlay is lit like the surface under it (same lightmap texel, same sun shadow), so its
+# blend is the same as blending the two albedos first and lighting the result once. A translucent Unreal material
+# is lit apart instead, through the translucency lighting volume and Lumen's translucency volume (coarse grids, a
+# per-pixel normal at best): de_nuke's yellow road paint came out at 0.97x the luminance of the sunlit asphalt under
+# it (CS2: 2.35x, as a decal 2.07x) and orange-brown in the shade. A material in the Deferred Decal domain on the overlay's own mesh
+# (a "mesh decal") blends into the GBuffer before lighting, which is CS2's arrangement (decision 009).
+OVERLAY_MASTER = "/Game/OFAST/Materials/M_OFAST_OverlayDecal_v1"
+
+
+def is_decal_overlay(material):
+    """Whether a glTF material is a CS2 overlay blended with plain alpha over the surface under it, i.e. one that
+    becomes a mesh decal: csgo_lightmappedgeneric with F_OVERLAY (always with F_TRANSLUCENT on the maps checked), and
+    lit csgo_static_overlay in its Translucent blend mode (F_BLEND_MODE 1). Not the static overlays' other modes:
+    0 Opaque, 2 Alpha Test, 3 Mod2x (unlit; Valve's DstBlend One), 4 Additive, 5 Multiply, 6 ModThenAdd (from the
+    shader's feature list in GameTracking-CS2), which the exporter still writes as plain BLEND (decision 009)."""
+    if material.get("alphaMode") != "BLEND":
+        return False
+    ofast = material.get("extras", {}).get("ofast", {})
+    ints = ofast.get("ints", {})
+    if ofast.get("shader") == "csgo_lightmappedgeneric.vfx":
+        return bool(ints.get("F_OVERLAY")) and bool(ints.get("F_TRANSLUCENT"))
+    if ofast.get("shader") == "csgo_static_overlay.vfx":
+        return ints.get("F_BLEND_MODE") == 1 and bool(ints.get("F_LIT"))
+    return False
+
+
+def ensure_overlay_master(defaults):
+    """The overlay decal material, built once by script: Deferred Decal domain, translucent blend, with glTF's
+    metallic-roughness inputs as Interchange's glTF material uses them — colour texture x BaseColorFactor (the
+    draw-call or placement tint), opacity = colour alpha x the factor's alpha (a draw call's alpha), normal texture,
+    roughness = MetallicRoughnessTexture.G x RoughnessFactor, metalness = .B x MetallicFactor. The decal blends all
+    of them by the opacity into what lies under it (DBuffer decals: colour, normal, roughness / metalness /
+    specular). No occlusion texture: DBuffer decals cannot write ambient occlusion (the overlays checked use
+    default_ao anyway). `defaults` holds the "color", "normal" and "orm" default textures."""
+    if unreal.EditorAssetLibrary.does_asset_exist(OVERLAY_MASTER):
+        return unreal.EditorAssetLibrary.load_asset(OVERLAY_MASTER)
+    folder, name = OVERLAY_MASTER.rsplit("/", 1)
+    material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, folder, unreal.Material, unreal.MaterialFactoryNew())
+    material.set_editor_property("material_domain", unreal.MaterialDomain.MD_DEFERRED_DECAL)
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+    mel = unreal.MaterialEditingLibrary
+    prop = unreal.MaterialProperty
+    color = texture_parameter(material, "BaseColorTexture", "color", defaults["color"], -900, -400)
+    normal = texture_parameter(material, "NormalTexture", "normal", defaults["normal"], -900, 0)
+    orm = texture_parameter(material, "MetallicRoughnessTexture", "linear", defaults["orm"], -900, 400)
+    factor = mel.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -900, -700)
+    factor.set_editor_property("parameter_name", "BaseColorFactor")
+    factor.set_editor_property("default_value", unreal.LinearColor(1, 1, 1, 1))
+    roughness_factor = scalar_parameter(material, "RoughnessFactor", 1.0, -600, 500)
+    metallic_factor = scalar_parameter(material, "MetallicFactor", 1.0, -600, 650)
+
+    def multiply(a, a_out, b, b_out, y):
+        node = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, -300, y)
+        for source, output, pin in ((a, a_out, "A"), (b, b_out, "B")):
+            if not mel.connect_material_expressions(source, output, node, pin):
+                raise RuntimeError("overlay master: could not connect %s" % pin)
+        return node
+
+    for source, output, target in (
+        (multiply(color, "RGB", factor, "", -500), "", prop.MP_BASE_COLOR),
+        (multiply(color, "A", factor, "A", -300), "", prop.MP_OPACITY),
+        (normal, "RGB", prop.MP_NORMAL),
+        (multiply(orm, "G", roughness_factor, "", 400), "", prop.MP_ROUGHNESS),
+        (multiply(orm, "B", metallic_factor, "", 600), "", prop.MP_METALLIC),
+    ):
+        if not mel.connect_material_property(source, output, target):
+            raise RuntimeError("overlay master: could not connect %s" % target)
+    mel.recompile_material(material)
+    unreal.EditorAssetLibrary.save_asset(OVERLAY_MASTER)
+    log("created " + OVERLAY_MASTER)
+    return material
+
+
+def overlay_instances():
+    """An instance of OVERLAY_MASTER for every overlay that becomes a mesh decal (is_decal_overlay): the glTF
+    material's colour, normal and metallic-roughness textures (imported like the other OFAST instances' textures;
+    the exporter writes every texture with one repeating sampler) and its factors. Returns glTF material name ->
+    instance; main() puts them on the world's overlay meshes after the scene import (put_overlay_decals)."""
+    with open(GLTF) as f:
+        document = json.load(f)
+
+    def image(slot):
+        info = slot and document["textures"][slot["index"]]
+        return document["images"][info["source"]]["uri"] if info else None
+
+    defaults = default_textures()
+    instances = {}
+    master = None
+    for material in document.get("materials", []):
+        if not is_decal_overlay(material):
+            continue
+        pbr = material.get("pbrMetallicRoughness", {})
+        textures = {}
+        for param, uri, kind, default in (
+            ("BaseColorTexture", image(pbr.get("baseColorTexture")), "color", "color"),
+            ("NormalTexture", image(material.get("normalTexture")), "normal", "normal"),
+            ("MetallicRoughnessTexture", image(pbr.get("metallicRoughnessTexture")), "linear", "orm"),
+        ):
+            textures[param] = import_texture(uri, BLEND_FOLDER, kind) if uri else defaults[default]
+        master = master or ensure_overlay_master(defaults)
+        instance = blend_instance(material["name"], master)
+        for param, texture in textures.items():
+            set_texture_parameter(instance, param, texture)
+        r, g, b, a = pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])
+        set_vector_parameter(instance, "BaseColorFactor", unreal.LinearColor(r, g, b, a))
+        set_scalar_parameter(instance, "RoughnessFactor", pbr.get("roughnessFactor", 1.0))
+        set_scalar_parameter(instance, "MetallicFactor", pbr.get("metallicFactor", 1.0))
+        instances[material["name"]] = instance
+    if instances:
+        log("overlay decals: %d materials" % len(instances))
+    return instances
+
+
+def put_overlay_decals(imported, instances):
+    """Puts the overlay decal instances on the world's overlay meshes, as component overrides: the mesh assets keep
+    Interchange's translucent material, which the 3D skybox's copies keep (a decal there would be depth-tested at
+    its true position, not behind the world like the rest of the skybox, see setup_skybox). Matching as in
+    swap_material_slots. Returns the number of slots changed."""
+    swapped = 0
+    for actor in imported:
+        if not isinstance(actor, unreal.StaticMeshActor) or actor.get_actor_label().startswith(SKYBOX_PREFIX):
+            continue
+        component = actor.static_mesh_component
+        mesh = component.static_mesh
+        if mesh is None:
+            continue
+        for index, slot in enumerate(mesh.static_materials):
+            slot_name = str(slot.material_slot_name)
+            current = slot.material_interface.get_name() if slot.material_interface else ""
+            for candidate in (slot_name, current, current[3:] if current.startswith("MI_") else None):
+                if candidate in instances:
+                    component.set_material(index, instances[candidate])
+                    swapped += 1
+                    break
+    return swapped
+
+
 # Lumen carries less bounce light than CS2's path-traced lightmaps. Measured compensation on top of CS2's own bounce
 # scales (light_environment bouncescale / skybouncescale, each light's bouncescale), fitted on de_mirage's four
 # calibration views (docs/formats/lighting.md): CT / T / palace / B apartments at 0.95 / 0.86 / 0.81 / 0.74 of CS2
@@ -2037,6 +2177,9 @@ def main():
     blends.update(height_blend_instances())
     blends.update(environment_instances())
     blends.update(tint_mask_instances())
+    # Translucent overlays become mesh decals, lit with the surface under them (put on the meshes' placements, not
+    # the meshes: the 3D skybox keeps the translucent material).
+    overlays = overlay_instances()
     delete_unused_ofast_assets(BLEND_FOLDER)
     prepare_level()
     unreal.EditorAssetLibrary.save_directory("/Game/OFAST", only_if_is_dirty=True, recursive=True)
@@ -2044,6 +2187,8 @@ def main():
     if blends:
         log("OFAST materials: %d mesh slots swapped" % swap_material_slots(imported, blends))
         unreal.EditorAssetLibrary.save_directory("/Game/OFAST/" + NAME, only_if_is_dirty=True, recursive=True)
+    if overlays:
+        log("overlay decals: %d placement slots" % put_overlay_decals(imported, overlays))
     # Sunlight must not leak into interiors: CS2's light blockers and two-sided shadows for single-sided walls.
     hide_light_blockers(imported)
     add_shadow_proxies(imported)

@@ -311,6 +311,21 @@ same treatment. Unlike proxies, they stay in Lumen's distance fields, where they
 occluders, since they seal gaps for CS2's bounce light too. That has not been re-checked since their material became
 masked: Lumen's surface cache sees nothing of them now.
 
+## Translucent surfaces and overlays
+
+Unreal lights a translucent material apart from the opaque scene. Interchange's glTF material for `BLEND` uses the
+translucency lighting mode Surface TranslucencyVolume: the direct light comes from the translucency lighting volume
+and the indirect light from Lumen's translucency volume, coarse grids around the camera instead of the per-pixel
+light and virtual shadow maps of opaque surfaces. A translucent surface lying on an opaque one is therefore lit
+less than its ground in direct sun: de_nuke's road paint came out at 0.97× the sunlit asphalt's luminance (CS2
+2.35×; 2.07× now). CS2 lights an overlay with its ground's lightmap texel, so OFAST draws overlays as mesh decals,
+blended into the GBuffer before lighting ([material.md](material.md#translucent-overlays-mesh-decals),
+[decision 009](../decisions/009-overlays-as-mesh-decals.md)). Surface ForwardShading
+(`TLM_SURFACE_PER_PIXEL_LIGHTING`) gives the direct sun per pixel with shadows but keeps Lumen's translucency volume
+for the indirect light (paint 1.95× in the sun, but 1.50× and orange-brown in the shade, where the decal gives 1.86×
+and CS2's hue); it is the candidate for the other translucent materials (glass, fence and foliage cards), not applied
+yet.
+
 ## Import styles
 
 `import_map.py` builds one of two lighting setups on the same imported geometry and materials (`run_ue.ps1 -Style`):

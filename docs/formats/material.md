@@ -305,20 +305,55 @@ material with its tint, alpha and shader; the 3D skybox adds its own, e.g. de_nu
 | de_mirage | 8 of 301 | 3 of 56 |
 
 Checked on de_nuke against CS2 ([decision 008](../decisions/008-draw-call-tints.md)): the parking bays and
-"no parking" lines are yellow at both spawns (hue 36–38°, CS2 43–44° in the sun; white before). In the shade the
-paint is as strong as CS2's; in direct sun it stays paler, as the white lines did before: a separate issue with
-translucent overlays in the sun, not the tint (same decision).
+"no parking" lines are yellow at both spawns (hue 36–38°, CS2 43–44° in the sun; white before). In direct sun the
+paint stayed paler, as the white lines did before: Unreal lit the translucent overlay apart from the asphalt under
+it, now fixed with mesh decals ("Translucent overlays: mesh decals" below).
 
 Many are opacity only: de_nuke's 35 scuff decals (`scuffs_overlay_001`, alpha 0.12–0.73) were drawn at full
 strength before. Others are colours: de_nuke's grey floor arrows (118), red stripes and "X" marks, its silo and pipe
 trims. Most shaders are involved (`csgo_static_overlay`, `csgo_lightmappedgeneric`, `csgo_complex`, `csgo_glass`,
 a few `csgo_environment(_blend)` on de_train and de_overpass; `csgo_effects` is not exported).
 
+## Translucent overlays: mesh decals
+
+An overlay is a surface lying on another one: road paint, signs, stains. CS2 lights it like the surface under it
+(same lightmap texel, same sun shadow), so blending α·lit(paint) + (1 − α)·lit(ground) is the same as lighting
+α·paint + (1 − α)·ground once. A translucent Unreal material is lit on its own instead: Interchange's glTF material
+for `BLEND` (`MI_Default_Blend`, parent `/InterchangeAssets/gltf/M_Default`) uses the translucency lighting mode
+Surface TranslucencyVolume, i.e. direct light from the translucency lighting volume and indirect light from Lumen's
+translucency volume, both coarse grids around the camera. de_nuke's yellow paint got less sun than the asphalt it
+lies on and turned orange-brown; the white lines before it were grey (175 on 167).
+
+So `import_map.py` turns the overlays blended with plain alpha into **mesh decals**: `csgo_lightmappedgeneric` with
+`F_OVERLAY` + `F_TRANSLUCENT`, and lit `csgo_static_overlay` with `F_BLEND_MODE` 1 (`is_decal_overlay`). Each gets an
+instance of `M_OFAST_OverlayDecal_v1` (Deferred Decal domain, translucent): colour texture × `baseColorFactor` (the
+draw-call or placement tint), opacity = colour alpha × the factor's alpha (a draw call's alpha), normal, roughness and
+metalness with their factors. Unreal draws a decal material on a static mesh as a mesh decal: it blends colour, normal
+and roughness into the GBuffer before lighting (DBuffer decals), which is CS2's arrangement. The instances go on the
+world's placements as component overrides; the 3D skybox's copies keep the translucent material. The glTF is not
+changed.
+
+| de_nuke, paint / asphalt luminance | CT spawn, sun: bays / line | T spawn, shade: bays |
+|---|---|---|
+| CS2 | 2.35 / 2.07 | 2.29 (hue 62°) |
+| translucent (before) | 0.97 / 0.95 | 1.62 (hue 38°) |
+| mesh decal | 2.07 / 1.86 | 1.86 (hue 57°) |
+
+Measured with `tools/compare/overlay_contrast.py` on the most saturated 5 % of yellow pixels against the asphalt
+beside them, linear luminance; details, the per-pixel translucent alternative and the remaining 10–20 % (CS2's
+opacity or its asphalt's albedo, open) in [decision 009](../decisions/009-overlays-as-mesh-decals.md). In Unreal's
+base-colour view the paint is a plain alpha blend at the texture's opacity (0.43–0.45 measured, texture 0.49).
+
+`csgo_static_overlay`'s other blend modes (`F_BLEND_MODE` 0 Opaque, 2 Alpha Test, 3 Mod2x, 4 Additive, 5 Multiply,
+6 ModThenAdd, from its feature list in GameTracking-CS2) are still exported as plain `BLEND`, which is wrong for
+them; de_nuke has 30 Mod2x overlays (unlit grime). Other translucent materials (glass, fence and foliage cards) keep
+Interchange's lighting mode and are still under-lit in direct sun.
+
 ## Other rules
 
 | Case | Handling |
 |---|---|
-| `F_TRANSLUCENT`, `F_BLEND_MODE`, `csgo_static_overlay` | glTF `BLEND` |
+| `F_TRANSLUCENT`, `F_BLEND_MODE`, `csgo_static_overlay` | glTF `BLEND`; in Unreal, overlays blended with plain alpha are mesh decals ("Translucent overlays" above) |
 | `F_ALPHA_TEST` | glTF `MASK`, cutoff 0.5 |
 | overlays (decals, `OBJECT_TYPE_OVERLAY`) | pushed 0.1 inch along their normal so they win the depth test |
 | `csgo_effects` (dust and light-shaft cards) | not exported (they appeared as white sheets; to be rebuilt as Unreal effects) |

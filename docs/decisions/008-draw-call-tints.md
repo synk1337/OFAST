@@ -80,7 +80,8 @@ and only one overlay lies on the asphalt at each paint pixel (`map_raycast` with
 gives what the files say. Candidates: how Unreal lights translucent (`BLEND`) surfaces in direct sun (its
 translucency lighting, not the opaque surface's), or a blend in CS2's overlay pass other than plain alpha (the
 decompiled shader shows only the opaque variant; Source 2 Viewer's renderer uses plain alpha). Logged as a
-follow-up.
+follow-up; it was the first: Unreal lit the translucent paint through its translucency volumes, not with the
+asphalt's light. Overlays are mesh decals since [decision 009](009-overlays-as-mesh-decals.md).
 
 ## Alternatives considered
 

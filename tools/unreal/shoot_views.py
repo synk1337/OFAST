@@ -22,6 +22,13 @@ Inputs (environment variables):
                    "post": PostProcessSettings fields (set with their override flag)
                    "console": console commands run before shooting, e.g. ["ShowFlag.Lighting 0"] (base colour only,
                               to compare with CS2's mat_fullbright 1)
+                   "materials": material asset path -> properties of that material, recompiled in memory (shader
+                                compilation can take minutes); an enum property takes the value's name, e.g.
+                                {"/InterchangeAssets/gltf/M_Default":
+                                 {"translucency_lighting_mode": "TLM_SURFACE_PER_PIXEL_LIGHTING"}}
+                   "script": a Python file run last, for what-ifs the groups above cannot express (e.g. building a
+                             test material and putting it on some slots); it sees `unreal`, `actors` (the level's
+                             actors) and `log`, and must not save anything
 
 It uses the cameras import_map.py saved with the level (labels OFAST_cam_<view>), so the viewpoints are exactly
 the import's, plus the OFAST_VIEWS ones. The level is not changed or saved; its lighting is whatever the last import
@@ -66,14 +73,27 @@ def apply_try(actors):
         "sky_light": (unreal.SkyLight,),
         "local": (unreal.PointLight, unreal.SpotLight, unreal.RectLight),
     }
-    unknown = set(settings) - set(groups) - {"post", "sun_rotation", "meshes", "blockers", "proxies", "console"}
+    unknown = set(settings) - set(groups) - {"post", "sun_rotation", "meshes", "blockers", "proxies", "console",
+                                             "materials", "script"}
     if unknown:
         raise RuntimeError(
-            "unknown OFAST_TRY group: %s (sun, sun_rotation, sky_light, local, meshes, blockers, proxies, post, console)"
-            % ", ".join(sorted(unknown))
+            "unknown OFAST_TRY group: %s (sun, sun_rotation, sky_light, local, meshes, blockers, proxies, post, console,"
+            " materials, script)" % ", ".join(sorted(unknown))
         )
     for command in settings.get("console", []):
         unreal.SystemLibrary.execute_console_command(None, command)
+    # "materials": properties of material assets (masters, e.g. a translucency lighting mode, which instances cannot
+    # override), changed in memory and recompiled; the assets are never saved.
+    for path, props in settings.get("materials", {}).items():
+        material = unreal.load_asset(path)
+        if not isinstance(material, unreal.Material):
+            raise RuntimeError("OFAST_TRY materials: %s is not a material" % path)
+        for prop, value in props.items():
+            current = material.get_editor_property(prop)
+            if isinstance(current, unreal.EnumBase) and isinstance(value, str):
+                value = getattr(type(current), value)
+            material.set_editor_property(prop, value)
+        unreal.MaterialEditingLibrary.recompile_material(material)
 
     def apply(component, props):
         # "visible" and "material" are not editor properties: they go through set_visibility and set_material
@@ -133,6 +153,10 @@ def apply_try(actors):
                 post.set_editor_property("override_" + prop, True)
                 post.set_editor_property(prop, value)
             actor.set_editor_property("settings", post)
+    if settings.get("script"):
+        with open(settings["script"], encoding="utf-8") as f:
+            code = f.read()
+        exec(compile(code, settings["script"], "exec"), {"unreal": unreal, "actors": actors, "log": log})
 
 
 def extra_cameras():
