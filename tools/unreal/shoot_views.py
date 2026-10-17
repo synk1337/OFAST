@@ -7,7 +7,10 @@ Inputs (environment variables):
                  the realistic style)
     OFAST_SHOT   folder for the screenshots: <map>_<view>.png
     OFAST_ONLY   optional comma list of view names (ct0, t0, top, or names from the -Views file of the import)
-    OFAST_TRY    optional JSON (or a .json file path) of what-if settings applied before shooting (never saved), to
+    OFAST_VIEWS  optional JSON file of viewpoints given as CS2 setpos/setang, as for import_map.py: cameras for them
+                 are added for this run only (a name the level already has is replaced), so new views can be tried
+                 without importing again
+    OFAST_TRY   optional JSON (or a .json file path) of what-if settings applied before shooting (never saved), to
                  try changes quickly:
                    "sun", "sky_light", "local": light component properties, e.g. {"indirect_lighting_intensity": 2}
                                                 ("name*": multiply the current value)
@@ -21,11 +24,12 @@ Inputs (environment variables):
                               to compare with CS2's mat_fullbright 1)
 
 It uses the cameras import_map.py saved with the level (labels OFAST_cam_<view>), so the viewpoints are exactly
-the import's. The level is not changed or saved; its lighting is whatever the last import saved (including a
-diagnostic -Disable run).
+the import's, plus the OFAST_VIEWS ones. The level is not changed or saved; its lighting is whatever the last import
+saved (including a diagnostic -Disable run).
 """
 
 import json
+import math
 import os
 import time
 
@@ -36,6 +40,7 @@ SHOT_DIR = os.environ["OFAST_SHOT"]
 ONLY = {s.strip() for s in os.environ.get("OFAST_ONLY", "").split(",") if s.strip()}
 WIDTH, HEIGHT = 1920, 1080
 CAMERA_PREFIX = "OFAST_cam_"  # import_map.CAMERA_PREFIX
+HFOV_16_9 = math.degrees(2 * math.atan(math.tan(math.radians(45)) * (16 / 9) / (4 / 3)))  # import_map.HFOV_16_9
 # Frames to wait after opening the level, so meshes and textures have streamed in before the first screenshot.
 WARM_UP_TICKS = 600
 SHOT_TIMEOUT_S = 45 * 60  # import_map.SHOT_TIMEOUT_S: longest wait for one screenshot (shader compilation)
@@ -130,6 +135,31 @@ def apply_try(actors):
             actor.set_editor_property("settings", post)
 
 
+def extra_cameras():
+    """Name -> camera for the OFAST_VIEWS file, spawned in the open level (never saved). The same conversion as
+    import_map.extra_views: setpos is the player's feet in inches (eye 64 higher), Source axes to Unreal's."""
+    path = os.environ.get("OFAST_VIEWS")
+    if not path:
+        return {}
+    with open(path) as f:
+        listed = json.load(f)
+    actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    cameras = {}
+    for view in listed:
+        x, y, z = view["setpos"]
+        pitch, yaw, roll = view["setang"]
+        location = unreal.Vector(x * 2.54, -y * 2.54, (z + 64.0) * 2.54)
+        camera = actors.spawn_actor_from_class(unreal.CameraActor, location,
+                                               unreal.Rotator(roll=roll, pitch=-pitch, yaw=-yaw))
+        component = camera.camera_component
+        component.set_editor_property("field_of_view", HFOV_16_9)
+        component.set_editor_property("aspect_ratio", 16 / 9)
+        component.set_editor_property("constrain_aspect_ratio", True)
+        cameras[view["name"]] = camera
+    log("%d cameras from %s" % (len(cameras), path))
+    return cameras
+
+
 def main():
     unreal.EditorPythonScripting.set_keep_python_script_alive(True)
     level = "/Game/OFAST/Maps/" + NAME
@@ -141,6 +171,7 @@ def main():
         for actor in unreal.get_editor_subsystem(unreal.EditorActorSubsystem).get_all_level_actors()
         if isinstance(actor, unreal.CameraActor) and actor.get_actor_label().startswith(CAMERA_PREFIX)
     }
+    cameras.update(extra_cameras())
     if not cameras:
         raise RuntimeError("no %s* cameras in %s (re-run import_map.py)" % (CAMERA_PREFIX, level))
     missing = ONLY - set(cameras)

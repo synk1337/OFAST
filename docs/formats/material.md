@@ -146,7 +146,7 @@ brightness, as in the bake. Its users:
   environment bakes, its terrace tablecloths solid dark red instead of red and white check. `import_map.py` now
   rebuilds the Interchange materials an older export left, see
   [decision 006](../decisions/006-reimport-rebuilds-stale-interchange-assets.md).)
-- `M_OFAST_Skybox_v3` (3D-skybox geometry): layer 1's tint, like the rest of its glTF stand-in.
+- `M_OFAST_Skybox_v4` (3D-skybox geometry): layer 1's tint, like the rest of its glTF stand-in.
 
 Checked on de_inferno against the same export with `--bake-model-tints`, both through these masters: base-colour
 renders (no lighting) of the three views differ by 0.3–0.6 sRGB levels on average.
@@ -233,7 +233,10 @@ How OFAST writes them:
   `TintMaskTexture`.R), the mask sampled with UV set 0 or 1 (`TintMaskUV`; set 1 is not checked in a render yet: no
   tinted placement on the maps exported so far uses it). Untinted placements keep Interchange's glTF material.
   Checked on de_inferno against CS2: the T-spawn tree and the CT spawn's flower boxes have green leaves and red
-  flowers, as in CS2, instead of being red all over (decision 007).
+  flowers, as in CS2, instead of being red all over (decision 007). On de_dust2 the T spawn's kerb is red and white
+  as in CS2 (its white segments are `F_NOTINT` and were tinted pink), and on de_nuke the T spawn's blue door has
+  CS2's hue. Tinted props on de_nuke stay a little less saturated than CS2, masked or not, like its untinted shaded
+  walls: lighting or CS2's colour LUT, not the tint (decision 007).
 - **`ofast export-map --bake-model-tints`**: the masked tint is baked into a colour texture of its own
   (`<texture>_tint_<hash>.png`, `"baked": true`), for other glTF readers. Masks on the second UV set have another
   layout than the colour and are never baked: Unreal applies those either way.
@@ -246,8 +249,15 @@ brightness, masked or not by `g_nColorCorrectionMode`; neutral on every map expo
 (vertex colour R brightens the colour by up to `g_flHeightGradientAmount`: de_inferno's downey willow bushes have 1)
 and vertex-colour occlusion; the tint of shaders not checked (`csgo_lightmappedgeneric`, `csgo_static_overlay`,
 `csgo_simple`, …) stays a plain multiply by the placement tint over the whole surface, ignoring their
-`g_flModelTintAmount`, `g_vColorTint` and masks; and the 3D skybox's instances (`M_OFAST_Skybox_v3`) show masked props untinted (three materials on
-de_anubis, de_dust2 and de_nuke).
+`g_flModelTintAmount`, `g_vColorTint` and masks.
+
+The 3D skybox's master (`M_OFAST_Skybox_v4`, see `setup_skybox` in `import_map.py`) applies the same masked tint:
+colour × lerp(1, `MaskedTint`, `TintMaskTexture`.R), the mask on UV set `TintMaskUV`. `MaskedTint` is a parameter of
+its own, apart from the environment shaders' `ModelTint`, and stays white for materials without a mask. Three masked
+materials sit in skyboxes: de_anubis `venice_boat_2_tintc7c5c5`, de_dust2 `dust_windows_01_tint000000` and de_nuke
+`curbs_001_tint000000`. They are small or far away (boats off de_anubis's coast, an antenna card, a strip of
+floor), so they were checked by reading the three imported instances back (parent v4, `MaskedTint` = the tint,
+`TintMaskTexture` = the mask), not in a render.
 
 ## Other rules
 

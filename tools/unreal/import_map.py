@@ -268,7 +268,9 @@ def hide_light_blockers(imported):
 
 
 # Versioned like BLEND_MASTER: the material of 3D-skybox geometry, drawn behind the world (see setup_skybox).
-SKYBOX_MASTER = "/Game/OFAST/Materials/M_OFAST_Skybox_v3"
+# v4 added the prop shaders' tint mask (TINT_MASK_MASTER's formula): v3 showed de_dust2's skybox windows, de_nuke's
+# skybox curbs and de_anubis's skybox boat untinted.
+SKYBOX_MASTER = "/Game/OFAST/Materials/M_OFAST_Skybox_v4"
 # Shared 1x1 stand-ins for missing glTF texture maps (saved: the master uses them as parameter defaults).
 DEFAULT_TEXTURE_FOLDER = "/Game/OFAST/Materials/Defaults"
 # How far skybox pixels are pushed back, cm: more than any distance inside a map, so the world always wins.
@@ -282,8 +284,8 @@ def setup_skybox(imported):
 
     So every sky3d_ actor gets (component overrides, the world's copies of a mesh are untouched):
     - opaque and masked materials -> an instance of SKYBOX_MASTER (the glTF material's colour, normal and
-      metallic-roughness textures and factors, and an environment material's model tint on layer 1) whose pixel
-      depth offset pushes it SKYBOX_DEPTH_OFFSET_CM back;
+      metallic-roughness textures and factors, an environment material's model tint on layer 1 and a prop
+      material's tint mask) whose pixel depth offset pushes it SKYBOX_DEPTH_OFFSET_CM back;
       translucent ones (clouds) keep their material — they are depth-tested against the world anyway;
     - no shadows and no Lumen presence: the skybox is lit apart in CS2 and must not shade the world (its light
       blockers, at 16x, would otherwise cast huge shadows);
@@ -322,7 +324,10 @@ def setup_skybox(imported):
         actors_done += 1
     # The instances and the textures they sample must be saved, or the level loses its overrides when reopened.
     unreal.EditorAssetLibrary.save_directory("/Game/OFAST", only_if_is_dirty=True, recursive=True)
-    log("3D skybox: %d actors drawn behind the world (%d materials), no shadows" % (actors_done, len(instances)))
+    masks = {name: by_name[name].get("extras", {}).get("ofast", {}).get("tint_mask") or {} for name in instances}
+    masked = sorted(name for name, mask in masks.items() if mask.get("texture") and not mask.get("baked"))
+    log("3D skybox: %d actors drawn behind the world (%d materials, tint mask on %s), no shadows"
+        % (actors_done, len(instances), ", ".join(masked) or "none"))
 
 
 DEFAULT_TEXTURES = {}
@@ -359,7 +364,10 @@ def default_textures():
 def ensure_skybox_master(defaults):
     """Masked material with glTF's PBR inputs (colour, normal and metallic-roughness textures with their factors),
     the model tint of environment materials (MODEL_TINT_FUNCTION on the colour, tint mask from HeightTexture.G; a
-    white ModelTint changes nothing) and a constant pixel depth offset."""
+    white ModelTint changes nothing), the tint of prop shaders under their tint mask (colour x lerp(1, MaskedTint,
+    TintMaskTexture.R) on UV set TintMaskUV, as TINT_MASK_MASTER; a white MaskedTint changes nothing) and a constant
+    pixel depth offset. A material has one tint or the other: environment shaders have no g_tTintMask and prop
+    shaders no extras.ofast.environment, so each keeps its own parameter and the other stays white."""
     if unreal.EditorAssetLibrary.does_asset_exist(SKYBOX_MASTER):
         return unreal.EditorAssetLibrary.load_asset(SKYBOX_MASTER)
     folder, name = SKYBOX_MASTER.rsplit("/", 1)
@@ -400,13 +408,41 @@ def ensure_skybox_master(defaults):
     factor.set_editor_property("default_value", unreal.LinearColor(1, 1, 1, 1))
     tinted = model_tint_call(material, multiply(color, "RGB", factor, "", -400), "", height, "",
                              model_tint_parameter(material, -600, -900), -150, -700)
+
+    def connect(source, output, target, pin):
+        if not mel.connect_material_expressions(source, output, target, pin):
+            raise RuntimeError("skybox master: could not connect " + pin)
+
+    # The prop shaders' tint mask, as in TINT_MASK_MASTER: colour x lerp(1, MaskedTint, mask.R), the mask on UV set
+    # 0 or 1 (TintMaskUV).
+    mask = texture_parameter(material, "TintMaskTexture", "linear", defaults["mask"], -900, -1300)
+    uv = mel.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate, -1200, -1300)
+    for pin, index in (("A", 0), ("B", 1)):
+        coordinate = mel.create_material_expression(material, unreal.MaterialExpressionTextureCoordinate,
+                                                    -1500, -1400 + index * 120)
+        coordinate.set_editor_property("coordinate_index", index)
+        connect(coordinate, "", uv, pin)
+    connect(scalar_parameter(material, "TintMaskUV", 0.0, -1500, -1150), "", uv, "Alpha")
+    connect(uv, "", mask, "UVs")
+    masked_tint = mel.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -600, -1150)
+    masked_tint.set_editor_property("parameter_name", "MaskedTint")
+    masked_tint.set_editor_property("default_value", unreal.LinearColor(1, 1, 1, 1))
+    white = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, -600, -1300)
+    white.set_editor_property("constant", unreal.LinearColor(1, 1, 1, 1))
+    prop_tint = mel.create_material_expression(material, unreal.MaterialExpressionLinearInterpolate, -300, -1200)
+    connect(white, "", prop_tint, "A")
+    connect(masked_tint, "", prop_tint, "B")
+    connect(mask, "R", prop_tint, "Alpha")
+    base = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, -100, -1000)
+    connect(tinted, "Result", base, "A")
+    connect(prop_tint, "", base, "B")
     depth = mel.create_material_expression(material, unreal.MaterialExpressionConstant, -300, 850)
     depth.set_editor_property("r", SKYBOX_DEPTH_OFFSET_CM)
     # Python's MaterialProperty has no pixel depth offset: everything goes through a Make Material Attributes node.
     material.set_editor_property("use_material_attributes", True)
     attributes = mel.create_material_expression(material, unreal.MaterialExpressionMakeMaterialAttributes, 0, 0)
     for source, output, pin in (
-        (tinted, "Result", "BaseColor"),
+        (base, "", "BaseColor"),
         (multiply(color, "A", factor, "A", -150), "", "OpacityMask"),
         (normal, "RGB", "Normal"),
         (multiply(orm, "G", scalar("RoughnessFactor", 1.0, 500), "", 450), "", "Roughness"),
@@ -423,26 +459,34 @@ def ensure_skybox_master(defaults):
 
 
 def skybox_instance(name, material, document, master, defaults, folder):
-    """An instance of SKYBOX_MASTER with a glTF material's textures and factors, and the model tint of an
-    environment material's layer 1 (a blend material shows layer 1 only here, like its glTF stand-in)."""
+    """An instance of SKYBOX_MASTER with a glTF material's textures and factors, the model tint of an environment
+    material's layer 1 (a blend material shows layer 1 only here, like its glTF stand-in), and the tint mask of a
+    prop material (extras.ofast.tint_mask, as tint_mask_instances; white MaskedTint and mask when there is none)."""
     def image(slot):
         info = slot and document["textures"][slot["index"]]
         return document["images"][info["source"]]["uri"] if info else None
 
     pbr = material.get("pbrMetallicRoughness", {})
-    environment = material.get("extras", {}).get("ofast", {}).get("environment")
+    ofast = material.get("extras", {}).get("ofast", {})
+    environment = ofast.get("environment")
     tinted = environment is not None and tinted_in_material(environment)
+    tint_mask = ofast.get("tint_mask") or {}
+    masked = bool(tint_mask.get("texture")) and not tint_mask.get("baked")
     textures = {
         "BaseColorTexture": (image(pbr.get("baseColorTexture")), "color"),
         "NormalTexture": (image(material.get("normalTexture")), "normal"),
         "MetallicRoughnessTexture": (image(pbr.get("metallicRoughnessTexture")), "orm"),
         "HeightTexture": (environment["layer1"].get("height") if tinted else None, "mask"),
+        "TintMaskTexture": (tint_mask["texture"] if masked else None, "mask"),
     }
     instance = blend_instance("Sky_" + name, master, folder)
     for param, (uri, kind) in textures.items():
         texture = import_texture(uri, folder, kind if kind in ("color", "normal") else "linear") if uri else defaults[kind]
         set_texture_parameter(instance, param, texture)
     set_model_tint(instance, environment if tinted else None, [("layer1", "")])
+    r, g, b = tint_mask["tint"] if masked else (1.0, 1.0, 1.0)
+    set_vector_parameter(instance, "MaskedTint", unreal.LinearColor(r, g, b, 1.0))
+    set_scalar_parameter(instance, "TintMaskUV", 1.0 if masked and tint_mask.get("uv") == 1 else 0.0)
     r, g, b, a = pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])
     unreal.MaterialEditingLibrary.set_material_instance_vector_parameter_value(
         instance, "BaseColorFactor", unreal.LinearColor(r, g, b, a))

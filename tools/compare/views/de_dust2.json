@@ -1,0 +1,26 @@
+[
+  {
+    "name": "tdoor",
+    "setpos": [-822.365, -795.642, 150.709],
+    "setang": [3, 41, 0],
+    "note": "T spawn looking at the green door (dust_door_80x128_03, tint a5e9b9) behind its grille and the window frames above: csgo_vertexlitgeneric with F_TINT_MASK (decision 007)"
+  },
+  {
+    "name": "tbluedoor",
+    "setpos": [-1060, -390, 135],
+    "setang": [0, 82, 0],
+    "note": "Light-blue door (dust_door_46x106_02, tint a9dbff), its frame (c7be9e), the awning and window frame above (c5e7ff): masked csgo_vertexlitgeneric; the door's knobs stay untinted"
+  },
+  {
+    "name": "tcar",
+    "setpos": [-1250, -700, 135],
+    "setang": [0, 52, 0],
+    "note": "Wider view of the same street: the taxi (dust_300d_color, tint fceed6), the light-blue door and the red and white kerb"
+  },
+  {
+    "name": "tsalmon",
+    "setpos": [-1620, 278, 13],
+    "setang": [0, 0, 0],
+    "note": "Salmon door (dust_door_46x106_04, tint ffb4ab) behind a grille, green window bars (b6eab4, 79c677), blue awning (6fbfd8) and the green and blue garbage containers (c4cd9b, 7fb6e0)"
+  }
+]
