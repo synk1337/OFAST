@@ -28,6 +28,12 @@ translation in the last column), `m_vTintColor`, `m_nObjectTypeFlags` (an **int 
 string for single flags**), `m_nOverlayRenderOrder`. In de_mirage every transform is identity: the baked geometry is
 already in world space.
 
+`m_vTintColor` is four floats, RGBA 0–1: (1, 1, 1, 1) on every scene object of the main worlds (de_dust2,
+de_mirage, de_inferno). The 3D skyboxes compiled from older prefabs also store **(0, 0, 0, 0)**: 57 of the 84 scene
+objects of de_dust2's skybox (the others (1, 1, 1, 1) and a grey). CS2 draws those untinted: de_dust2's skybox bushes
+are green and its clouds are light. Read as black, they made 18 black-tinted materials on de_dust2 (21 on de_mirage, 17 on
+de_nuke), so OFAST reads an all-zero tint as white, and an alpha of 0 alone as 1 (`scene_object_tint`).
+
 | Flag | Value | OFAST |
 |---|---|---|
 | `OBJECT_TYPE_MODEL` | 8 | placed from a model (static props, kit pieces) rather than built in Hammer. Without it (and not an overlay) the node is named `world_…`, like brush entities (`func_*`). Unreal gives only `world_…` meshes two-sided shadows: the walls CS2 shades with from behind were all world geometry ([lighting.md](lighting.md#shadows-from-the-back-of-walls)) |

@@ -280,6 +280,23 @@ fn object_type_flags(value: Option<&Value>) -> u32 {
     }
 }
 
+/// A scene object's `m_vTintColor` (RGBA 0–1), white when absent or malformed. An alpha of 0 reads as 1, and so does
+/// the whole tint when all four are 0: the 3D skyboxes compiled from older prefabs store (0, 0, 0, 0) where the main
+/// worlds store (1, 1, 1, 1) (de_dust2's skybox: 57 objects, its main world none), and CS2 draws them untinted —
+/// de_dust2's skybox bushes are green and its clouds light, not black.
+fn scene_object_tint(value: Option<&Value>) -> [f32; 4] {
+    let mut values = Vec::new();
+    if let Some(v) = value {
+        numbers(v, &mut values);
+    }
+    match values[..] {
+        [r, g, b, a] if values.iter().any(|&c| c != 0.0) => {
+            [r, g, b, if a == 0.0 { 1.0 } else { a }]
+        }
+        _ => [1.0; 4],
+    }
+}
+
 fn parse_world_node(root: &Value) -> WorldNode {
     let mut node = WorldNode::default();
     for object in array(root.get("m_sceneObjects")) {
@@ -290,21 +307,10 @@ fn parse_world_node(root: &Value) -> WorldNode {
         if model.is_empty() {
             continue; // `m_renderable` (mesh-only) objects are not used by CS2 maps so far
         }
-        let mut tint = [1.0; 4];
-        let mut values = Vec::new();
-        if let Some(v) = object.get("m_vTintColor") {
-            numbers(v, &mut values);
-        }
-        if values.len() == 4 {
-            tint = [values[0], values[1], values[2], values[3]];
-            if tint[3] == 0.0 {
-                tint[3] = 1.0;
-            }
-        }
         node.scene_objects.push(SceneObject {
             model: model.to_owned(),
             transform: transform(object.get("m_vTransform")).unwrap_or(IDENTITY),
-            tint,
+            tint: scene_object_tint(object.get("m_vTintColor")),
             flags: object_type_flags(object.get("m_nObjectTypeFlags")),
             overlay_order: object
                 .get("m_nOverlayRenderOrder")
@@ -459,6 +465,26 @@ mod tests {
             (p[0] - 100.0).abs() < 1e-3 && (p[1] - 16.0).abs() < 1e-3,
             "{p:?}"
         );
+    }
+
+    #[test]
+    fn unset_scene_object_tints_are_white() {
+        let tint = |values: &[f64]| {
+            let array = Value::Array(values.iter().map(|&v| Value::Float(v)).collect());
+            scene_object_tint(Some(&array))
+        };
+        // de_dust2's skybox clouds and bushes: all zero, drawn untinted by CS2.
+        assert_eq!(tint(&[0.0; 4]), [1.0; 4]);
+        assert_eq!(tint(&[1.0; 4]), [1.0; 4]);
+        // A grey with no alpha keeps its colour, at full opacity.
+        let grey = 195.0 / 255.0;
+        assert_eq!(
+            tint(&[grey, grey, grey, 0.0]),
+            [grey as f32, grey as f32, grey as f32, 1.0]
+        );
+        assert_eq!(tint(&[0.0, 0.0, 0.0, 1.0]), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(tint(&[0.5]), [1.0; 4]);
+        assert_eq!(scene_object_tint(None), [1.0; 4]);
     }
 
     #[test]
