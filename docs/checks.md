@@ -114,6 +114,32 @@ brighter than CS2's), de_mirage's B balcony 0.88 and de_inferno's banana 1.66. W
 views that were far too dark from short-ranged lamps came up (de_nuke's lower level, de_dust2's tunnels, de_inferno's
 library), and interiors lit mostly by bounce or by generous lamps are now more often too bright than too dark — see 9.
 
+## After merging all branches (2026-10-18)
+
+Every branch merged into `main` (overlays as mesh decals, static overlay blend modes, per-pixel translucency, tint
+masks, the tone curve measured on de_anubis — H(3.4 x) / H(6 W), the colour table on Hable maps only — and this page's
+fixes), the five maps re-exported and imported with all their views, compared the same way (`--cs2-gamma 2.013074`;
+renders in `test-data/shots/merged/`). Nearly every view reads within 0.05 of the "After" columns above. What moved:
+
+| Map | View | After (above) | Merged | Why |
+|---|---|---|---|---|
+| de_inferno | ct0 / t0 | 0.92 / 1.81 | 0.81 / 1.44 | the new tone curve (the old H(2.5 x) / H(1.25 W) was fitted on these surfaces) |
+| de_inferno | asite / bsite / middle / pit / balcony | 1.06 / 1.00 / 1.10 / 0.97 / 1.03 | 0.92 / 0.86 / 0.93 / 0.82 / 0.86 | same; de_inferno's base colours are 0.60× CS2's albedo (lighting.md) |
+| de_inferno | apartments / apartments2 / underpass / ruins / banana | 2.18 / 1.75 / 2.87 / 2.79 / 1.66 | 1.93 / 1.30 / 2.38 / 2.08 / 1.44 | same; still item 9 |
+| de_inferno | arch / library | 0.84 / 1.09 | 0.64 / 0.75 | same |
+| de_nuke | bsite | 1.00 (what-if) | 0.85 | the fixes for real (bounce-only lights, start-disabled entities); still patchy: items 6 and 7 |
+| de_nuke | observation / tunnels | 1.76 / 2.30 | 1.66 / 2.17 | same |
+| de_mirage | underpass / shop | 1.36 / 0.79 | 1.42 / 0.82 | |
+| de_anubis | ct0 / t0 | — | 1.11 / 1.08 | 1.01 / 1.01 against the uncorrected references the curve was fitted on: the fit predates the brightness correction and should be redone with it |
+
+New views without a CS2 reference yet: de_dust2 `dumpster`, de_inferno `trike`, de_nuke `ctvan`. de_dust2's tint
+views read 1.18 – 1.26 (sunlit, as the tint checks found).
+
+Two of the import's own screenshots were wrong: de_mirage's `underpass` file held the CT-spawn view (and `ct0` was
+missing), and de_dust2's `uppertunnel` came out at 0.88. `shoot_views.py` on the saved levels gave the right
+pictures (1.42; 0.99 and 1.01 in two runs), which the table uses. The import's screenshot loop can therefore drop a
+shot or catch one early; re-shoot with `shoot_views.py` when a number looks off.
+
 ## What was wrong
 
 ### Fixed

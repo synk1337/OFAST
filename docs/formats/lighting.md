@@ -361,6 +361,12 @@ the rule's simulation on the earlier Unreal shots to 0.1 % (de_anubis, de_nuke).
 | de_dust2 T / CT | 0.95 / 0.11 | 0.95 / 0.095 | |
 | de_nuke CT / T | 0.98 / 0.96 | 0.92 / 0.90 | applying its table (17 levels) darkens the picture: the one map where the table, unconfirmed on linear maps, makes the match worse; see [the table](#the-colour-correction-table) |
 
+After merging all branches (2026-10-18), with the colour table on Hable maps only and the fixes of
+[checks.md](../checks.md), against the same uncorrected references: de_mirage 0.99 / 0.98, palace 0.96, B apartments
+0.76; de_dust2 0.27 / 0.98 (the CT room gained from the lamp-range fix); de_inferno 0.76 / 1.22 (re-imported now);
+de_nuke 0.98 / 0.95; de_anubis 1.01 / 1.01. Corrected for this machine's CS2 brightness setting (checks.md), de_anubis
+reads 1.11 / 1.08: the level 3.4 was fitted on uncorrected references and should be refitted on corrected ones.
+
 ## Shadows from the back of walls
 
 CS2's walls are single-sided: an interior wall usually has no outer face. CS2 stops sunlight at such a wall from
