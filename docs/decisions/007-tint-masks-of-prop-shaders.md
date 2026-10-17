@@ -147,7 +147,9 @@ re-import needed): de_dust2 `tdoor`, `tbluedoor`, `tcar`, `tsalmon`, de_nuke `ct
 - The 3D-skybox master applies tint masks since `M_OFAST_Skybox_v4` (a `MaskedTint` parameter of its own, white
   without a mask). v3 showed the three masked skybox materials (de_anubis, de_dust2, de_nuke) untinted. All three
   were read back after their maps' re-import (parent v4, tint and mask set); they are too small or far away to
-  check in a render.
+  check in a render. The de_dust2 and de_nuke ones (tint 000000) turned out to be skybox scene objects stored with
+  `m_vTintColor` (0, 0, 0, 0), i.e. untinted: commit 5272b68 (branch `claude/brave-cray-9119b1`) exports them
+  white, leaving de_anubis's boat as the only masked skybox tint.
 - Not reproduced: `csgo_foliage`'s colour correction (neutral on every map exported so far) and height gradient
   (vertex colour R brightening: de_inferno's downey willow bushes), the vertex-colour occlusion, and the tint rules
   of the shaders not checked.

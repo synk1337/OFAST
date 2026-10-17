@@ -258,7 +258,9 @@ its own, apart from the environment shaders' `ModelTint`, and stays white for ma
 materials sit in skyboxes: de_anubis `venice_boat_2_tintc7c5c5`, de_dust2 `dust_windows_01_tint000000` and de_nuke
 `curbs_001_tint000000`. They are small or far away (boats off de_anubis's coast, an antenna card, a strip of
 floor), so they were checked by reading the three imported instances back (parent v4, `MaskedTint` = the tint,
-`TintMaskTexture` = the mask), not in a render.
+`TintMaskTexture` = the mask), not in a render. The de_dust2 and de_nuke tints (000000) are skybox scene objects
+stored with `m_vTintColor` (0, 0, 0, 0), which means untinted: commit 5272b68 (branch `claude/brave-cray-9119b1`)
+reads them as white, after which they have no tint mask to apply and de_anubis's boat is the only masked skybox tint.
 
 ## Other rules
 
