@@ -15,7 +15,8 @@
 //!   it is in CS2. Placements (node matrices) are converted the same way.
 //! - **Materials**: each CS2 material (× tint colour) becomes a glTF PBR material. The CS2 shader name and texture
 //!   parameters are kept in `extras.ofast` so the Unreal plugin can later build matching master materials.
-//!   Translucent and alpha-tested CS2 materials map to glTF `BLEND` / `MASK`.
+//!   Translucent and alpha-tested CS2 materials map to glTF `BLEND` / `MASK` (cut at the material's
+//!   `g_flAlphaTestReference`); `csgo_static_overlay` by its blend mode ([`OverlayBlend`]).
 //! - **Textures**: see [`TextureRole`]. Textures are decoded and written as PNG at the end, in parallel; a texture
 //!   that fails to decode is replaced by a 1×1 neutral image and reported as a warning.
 //!
@@ -246,6 +247,72 @@ impl MaterialInfo {
     /// `csgo_environment_blend`.
     fn reads_blend_weights(&self) -> bool {
         self.is_vertex_blend() || self.shader == environment::ENVIRONMENT_BLEND
+    }
+
+    /// The alpha below which an alpha-tested material is cut away: its `g_flAlphaTestReference`, or the shaders'
+    /// default 0.5 when the material keeps it. The six exported maps use 0.05 – 0.9 (`csgo_foliage` 0.2 – 0.9,
+    /// `csgo_static_overlay` 0.18 – 0.63), so a fixed 0.5 cut foliage cards and alpha-tested overlays wrongly.
+    fn alpha_test_reference(&self) -> f64 {
+        self.floats
+            .get("g_flAlphaTestReference")
+            .copied()
+            .unwrap_or(0.5)
+    }
+}
+
+/// The shader of Hammer's overlays (decals placed on a surface: grime, signs, floor markings).
+pub(crate) const STATIC_OVERLAY: &str = "csgo_static_overlay.vfx";
+
+/// How a `csgo_static_overlay` material is blended with what is under it: its `F_BLEND_MODE` feature, numbered as in
+/// the shader's feature list (decompiled in GameTracking-CS2, `csgo_static_overlay.slang`): `0="Opaque",
+/// 1="Translucent", 2="Alpha Test", 3="Mod2x", 4="Additive", 5="Multiply", 6="ModThenAdd"`. Only modes 0–2 can be lit
+/// (`F_LIT`); every mode is drawn with depth bias −64 and without depth writes, the colour blend being
+/// `DstBlend (F_BLEND_MODE==3) ? One : InvSrcAlpha` (the shader's render state).
+///
+/// | Mode | How CS2 draws it | glTF |
+/// |---|---|---|
+/// | `Opaque` | a lit surface; the colour's alpha is unused | `OPAQUE` |
+/// | `Translucent` | alpha blend over the surface under it | `BLEND` |
+/// | `AlphaTest` | cut where the colour's alpha is below `g_flAlphaTestReference` | `MASK` at that reference |
+/// | `Mod2x` | unlit: multiplies what is drawn under it by `lerp(1, 2 × colour × tint, alpha × tint alpha)`, the colour read without sRGB decoding (`SrgbRead(false)`), so 128 grey changes nothing, darker darkens, brighter brightens up to 2× | `BLEND` (glTF has no multiply blend; `import_map.py` gives Unreal a Modulate material) |
+/// | `Additive`, `Multiply`, `ModThenAdd` | not on the six exported maps; not checked | `BLEND` |
+///
+/// Other shaders with an `F_BLEND_MODE` (`csgo_unlitgeneric`: de_dust2 and de_mirage have one each) may number
+/// their modes differently and keep the plain `BLEND` of every translucent material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OverlayBlend {
+    /// 0: drawn like any surface (de_nuke's red "A" / "B" bombsite signs).
+    Opaque,
+    /// 1: alpha blend (de_nuke's plant logos and painted stripes).
+    Translucent,
+    /// 2: alpha-tested (de_nuke 1, de_inferno 6, de_anubis 7, de_vertigo 1 materials).
+    AlphaTest,
+    /// 3: unlit multiply by 2 × colour (grime, scuffs, floor markings, caustics).
+    Mod2x,
+    /// 4.
+    Additive,
+    /// 5.
+    Multiply,
+    /// 6.
+    ModThenAdd,
+}
+
+impl OverlayBlend {
+    /// The blend mode of a `csgo_static_overlay` material (`F_BLEND_MODE`, 0 when not set); `None` for the other
+    /// shaders. A value outside 0–6 is read as `Translucent`, the plain `BLEND` every overlay had before.
+    pub(crate) fn of(info: &MaterialInfo) -> Option<Self> {
+        if info.shader != STATIC_OVERLAY {
+            return None;
+        }
+        Some(match info.ints.get("F_BLEND_MODE").copied().unwrap_or(0) {
+            0 => Self::Opaque,
+            2 => Self::AlphaTest,
+            3 => Self::Mod2x,
+            4 => Self::Additive,
+            5 => Self::Multiply,
+            6 => Self::ModThenAdd,
+            _ => Self::Translucent,
+        })
     }
 }
 
@@ -649,16 +716,22 @@ impl<'c> GltfWriter<'c> {
                 "vectors": info.vectors,
             }
         });
-        let translucent = info.flag("F_TRANSLUCENT")
-            || info.flag("F_BLEND_MODE")
-            || info.flag("F_OVERLAY")
-            || info.shader == "csgo_static_overlay.vfx";
-        let alpha_test = info.flag("F_ALPHA_TEST");
+        // Static overlays by their blend mode (OverlayBlend); the other shaders by their features.
+        let (translucent, alpha_test) = match OverlayBlend::of(info) {
+            Some(OverlayBlend::Opaque) => (false, false),
+            Some(OverlayBlend::AlphaTest) => (false, true),
+            // Plain alpha, and the modes glTF has no blend for (Mod2x: Unreal's material reads F_BLEND_MODE).
+            Some(_) => (true, false),
+            None => (
+                info.flag("F_TRANSLUCENT") || info.flag("F_BLEND_MODE") || info.flag("F_OVERLAY"),
+                info.flag("F_ALPHA_TEST"),
+            ),
+        };
         if translucent {
             material["alphaMode"] = json!("BLEND");
         } else if alpha_test {
             material["alphaMode"] = json!("MASK");
-            material["alphaCutoff"] = json!(0.5);
+            material["alphaCutoff"] = json!(info.alpha_test_reference());
         }
         if info.flag("F_RENDER_BACKFACES") || info.flag("F_DOUBLE_SIDED") {
             material["doubleSided"] = json!(true);
@@ -1926,6 +1999,145 @@ mod tests {
         assert_eq!(
             factor(&info("csgo_static_overlay.vfx", &[])),
             json!([0.0, 0.0, 0.0, 1.0])
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Fills an untinted material of `shader` with a colour texture, the integer parameters `ints` and the floats
+    /// `floats`. Returns the glTF material and the role its colour texture was registered with.
+    fn blend_test_material(
+        writer: &mut GltfWriter,
+        shader: &str,
+        ints: &[(&str, i64)],
+        floats: &[(&str, f64)],
+    ) -> (Json, Option<TextureRole>) {
+        let info = MaterialInfo {
+            shader: shader.into(),
+            textures: [(
+                "g_tColor".to_owned(),
+                "materials/overlays/grime_color.vtex".to_owned(),
+            )]
+            .into(),
+            ints: ints.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect(),
+            floats: floats.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect(),
+            ..Default::default()
+        };
+        let mut material = json!({});
+        writer.fill_material(&mut material, &info, [255; 4]);
+        let index = material["pbrMetallicRoughness"]["baseColorTexture"]["index"].as_u64();
+        let role = index.and_then(|i| match &writer.texture_jobs[i as usize].job {
+            TextureJob::Single(_, role) => Some(*role),
+            _ => None,
+        });
+        (material, role)
+    }
+
+    /// glTF's alpha mode and cutoff of a material (`OPAQUE` when not written).
+    fn alpha_mode(material: &Json) -> (String, Option<f64>) {
+        (
+            material["alphaMode"]
+                .as_str()
+                .unwrap_or("OPAQUE")
+                .to_owned(),
+            material["alphaCutoff"].as_f64(),
+        )
+    }
+
+    #[test]
+    fn static_overlays_are_blended_by_their_blend_mode() {
+        let content = Content::new();
+        let dir = temp_folder("overlay-blend");
+        let mut writer = GltfWriter::new(&content, &dir, ExportOptions::default()).expect("writer");
+        let mut fill = |ints: &[(&str, i64)], floats: &[(&str, f64)]| {
+            blend_test_material(&mut writer, STATIC_OVERLAY, ints, floats)
+        };
+        let opaque = (String::from("OPAQUE"), None);
+        let blend = (String::from("BLEND"), None);
+        let keep_alpha = |keep_alpha| Some(TextureRole::Color { keep_alpha });
+
+        // de_nuke's bombsite signs: opaque and lit, their colour without alpha. No F_BLEND_MODE is mode 0.
+        for ints in [&[("F_LIT", 1)][..], &[("F_BLEND_MODE", 0), ("F_LIT", 1)]] {
+            let (material, role) = fill(ints, &[]);
+            assert_eq!(
+                (alpha_mode(&material), role),
+                (opaque.clone(), keep_alpha(false))
+            );
+        }
+        let (material, role) = fill(&[("F_BLEND_MODE", 1), ("F_LIT", 1)], &[]);
+        assert_eq!(
+            (alpha_mode(&material), role),
+            (blend.clone(), keep_alpha(true))
+        );
+        // Alpha-tested: cut at the material's own reference (de_nuke's plant logo: 0.4), 0.5 when it keeps the
+        // shader's default.
+        let (material, role) = fill(
+            &[("F_BLEND_MODE", 2), ("F_LIT", 1)],
+            &[("g_flAlphaTestReference", 0.4)],
+        );
+        assert_eq!(
+            (alpha_mode(&material), role),
+            (("MASK".into(), Some(0.4)), keep_alpha(true))
+        );
+        assert_eq!(
+            alpha_mode(&fill(&[("F_BLEND_MODE", 2)], &[]).0),
+            ("MASK".into(), Some(0.5))
+        );
+        // Mod2x (de_nuke's grime) and the modes not checked: glTF has no such blend, BLEND with the alpha.
+        for mode in 3..=6 {
+            let (material, role) = fill(&[("F_BLEND_MODE", mode)], &[]);
+            assert_eq!(
+                (alpha_mode(&material), role),
+                (blend.clone(), keep_alpha(true)),
+                "mode {mode}"
+            );
+            assert_eq!(material["extras"]["ofast"]["ints"]["F_BLEND_MODE"], mode);
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn other_shaders_keep_their_features_and_cut_at_their_reference() {
+        let content = Content::new();
+        let dir = temp_folder("alpha-test");
+        let mut writer = GltfWriter::new(&content, &dir, ExportOptions::default()).expect("writer");
+        let mut mode = |shader: &str, ints: &[(&str, i64)], floats: &[(&str, f64)]| {
+            alpha_mode(&blend_test_material(&mut writer, shader, ints, floats).0)
+        };
+        assert_eq!(
+            mode(
+                "csgo_foliage.vfx",
+                &[("F_ALPHA_TEST", 1)],
+                &[("g_flAlphaTestReference", 0.2)]
+            ),
+            ("MASK".into(), Some(0.2))
+        );
+        assert_eq!(
+            mode("csgo_vertexlitgeneric.vfx", &[("F_ALPHA_TEST", 1)], &[]),
+            ("MASK".into(), Some(0.5))
+        );
+        // A reference without the feature changes nothing.
+        assert_eq!(
+            mode("csgo_complex.vfx", &[], &[("g_flAlphaTestReference", 0.2)]),
+            ("OPAQUE".into(), None)
+        );
+        // csgo_unlitgeneric numbers its own F_BLEND_MODE (not checked): plain BLEND as before.
+        for blend_mode in [1, 2, 4] {
+            assert_eq!(
+                mode(
+                    "csgo_unlitgeneric.vfx",
+                    &[("F_BLEND_MODE", blend_mode)],
+                    &[]
+                ),
+                ("BLEND".into(), None)
+            );
+        }
+        assert_eq!(
+            mode(
+                "csgo_lightmappedgeneric.vfx",
+                &[("F_OVERLAY", 1), ("F_TRANSLUCENT", 1)],
+                &[]
+            ),
+            ("BLEND".into(), None)
         );
         let _ = fs::remove_dir_all(&dir);
     }
