@@ -242,16 +242,17 @@ manifest's `post.color_correction` names it. Every official map checked but de_o
 | 15 – 24 | de_ancient 15, de_nuke 17, cs_italy 17, cs_office 22, de_cache 24, de_inferno 24 | 14 – 25 |
 | 27 – 31 | de_vertigo 27, de_anubis 31 | 5 – 19 |
 
-CS2 draws every map through the same post-processing, so OFAST applies the table on linear maps too, although there
-it could not be confirmed separately: its effect is small (de_mirage ±1 %, de_dust2 +1 %), and de_nuke's 17 levels
-move its spawns from 0.98 / 0.96 to 0.92 / 0.90 of CS2 (an exposure pair, 1.0 / 0.85, halves the same with or
-without it; its sky's three channels agree better with it in one spawn and worse in the other).
+OFAST applies the table on **Hable maps only** (decided 2026-10-18). On the linear maps it could not be confirmed:
+its effect is small on de_mirage (±1 %) and de_dust2 (+1 %), and de_nuke's 17 levels move its spawns from 0.98 / 0.96
+to 0.92 / 0.90 of CS2, so CS2's own screenshots match better without it (an exposure pair, 1.0 / 0.85, halves the
+same with or without it; its sky's three channels agree better with it in one spawn and worse in the other).
+Toggling CS2's colour correction on de_nuke would settle it.
 
 ### In Unreal
 
 A post-process material at `BL_ReplacingTonemapper` (`M_OFAST_Tonemap_v3`), on every map: scene colour ×
 eye-adaptation exposure → a straight line (shoulder 0) or `H(3.4 x) / H(6 W)` (`HABLE_INPUT_SCALE`,
-`HABLE_WHITE_SCALE` in `import_map.py`) → sRGB → the map's table, imported as an uncompressed, non-sRGB texture
+`HABLE_WHITE_SCALE` in `import_map.py`) → sRGB → on Hable maps, the map's table, imported as an uncompressed, non-sRGB texture
 without mips and read with two bilinear lookups on neighbouring blue slices. Unreal applies nothing after a replacing
 tone mapper. The curve's parameters come from the manifest's `post.tonemap`. Before this, linear maps used Unreal's
 own tone mapper with its curve off, and Hable maps `M_OFAST_TonemapHable_v2` (H(2.5 x) / H(1.25 W), no table).
@@ -455,7 +456,7 @@ a decal (CS2 2.29×).
 | Sky | CS2's `env_sky` HDR on a sphere + Sky Light from it | Unreal's Sky Atmosphere + real-time Sky Light, light height fog |
 | Local lights | CS2-matched candela (`intensity_cd`), CS2 bounce × gain | Hammer's real candela (`intensity_cd_photometric` = 79.6 × linear), plain bounce |
 | Exposure | fixed, measured on CS2 (EV100 0.322 on de_mirage) | auto (histogram), EV100 2 – 16 |
-| Tone curve | CS2's (a straight line or Hable's), then CS2's colour-correction table | Unreal's filmic curve, local exposure, light bloom and vignette |
+| Tone curve | CS2's (a straight line or Hable's), then on Hable maps CS2's colour-correction table | Unreal's filmic curve, local exposure, light bloom and vignette |
 
 The realistic style does **not** keep CS2's light ratios: it pairs Hammer's photometric candela with a real-world
 sun (100 000 lux before the atmosphere, about 80 000 on the ground), so a 121 cd wall lamp is far fainter next to the

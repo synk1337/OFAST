@@ -2171,8 +2171,8 @@ def setup_sun(manifest):
 def setup_post(manifest):
     """Unbound post-process volume reproducing CS2's picture: fixed exposure (EV100 from the exporter, measured
     against CS2 screenshots), then OFAST's tone mapper (cs2_tonemapper_instance): a straight line when the map's curve
-    is one (a shoulder of 0), CS2's Hable curve otherwise, then the map's colour-correction table. No bloom, no
-    vignette."""
+    is one (a shoulder of 0), CS2's Hable curve otherwise, then, on Hable maps, the map's colour-correction table. No
+    bloom, no vignette."""
     post = manifest.get("post") or {}
     # Sunlit views sit at CS2's minimum exposure, the highest EV100.
     ev100 = post.get("ev100_max", 0.0)
@@ -2191,11 +2191,13 @@ def setup_post(manifest):
     override("vignette_intensity", 0.0)
     # Keys the .vpost lacks are written as null: drop them so the defaults below apply.
     tonemap = {key: value for key, value in (post.get("tonemap") or {}).items() if value is not None}
-    # Unreal's own tone mapper is always replaced: CS2 applies its colour-correction table after the curve, on every
-    # map with one (measured on de_anubis), and a replacing tone mapper is the last step Unreal runs.
+    # Unreal's own tone mapper is always replaced. CS2 applies its colour-correction table after the curve on Hable maps
+    # (measured on de_anubis: without it no curve fits an exposure pair). On the linear maps it is left out: it is
+    # unconfirmed there, nearly the identity on de_mirage and de_dust2, and on de_nuke CS2's own screenshots match
+    # without it (0.98 / 0.96 of CS2) and not with it (0.92 / 0.90).
     hable = tonemap.get("shoulder_strength", 0.0) > 0.0
     color_correction = post.get("color_correction") or {}
-    lut = import_lut(color_correction)
+    lut = import_lut(color_correction) if hable else None
     tonemapper = cs2_tonemapper_instance(tonemap, hable, lut, color_correction.get("size", 32))
     settings.set_editor_property(
         "weighted_blendables",
