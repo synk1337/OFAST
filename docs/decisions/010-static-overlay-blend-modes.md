@@ -111,6 +111,11 @@ it), linear luminance, so the light cancels out:
 - **Opaque bombsite signs** (the lobby's "A", the ramp room's "B"): no depth fighting with their walls; lit per
   pixel, the lobby's "A" is brighter and shows its white border as in CS2 (dimmer before, as translucent surfaces
   are in Unreal, decision 009).
+- **Caustics** (`caustics_001_decal`, 12 placements on B site's ceiling and walls): base-colour renders
+  (`ShowFlag.Lighting 0`, so Lumen's run-to-run noise drops out) with and without them, from `setpos 704 -900 -620;
+  setang -5 -90 0`: one atlas cell spread over each overlay, its ripple lines × 1.06 and its cells × 0.92 (draw alpha
+  0.37–0.41, tint c1e3ff), and another cell in a render a minute later (`caustics_ratio_two_times.png`; the two
+  patterns correlate 0.28). Not compared with CS2, where they move too.
 - 25 other de_nuke materials changed cutoff (railing cards 0.225, hanging wires 0.089, tree cards 0.42–0.9, roof fans
   0.4); not compared with CS2 one by one.
 
