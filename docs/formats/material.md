@@ -340,14 +340,18 @@ material. The glTF is not changed.
 
 | de_nuke, paint / asphalt luminance | CT spawn, sun: bays / line | T spawn, shade: bays |
 |---|---|---|
-| CS2 | 2.35 / 2.07 | 2.29 (hue 62°) |
+| CS2, reference shots | 2.35 / 2.07 | 2.29 (hue 62°) |
+| CS2, fresh F12 captures (auto exposure) | 2.13 / – | 2.01 (hue 60°) |
 | translucent (before) | 0.97 / 0.95 | 1.62 (hue 38°) |
 | mesh decal | 2.07 / 1.86 | 1.86 (hue 57°) |
 
 Measured with `tools/compare/overlay_contrast.py` on the most saturated 5 % of yellow pixels against the asphalt
-beside them, linear luminance; details, the per-pixel translucent alternative and the remaining 10–20 % (CS2's
-opacity or its asphalt's albedo, open) in [decision 009](../decisions/009-overlays-as-mesh-decals.md). In Unreal's
-base-colour view the paint is a plain alpha blend at the texture's opacity (0.43–0.45 measured, texture 0.49).
+beside them (luminance of the displayed colours: lit ratios compare only at the same exposure, since the tone curve
+compresses a near-white paint). Details and the per-pixel translucent alternative in
+[decision 009](../decisions/009-overlays-as-mesh-decals.md). In the base-colour views (CS2 `mat_fullbright 1`,
+Unreal `ShowFlag.Lighting 0`) Unreal's paint is a plain alpha blend at the texture's opacity (0.46–0.49, texture
+0.486), while CS2's is about 1.27× more opaque (0.57–0.61) and a little yellower, for a reason not found
+(not compensated).
 
 `csgo_static_overlay`'s other blend modes are handled apart ("Static overlay blend modes and Mod2x" below).
 

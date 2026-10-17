@@ -324,7 +324,7 @@ Unreal lights a translucent material apart from the opaque scene, with its **tra
 The translucency lighting volume and Lumen's translucency volume are coarse grids around the camera, not the
 per-pixel light and virtual shadow maps of opaque surfaces. A translucent surface was therefore lit less than the
 opaque ones next to it in direct sun: de_nuke's road paint came out at 0.97× the sunlit asphalt's luminance (CS2
-2.35×), the SWAT van's lettering and de_dust2's container sign at 0.81 and 0.70 of what per-pixel lighting gives.
+2.13–2.35× depending on exposure), the SWAT van's lettering and de_dust2's container sign at 0.81 and 0.70 of what per-pixel lighting gives.
 
 OFAST now handles translucent surfaces in two ways ([material.md](material.md#translucent-overlays-mesh-decals)):
 
@@ -336,8 +336,9 @@ OFAST now handles translucent surfaces in two ways ([material.md](material.md#tr
 - **Every other translucent surface is lit with Surface ForwardShading** (glass, fence and foliage cards, signs):
   `import_map.py` re-parents Interchange's instances to an OFAST copy of its master with that mode
   (`M_OFAST_glTFDefault_v1`), and sets it on OFAST's own masters whose instances can be translucent. Static overlays
-  in their other blend modes (Mod2x …) and the unlit `csgo_unlitgeneric` cards keep Interchange's mode for now:
-  neither mode is right for them (a Mod2x scuff got brighter per pixel in the sun, darker in the shade).
+  in their other blend modes have their own handling (Mod2x: an unlit Modulate material,
+  [decision 011](../decisions/011-static-overlay-blend-modes.md); per pixel, a Mod2x scuff got brighter in the sun
+  and darker in the shade), and the unlit `csgo_unlitgeneric` cards keep Interchange's mode for now.
 
 Per-pixel lighting fixes the direct sun only: the indirect light still comes from Lumen's translucency volume, so
 in the shade a translucent surface stays darker than the screen and surface-cache lighting of the wall beside it.
