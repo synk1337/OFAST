@@ -395,7 +395,7 @@ brightening and no tinted multiply.
 material (`MOD2X_FLIPBOOK_HLSL`), cells row by row from the top left; the random and scripted modes play sequentially
 too. Not done for the other overlay materials (none animated on the six maps).
 
-Checked on de_nuke against CS2 ([decision 010](../decisions/010-static-overlay-blend-modes.md), measured with
+Checked on de_nuke against CS2 ([decision 011](../decisions/011-static-overlay-blend-modes.md), measured with
 `tools/compare/mark_contrast.py`): floor arrows and marking squares darken the floor to 0.37–0.47 of its luminance
 (CS2 0.35–0.47; 0.11–0.25 as a plain blend before), a marking's light band brightens it to 1.24 (CS2 1.24), and the
 grey veils of the scuff quads are gone.

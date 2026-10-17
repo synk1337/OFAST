@@ -1,4 +1,4 @@
-# 010 — Static overlays by their blend mode; Mod2x grime multiplies what lies under it
+# 011 — Static overlays by their blend mode; Mod2x grime multiplies what lies under it
 
 - **Date:** 2026-10-17
 - **Status:** accepted

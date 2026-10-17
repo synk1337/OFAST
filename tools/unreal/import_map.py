@@ -1513,7 +1513,7 @@ def is_decal_overlay(material):
     lit csgo_static_overlay in its Translucent blend mode (F_BLEND_MODE 1). Not the static overlays' other modes
     (OverlayBlend in ofast-core's glTF writer): 0 Opaque and 2 Alpha Test are exported as OPAQUE and MASK and keep
     Interchange's lit materials (the exporter lifts overlays 2.5 mm off their surface, so they win the depth test),
-    3 Mod2x gets the Modulate material of is_mod2x_overlay (decision 010)."""
+    3 Mod2x gets the Modulate material of is_mod2x_overlay (decision 011)."""
     if material.get("alphaMode") != "BLEND":
         return False
     ofast = material.get("extras", {}).get("ofast", {})
@@ -1647,7 +1647,7 @@ def put_overlay_decals(imported, instances):
 # before the tone curve, so values above 1 brighten). A Modulate *decal* cannot: with DBuffer decals (r.DBuffer, which
 # the overlay decals need) Unreal turns it into a plain translucent decal (FinalizeBlendDesc in
 # DecalRenderingCommon.cpp), and the DBuffer can only scale the base colour by one value from 0 to 1 and add a colour
-# (ApplyDBufferData: BaseColor x ColorOpacity + PreMulColor): no brightening, no per-channel multiply (decision 010).
+# (ApplyDBufferData: BaseColor x ColorOpacity + PreMulColor): no brightening, no per-channel multiply (decision 011).
 # Rendered before depth of field, so it is blurred with the surface it lies on.
 MOD2X_MASTER = "/Game/OFAST/Materials/M_OFAST_OverlayMod2x_v1"
 # The texture animation of an overlay (F_TEXTURE_ANIMATION; de_nuke's caustics: 60 cells of an 8 x 8 atlas, 0.05 s

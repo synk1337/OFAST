@@ -18,7 +18,7 @@ overlay_contrast.py is the counterpart for coloured overlays (road paint), picke
 
 --crop writes the boxes side by side, labelled, to look at.
 
-Used for decision 010 (docs/decisions/010-static-overlay-blend-modes.md).
+Used for decision 011 (docs/decisions/011-static-overlay-blend-modes.md).
 """
 
 import argparse
