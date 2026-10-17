@@ -1,6 +1,7 @@
 //! Model tints of CS2's prop shaders — `csgo_complex`, `csgo_vertexlitgeneric`, `csgo_foliage` and
-//! `csgo_simple_3layer_parallax`: a placement's tint colour (`rendercolor`, a scene object's tint) multiplies the
-//! colour, and with a tint mask (`F_TINT_MASK`) only where the mask is set.
+//! `csgo_simple_3layer_parallax` — and of the unlit cards (`csgo_unlitgeneric`): a placement's tint colour
+//! (`rendercolor`, a scene object's tint) multiplies the colour, and with a tint mask (`F_TINT_MASK`) only where the
+//! mask is set (`csgo_unlitgeneric` has no tint mask).
 //!
 //! Where the knowledge comes from — Valve's compiled shaders as decompiled by Source 2 Viewer and tracked in
 //! SteamDatabase's GameTracking-CS2 (`game/csgo/shaders_vulkan_dir/shaders/vfx/<shader>.slang`):
@@ -33,11 +34,12 @@ use crate::texture::Image;
 
 /// The shaders whose model tint this module reproduces (each checked in its decompiled code). Other shaders keep a
 /// plain multiply by the placement tint ([`ModelTint::plain`]).
-const SHADERS: [&str; 4] = [
+const SHADERS: [&str; 5] = [
     "csgo_complex.vfx",
     "csgo_vertexlitgeneric.vfx",
     "csgo_foliage.vfx",
     "csgo_simple_3layer_parallax.vfx",
+    "csgo_unlitgeneric.vfx",
 ];
 
 /// A material's model tint under one placement.
@@ -206,6 +208,22 @@ mod tests {
         let mut info = material("csgo_vertexlitgeneric.vfx");
         info.ints.insert("F_NOTINT".into(), 1);
         assert!(ModelTint::read(&info, [10, 20, 30]).is_white());
+    }
+
+    /// de_dust2's skybox clouds (`nuke_clouds_002`, `csgo_unlitgeneric`): `g_vColorTint` greys them, placed untinted.
+    #[test]
+    fn unlit_cards_take_the_material_tint() {
+        let info = MaterialInfo {
+            shader: "csgo_unlitgeneric.vfx".into(),
+            vectors: [("g_vColorTint".to_owned(), [0.556_863, 0.584_314, 0.6, 1.0])].into(),
+            ..Default::default()
+        };
+        let tint = ModelTint::read(&info, [255; 3]);
+        assert!(close(
+            tint.color,
+            [0.556_863, 0.584_314, 0.6].map(srgb_to_linear)
+        ));
+        assert_eq!(tint.mask, None);
     }
 
     #[test]

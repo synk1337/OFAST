@@ -370,7 +370,7 @@ translucent instances, parented to the copy). After the scene import, `light_tra
 Interchange instance of every `BLEND` material `lit_per_pixel` names from `MI_Default_Blend(_DS)` to the copy; the
 parameters are the same, so the instance keeps its textures and factors. Left out: the decal overlays above, the
 static overlays in their other blend modes (Mod2x, alpha test …; "Static overlay blend modes and Mod2x" below) and the
-unlit `csgo_unlitgeneric` cards. OFAST's environment and tint-mask
+unlit cards ("Unlit materials" below). OFAST's environment and tint-mask
 masters, whose instances can be translucent through `set_alpha_overrides`, have the per-pixel mode too. Measured in
 [decision 010](../decisions/010-translucent-decals-and-per-pixel-lighting.md): in the sun the SWAT lettering and the
 container sign were at 0.81 and 0.70 of their per-pixel luminance before; against CS2 their contrast with the
@@ -382,7 +382,7 @@ surface around them went from 0.70 and 0.68 of CS2's to 0.87 and 0.91.
 list (decompiled in GameTracking-CS2): `0="Opaque", 1="Translucent", 2="Alpha Test", 3="Mod2x", 4="Additive",
 5="Multiply", 6="ModThenAdd"`. Only modes 0–2 can be lit (`F_LIT`). The exporter reads it (`OverlayBlend` in
 `crates/ofast-core/src/export/gltf.rs`); other shaders keep their features (`csgo_unlitgeneric`'s own `F_BLEND_MODE`
-is not checked and stays `BLEND`).
+stays `BLEND` in glTF: "Unlit materials" below).
 
 | `F_BLEND_MODE` | How CS2 draws it | glTF | Unreal (`import_map.py`) |
 |---|---|---|---|
@@ -429,16 +429,57 @@ Checked on de_nuke against CS2 ([decision 011](../decisions/011-static-overlay-b
 (CS2 0.35–0.47; 0.11–0.25 as a plain blend before), a marking's light band brightens it to 1.24 (CS2 1.24), and the
 grey veils of the scuff quads are gone.
 
+## Unlit materials (`csgo_unlitgeneric`, `csgo_black_unlit`)
+
+Two CS2 shaders draw without any lighting. Valve's compiled shaders, as decompiled in GameTracking-CS2, read no
+light, lightmap or probe in their pixel code:
+
+- **`csgo_unlitgeneric`**: `colour = g_tColor × tint`, opacity = the texture's alpha × the tint's alpha, then fog
+  (`g_bFogEnabled`). The tint is the prop shaders' one, built in the vertex shader: `lerp(1, rendercolor,
+  g_flModelTintAmount) × g_vColorTint` ("Model tint of prop shaders" above; no tint mask). `F_BLEND_MODE`: 0 Opaque,
+  1 Translucent, 2 Alpha Test, 3 Mod2x, 4 Additive, 5 Multiply, 6 ModThenAdd (the feature list; only the default
+  variant's code is decompiled). `F_TWOTEXTURE` ("TwoTexture") adds a second colour texture `g_tColor2` with its own
+  UV transform (`g_vTex2Coord*`); its use is not in the default variant. OFAST takes Source 1's `UnlitTwoTexture`
+  rule, which the feature ports: the two textures multiply, colour and alpha.
+- **`csgo_black_unlit`**: black, then fog. The material has no texture.
+
+The exporter gives their glTF materials the extension **`KHR_materials_unlit`** (listed in `extensionsUsed`), keeps
+`extras.ofast` as for any material, and gives `csgo_black_unlit` a black `baseColorFactor`. Without a factor, glTF
+readers take white: Unreal drew those surfaces lit white. A two-texture card whose second texture has the default
+transform gets the product baked into its colour texture (`<texture>_two_<hash>.png`: colours multiplied in linear,
+alphas multiplied, at the larger texture's size); de_dust2's clouds' alpha goes from 0.043 on average to 0.010. Interchange imports an unlit glTF material as an instance of
+its unlit master `/InterchangeAssets/gltf/M_Unlit` (`MI_Unlit_Opaque`, `_Mask`, `_Blend`, `_DS` when two-sided),
+which takes only the base colour texture and factor. Before, they got the lit `M_Default` and were shaded by the sun.
+
+CS2's unlit colour goes into the picture as it is, before exposure and tone mapping, like the sky. One unit of CS2
+radiance is one unit of Unreal luminance with OFAST's light units (`sky_intensity` uses the same rule), so the
+instances need no scale. In the realistic style (physical sun and auto exposure) they are too dark.
+
+`import_map.py` leaves unlit materials out of the per-pixel lighting (`lit_per_pixel`). It gives the cards whose
+`F_BLEND_MODE` glTF's alpha blend cannot say an Unreal blend mode on their Interchange instance (`set_unlit_blend_modes`):
+4 Additive → Additive (Unreal adds colour × opacity). The other modes stay alpha-blended; no map exported so far
+uses them. In the 3D skybox, translucent cards keep their Interchange instance. Opaque unlit materials there get the
+lit skybox master (they need its depth offset); for `csgo_black_unlit` lit black is still black.
+
+| Map | Unlit materials (placements) |
+|---|---|
+| de_mirage | `window_illum_backing` (3, opaque: the glow behind arched windows), `black_simple` (14); `wrongway_timer` (Translucent, the Retakes stopwatch bands) only sits on `func_brush`es that start disabled, which are not exported |
+| de_dust2 | `nuke_clouds_002` (14, Additive, `F_TWOTEXTURE`, 3D skybox), `black_simple` (34) |
+| de_inferno, de_nuke, de_anubis, de_vertigo | `black_simple` (10, 41, 21, 14) |
+
+[Decision 012](../decisions/012-unlit-cards.md) has the checks against CS2.
+
 ## Other rules
 
 | Case | Handling |
 |---|---|
+| `csgo_unlitgeneric`, `csgo_black_unlit` | glTF `KHR_materials_unlit` (Interchange's unlit master); `csgo_black_unlit` black; `csgo_unlitgeneric` tinted like the prop shaders, its two textures (`F_TWOTEXTURE`) baked as their product, Additive (`F_BLEND_MODE` 4) blended additively in Unreal ("Unlit materials" above) |
 | `F_TRANSLUCENT`, `F_BLEND_MODE` (other shaders) | glTF `BLEND`; in Unreal, overlays blended with plain alpha and `csgo_complex` decals (`F_DEPTH_BIAS`) are mesh decals ("Translucent overlays" above), the other translucent surfaces are lit per pixel ("Other translucent surfaces" above) |
 | `csgo_static_overlay` | by its `F_BLEND_MODE`: `OPAQUE`, `BLEND`, `MASK`, Mod2x as `BLEND` with a Modulate material in Unreal ("Static overlay blend modes" above) |
 | `F_ALPHA_TEST` | glTF `MASK`, cut at the material's `g_flAlphaTestReference` (0.5 when not set; 0.05–0.9 on the six maps) |
 | overlays (decals, `OBJECT_TYPE_OVERLAY`) | pushed 0.1 inch along their normal so they win the depth test |
 | `csgo_effects` (dust and light-shaft cards) | not exported (they appeared as white sheets; to be rebuilt as Unreal effects) |
-| tints (`m_vTintColor`, `rendercolor`, a draw call's own tint) | material named `<name>_tintRRGGBB` (`<name>_tintRRGGBBAA` when the alpha is not full); `baseColorFactor` (sRGB → linear) when the tint covers the whole surface; environment shaders tint only their tint mask, in Unreal's material ("Model tint" above), and so do prop shaders with `F_TINT_MASK` ("Model tint of prop shaders" above); the draw call's tint multiplies the placement's first ("Draw-call tint" above) |
+| tints (`m_vTintColor`, `rendercolor`, a draw call's own tint) | a scene object's tint of (0, 0, 0, 0) is none (older 3D skyboxes, [map.md](map.md#world-node-vwnod_c-data)); material named `<name>_tintRRGGBB` (`<name>_tintRRGGBBAA` when the alpha is not full); `baseColorFactor` (sRGB → linear) when the tint covers the whole surface; environment shaders tint only their tint mask, in Unreal's material ("Model tint" above), and so do prop shaders with `F_TINT_MASK` ("Model tint of prop shaders" above); the draw call's tint multiplies the placement's first ("Draw-call tint" above) |
 | same file name in two folders | the second material is renamed `<name>_<folder>` (Unreal matches slots by name) |
 
 ## Unreal project requirement

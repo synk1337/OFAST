@@ -16,7 +16,8 @@
 //! - **Materials**: each CS2 material (× tint colour) becomes a glTF PBR material. The CS2 shader name and texture
 //!   parameters are kept in `extras.ofast` so the Unreal plugin can later build matching master materials.
 //!   Translucent and alpha-tested CS2 materials map to glTF `BLEND` / `MASK` (cut at the material's
-//!   `g_flAlphaTestReference`); `csgo_static_overlay` by its blend mode (`OverlayBlend`, private).
+//!   `g_flAlphaTestReference`); `csgo_static_overlay` by its blend mode (`OverlayBlend`, private). The shaders CS2
+//!   draws unlit (`csgo_unlitgeneric`, `csgo_black_unlit`) get `KHR_materials_unlit`.
 //! - **Textures**: see [`TextureRole`]. Textures are decoded and written as PNG at the end, in parallel; a texture
 //!   that fails to decode is replaced by a 1×1 neutral image and reported as a warning.
 //!
@@ -31,7 +32,8 @@
 //! - **Names.** A CS2 texture keeps its file name plus the role's suffix (`_normal`, `_raw`, …; `_2`, `_3` when
 //!   two differ). A texture OFAST computes for an environment material (`environment`) is named
 //!   `<texture>_cc_<hash>.png` or `<texture>_surface_<hash>.png` (a prop's colour with its masked tint baked in,
-//!   `tint`: `<texture>_tint_<hash>.png`), `<hash>` being the first 8 hex digits of its pixel
+//!   `tint`: `<texture>_tint_<hash>.png`; an unlit card's two textures multiplied: `<texture>_two_<hash>.png`),
+//!   `<hash>` being the first 8 hex digits of its pixel
 //!   hash: the same name always holds the same pixels, so a tool that imports each file name once (`import_map.py`'s
 //!   `import_texture`) never keeps a stale bake after a re-export.
 //! - **No leftovers.** After writing, PNGs that no `.gltf` in `<out>` references are deleted from `<out>/textures`
@@ -176,6 +178,9 @@ enum TextureJob {
     EnvSurface(environment::SurfaceJob),
     /// A prop shader's colour with its masked model tint baked in (`ExportOptions::bake_model_tints`).
     TintColor(tint::TintJob),
+    /// `csgo_unlitgeneric` with `F_TWOTEXTURE`: `g_tColor` × `g_tColor2` (see [`bake_two_texture`]), keeping the
+    /// alpha or not.
+    TwoTexture(String, String, bool),
 }
 
 impl TextureJob {
@@ -183,9 +188,32 @@ impl TextureJob {
     fn is_baked(&self) -> bool {
         matches!(
             self,
-            TextureJob::EnvColor(_) | TextureJob::EnvSurface(_) | TextureJob::TintColor(_)
+            TextureJob::EnvColor(_)
+                | TextureJob::EnvSurface(_)
+                | TextureJob::TintColor(_)
+                | TextureJob::TwoTexture(..)
         )
     }
+}
+
+/// The second colour texture of a `csgo_unlitgeneric` material with `F_TWOTEXTURE` ("TwoTexture"), whose colour
+/// is then `g_tColor × g_tColor2` (see [`bake_two_texture`]). Only with both textures at their default transforms
+/// (`g_vTex2CoordScale` 1, offset 0, no rotation: de_dust2's skybox clouds), as one glTF texture cannot say more.
+fn two_texture(info: &MaterialInfo) -> Option<&str> {
+    if info.shader != "csgo_unlitgeneric.vfx" || !info.flag("F_TWOTEXTURE") {
+        return None;
+    }
+    let vector =
+        |name: &str, default: [f64; 2]| info.vectors.get(name).map_or(default, |v| [v[0], v[1]]);
+    let untransformed = vector("g_vTex2CoordScale", [1.0, 1.0]) == [1.0, 1.0]
+        && vector("g_vTex2CoordOffset", [0.0, 0.0]) == [0.0, 0.0]
+        && info
+            .floats
+            .get("g_flTex2CoordRotation")
+            .is_none_or(|r| *r == 0.0);
+    untransformed
+        .then(|| info.textures.get("g_tColor2").map(String::as_str))
+        .flatten()
 }
 
 /// A registered texture (glTF texture index = position in [`GltfWriter::texture_jobs`]).
@@ -352,6 +380,11 @@ const ELEMENT_ARRAY_BUFFER: u32 = 34963;
 /// Shaders whose geometry is not exported: `csgo_effects` draws additive dust / light-shaft cards that would show
 /// up as opaque white sheets in a plain PBR material (they come back as Unreal effects later).
 const SKIPPED_SHADERS: &[&str] = &["csgo_effects.vfx"];
+
+/// Shaders CS2 draws without lighting: their pixel shaders (decompiled in GameTracking-CS2) read no light, only
+/// colour × tint and fog. Their materials get glTF's `KHR_materials_unlit`, which Unreal's Interchange imports with
+/// its unlit master (`MI_Unlit_Opaque` / `_Mask` / `_Blend`). `csgo_black_unlit` draws plain black.
+const UNLIT_SHADERS: &[&str] = &["csgo_unlitgeneric.vfx", "csgo_black_unlit.vfx"];
 
 /// Texture parameter names, in priority order, for each glTF slot.
 const COLOR_PARAMS: &[&str] = &["g_tColor", "g_tColor1", "g_tLayer1Color", "g_tColorA"];
@@ -742,6 +775,14 @@ impl<'c> GltfWriter<'c> {
             return;
         }
         self.fill_model_tint(material, info, tint, translucent || alpha_test);
+        if UNLIT_SHADERS.contains(&info.shader.as_str()) {
+            material["extensions"] = json!({ "KHR_materials_unlit": {} });
+            if info.shader == "csgo_black_unlit.vfx" {
+                // No texture: without a factor glTF readers would take white.
+                material["pbrMetallicRoughness"]["baseColorFactor"] = json!([0.0, 0.0, 0.0, 1.0]);
+            }
+            return;
+        }
 
         // CS2 shaders (csgo_*): hemi-octahedral normal in RG with roughness in B; metalness in g_tMetalness.G,
         // whose R is the roughness for weapons only (see ValveResourceFormat's complex shader). Otherwise a
@@ -828,7 +869,13 @@ impl<'c> GltfWriter<'c> {
                     );
                     self.register(TextureJob::TintColor(job), format!("{}_tint", stem(path)))
                 }
-                _ => self.texture(path, TextureRole::Color { keep_alpha }),
+                _ => match two_texture(info) {
+                    Some(second) => self.register(
+                        TextureJob::TwoTexture(path.clone(), second.to_owned(), keep_alpha),
+                        format!("{}_two", stem(path)),
+                    ),
+                    None => self.texture(path, TextureRole::Color { keep_alpha }),
+                },
             };
             material["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": id });
         }
@@ -1123,6 +1170,9 @@ impl<'c> GltfWriter<'c> {
                     TextureJob::EnvColor(job) => environment::bake_color(content, job),
                     TextureJob::EnvSurface(job) => environment::bake_surface(content, job),
                     TextureJob::TintColor(job) => tint::bake_color(content, job),
+                    TextureJob::TwoTexture(first, second, keep_alpha) => {
+                        bake_two_texture(content, first, second, *keep_alpha)
+                    }
                 }
                 .unwrap_or_else(|e| {
                     warn(&e);
@@ -1244,9 +1294,20 @@ impl<'c> GltfWriter<'c> {
             document["samplers"] =
                 json!([{ "magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497 }]);
         }
+        let mut extensions_used = Vec::new();
         if !self.lights.is_empty() {
-            document["extensionsUsed"] = json!(["KHR_lights_punctual"]);
+            extensions_used.push("KHR_lights_punctual");
             document["extensions"] = json!({ "KHR_lights_punctual": { "lights": self.lights } });
+        }
+        if self
+            .materials
+            .iter()
+            .any(|m| m["extensions"].get("KHR_materials_unlit").is_some())
+        {
+            extensions_used.push("KHR_materials_unlit");
+        }
+        if !extensions_used.is_empty() {
+            document["extensionsUsed"] = json!(extensions_used);
         }
         let gltf = self.out_dir.join(format!("{name}.gltf"));
         fs::write(
@@ -1480,6 +1541,47 @@ fn decode_texture(content: &Content, path: &str, role: TextureRole) -> Result<Im
         }
     }
     Ok(image)
+}
+
+/// `csgo_unlitgeneric`'s two-texture colour (`F_TWOTEXTURE`): `first × second`, the colours multiplied in linear
+/// (both are sRGB textures) and the alphas multiplied, at the larger texture's size (nearest sample of the smaller).
+/// The product is Source 1's `UnlitTwoTexture` rule, which the feature ports: Valve's decompiled files show only the
+/// default variant, without it. `keep_alpha` false: alpha 255, as for any opaque colour texture.
+fn bake_two_texture(
+    content: &Content,
+    first: &str,
+    second: &str,
+    keep_alpha: bool,
+) -> Result<Image, ExportError> {
+    let a = decode_raw(content, first)?.1;
+    let b = decode_raw(content, second)?.1;
+    Ok(multiply_textures(&a, &b, keep_alpha))
+}
+
+/// The texel-by-texel product of two sRGB colour textures (see [`bake_two_texture`]).
+fn multiply_textures(a: &Image, b: &Image, keep_alpha: bool) -> Image {
+    let (width, height) = if a.width * a.height >= b.width * b.height {
+        (a.width, a.height)
+    } else {
+        (b.width, b.height)
+    };
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let texel = |image: &Image, c| environment::sample(image, x, y, width, height, c);
+            for c in 0..3 {
+                let product = environment::SRGB_TO_LINEAR[usize::from(texel(a, c))]
+                    * environment::SRGB_TO_LINEAR[usize::from(texel(b, c))];
+                rgba.push(environment::linear_to_srgb(product));
+            }
+            rgba.push(if keep_alpha {
+                ((u16::from(texel(a, 3)) * u16::from(texel(b, 3)) + 127) / 255) as u8
+            } else {
+                255
+            });
+        }
+    }
+    Image::new(width, height, rgba)
 }
 
 /// Builds a glTF metallic-roughness image (R 255, G roughness, B metalness, A 255) from channels of CS2 textures,
@@ -2248,6 +2350,137 @@ mod tests {
         assert_eq!(materials[2]["name"], "hr_nuke_parkingstripe_single");
         assert!(factor(&materials[2]).is_empty());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// de_mirage's `wrongway_timer` (`csgo_unlitgeneric`, translucent) and `black_simple` (`csgo_black_unlit`, no
+    /// texture) next to a lit material: only the unlit ones get `KHR_materials_unlit`, the file declares it, and
+    /// `extras.ofast` keeps the CS2 shader.
+    #[test]
+    fn unlit_shaders_get_khr_materials_unlit() {
+        let content = Content::new();
+        let dir = temp_folder("unlit");
+        let mut writer = GltfWriter::new(&content, &dir, ExportOptions::default()).expect("writer");
+        let infos = [
+            (
+                "materials/tools/wrongway_timer.vmat",
+                "csgo_unlitgeneric.vfx",
+                Some("materials/tools/wrongway_timer_color.vtex"),
+                true,
+            ),
+            (
+                "materials/dev/black_simple.vmat",
+                "csgo_black_unlit.vfx",
+                None,
+                false,
+            ),
+            (
+                "materials/de_mirage/plaster.vmat",
+                "csgo_complex.vfx",
+                None,
+                false,
+            ),
+        ];
+        for (path, shader, color, translucent) in infos {
+            let info = MaterialInfo {
+                shader: shader.into(),
+                textures: color
+                    .map(|c| ("g_tColor".to_owned(), c.to_owned()))
+                    .into_iter()
+                    .collect(),
+                ints: [("F_BLEND_MODE".to_owned(), i64::from(translucent))].into(),
+                ..Default::default()
+            };
+            writer.material_infos.insert(path.to_owned(), Some(info));
+            writer.material(path, [1.0; 4]);
+        }
+        let report = writer.finish("unlit", Vec::new()).expect("finish");
+        let document: Json =
+            serde_json::from_str(&fs::read_to_string(&report.gltf).expect("read")).expect("JSON");
+        assert_eq!(document["extensionsUsed"], json!(["KHR_materials_unlit"]));
+        let materials = &document["materials"];
+        assert_eq!(
+            materials[0]["extensions"],
+            json!({ "KHR_materials_unlit": {} })
+        );
+        assert_eq!(materials[0]["alphaMode"], "BLEND");
+        assert_eq!(
+            materials[0]["extras"]["ofast"]["shader"],
+            "csgo_unlitgeneric.vfx"
+        );
+        assert_eq!(
+            materials[1]["extensions"],
+            json!({ "KHR_materials_unlit": {} })
+        );
+        assert_eq!(
+            materials[1]["pbrMetallicRoughness"]["baseColorFactor"],
+            json!([0.0, 0.0, 0.0, 1.0])
+        );
+        assert!(materials[2].get("extensions").is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// de_dust2's skybox clouds (`nuke_clouds_002`): `csgo_unlitgeneric` with `F_TWOTEXTURE` draws the product of its
+    /// two cloud textures, baked into one colour texture.
+    #[test]
+    fn two_texture_cards_bake_the_product_of_their_textures() {
+        let mut info = MaterialInfo {
+            shader: "csgo_unlitgeneric.vfx".into(),
+            textures: [
+                ("g_tColor", "materials/clouds_003_color.vtex"),
+                ("g_tColor2", "materials/clouds_001_color.vtex"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .into(),
+            ints: [
+                ("F_BLEND_MODE".to_owned(), 4),
+                ("F_TWOTEXTURE".to_owned(), 1),
+            ]
+            .into(),
+            vectors: [("g_vTex2CoordScale".to_owned(), [1.0, 1.0, 0.0, 0.0])].into(),
+            ..Default::default()
+        };
+        assert_eq!(two_texture(&info), Some("materials/clouds_001_color.vtex"));
+        let content = Content::new();
+        let dir = temp_folder("two-texture");
+        let mut writer = GltfWriter::new(&content, &dir, ExportOptions::default()).expect("writer");
+        let mut material = json!({});
+        writer.fill_material(&mut material, &info, [255; 4]);
+        assert_eq!(material["alphaMode"], "BLEND");
+        let job = &writer.texture_jobs[material["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+            .as_u64()
+            .expect("colour texture") as usize];
+        assert_eq!(
+            job.job,
+            TextureJob::TwoTexture(
+                "materials/clouds_003_color.vtex".into(),
+                "materials/clouds_001_color.vtex".into(),
+                true
+            )
+        );
+        // A second texture moved or scaled is not the same UV: no bake, the first texture alone.
+        info.vectors
+            .insert("g_vTex2CoordScale".into(), [2.0, 2.0, 0.0, 0.0]);
+        assert_eq!(two_texture(&info), None);
+        info.vectors.clear();
+        info.ints.remove("F_TWOTEXTURE");
+        assert_eq!(two_texture(&info), None);
+        let _ = fs::remove_dir_all(&dir);
+
+        // White clouds: the colour stays white, the alphas multiply; the smaller texture is sampled at the larger size.
+        let a = Image::new(2, 1, vec![255, 255, 255, 128, 255, 255, 255, 255]);
+        let b = Image::new(1, 1, vec![255, 255, 255, 64]);
+        let product = multiply_textures(&a, &b, true);
+        assert_eq!((product.width, product.height), (2, 1));
+        assert_eq!(product.rgba, vec![255, 255, 255, 32, 255, 255, 255, 64]);
+        // Colours multiply in linear: mid grey (sRGB 188 ≈ linear 0.5) times itself is linear 0.25 (sRGB 137).
+        let grey = Image::new(1, 1, vec![188, 188, 188, 255]);
+        let squared = multiply_textures(&grey, &grey, false);
+        assert!(
+            squared.rgba[..3].iter().all(|&c| (136..=138).contains(&c)),
+            "{:?}",
+            squared.rgba
+        );
+        assert_eq!(squared.rgba[3], 255);
     }
 
     #[test]

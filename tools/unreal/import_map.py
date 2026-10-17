@@ -21,7 +21,8 @@ OFAST's instances and textures no export uses any more are deleted: delete_unuse
 (grime, scuffs: a Modulate material multiplying what lies under them, mod2x_instances) → translucent overlays
 (road paint, signs, csgo_complex decals) as mesh decals, lit with the surface under them as in CS2
 (put_overlay_decals) → the other translucent surfaces (glass, fence and foliage cards) lit per pixel
-(light_translucent_per_pixel) → light blockers hidden and
+(light_translucent_per_pixel) → unlit cards in CS2's additive mode made additive (set_unlit_blend_modes; Interchange
+gives KHR_materials_unlit materials its unlit master) → light blockers hidden and
 shadow proxies added (no sunlight through single-sided walls) → 3D skybox drawn behind the world → CS2's environment from the manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
 exposure, CS2's tone curve (straight or Hable) and colour-correction table (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
 default field of view → screenshots → quit. Everything the script adds is tagged "OFAST" and rebuilt on every run.
@@ -1762,11 +1763,22 @@ def lit_per_pixel(material):
       Alpha Test are exported as OPAQUE and MASK, Additive / Multiply / ModThenAdd are on none of the maps checked
       (decision 011). Per pixel, de_nuke's Mod2x scuff on a shaded pillar got darker still, where CS2 barely changes
       the pillar (decision 010);
-    - csgo_unlitgeneric: unlit in CS2 (exported without KHR_materials_unlit yet)."""
+    - an unlit material (KHR_materials_unlit: csgo_unlitgeneric cards, decision 012): Interchange gives it its unlit
+      master (MI_Unlit_Blend), which has no lighting to change."""
     if material.get("alphaMode") != "BLEND" or is_decal_overlay(material):
+        return False
+    if "KHR_materials_unlit" in material.get("extensions", {}):
         return False
     shader = material.get("extras", {}).get("ofast", {}).get("shader")
     return shader not in ("csgo_static_overlay.vfx", "csgo_unlitgeneric.vfx")
+
+
+def interchange_instance(name):
+    """The material instance Interchange's scene import made for the glTF material `name`, or None."""
+    for path in (INTERCHANGE_FOLDER + "/Materials/" + name, INTERCHANGE_FOLDER + "/Materials/MI_" + name):
+        if unreal.EditorAssetLibrary.does_asset_exist(path):
+            return unreal.EditorAssetLibrary.load_asset(path)
+    return None
 
 
 def light_translucent_per_pixel(skip):
@@ -1784,13 +1796,10 @@ def light_translucent_per_pixel(skip):
     copies = {copy.get_path_name(): source for source, copy in parents.items()}  # OFAST copy -> Interchange's
     changed = kept = restored = 0
     for name, per_pixel in sorted(wanted.items()):
-        for path in (INTERCHANGE_FOLDER + "/Materials/" + name, INTERCHANGE_FOLDER + "/Materials/MI_" + name):
-            if unreal.EditorAssetLibrary.does_asset_exist(path):
-                break
-        else:
+        instance = interchange_instance(name)
+        if instance is None:
             log("translucent per pixel: no Interchange material for %s" % name)
             continue
-        instance = unreal.EditorAssetLibrary.load_asset(path)
         parent = instance.get_editor_property("parent")
         parent = parent.get_path_name() if parent else ""
         if per_pixel and parent in copies:
@@ -1968,6 +1977,49 @@ def mod2x_instances():
     if instances:
         log("Mod2x overlays: %d materials (%d animated)" % (len(instances), animated))
     return instances
+
+
+# csgo_unlitgeneric's blend modes (F_BLEND_MODE; its feature list in GameTracking-CS2: 0 Opaque, 1 Translucent,
+# 2 Alpha Test, 3 Mod2x, 4 Additive, 5 Multiply, 6 ModThenAdd) that glTF's BLEND cannot say, as the Unreal blend mode
+# of the material's Interchange instance (a child of MI_Unlit_Blend). Only Additive occurs on the maps exported so
+# far: de_dust2's 3D-skybox clouds, which CS2 adds onto the sky (decision 012). Unreal's additive mode adds the colour
+# times the opacity, the texture's alpha.
+UNLIT_BLEND_MODES = {4: unreal.BlendMode.BLEND_ADDITIVE}
+
+
+def unlit_blend_mode(material):
+    """The Unreal blend mode an unlit translucent glTF material (KHR_materials_unlit) needs instead of plain alpha
+    blending, or None."""
+    if "KHR_materials_unlit" not in material.get("extensions", {}) or material.get("alphaMode") != "BLEND":
+        return None
+    ints = material.get("extras", {}).get("ofast", {}).get("ints", {})
+    return UNLIT_BLEND_MODES.get(ints.get("F_BLEND_MODE"))
+
+
+def set_unlit_blend_modes():
+    """Gives the Interchange instance of every material with an unlit_blend_mode that mode (base property override),
+    written only when it changes. Runs after the scene import (Interchange makes the instances). Returns the number of
+    instances with such a mode."""
+    with open(GLTF) as f:
+        document = json.load(f)
+    count = 0
+    for material in document.get("materials", []):
+        mode = unlit_blend_mode(material)
+        if mode is None:
+            continue
+        instance = interchange_instance(material["name"])
+        if instance is None:
+            log("unlit blend mode: no Interchange material for %s" % material["name"])
+            continue
+        overrides = instance.get_editor_property("base_property_overrides")
+        if not overrides.get_editor_property("override_blend_mode") or overrides.get_editor_property("blend_mode") != mode:
+            overrides.set_editor_property("override_blend_mode", True)
+            overrides.set_editor_property("blend_mode", mode)
+            instance.set_editor_property("base_property_overrides", overrides)
+            unreal.MaterialEditingLibrary.update_material_instance(instance)
+            CHANGED_INSTANCES.add(instance.get_path_name())
+        count += 1
+    return count
 
 
 # Lumen carries less bounce light than CS2's path-traced lightmaps. Measured compensation on top of CS2's own bounce
@@ -2689,6 +2741,10 @@ def main():
     if changed or kept or restored:
         log("translucent per pixel: %d Interchange materials re-parented, %d already were, %d given back to "
             "Interchange's parent" % (changed, kept, restored))
+    # Unlit cards (KHR_materials_unlit, Interchange's unlit master) in CS2's additive mode: de_dust2's skybox clouds.
+    unlit = set_unlit_blend_modes()
+    if unlit:
+        log("unlit blend modes: %d Interchange materials additive" % unlit)
     # Sunlight must not leak into interiors: CS2's light blockers and two-sided shadows for single-sided walls.
     hide_light_blockers(imported)
     add_shadow_proxies(imported)
