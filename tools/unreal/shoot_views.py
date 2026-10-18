@@ -20,9 +20,11 @@ Inputs (environment variables):
                    "proxies": properties of the shadow proxies
                    (in these three groups, "visible": false hides and "material": "/Game/..." replaces every slot)
                    "post": PostProcessSettings fields (set with their override flag)
-                   "console": console commands run before shooting, e.g. ["ShowFlag.Lighting 0"] (base colour only,
-                              to compare with CS2's mat_fullbright 1; Unreal then skips the manual exposure, so
-                              the base colour goes through OFAST's tone mapper at exposure 1)
+                   "console": console commands run before shooting, e.g. ["ShowFlag.Lighting 0",
+                              "ShowFlag.Specular 0"] (base colour only, to compare with CS2's mat_fullbright 1;
+                              Unreal then skips the manual exposure, so the base colour goes through OFAST's tone
+                              mapper at exposure 1). Without ShowFlag.Specular 0 Unreal's unlit view adds 0.45 x the
+                              specular colour (0.018 - 0.036 linear) to the base colour (docs/formats/lighting.md)
                    "materials": material asset path -> properties of that material, recompiled in memory (shader
                                 compilation can take minutes); an enum property takes the value's name, e.g.
                                 {"/InterchangeAssets/gltf/M_Default":

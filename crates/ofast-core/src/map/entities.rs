@@ -36,6 +36,17 @@ impl Entity {
         })
     }
 
+    /// An entity from (key, value) pairs, for tests elsewhere in the crate.
+    #[cfg(test)]
+    pub(crate) fn from_pairs(pairs: &[(&str, Value)]) -> Self {
+        Self {
+            properties: pairs
+                .iter()
+                .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
+                .collect(),
+        }
+    }
+
     /// Raw property value.
     pub fn get(&self, key: &str) -> Option<&EntityValue> {
         self.properties.get(&key.to_ascii_lowercase())
