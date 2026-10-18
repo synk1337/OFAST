@@ -11,7 +11,8 @@ the same setpos / setang), scaled to 1920 x 1080 here:
   between A and B, inside the box (fractions of the frame: left, top, right, bottom; default the whole frame),
   opened by one pixel to drop noise. The rest of the box is the "ground", the opaque surface around it: choose the
   box so that it holds little else.
-- --albedo: the base-colour render of the same view (shoot_views.py -Try with "console": ["ShowFlag.Lighting 0"]).
+- --albedo: the base-colour render of the same view (shoot_views.py -Try with "console": ["ShowFlag.Lighting 0",
+  "ShowFlag.Specular 0"]; without the second, Unreal's unlit view adds 0.45 x the specular colour).
 - label=render: the lit renders to measure.
 
 For every lit render the script prints the light factor of the surface and of the ground (mean linear luminance

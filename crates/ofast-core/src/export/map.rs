@@ -566,6 +566,11 @@ struct LocalLight<'a> {
     /// `directlight`: 0 none (the light only adds bounce to the bake), 1 baked, 2 dynamic, 3 stationary
     /// (`lights_base.fgd`, `lights2.fgd`).
     direct: i32,
+    /// Hammer's "Bake Specular to Cubemaps" (`bakespeculartocubemaps`, `lights2.fgd`): a baked light's highlight is
+    /// rendered into the cubemaps, at `bakespeculartocubemaps_scale`. A baked light has no other specular: CS2's
+    /// lightmaps carry diffuse light only, and its direct specular is drawn for stationary and dynamic lights alone.
+    bake_specular: bool,
+    bake_specular_scale: f32,
     brightness: f32,
     brightnessscale: f32,
 }
@@ -640,8 +645,11 @@ impl<'a> LocalLight<'a> {
             },
             bounce: entity.number("bouncescale").unwrap_or(1.0),
             skirt: entity.number("skirt").unwrap_or(0.1).clamp(0.0, 1.0),
-            // Only 0 changes how the light is rebuilt; a missing key is a light that lights directly.
-            direct: entity.number("directlight").map_or(1, |v| v as i32),
+            // A missing key is lights2.fgd's default, 3 (stationary: direct light at run time).
+            direct: entity.number("directlight").map_or(3, |v| v as i32),
+            // light_barn stores 0 none / 1 rectangle / 2 disk, the other classes a boolean.
+            bake_specular: entity.flag("bakespeculartocubemaps").unwrap_or(false),
+            bake_specular_scale: entity.number("bakespeculartocubemaps_scale").unwrap_or(1.0),
             brightness,
             brightnessscale,
         })
@@ -703,8 +711,12 @@ impl<'a> LocalLight<'a> {
             "skirt": self.skirt,
             "source_radius": cm(self.radius),
             "indirect_intensity": self.bounce,
-            // CS2's directlight: 0 = no direct light (the light only adds bounce to CS2's bake).
+            // CS2's directlight: 0 = no direct light (the light only adds bounce to CS2's bake), 1 = baked (no
+            // specular of its own), 2 = dynamic, 3 = stationary.
             "direct": self.direct,
+            // A baked light's highlight in CS2's cubemaps ("Bake Specular to Cubemaps"), and its scale.
+            "bake_specular": self.bake_specular,
+            "bake_specular_scale": self.bake_specular_scale,
         });
         match self.shape {
             LightShape::Point => light["shape"] = json!("point"),
@@ -731,6 +743,10 @@ fn unreal_rotator(angles: [f32; 3]) -> [f32; 3] {
 
 /// Sun (`light_environment`) settings for the manifest. Its `brightness` is a plain linear multiplier (unlike local
 /// lights), so the Unreal illuminance is brightness × brightnessscale × [`LUX_PER_UNIT`].
+///
+/// `direct` is its `directlight` (`lights_base.fgd`: 0 none, 1 baked, 3 stationary, 2 dynamic; 2 when missing). A
+/// baked sun (every official map checked but de_cache) is in CS2's lightmaps, which carry diffuse light only: CS2
+/// draws no sun highlight on those maps.
 fn sun_manifest(sun: &Entity) -> Json {
     let brightness = sun.number("brightness").unwrap_or(1.0);
     let scale = sun.number("brightnessscale").unwrap_or(1.0);
@@ -744,6 +760,8 @@ fn sun_manifest(sun: &Entity) -> Json {
         "source_angle": sun.number("angulardiameter").unwrap_or(1.0),
         // How much the sun's bounce light was scaled in CS2's bake ≈ Unreal's Indirect Lighting Intensity.
         "indirect_intensity": sun.number("bouncescale").unwrap_or(1.0),
+        // CS2's directlight: 1 = baked into the lightmaps (no highlight), 2 / 3 = drawn per pixel (with one).
+        "direct": sun.number("directlight").map_or(2, |v| v as i32),
     })
 }
 
@@ -1068,5 +1086,51 @@ mod tests {
     fn lut_strip_rejects_a_wrong_size() {
         assert!(lut_strip(32, &[0; 32 * 32 * 4]).is_none());
         assert!(lut_strip(1, &[0; 4]).is_none());
+    }
+
+    #[test]
+    fn manifest_says_how_cs2_draws_each_lights_specular() {
+        use crate::kv3::Value;
+        let light = |class: &str, extra: Vec<(&str, Value)>| {
+            let mut pairs = vec![("classname", Value::String(class.into()))];
+            pairs.extend(extra);
+            LocalLight::from_entity(&Entity::from_pairs(&pairs))
+                .expect("a light class")
+                .manifest()
+        };
+        // de_mirage's lights: baked, nothing in the cubemaps (light_rect / light_omni2 store a boolean).
+        let rect = light(
+            "light_rect",
+            vec![
+                ("directlight", Value::String("1".into())),
+                ("bakespeculartocubemaps", Value::Bool(false)),
+            ],
+        );
+        assert_eq!(rect["direct"], json!(1));
+        assert_eq!(rect["bake_specular"], json!(false));
+        // light_barn stores a choice: 2 = a disk baked into the cubemaps.
+        let barn = light(
+            "light_barn",
+            vec![
+                ("directlight", Value::String("1".into())),
+                ("bakespeculartocubemaps", Value::String("2".into())),
+                ("bakespeculartocubemaps_scale", Value::Float(0.5)),
+            ],
+        );
+        assert_eq!(barn["bake_specular"], json!(true));
+        assert_eq!(barn["bake_specular_scale"], json!(0.5));
+        // Without the key: lights2.fgd's default, stationary.
+        assert_eq!(light("light_omni2", vec![])["direct"], json!(3));
+
+        let sun = |extra: Vec<(&str, Value)>| {
+            let mut pairs = vec![("classname", Value::String("light_environment".into()))];
+            pairs.extend(extra);
+            sun_manifest(&Entity::from_pairs(&pairs))
+        };
+        assert_eq!(
+            sun(vec![("directlight", Value::String("1".into()))])["direct"],
+            json!(1)
+        );
+        assert_eq!(sun(vec![])["direct"], json!(2));
     }
 }
