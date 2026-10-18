@@ -162,8 +162,8 @@ picture, while without them the T spawn reads 1.09, its hall floor 1.18 and its 
 predicted light (205 shaded floor pixels), CS2's hall-floor light is ≈ 0.65 × (Unreal without the lamps) + 0.07 ×
 (the frustum without cookie): next to nothing. The lamp's fixture (`constructionlight`, 3 units above the origin)
 does not enclose it, and the hall floor lies inside each lamp's precomputed box. Yet de_nuke's garage, lit by 14
-static flashlight lamps (EV 2.7, size 10 10 0.23), reads 1.29 with plain rects, 0.50 as cookie spots and 0.13
-without them (what-ifs on the saved de_nuke level): there CS2 does light them. The only key that tells the two sets
+static flashlight lamps (EV 2.7, size 10 10 0.23), reads 1.31 with plain rects, 0.50 as cookie spots and 0.13
+without them (what-ifs on the saved de_nuke level, shot twice): there CS2 does light them. The only key that tells the two sets
 apart is **`skirt_near`** ("Near Falloff"): 0 on all 48 static barn lights of de_vertigo, 0.1 on de_nuke's (the
 run-time shader skips a near fade of 0; a bake that divides by it would lose the light). Other maps with static
 barn lights at `skirt_near` 0: de_overpass 21, de_train 6, de_anubis 5, de_inferno 1 — none in a checked view yet.
