@@ -118,6 +118,97 @@ fn locomotion_graphs_read() {
     }
 }
 
+/// The main graph and the weapon graphs give each weapon's idle, shoot, draw and reload clips.
+#[test]
+fn weapon_clips_found_in_the_graphs() {
+    use ofast_core::anim::graph::Graph;
+    use ofast_core::anim::weapon::WeaponClips;
+    let install = Cs2Install::locate().expect("CS2 install found");
+    let vpk = Vpk::open(install.main_vpk()).expect("pak01_dir.vpk opens");
+    let graph = |path: &str| {
+        let bytes = vpk
+            .read_path(&format!("{path}_c"))
+            .unwrap_or_else(|e| panic!("{path}: {e}"));
+        Graph::parse(
+            &Resource::parse(&bytes)
+                .unwrap()
+                .kv3(BlockKind::DATA)
+                .unwrap()
+                .root,
+        )
+    };
+    let main = graph("animation/graphs/worldmodel/worldmodel.vnmgraph").expect("main graph");
+    let name = |path: &String| path.rsplit('/').next().unwrap_or_default().to_owned();
+    for weapon in [
+        "weapon_ak47",
+        "weapon_m4a1",
+        "weapon_glock",
+        "weapon_knife",
+        "weapon_hegrenade",
+        "weapon_awp",
+    ] {
+        let clips = WeaponClips::find(&main, weapon, |p| graph(p)).expect("weapon clips");
+        println!(
+            "{weapon}: {:?}, idle {:?}, shoot {:?}, draw {:?}, reload {:?}",
+            clips.category,
+            clips.idle.iter().map(name).collect::<Vec<_>>(),
+            clips.shoot.iter().map(name).collect::<Vec<_>>(),
+            clips.draw.iter().map(name).collect::<Vec<_>>(),
+            clips.reload.iter().map(name).collect::<Vec<_>>()
+        );
+        assert!(clips.category.is_some(), "{weapon} has a category");
+    }
+    // Which locomotion set each category runs with: the main graph's locomotion state machine.
+    let machine = main
+        .find("SM0/Locomotion/locomotion")
+        .expect("locomotion state machine");
+    for category in ofast_core::anim::weapon::CATEGORIES {
+        let ids = |p: &str| (p == "weapon_category").then(|| category.to_owned());
+        let state = main.select_state(machine, &ids);
+        println!(
+            "{category}: locomotion {:?}",
+            state.map(|s| main.paths[s].clone())
+        );
+    }
+    let ak = WeaponClips::find(&main, "weapon_ak47", |p| graph(p)).unwrap();
+    assert_eq!(ak.category.as_deref(), Some("weapon_category_rifle"));
+    assert!(ak.idle.iter().any(|p| p.ends_with("/idle_ak.vnmclip")));
+    assert!(ak.shoot.iter().any(|p| p.ends_with("/shoot_ak.vnmclip")));
+    assert!(ak.draw.iter().any(|p| p.ends_with("/draw_ak.vnmclip")));
+    assert!(ak.reload.iter().any(|p| p.ends_with("/reload_ak.vnmclip")));
+}
+
+/// `items_game.txt` names the weapons the demos report by index, with the names the animation graphs select on.
+#[test]
+fn item_names_read() {
+    let install = Cs2Install::locate().expect("CS2 install found");
+    let vpk = Vpk::open(install.main_vpk()).expect("pak01_dir.vpk opens");
+    let text = String::from_utf8(vpk.read_path("scripts/items/items_game.txt").unwrap()).unwrap();
+    let names = ofast_core::items::item_names(&text);
+    println!("{} item names", names.len());
+    for (index, name) in [
+        (1, "weapon_deagle"),
+        (4, "weapon_glock"),
+        (7, "weapon_ak47"),
+        (16, "weapon_m4a1"),
+        (42, "weapon_knife"),
+        (44, "weapon_hegrenade"),
+        (49, "weapon_c4"),
+        (59, "weapon_knife_t"),
+        (60, "weapon_m4a1_silencer"),
+        (61, "weapon_usp_silencer"),
+    ] {
+        assert_eq!(
+            names.get(&index).map(String::as_str),
+            Some(name),
+            "item {index}"
+        );
+    }
+    for index in [509, 514] {
+        println!("  {index}: {:?}", names.get(&index));
+    }
+}
+
 #[test]
 fn every_clip_decodes() {
     let install = Cs2Install::locate().expect("CS2 install found");

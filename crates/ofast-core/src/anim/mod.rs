@@ -15,17 +15,33 @@
 //! bones named like a clip bone take that bone's *model-space* pose, the others follow their parent at bind pose,
 //! then each bone's local transform is taken back from those world poses.
 //!
-//! Additive clips (`m_bIsAdditive`: per-weapon idles, shoot, flinch, breathing) store deltas over another pose and
-//! are not composed here yet; [`Clip::is_additive`] tells them apart.
+//! Additive clips (`m_bIsAdditive`: per-weapon idles, shoot, flinch, breathing) store deltas over another pose;
+//! [`Clip::is_additive`] tells them apart and [`layers::add_layer`] applies them.
 //!
-//! Knowledge from ValveResourceFormat (MIT; `ModelAnimation2/AnimationClip.cs`, `SkeletonRetargeter.cs`), checked on
-//! local CS2 files; independent implementation. Details: `docs/formats/animation.md`.
+//! # Modules
+//!
+//! | Module | What |
+//! |---|---|
+//! | [`graph`] | reading a compiled graph and evaluating its state entry conditions |
+//! | [`locomotion`] | the ground locomotion blends of `worldmodel_locomotion.vnmgraph` |
+//! | [`weapon`] | a weapon's idle, shoot, draw and reload clips, found through the main and weapon graphs |
+//! | [`layers`] | bone masks, additive and model-space layers |
+//! | [`aim`] | CS2's aim node, rebuilt: spine, weapon, hand IK |
+//! | [`bake`] | each player's pose over a round from the demo's rig inputs |
+//!
+//! Knowledge from ValveResourceFormat (MIT; `ModelAnimation2/AnimationClip.cs`, `SkeletonRetargeter.cs`, the
+//! AnimGraph runtime and `Gameplay/AimCS.cs`), checked on local CS2 files; independent implementation. Details:
+//! `docs/formats/animation.md`.
 
+pub mod aim;
 pub mod bake;
 mod clip;
+pub mod graph;
+pub mod layers;
 pub mod locomotion;
 mod retarget;
 mod skeleton;
+pub mod weapon;
 
 pub use clip::{Clip, TrackSettings};
 pub use locomotion::Locomotion;

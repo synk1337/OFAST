@@ -130,13 +130,62 @@ clip's own speed from its feet (a planted ankle slides back under the body): 130
 for the walks, below the 225 and 136 the blends place them at. Either the feet slide a little in CS2 too, or the
 estimate (ankle within 1.5 inches of its lowest) is rough; not checked yet.
 
+## The main graph's upper body (`worldmodel.vnmgraph`)
+
+The root of the main graph is a stack (`crates/ofast-core/src/anim/{graph,layers,weapon,aim}.rs`):
+
+```text
+Snap Weapon                          wpn onto hand_R, left hand IK (not rebuilt)
+└ Layer Blend (model space)          + flashed (not rebuilt)
+  └ Aim IK (CNmAimCSNode)            procedural aim, rebuilt in anim::aim
+    └ Foot IK                        (not rebuilt)
+      └ Layer Blend
+          base: SM0 → Locomotion = Layer Blend(locomotion set, + Idle Poses (additive, UpperBody))
+          + Weapons        (model space, UpperBody): the weapon's own graph — draw, reload, silencer, knife attacks
+          + Defuse         (model space)
+          + BodyAdditives  (additive): breathing, jump start / land
+          + Weapon Shoot   (additive, UpperBody): shoot_<weapon>
+          + Body / Head / Fire flinches (additive)
+```
+
+States are selected by ID parameters: `weapon_category` (`weapon_category_rifle`, `_pistol`, `_knife`, `_smg`,
+`_shotgun`, `_sniper`, `_machinegun`, `_grenade`, `_equipment`), `weapon_type` (the item's name in
+`scripts/items/items_game.txt`: `weapon_ak47`, `weapon_m4a1` for the M4A4, `weapon_knife` for the CT knife…),
+`action` (`action_idle`, `_deploy`, `_attack`…), `attack_type`. `anim::graph::Graph` reads a graph's nodes and
+evaluates state entry conditions (ID comparisons with and / or / not) for given values; `anim::weapon::WeaponClips`
+walks Idle Poses, Weapon Shoot and Weapons to a weapon's clips, e.g. for `weapon_ak47`: `idle_ak` / `idle_crouch_ak`
+(additive), `shoot_ak` (additive), `draw_ak` / `draw_crouch_ak` and `reload_ak` / `reload_crouch_ak` (from
+`worldmodel_gun.vnmgraph+ak47`). The locomotion set follows the category: pistols → pistol, knives and grenades →
+knife, rifles, SMGs, shotguns, snipers and machine guns → rifle (equipment matches no state).
+
+**Additive clips** store per-bone deltas in the bone's own frame: the delta rotation multiplies the base on the right
+(`base × delta`), translations and scales add (scale deltas from 0). Checked: `idle_ak` over the rifle set's
+`idle_rifle` gives its shipped `idle_ak.vnmclip+non_additive` within 0.04° (`examples/additive_probe.rs`); the CT
+knife's `idle_default_ct` is all identity (the knife set's carry is already right).
+
+**Bone masks** (`.vnmskel` `m_maskDefinitions`): `UpperBody` lists `spine_0` and the weapon bones (`wpn`,
+`wpnPivot`, `wpnTip`, `wpnEnd`, `wpnHand_L`, `wpnHand_R`) at 1; every other bone takes its nearest listed ancestor's
+weight, so the spine, arms, head and weapon get 1 and the pelvis and legs 0. **Model-space layers** blend each masked
+bone's model-space rotation towards the layer's and recompute its local rotation under the already blended parent.
+
+**Aim** (`CNmAimCSNode`, engine code, rebuilt from Source 2 Viewer's reconstruction): the view yaw relative to the
+body (−89 … 89°, remapped into −55 … 65°) turns `spine_0 … 3` about the up axis by 0.1 / 0.2 / 0.3 / 0.4 of it; the
+pitch (positive down) bends the spine about each bone's local Z by 0.125 / 0.225 / 0.25 / 0.4 of a per-category range
+(rifles −25.5 … 25°) and the neck / head by 0.35 / 0.65 of another (rifles −35 … 20°); the weapon pivot moves onto
+`spine_3`; knives pitch the pivot, rifles and pistols pitch the weapon, shift it at extreme pitches and turn the
+barrel onto the aim direction; rifles turn the head towards the muzzle; a two-bone IK puts the hands on the weapon's
+hand bones (not the left hand for knives and grenades). Draws and reloads pull the pitch towards level over 0.4 s and
+release the hands (CS2 releases them by clip events, not read here).
+
 ## Each player's animation (`anim::bake`, `export::players`)
 
-For every tick a player is alive: the weapon in hand picks the set (rifles, SMGs, shotguns, machine guns and snipers
-→ rifle; pistols and the Zeus → pistol; knives — and, an assumption not yet checked in CS2, grenades, the C4 and
-empty hands → knife), the velocity is turned into the body's frame by the body yaw, and the set's blend gives the
-clips, weights and cycle length; the phase advances by the tick. Poses are sampled at 30 fps from the round's first
-tick, retargeted onto the team's agent and written as one glTF per team:
+For every tick a player is alive: the weapon in hand (item index → name → category, from `items_game.txt` and the
+main graph) picks the locomotion set, the velocity is turned into the body's frame by the body yaw, and the set's
+blend gives the clips, weights and cycle length; the phase advances by the tick. Over that: the weapon's additive
+idle pose (blended by crouch), its draw or reload clip in model space while the weapon's gameplay state is 11 or
+800 / 801 (from the state's first tick, fading in over 0.15 s and out over 0.25 s), its additive shot from each tick
+the state enters 100 or 101, and the aim from the eye angles and body yaw. Poses are sampled at 30 fps from the
+round's first tick, retargeted onto the team's agent and written as one glTF per team:
 
 ```bash
 ofast export-demo match.dem --round 5 --out exports/demos --players
@@ -178,6 +227,15 @@ each player's animation on an agent actor moved along the replay's positions and
   (CS2's carries the history before the round, OFAST's starts at the round's first tick), and the arms differ: CS2's
   weapon layers (knife and grenade in hand, the reaching arm) are not baked yet. In the killers' views the
   Terrorists show as Phoenix agents. Side by side: `test-data/shots/replay_r5/compare_locomotion_r5.png`.
+- **Weapon layers and aim against CS2** (2026-10-18, M4.4b), through players' eyes in the same round
+  (`test-data/shots/replay_r5b/compare_rifles_r5.png`): P1 drawing his M4A4 at tick 25824, seen from the front by a
+  teammate, holds his hands together at the chest as in CS2, and so does the CT beside him; bad_klan firing his
+  M4A4 at tick 27664, seen from the front by XANTARES, stands in the same rifle hold with both arms raised forward,
+  but CS2's hands sit higher, at the sights, and its head drops onto the gun while OFAST's stays upright. The knife
+  runners of ticks 26508 – 26528 barely change (`compare_layers_r5.png`): the CT knife's idle pose is the identity,
+  and CS2's more upright knife run is not explained yet.
+- `tests/cs2_anim.rs` `weapon_clips_found_in_the_graphs` finds every tested weapon's clips and category through the
+  graphs; `item_names_read` reads 2059 item names from `items_game.txt`.
 - `tests/cs2_anim.rs` `locomotion_graphs_read`: the three locomotion graphs give the blends above (17 standing and
   9 crouched points, `run_n` at 225, all clips decoded); `tests/cs2_demo.rs` `players_export_one_animation_per_player`:
   round 1 exports one animation per player, 30 fps over the whole round.
@@ -187,5 +245,8 @@ each player's animation on an agent actor moved along the replay's positions and
 - **Additive clips**: composing a delta onto a base pose (for the weapon idle, shoot and flinch layers).
 - **Secondary clips** (weapon parts) are decoded but not exported.
 - **Events and sync tracks** are not read (the locomotion blends share one phase instead).
-- **The rest of the graphs**: weapon layers and actions (`worldmodel_gun`, `_knife`, `_grenade`), aim, the
-  locomotion graph's start, stop, turn, jump, air and ladder states.
+- **The rest of the graphs**: knife attacks, grenade throws, planting and defusing, the silencer, breathing,
+  flinches, the flashed layer, foot IK, the weapon snap; the locomotion graph's start, stop, turn, jump, air and
+  ladder states. The aim's weapon drop, C4-planting fade, and tilt and roll off to the side.
+- **Clip events** (`WPN_DISABLE_HAND_IK`, `WPN_IK_ACTION_ENDING`…) that time CS2's hand IK and action blends: OFAST
+  releases the hands for a whole draw or reload instead.

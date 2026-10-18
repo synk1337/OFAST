@@ -136,8 +136,14 @@ player and round.
   (`ofast export-demo --players`: one glTF per team), played in Unreal on agent actors moved by the replay; round 5
   checked through a player's eyes against CS2 (positions, facing and stride match; arms differ).
   [animation.md](formats/animation.md#locomotion-graph-worldmodel_locomotionvnmgraph).
-- [ ] M4.4b Weapon layers and aim: weapon idle / shoot / reload / deploy (additive clips, `worldmodel_gun` and
-  friends), procedural aim on the spine; the locomotion graph's starts, stops, turns on the spot, jumps and ladders.
+- [x] **M4.4b Weapon layers and aim**: each weapon's clips found by walking CS2's main and weapon graphs (names
+  from `items_game.txt`); its additive idle pose, draw and reload (model space, upper-body mask) and additive shots
+  over the locomotion; CS2's aim node rebuilt (spine yaw and pitch, weapon pitch and barrel alignment, two-bone hand
+  IK). Checked through players' eyes against CS2: a rifle draw matches, a rifle firing stance is close (CS2's hands
+  sit higher and its head drops to the sights). [animation.md](formats/animation.md#the-main-graphs-upper-body-worldmodelvnmgraph).
+- [ ] M4.4c The rest of the graph: knife attacks, grenade throws, planting and defusing, the locomotion graph's
+  starts, stops, turns on the spot, jumps and ladders, clip events (hand IK timing), and why CS2's knife run stands
+  more upright.
 - [ ] M4.5 Weapons in hand (weapon skeletal mesh on `weapon_hand_R`), each player's agent, knife and gloves from the
   demo's model hashes.
 - [ ] M4.6 Deaths: ragdolls in Unreal from the demo's ragdoll force and bone.

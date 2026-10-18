@@ -13,6 +13,8 @@
 //! | [`kv3`] | KeyValues3, binary and text — the data format inside most resources | `docs/formats/kv3.md` |
 //! | [`demo`] | CS2 demos (`.dem`): frames, string tables, send tables, entities, player positions per round | `docs/formats/demo.md` |
 //! | [`game`] | Locating a CS2 install on disk | — |
+//! | [`items`] | Item definitions (`scripts/items/items_game.txt`, KeyValues 1): weapon names by index | — |
+//! | [`anim`] | Animation clips, skeletons, CS2's locomotion graph, each player's baked animation | `docs/formats/animation.md` |
 //! | [`bytes`] | Shared little-endian byte cursor (and varints) used by every binary reader | — |
 //!
 //! More modules (textures, meshes, materials, maps…) arrive milestone by milestone — see
@@ -34,6 +36,7 @@ pub mod coords;
 pub mod demo;
 pub mod export;
 pub mod game;
+pub mod items;
 pub mod kv3;
 pub mod map;
 pub mod meshopt;

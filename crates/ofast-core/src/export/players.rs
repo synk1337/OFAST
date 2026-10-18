@@ -10,15 +10,20 @@
 //! Every CT uses the SAS agent and every T the Phoenix agent for now; each player's own agent, weapon and knife come
 //! with M4.5.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use super::ExportError;
 use super::gltf::{BoneAnimation, export_model_animated, resource_data};
-use crate::anim::bake::{LocomotionSets, WeaponSet, bake_player};
+use crate::anim::aim::AimBones;
+use crate::anim::bake::{LocomotionSets, UpperBody, WeaponAnimation, WeaponSet, bake_player};
+use crate::anim::graph::Graph;
+use crate::anim::layers::BoneMask;
+use crate::anim::weapon::WeaponClips;
 use crate::anim::{Clip, Locomotion, NmSkeleton, Retargeter, Transform};
 use crate::content::Content;
 use crate::demo::players::RoundTrack;
+use crate::items::item_names;
 
 /// Agent model every Counter-Terrorist wears for now.
 pub const CT_AGENT: &str = "agents/models/ctm_sas/ctm_sas.vmdl_c";
@@ -75,7 +80,16 @@ pub fn export_players(
 ) -> Result<PlayersReport, ExportError> {
     let sets = load_locomotion(content)?;
     let skeleton_path = sets.rifle.clips[0].1.skeleton.clone();
-    let clip_skeleton = NmSkeleton::parse(&resource_data(content, &skeleton_path)?);
+    let skeleton_data = resource_data(content, &skeleton_path)?;
+    let clip_skeleton = NmSkeleton::parse(&skeleton_data);
+    let mut warnings = Vec::new();
+    let upper = load_upper_body(
+        content,
+        track,
+        &skeleton_data,
+        &clip_skeleton,
+        &mut warnings,
+    )?;
 
     // Each player's team: the last one seen in the round.
     let mut teams: BTreeMap<u32, u32> = BTreeMap::new();
@@ -86,7 +100,7 @@ pub fn export_players(
         files: Vec::new(),
         players: 0,
         frames: 0,
-        warnings: Vec::new(),
+        warnings,
     };
     for (team, suffix, agent) in [(3, "ct", CT_AGENT), (2, "t", T_AGENT)] {
         let players: Vec<u32> = teams
@@ -104,8 +118,14 @@ pub fn export_players(
                 let retargeter = Retargeter::new(&model.skeleton, &clip_skeleton);
                 let mut animations = Vec::new();
                 for &controller in &players {
-                    let poses = bake_player(track, controller, &sets, PLAYER_ANIMATION_FPS)
-                        .map_err(ExportError::Anim)?;
+                    let poses = bake_player(
+                        track,
+                        controller,
+                        &sets,
+                        upper.as_ref(),
+                        PLAYER_ANIMATION_FPS,
+                    )
+                    .map_err(ExportError::Anim)?;
                     let poses = hold_gaps(poses, &clip_skeleton.reference);
                     frames_written = poses.len();
                     animations.push(BoneAnimation {
@@ -122,6 +142,103 @@ pub fn export_players(
         report.frames = frames_written;
     }
     Ok(report)
+}
+
+/// The main graph of third-person animation.
+const MAIN_GRAPH: &str = "animation/graphs/worldmodel/worldmodel.vnmgraph";
+/// CS2's item definitions.
+const ITEMS_GAME: &str = "scripts/items/items_game.txt";
+
+/// The upper-body layers' data for the weapons the round's players hold: names from `items_game.txt`, clips found
+/// in the graphs ([`WeaponClips`]), the `UpperBody` mask and the aim's bones. `None` (with a warning) when one of
+/// them cannot be read: the players then get the locomotion alone.
+fn load_upper_body(
+    content: &Content,
+    track: &RoundTrack,
+    skeleton_data: &crate::kv3::Value,
+    skeleton: &NmSkeleton,
+    warnings: &mut Vec<String>,
+) -> Result<Option<UpperBody>, ExportError> {
+    let (Some(mask), Some(aim)) = (
+        BoneMask::from_skeleton(skeleton_data, skeleton, "UpperBody"),
+        AimBones::find(skeleton),
+    ) else {
+        warnings
+            .push("clip skeleton without an UpperBody mask or aim bones: locomotion only".into());
+        return Ok(None);
+    };
+    let names = match content
+        .read(ITEMS_GAME)
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    {
+        Ok(text) => item_names(&text),
+        Err(e) => {
+            warnings.push(format!("{ITEMS_GAME}: {e}: locomotion only"));
+            return Ok(None);
+        }
+    };
+    let graph = |path: &str| -> Result<Graph, ExportError> {
+        Ok(Graph::parse(&resource_data(content, path)?)?)
+    };
+    let main = graph(MAIN_GRAPH)?;
+    let clip = |path: &String| -> Result<Clip, ExportError> {
+        Clip::parse(&resource_data(content, path)?).map_err(|source| ExportError::Clip {
+            path: path.clone(),
+            source,
+        })
+    };
+    let pair = |paths: &[String]| -> Result<Option<[Clip; 2]>, ExportError> {
+        Ok(match paths {
+            [] => None,
+            [only] => Some([clip(only)?, clip(only)?]),
+            // Standing first, crouched second; a plain reload before its crouched and empty-magazine variants.
+            _ => {
+                let stand = &paths[0];
+                let crouch = paths
+                    .iter()
+                    .find(|p| p.contains("crouch") && !p.contains("empty"))
+                    .unwrap_or(stand);
+                Some([clip(stand)?, clip(crouch)?])
+            }
+        })
+    };
+    let items: std::collections::BTreeSet<u32> = track
+        .samples
+        .iter()
+        .flat_map(|s| &s.players)
+        .filter_map(|p| p.rig.weapon.as_ref().map(|w| w.item))
+        .collect();
+    let mut weapons = HashMap::new();
+    for item in items {
+        let Some(name) = names.get(&item) else {
+            warnings.push(format!("weapon item {item}: not in {ITEMS_GAME}"));
+            continue;
+        };
+        let clips = WeaponClips::find(&main, name, |path| {
+            graph(path).map_err(|e| crate::anim::AnimError::Graph(format!("{path}: {e}")))
+        })?;
+        let Some(category) = clips.category.clone() else {
+            warnings.push(format!("weapon {name}: not in the animation graph"));
+            continue;
+        };
+        weapons.insert(
+            item,
+            WeaponAnimation {
+                weapon: name.clone(),
+                category,
+                idle: pair(&clips.idle)?,
+                shoot: clips.shoot.first().map(clip).transpose()?,
+                draw: pair(&clips.draw)?,
+                reload: pair(&clips.reload)?,
+            },
+        );
+    }
+    Ok(Some(UpperBody {
+        weapons,
+        mask,
+        aim,
+        parents: skeleton.parents.clone(),
+    }))
 }
 
 /// Fills the frames without a pose (no living pawn) with the last pose before them — or, before the first, the
