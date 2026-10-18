@@ -211,3 +211,10 @@ shot or catch one early; re-shoot with `shoot_views.py` when a number looks off.
     case in lighting.md).
 12. **Small things**: de_nuke's observation room and garage read 1.6 – 1.8 / 0.85 – 1.6 (bright walls, but a black
     garage ceiling where CS2's is lit by bounce); de_inferno's banana 1.64 (shaded walls brighter than CS2's).
+13. **Barn lights** (2026-10-18, de_vertigo): OFAST lit them as hemisphere-wide rects, where CS2 lights a frustum
+    times a cookie texture. Stationary and dynamic barn lights with a cookie are now spot lights fitted to it (the
+    CT spawn's far wall 2.4× → 1.05× CS2's light). Static ones with a cookie keep the rect: de_vertigo's 36 T-spawn
+    lamps are next to absent in CS2's bake (the T spawn reads 1.09 without them, 1.81 with), de_nuke's garage lamps
+    are not; their `skirt_near` (0 against 0.1) is the only difference found
+    ([lighting.md](formats/lighting.md#barn-lights-and-their-cookies)). de_vertigo's CT floor is now short of sky
+    light in Unreal (a third of the sky's blue).
