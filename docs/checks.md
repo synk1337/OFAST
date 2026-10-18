@@ -186,16 +186,50 @@ blocks of the same Unreal base colour, away from shadow edges.
 | tramp | 1.10 | — | 0.84 – 1.09 | 0.79 – 1.02 | — |
 | underpass | 1.29 | — | 1.29 | 1.21 | — |
 
-Every outdoor view's sunlit surfaces read 1.03 – 1.10: Unreal's base colours are about 7 % above CS2's lit albedo
-(de_anubis: 1.08), and that, not the light, is most of what reads bright in the sunlit views. The calibration views'
+Every outdoor view's sunlit surfaces read 1.03 – 1.10, which looked like Unreal's base colours being about 7 % above
+CS2's lit albedo (de_anubis: 1.08). It was Unreal's highlights of baked lights, which CS2 does not draw ("Highlights
+of baked lights" below), and that, not the bounce light, is most of what reads bright in the sunlit views. The calibration views'
 light is within 1 – 7 % of CS2's relative to the sun, so `OUTDOOR_BOUNCE_GAIN` 1.25, `LOCAL_BOUNCE_GAIN` 2.0 and the
-rect-light halving stay. `mat_fullbright` could not be used for this on de_mirage: it shows 1.2 – 1.5× the albedo
-the lit shader uses (Unreal's base colour 0.70× it in the CT spawn, CS2's lit ÷ fullbright on sunlit cobbles below
+rect-light halving stay. `mat_fullbright` could not be used for this on de_mirage: it shows 1.3 – 1.55× the albedo
+the lit shader uses (Unreal's base colour 0.65× it in the CT spawn, CS2's lit ÷ fullbright on sunlit cobbles below
 the direct sun alone; lighting.md).
 
 The T ramp (`tramp`) varies from one editor session to the next: 1.10 (the import's shot), 1.15 – 1.17 in two later
 runs on the saved level, 0.84 in a third that shot every view seven times (the same in all seven). In that session
 the other views agreed with the import's shots within 1 % (the dark shop 3 %); the cause was not found.
+
+### Highlights of baked lights (2026-10-18)
+
+Why the sunlit surfaces read 7 % bright, stage by stage ([lighting.md](formats/lighting.md#highlights-cs2-does-not-draw-2026-10-18)
+has the method and the evidence):
+- **Colour textures** (exporter): OFAST's decoded colours average what CS2 stored as each texture's average (de_mirage's
+  348 colour textures: median 1.0065). Not the cause.
+- **Base colours in Unreal**: de_anubis's base colours are right (0.99 / 0.97 of CS2's `mat_fullbright`). Its 1.08
+  was the base-colour render: `ShowFlag.Lighting 0` adds 0.45 × the specular colour; base-colour renders now also
+  set `ShowFlag.Specular 0`.
+- **The sun's highlight**: CS2 bakes de_mirage's sun (and nearly every official map's) into its lightmaps, which
+  draw no highlight; Unreal's sun drew one. With the sun's Specular Scale at 0 the sunlit blocks read 0.97 – 1.04
+  (1.03 – 1.10 before); across 5800 sunlit blocks Unreal / CS2 grew with the highlight's share exactly as if CS2 had
+  none (slope 0.92; −0.08 without it). Baked local lights draw none either, unless Hammer bakes their highlight into
+  the cubemaps. **Fixed**: the manifest says how CS2 draws each light (`direct` on the sun; `bake_specular`,
+  `bake_specular_scale` on local lights) and `import_map.py` sets each light's Specular Scale to match.
+- Interchange's glTF master reflects with F0 0.08 where CS2 (and OFAST's own masters) use 0.04: about 1 – 1.5 % of
+  the sunlit light, more in the shade. Not changed (follow-up, with the bounce gains).
+
+de_mirage re-exported (the manifest only: glTF, binary and textures came out byte-identical) and re-imported with the
+fix; the import's own shots, all 15 right this time, against the `lut_all` import's (Unreal / CS2 of the scene, same
+method as the table above; "all" is every non-sky block):
+
+| View | All, before → after | Sunlit | Shade / lamp | Light relative to the sun (sunlit 1.01) |
+|---|---|---|---|---|
+| ct0 / t0 | 1.05 / 1.05 → 1.02 / 1.04 | 1.07 / 1.05 → 1.02 / 1.00 | 1.00 / 1.06 → 0.99 / 1.05 | 0.97 / 1.05 |
+| asite / stairs | 1.06 / 1.05 → 1.03 / 1.01 | 1.10 / 1.10 → 1.04 / 1.03 | 1.02 / 1.01 → 1.01 / 1.00 | 0.97 / 0.97 |
+| bsite / bapps | 0.86 / 0.85 → 0.83 / 0.83 | 1.06 / 1.03 → 0.99 / 0.96 | 0.78 / 0.77 → 0.77 / 0.76 | 0.77 / 0.79 |
+| middle | 0.96 → 0.94 | 1.04 → 0.98 | 0.90 → 0.90 | 0.91 |
+| palace / apps | 1.05 / 0.84 → 1.01 / 0.75 | — | same | 1.00 / 0.74 |
+| connector / sniper | 1.26 / 1.27 → 1.20 / 1.22 | — | same | 1.19 / 1.21 |
+| shop / tramp / underpass | 0.71 / 1.09 / 1.28 → 0.70 / 1.08 / 1.28 | — | same | 0.69 / 1.07 / 1.26 |
+| all seven outdoor views, pooled | | 1.07 → **1.01** | | |
 
 ## What was wrong
 
@@ -256,8 +290,10 @@ the other views agreed with the import's shots within 1 % (the dark shop 3 %); t
    [above](#light-and-material-against-the-default-picture-2026-10-18)): the gains hold for the calibration views,
    but relative to the sun the connector and sniper's nest get 1.17 / 1.18 of CS2's light (`LOCAL_BOUNCE_GAIN` 1.5
    would fit them and leave the palace at 0.93) and the underpass 1.21, which follows the outdoor gain, not its lamp:
-   sky light reaching into an enclosed room. No one gain fits these and the palace; open. de_inferno's interiors were
-   measured with the refitted Hable level since (refit column above): 1.2 – 2.2.
+   sky light reaching into an enclosed room. No one gain fits these and the palace; open. Without the highlights of
+   the baked lamps and sun (2026-10-18, [above](#highlights-of-baked-lights-2026-10-18)) the palace is at 1.00
+   relative to the sun, the connector and sniper's nest 1.19 / 1.21, the underpass 1.26: the same picture.
+   de_inferno's interiors were measured with the refitted Hable level since (refit column above): 1.2 – 2.2.
 10. **Ropes and cables are missing** (`path_particle_rope_clientside`: 69 on de_nuke — the power lines in the yard
     and their shadows).
 11. **Dark rooms lit by daylight from outside stay too dark**: de_mirage's shop 0.73 (cells down to 0.22), de_dust2's

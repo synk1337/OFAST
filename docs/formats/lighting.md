@@ -25,6 +25,7 @@ derived from it, so any other constant would give the same picture; π keeps Unr
 | `brightness` × `brightnessscale` | 3 × 1 | **linear** multiplier | intensity = 3 × π = 9.42 lux |
 | `angulardiameter` | 1 | "sun spread angle", shadow softness (degrees) | Source Angle |
 | `bouncescale` | 1.3 | bounce strength in the bake | Indirect Lighting Intensity (× 1.25, see the bounce gains) |
+| `directlight` | 1 | 1 "Baked": the sun is in the lightmaps, which carry no highlight; 3 "Stationary" / 2 "Dynamic": drawn per pixel, with one | Specular Scale 0 when baked, 1 otherwise ([highlights](#highlights-cs2-does-not-draw-2026-10-18)) |
 | `skytexture` | `mirage_sky` | ambient comes from that `env_sky`'s HDR | Sky Light cube map |
 | `skycolor` × `skyintensity` | 130 205 255 × 1 | flat ambient, **only used when `skytexture` is empty** (Hammer's `lights_base.fgd`) | — |
 | `skyambientbounce` | 0 0 0 | albedo of a virtual ground below the horizon | Sky Light lower hemisphere colour |
@@ -60,12 +61,20 @@ hemisphere average); black on de_mirage (albedo 0).
 - `directlight`: 1 "Static" (fully baked into the lightmaps, bounce included; all of de_mirage's lights but six),
   3 "Stationary" (direct light at run time, baked shadows), 2 "Dynamic", and **0 "None": no direct light at all, the
   light only adds bounce to the bake** (de_mirage 6, de_dust2 1, de_inferno 17, de_nuke 6 — fill lights by windows
-  and doors, e.g. the one 94 units from de_dust2's pit wall).
+  and doors, e.g. the one 94 units from de_dust2's pit wall). A missing key is the FGD's default, 3.
+- **Highlights**: only stationary and dynamic lights draw their own specular highlight. A static light's highlight
+  exists only when Hammer bakes it into the cubemaps, `bakespeculartocubemaps` ("Bake Specular to Cubemaps": a
+  boolean, or for `light_barn` 0 none / 1 rectangle / 2 disk) at `bakespeculartocubemaps_scale`. de_mirage bakes
+  none of its 66 static lights' highlights; de_nuke 97 of its 153, de_inferno 22 of 184, de_vertigo 24 of 86. The
+  manifest carries both keys (`bake_specular`, `bake_specular_scale`) and `import_map.py` gives each Unreal light the
+  Specular Scale CS2's highlight has: 1 for stationary and dynamic lights, the bake scale for a baked one in the
+  cubemaps (approximated by its own highlight), 0 otherwise ([highlights](#highlights-cs2-does-not-draw-2026-10-18)).
 
 In the glTF they are `KHR_lights_punctual` approximations (rect → wide spot) for any tool. Unreal's Interchange drops
 the glTF `range` (every light gets a 10 m attenuation radius), so `import_map.py` replaces them with Unreal Point,
 Spot and **Rect** lights built from the manifest's `lights` list: exact shape, size, range (`attenuation_radius`,
-with `skirt`), colour, bounce and `direct` (the `directlight` value), movable.
+with `skirt`), colour, bounce, `direct` (the `directlight` value) and the highlight (`bake_specular`,
+`bake_specular_scale`), movable.
 
 **Range.** Unreal's inverse-square lights do not keep full strength up to a cut: they fade over their whole
 attenuation radius with the window (1 − (d / radius)⁴)², which is 0.35 at 80 % of the radius and 0.01 at 97 %. CS2
@@ -165,18 +174,24 @@ For comparisons, **`mat_tonemap_force_scale <exposure>`** (cheat) locks CS2's ex
 `mat_tonemap_force_scale 0.8` is identical to the automatic one (ratio 1.000), at 1.0 it is 1.23× brighter.
 `mat_fullbright 1` shows the albedo × 1, linearly: it ignores the locked exposure (de_anubis at 1.0 and 0.5: identical
 to 0.002 %) and the tone curve (fullbright against Unreal's base colour is flat over the whole brightness range).
-Unreal's `ShowFlag.Lighting 0` render, its base colour, skips the manual exposure (exposure 1: its sky pixels fit
-exposure 1.0 exactly) but keeps OFAST's tone mapper.
+Unreal's base colour is a render with `ShowFlag.Lighting 0` **and `ShowFlag.Specular 0`**: it skips the manual
+exposure (exposure 1: its sky pixels fit exposure 1.0 exactly) but keeps OFAST's tone mapper. `ShowFlag.Lighting 0`
+alone is not the base colour: Unreal's unlit view adds 0.45 × the specular colour to it (`EnvBRDFApproxFullyRough` in
+`BasePassPixelShader.usf`, a stand-in for a fully rough reflection), 0.018 linear at the dielectric F0 of 0.04 and
+0.036 at 0.08, which de_mirage's views showed as 1.06 – 1.12× their base colour, and which made de_anubis's base
+colours read 8 % bright ([below](#highlights-cs2-does-not-draw-2026-10-18)). The renders before 2026-10-18 have it.
 
-Fullbright is not always the albedo the lit shader uses. On de_anubis and de_vertigo it agrees with Unreal's base
-colour to 0 – 8 %; on de_mirage Unreal's base colour is only 0.70× it in the CT spawn (0.78 palace, 0.88 B
-apartments) and on de_inferno 0.5 – 0.6×, and there CS2's own lit ÷ fullbright on sunlit ground is less than the sun
-alone gives: 1.64 – 1.73 units on de_mirage's CT-spawn cobbles, where the direct sun is 3 × 0.773 (its colour's
-luminance) × sin 60° = 2.01 and Unreal's light (lit ÷ base colour) is 2.43 – 2.46. So on those maps fullbright shows
-more than the lit albedo — on de_mirage 1.2 – 1.5× (B apartments … CT spawn), taking the lit albedo from the sunlit
-surfaces below — something the lit shader applies and fullbright skips, not found yet; and
-`tone_fit.py light` splits light from material wrongly there; [the calibration](#against-cs2s-default-picture-2026-10-18)
-uses the sunlit surfaces instead.
+Fullbright is not always the albedo the lit shader uses. On de_anubis it agrees with Unreal's base colour (0.99 CT,
+0.97 T, with the specular-free render; de_vertigo 1.00 – 1.01 with the older one); on de_mirage Unreal's base colour
+is only 0.65× it in the CT spawn (0.72 palace, 0.77 B apartments; 0.70 / 0.78 / 0.88 with the unlit view's specular
+term) and on de_inferno 0.5 – 0.6×, and there CS2's own lit ÷ fullbright on sunlit ground is less than the sun alone
+gives: 1.64 – 1.73 units on de_mirage's CT-spawn cobbles, where the direct sun is 3 × 0.773 (its colour's luminance) ×
+sin 60° = 2.01 and Unreal's light (lit ÷ base colour) is 2.43 – 2.46. Unreal's base colour is the texture (OFAST's
+decoded colour textures average what CS2 stored as their average, below), and CS2's lit picture of the sunlit
+surfaces matches it once Unreal draws no sun highlight ([below](#highlights-cs2-does-not-draw-2026-10-18)). So on
+those maps fullbright shows 1.3 – 1.55× the texture (B apartments … CT spawn) — something fullbright applies that the
+lit shader does not, not found yet — and `tone_fit.py light` splits light from material wrongly there;
+[the calibration](#against-cs2s-default-picture-2026-10-18) uses the sunlit surfaces instead.
 
 Unreal, with Manual exposure (physical camera off) and its tone curve off (`ToneCurveAmount` 0, `ExpandGamut` 0,
 `BlueCorrection` 0), shows `luminance × 2^bias` (`PostProcessEyeAdaptation.cpp`; checked the same way: Unreal's
@@ -258,12 +273,13 @@ against Unreal's scene values (its shots inverted through its own rule) on lit c
 | white w from exposure pairs | 4.1 – 4.2 (CT, T) | 3.7 – 5.6 (CT, T; 1.6 / 0.8 / 0.4 / 0.2) | 3.2 – 3.4 (CT) |
 | k from sky pixels at w = 4.2 | 2.84 (CT, T) | 2.90 – 2.93 (CT), 2.86 – 2.87 (T) | 2.82 – 2.83 (CT, green; CS2 draws the **skybox** `env_sky`, 0.8 × 2^1, which OFAST exports; the main world's, 0.5 × 2^1, would give 0.63 of it) |
 | lit surfaces, k × CS2 scene / Unreal scene (median of 12 cells) | 2.65 (CT), 2.78 (T) | 2.45 (CT; cells 1.0 – 5.0), 1.63 (T) | 4.5 (CT; cells 3.4 – 4.9, merged code) |
-| Unreal base colour / CS2 fullbright albedo | 1.08 (CT) | 1.01 (CT), 1.00 (T) | 0.5 – 0.6 (CT) |
+| Unreal base colour / CS2 fullbright albedo | 1.08 (CT); 0.99 (CT), 0.97 (T) without the unlit view's specular term | 1.01 (CT), 1.00 (T) | 0.5 – 0.6 (CT) |
 | light, lit ÷ albedo (Unreal / CS2) | 1.00 (CT) | 1.05 (CT; 0.56 – 2.10), 1.87 (T; shaded floor 3 – 3.9) | 0.9 – 1.2 (CT) |
 | automatic exposure | `minexposure` 0.7 | above `minexposure` 0.8: the auto picture is 1.38 – 1.41× the 0.8 one | |
 
 So with this rule the sky agrees on all three maps, and where a picture still differs it is the scene: de_anubis's
-surfaces are 5 – 8 % bright in Unreal (its base colours, 1.08), de_vertigo's shade is far too bright (the light, not
+surfaces are 5 – 8 % bright in Unreal (read as its base colours, 1.08; in fact Unreal's sun highlight, which CS2 does
+not draw, and the unlit view's specular term: [highlights](#highlights-cs2-does-not-draw-2026-10-18)), de_vertigo's shade is far too bright (the light, not
 the materials: in its T spawn's covered hall Unreal's light is 2 – 4× CS2's, warm where CS2's is blue), and
 de_inferno's surfaces are too dark (its materials, base colour 0.5 – 0.6× CS2's albedo; open). Its sunlit ground is
 odd in CS2: lit ÷ fullbright gives fewer units of light than the sun alone, so for some de_inferno materials fullbright
@@ -326,7 +342,8 @@ Unreal) and Unreal, compared cell by cell on a 4 × 3 grid with `tools/compare/c
 linear luminance, Unreal / CS2). Views: `tools/compare/views/de_mirage.json` plus the two spawns. The references of
 this section and the next were taken at brightness 2.013, brighter than CS2's default. The calibration was measured
 again against the default picture on 2026-10-18 ([below](#against-cs2s-default-picture-2026-10-18)): the constants
-stand, and what reads too bright there is Unreal's base colours, not the light.
+stand, and what reads too bright there is not the light but Unreal's sun highlight, which CS2 does not draw
+([below](#highlights-cs2-does-not-draw-2026-10-18)).
 
 | View | Whole image | Cells | Notes |
 |---|---|---|---|
@@ -412,8 +429,10 @@ scene ratio against the import's values; the base configuration shot twice agree
 **The constants stay.** Relative to the sun, the spawns' shade is 1 – 7 % darker than CS2's (0.95 / 0.99 by class,
 0.93 / 0.96 by pairs) and the palace 2 %, about the spread between the two methods. So neither the bounce gains nor
 the rect-light factor is what makes de_mirage 5 – 6 % bright against the default picture: its sunlit surfaces are
-7 % bright too, i.e. Unreal's base colours are about 7 % above CS2's lit albedo, as on de_anubis (1.08). Lowering the
-gains to hide that would leave the shade about 10 – 15 % dark relative to the sun once the base colours are right.
+7 % bright too, which read as Unreal's base colours being about 7 % above CS2's lit albedo, as on de_anubis (1.08).
+They are not: it was Unreal's sun highlight, which CS2 does not draw, and the unlit view's specular term on de_anubis
+([below](#highlights-cs2-does-not-draw-2026-10-18)). Lowering the gains to hide it would have left the shade about
+10 – 15 % dark relative to the sun.
 What the light still gets wrong is local, and the same gain pulls it both ways:
 - outdoor shade at B site, the B-apartments balcony and middle is dark (0.73 – 0.92 relative to the sun), like the
   B-apartments corridor (0.78): bounce Lumen carries only partly; raising `OUTDOOR_BOUNCE_GAIN` to 1.5 would bring
@@ -423,6 +442,80 @@ What the light still gets wrong is local, and the same gain pulls it both ways:
   the cleaner calibration;
 - the underpass reads 1.21 and follows the outdoor gain (13 % for 20 %), not its hanging lamp (3 %): sky light
   reaching into an enclosed room.
+
+### Highlights CS2 does not draw (2026-10-18)
+
+Why de_mirage's sunlit surfaces read 3 – 10 % bright (and de_anubis's base colours 8 %), stage by stage:
+
+| Stage | Check | Result |
+|---|---|---|
+| Colour textures (exporter) | OFAST's decoded mip 0, through the sRGB curve, against the linear average CS2's compiler stored in each texture (its "reflectivity"), all 348 of de_mirage's colour textures | median 1.0065 (10 – 90 %: 0.997 – 1.016); only alpha decals differ, whose stored average is not of their colour alone: **not the cause** |
+| Base colours in Unreal (import, materials) | de_anubis, where `mat_fullbright` is the lit albedo: Unreal's specular-free base-colour render ÷ fullbright | 0.99 (CT), 0.97 (T): **not the cause**; the 1.08 measured before was the unlit view's specular term ([above](#exposure-and-tone-mapping--post_processing_volume--vpost)): 1.07 / 1.03 with it |
+| The sun's highlight (import) | de_mirage's saved level with the sun's Specular Scale at 0 | sunlit 1.03 – 1.10 → 0.97 – 1.04 (mean 1.06 → 1.01): **the cause** |
+| All specular, Lumen's reflections too | `ShowFlag.Specular 0` | sunlit 0.94 – 1.01, shade 5 – 10 % down |
+
+| View, sunlit blocks (Unreal / CS2) | As imported | Sun highlight off | All specular off | Re-imported with the fix |
+|---|---|---|---|---|
+| ct0 | 1.07 | 1.02 | 0.99 | 1.02 |
+| t0 | 1.05 | 1.00 | 0.98 | 1.00 |
+| asite | 1.10 | 1.04 | 1.01 | 1.04 |
+| stairs | 1.10 | 1.03 | 1.00 | 1.03 |
+| bsite | 1.06 | 1.00 | 0.97 | 0.99 |
+| bapps | 1.03 | 0.97 | 0.94 | 0.96 |
+| middle | 1.04 | 0.98 | 0.96 | 0.98 |
+| all seven, pooled | 1.07 | 1.01 | 0.985 | **1.01** |
+
+The first three columns are what-ifs on the saved level of the `lut_all` import (`shoot_views.py`-style, several
+configurations in one editor session); the last is the import with the fix (2026-10-18), against the `lut_all`
+import's own shots for "as imported". The import reproduces the what-if to 0.5 % in every view. What is left per view
+(asite / stairs +3 – 4 %, bapps −4 %) was there before the fix in the same pattern (the views spread 1.03 – 1.10): it
+is local, not the material.
+
+**CS2 draws no sun highlight on these maps.** In Unreal the sun's highlight is 2 – 12 % of a sunlit block's light
+(median 4 – 6 % per view: it grows towards the mirror direction and on smoother surfaces). If CS2 drew the same one,
+Unreal / CS2 would not depend on it; if CS2 drew none, it would grow as 1 / (1 − that share). Over the 5800 sunlit
+blocks of the seven outdoor views (the 160 blocks with a share above 12 %, the smoothest surfaces, left out), log(Unreal / CS2) against
+−log(1 − share) has slope **0.92** as imported and **−0.08** with the sun's highlight off. In the CT spawn the ratio
+rises from 1.05 to 1.11 over shares of 2 – 12 % with the highlight and stays at 1.01 – 1.02 without it.
+
+Why: de_mirage's `light_environment` has `directlight` 1, "Baked" — so do de_anubis, de_dust2, de_inferno, de_nuke,
+de_vertigo, de_overpass, de_train, de_ancient, cs_office and cs_italy; de_cache's is 3, "Stationary". Hammer's FGDs
+say a static light is "fully baked into lightmap", that "Specular Softness" (which softens the direct highlight) needs
+a stationary or dynamic light, and that a static light's highlight can be baked into the cubemaps ("Bake Specular to
+Cubemaps", only for baked lights), a key `light_environment` does not have. Source 2 Viewer's reconstruction of the
+shaders (`lighting.slang`) adds the lightmap to the diffuse light only and draws the per-pixel sun, with its
+highlight, from the sun's run-time colour, which a baked sun would leave at zero (an inference: Valve's decompiled
+shaders were not read for this; the slope above is the evidence). The same holds for local lights
+([above](#local-lights--light_omni2-light_rect-light_barn-and-legacy-light_omni-light_spot)): all 66 of de_mirage's
+are baked without it. Unreal's lights are movable and draw a highlight from every light.
+
+**The fix** ([decision 014](../decisions/014-highlights-only-where-cs2-draws-them.md); `cs2_specular_scale` in
+`import_map.py`, from the manifest's new sun `direct` and local lights'
+`bake_specular` / `bake_specular_scale`): Specular Scale 0 for baked lights without a cubemap highlight and for
+bounce-only ones, the bake's scale for baked lights with one, 1 for stationary and dynamic lights. Manifests from
+before keep Unreal's highlights (with a warning). The realistic style keeps physical highlights.
+
+**After the fix** (de_mirage re-exported and re-imported; Unreal / CS2 of the scene over all non-sky blocks, before →
+after): CT spawn 1.05 → 1.02, T spawn 1.05 → 1.04, palace 1.05 → 1.01, B apartments 0.84 → 0.75, connector and
+sniper's nest 1.26 / 1.27 → 1.20 / 1.22, underpass 1.28 (unchanged; per view in
+[checks.md](../checks.md#highlights-of-baked-lights-2026-10-18)). Relative to the sunlit surfaces (1.01) the light is
+now CT shade 0.97, T shade 1.05, palace 1.00: `OUTDOOR_BOUNCE_GAIN`, `LOCAL_BOUNCE_GAIN` and the rect halving stay.
+Indoors the baked lamps' highlights are gone too; the B apartments, short of the corridor bounce already, drop further.
+
+Two further differences, measured but not changed:
+- **Interchange's glTF master reflects twice as much.** Unreal's unlit view adds 0.45 × the specular colour (F0), so
+  the difference between `ShowFlag.Lighting 0` renders with and without `ShowFlag.Specular 0` gives each pixel's F0:
+  0.04 on the surfaces of OFAST's own masters (`M_OFAST_LayerBlend_v2`: de_mirage's blended ground and painted walls),
+  which is CS2's F0 for every non-metal but weapons (Source 2 Viewer's `complex.frag.slang`), and 0.08 on everything Interchange's
+  glTF master (`M_Default`, and OFAST's copy `M_OFAST_glTFDefault_v1`) draws (most walls, the palace, props): it feeds
+  Specular from its body function with `SpecularFactor` 1 and `IOR` 1.5, while OFAST's masters leave Specular at
+  Unreal's 0.5 (read back from the assets). That doubles their reflections (Lumen's, of the
+  sky); the highlights are gone with the fix above. Their share of a sunlit block is 2 – 3 % (the last two columns),
+  of the outdoor shade 5 – 10 %, against which the bounce gains were calibrated: left for a follow-up that measures
+  both together.
+- CS2 takes the energy of its reflections off its baked diffuse light (Source 2 Viewer's `lighting.slang`: the
+  lightmap × (1 − the reflection's directional albedo), a few % for F0 0.04); Unreal's legacy materials do not
+  (`r.Material.EnergyConservation` is off, Substrate too). Not reproduced.
 
 ## Checked on three more maps (2026-10-16 evening)
 
@@ -497,7 +590,7 @@ merged code (renders in `test-data/shots/refit/`), de_vertigo with the code of 2
 
 | View | Brighter references, k 3.4 | Default picture, k 3.4 | Default picture, k 2.85 | Notes |
 |---|---|---|---|---|
-| de_anubis CT / T | 1.01 / 1.01 | 1.11 / 1.08 | 1.04 / 1.02 | lit surfaces 2.67 / 2.77 against k = 2.85: Unreal's base colours are a few % above CS2's albedo (1.08 in the CT view) |
+| de_anubis CT / T | 1.01 / 1.01 | 1.11 / 1.08 | 1.04 / 1.02 | lit surfaces 2.67 / 2.77 against k = 2.85: read as base colours a few % above CS2's albedo (1.08 in the CT view); the base colours are right (0.99), it is mostly the sun highlight ([highlights](#highlights-cs2-does-not-draw-2026-10-18)) |
 | de_inferno CT / T | 0.76 / 1.22 | 0.81 / 1.44 | 0.75 / 1.30 | sky right (k 2.82); surfaces too dark from its materials (base colour 0.5 – 0.6× CS2's albedo); its 12 other views in [checks.md](../checks.md#after-merging-all-branches-2026-10-18) |
 | de_vertigo CT / T | — | 1.42 / 2.04 | 1.27 / 1.82 | new map; the shade is too bright (light 2 – 4× CS2's in the T spawn's hall), materials right (base colour 1.00 – 1.01) — open |
 
@@ -505,7 +598,8 @@ The real imports reproduce `tone_fit.py simulate` to 0.1 – 0.2 % (de_vertigo C
 The linear maps do not use k and w; their numbers against the default picture are in checks.md. Their lighting
 calibration (bounce gains, rect lights, fitted at 2.013 on de_mirage) was measured again against the default picture
 ([above](#against-cs2s-default-picture-2026-10-18)): the light holds; de_mirage's spawns and palace read 5 – 6 %
-bright because its sunlit surfaces do, i.e. the base colours.
+bright because its sunlit surfaces do, which was Unreal's highlights of baked lights
+([above](#highlights-cs2-does-not-draw-2026-10-18)).
 
 ## Shadows from the back of walls
 
