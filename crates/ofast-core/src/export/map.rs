@@ -34,6 +34,7 @@ use std::rc::Rc;
 use serde_json::{Value as Json, json};
 
 use super::gltf::{ExportReport, GltfWriter, load_model, srgb_to_linear, write_png};
+use super::light_cookie::{CookieProfile, cookie_profile, fit_spot};
 use super::sky::{SkyExport, export_sky, write_flat_hdr};
 use super::{ExportError, ExportOptions};
 use crate::content::Content;
@@ -140,6 +141,28 @@ pub fn export_map(
             .light(light.class, light.gltf(), light.origin, light.forward());
         exporter.roots.push(node);
     }
+    // Barn lights' cookies, read once each (de_vertigo's 51 barn lights share one).
+    let mut cookies: BTreeMap<&str, Option<CookieProfile>> = BTreeMap::new();
+    for cookie in lights
+        .iter()
+        .filter_map(|l| l.barn.as_ref().and_then(|b| b.cookie))
+    {
+        if cookies.contains_key(cookie) {
+            continue;
+        }
+        let profile = match cookie_profile(content, cookie) {
+            Ok(profile) => Some(profile),
+            Err(e) => {
+                exporter
+                    .writer
+                    .report
+                    .warnings
+                    .push(format!("light cookie {cookie}: {e}"));
+                None
+            }
+        };
+        cookies.insert(cookie, profile);
+    }
 
     // Every env_sky with the transform of the world it lives in: the 3D skybox's first (they turn with the skybox).
     let env_skies: Vec<(&Entity, Transform)> = skybox
@@ -221,7 +244,7 @@ pub fn export_map(
         out_dir,
         &mut exporter.writer.report.warnings,
     );
-    manifest["lights"] = lights.iter().map(LocalLight::manifest).collect();
+    manifest["lights"] = lights.iter().map(|l| l.manifest(&cookies)).collect();
     fs::write(
         out_dir.join(format!("{}.ofast.json", map.name)),
         serde_json::to_string_pretty(&manifest).expect("JSON serializes"),
@@ -568,6 +591,19 @@ struct LocalLight<'a> {
     direct: i32,
     brightness: f32,
     brightnessscale: f32,
+    /// A `light_barn`'s frustum and cookie (perspective barn lights only).
+    barn: Option<Barn<'a>>,
+}
+
+/// The frustum CS2 lights a barn light inside (`size_params` = x, y, z; see [`super::light_cookie`]).
+#[derive(Debug, Clone, PartialEq)]
+struct Barn<'a> {
+    /// Half-tangents of the frustum: x·z and y·z.
+    tan: [f32; 2],
+    /// How far the frustum's eye sits behind the entity's origin: 1/z inches.
+    near: f32,
+    /// The cookie texture stretched over the frustum (`lightcookie`), if any.
+    cookie: Option<&'a str>,
 }
 
 impl<'a> LocalLight<'a> {
@@ -605,8 +641,8 @@ impl<'a> LocalLight<'a> {
                 width: 2.0 * size(0).unwrap_or(16.0),
                 height: 2.0 * size(1).unwrap_or(16.0),
             },
-            // A barn light's `size_params` is its barn-door aperture; the emitter is `luminaire_size` across (the
-            // barn doors themselves are not reproduced yet).
+            // A barn light's `size_params` is its aperture (the frustum, `Barn`); the emitter is `luminaire_size`
+            // across. The rectangle is what Unreal gets unless the importer rebuilds the frustum from `barn`.
             "light_barn" => {
                 let side = entity
                     .number("luminaire_size")
@@ -644,6 +680,15 @@ impl<'a> LocalLight<'a> {
             direct: entity.number("directlight").map_or(1, |v| v as i32),
             brightness,
             brightnessscale,
+            // Perspective barn lights only (a `size_params` z of 0 or less is an orthographic box of light).
+            barn: match (class, size(0), size(1), size(2)) {
+                ("light_barn", Some(x), Some(y), Some(z)) => Some(Barn {
+                    tan: [x * z, y * z],
+                    near: 1.0 / z,
+                    cookie: entity.string("lightcookie").filter(|c| !c.is_empty()),
+                }),
+                _ => None,
+            },
         })
     }
 
@@ -688,7 +733,8 @@ impl<'a> LocalLight<'a> {
     }
 
     /// Manifest entry, in Unreal units (cm, degrees, candela): the exact shape and range for Unreal's own lights.
-    fn manifest(&self) -> Json {
+    /// `cookies` holds the profiles of the barn lights' cookies (`None` where one could not be read).
+    fn manifest(&self, cookies: &BTreeMap<&str, Option<CookieProfile>>) -> Json {
         let cm = |inches: f32| inches * coords::INCH_TO_CM;
         let mut light = json!({
             "class": self.class,
@@ -718,6 +764,26 @@ impl<'a> LocalLight<'a> {
                 light["source_width"] = json!(cm(width));
                 light["source_height"] = json!(cm(height));
             }
+        }
+        if let Some(barn) = &self.barn {
+            // CS2's frustum (see `light_cookie`): half-tangents, and the eye `near` behind the origin, from which the
+            // light falls off; `intensity_cd` is at 100 units past the origin as for every light.
+            let mut entry = json!({ "tan": barn.tan.to_vec(), "near": cm(barn.near) });
+            if let Some(cookie) = barn.cookie {
+                entry["cookie"] = json!(cookie);
+                if let Some(Some(profile)) = cookies.get(cookie) {
+                    // The cookie's linear transmission per ring of the frustum's radius (0 – 1 in 20 rings), its mean
+                    // over the frustum, and the Unreal spot light that matches it on this frustum.
+                    let fit = fit_spot(profile, (barn.tan[0] * barn.tan[1]).sqrt());
+                    entry["cookie_profile"] = json!(profile.rings.to_vec());
+                    entry["cookie_mean"] = json!(profile.mean);
+                    entry["cookie_srgb"] = json!(profile.srgb);
+                    entry["spot"] = json!({
+                        "scale": fit.scale, "inner_cone": fit.inner_deg, "outer_cone": fit.outer_deg,
+                    });
+                }
+            }
+            light["barn"] = entry;
         }
         light
     }
