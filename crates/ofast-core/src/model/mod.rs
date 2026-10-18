@@ -21,6 +21,7 @@
 //! Details: `docs/formats/model.md`. Knowledge from ValveResourceFormat (MIT); independent implementation.
 
 mod attributes;
+mod skeleton;
 
 use crate::bytes::{ByteReader, UnexpectedEof};
 use crate::kv3::Value;
@@ -28,6 +29,9 @@ use crate::meshopt::{self, MeshoptError};
 use crate::resource::{BlockKind, Resource, ResourceError};
 
 pub use attributes::{Geometry, half_to_f32};
+pub use skeleton::{
+    Affine, Bone, Skeleton, affine, compose, invert_rigid, normalize_quat, quat_matrix, quat_mul,
+};
 
 /// DXGI format numbers used by CS2 vertex layouts.
 #[allow(missing_docs)]
@@ -35,6 +39,7 @@ pub mod dxgi {
     pub const R32G32B32A32_FLOAT: u32 = 2;
     pub const R32G32B32_FLOAT: u32 = 6;
     pub const R16G16B16A16_FLOAT: u32 = 10;
+    pub const R16G16B16A16_UINT: u32 = 12;
     pub const R32G32_FLOAT: u32 = 16;
     pub const R8G8B8A8_UNORM: u32 = 28;
     pub const R8G8B8A8_UINT: u32 = 30;
@@ -189,6 +194,9 @@ pub struct Mesh {
     pub index_buffers: Vec<Vec<u32>>,
     /// Draw calls.
     pub draw_calls: Vec<DrawCall>,
+    /// Bone influences per vertex the compiler kept (`m_skeleton.m_nBoneWeightCount`, 1 – 4 on agents; 0 when the
+    /// mesh is not skinned). With 1, CS2 stores no weights: every vertex follows its first bone index fully.
+    pub bone_weight_count: u32,
 }
 
 impl Mesh {
@@ -236,6 +244,12 @@ pub struct Model {
     pub lod_masks: Vec<u64>,
     /// Paths of external `.vmesh` files (not embedded) — empty strings for embedded meshes.
     pub external_meshes: Vec<String>,
+    /// The bones (empty or a single `dummy` bone on unskinned models).
+    pub skeleton: Skeleton,
+    /// `m_remappingTable`: skeleton bone indices, one slice per mesh (see [`Model::bone_remap`]).
+    pub remapping_table: Vec<u32>,
+    /// `m_remappingTableStarts`: where each mesh's slice of the remapping table begins, by mesh index.
+    pub remapping_starts: Vec<usize>,
 }
 
 impl Model {
@@ -259,6 +273,15 @@ impl Model {
                 .unwrap_or(1) as u64,
             lod_masks: integers(data.get("m_refLODGroupMasks")),
             external_meshes: strings(data.get("m_refMeshes")),
+            skeleton: Skeleton::parse(&data),
+            remapping_table: integers(data.get("m_remappingTable"))
+                .into_iter()
+                .map(|v| v as u32)
+                .collect(),
+            remapping_starts: integers(data.get("m_remappingTableStarts"))
+                .into_iter()
+                .map(|v| v as usize)
+                .collect(),
         };
 
         let embedded = ctrl
@@ -270,6 +293,22 @@ impl Model {
         }
         model.meshes.sort_by_key(|m| m.mesh_index);
         Ok(model)
+    }
+
+    /// The remapping slice of mesh `mesh_index`: a vertex's bone index `i` (`BLENDINDICES`) is skeleton bone
+    /// `bone_remap(mesh)[i]`. A slice runs from its start to the next mesh's start; it begins with the mesh's own
+    /// render bones (`MDAT m_skeleton.m_bones`, same order) and on agents ends with hitbox bones vertices never use.
+    pub fn bone_remap(&self, mesh_index: usize) -> &[u32] {
+        let Some(&start) = self.remapping_starts.get(mesh_index) else {
+            return &[];
+        };
+        let end = self
+            .remapping_starts
+            .get(mesh_index + 1)
+            .copied()
+            .unwrap_or(self.remapping_table.len())
+            .min(self.remapping_table.len());
+        self.remapping_table.get(start..end).unwrap_or_default()
     }
 
     /// Meshes shown by default: in the default mesh groups and in the most detailed LOD.
@@ -389,6 +428,12 @@ fn read_embedded_mesh(resource: &Resource<'_>, entry: &Value) -> Result<Mesh, Mo
 
     Ok(Mesh {
         draw_calls: read_draw_calls(&mesh_data),
+        bone_weight_count: mesh_data
+            .get("m_skeleton")
+            .and_then(|s| s.get("m_nBoneWeightCount"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            .max(0) as u32,
         name,
         mesh_index,
         vertex_buffers,

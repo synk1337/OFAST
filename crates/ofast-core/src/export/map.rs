@@ -389,7 +389,7 @@ impl MapExporter<'_> {
             let draws: Vec<&DrawCall> = mesh.draw_calls.iter().collect();
             if let Some(gltf_mesh) =
                 self.writer
-                    .mesh(&short_name(path), mesh, &draws, tint, normal_offset)?
+                    .mesh(&short_name(path), mesh, &draws, tint, normal_offset, None)?
             {
                 written.push(gltf_mesh);
             }
@@ -425,9 +425,9 @@ impl MapExporter<'_> {
             }
         }
         for (&(_, world), (draws, tint)) in &groups {
-            if let Some(gltf_mesh) = self
-                .writer
-                .mesh(&short_name(path), mesh, draws, *tint, 0.0)?
+            if let Some(gltf_mesh) =
+                self.writer
+                    .mesh(&short_name(path), mesh, draws, *tint, 0.0, None)?
             {
                 self.placing_world_geometry = world;
                 let node = self
@@ -454,6 +454,7 @@ impl MapExporter<'_> {
                             &[draw],
                             fragment.tint,
                             0.0,
+                            None,
                         )?,
                         None => None,
                     };

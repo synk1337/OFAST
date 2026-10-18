@@ -30,6 +30,13 @@ pub struct Geometry {
     /// Vertex colour (0–1, RGBA) from `COLOR 0` stored as `R8G8B8A8_UNORM`. On `csgo_environment(_blend)` meshes it
     /// is the painted tint (semantic `VertexPaintTintColor`): colour × lerp(1, rgb, a).
     pub colors: Vec<[f32; 4]>,
+    /// Skinning: four bone indices per vertex from `BLENDINDICES 0` (`R8G8B8A8_UINT`, or `R16G16B16A16_UINT`),
+    /// indices into the mesh's remapping slice ([`super::Model::bone_remap`]), not skeleton bones yet. Slots whose
+    /// weight is 0 can hold leftover indices.
+    pub joints: Vec<[u16; 4]>,
+    /// Skinning weights from `BLENDWEIGHT 0` (`R8G8B8A8_UNORM`; the bytes sum to exactly 255 on every CS2 agent
+    /// vertex). Empty when the mesh stores none (one bone per vertex, `m_nBoneWeightCount` 1).
+    pub weights: Vec<[u8; 4]>,
     /// Triangle list indices into the arrays above.
     pub indices: Vec<u32>,
 }
@@ -170,6 +177,34 @@ impl Geometry {
                 .map(|i| {
                     let b = &vertex_bytes(vb, i)[attr.offset..];
                     [b[0], b[1], b[2], b[3]].map(|c| f32::from(c) / 255.0)
+                })
+                .collect();
+        }
+
+        if let Some((vb, attr)) = streams.find("BLENDINDICES", 0) {
+            let read = |i: usize| -> Option<[u16; 4]> {
+                let b = &vertex_bytes(vb, i)[attr.offset..];
+                match attr.format {
+                    dxgi::R8G8B8A8_UINT => Some([b[0], b[1], b[2], b[3]].map(u16::from)),
+                    dxgi::R16G16B16A16_UINT => Some(std::array::from_fn(|k| {
+                        u16::from_le_bytes([b[2 * k], b[2 * k + 1]])
+                    })),
+                    _ => None,
+                }
+            };
+            geometry.joints = vertices.clone().map_while(read).collect();
+            if geometry.joints.len() != vertices.len() {
+                geometry.joints.clear();
+            }
+        }
+        if let Some((vb, attr)) = streams.find("BLENDWEIGHT", 0)
+            && attr.format == dxgi::R8G8B8A8_UNORM
+        {
+            geometry.weights = vertices
+                .clone()
+                .map(|i| {
+                    let b = &vertex_bytes(vb, i)[attr.offset..];
+                    [b[0], b[1], b[2], b[3]]
                 })
                 .collect();
         }

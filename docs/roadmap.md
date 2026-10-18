@@ -111,6 +111,25 @@ de_fachwerk) — probably stored in another archive.
 - [ ] Several rounds / a whole match in one sequence; weapons in hand; grenades (M6).
 - [ ] Studio demo browser (Tauri app).
 
+## M4 progress
+
+Design: [decision 013](decisions/013-replay-rig-baked-in-rust.md) — CS2's agents as skeletal meshes, each player's
+animation computed in Rust from the demo (CS2's own clips, blended per tick) and imported as one AnimSequence per
+player and round.
+
+- [x] **M4.1 Skinned agents**: skeleton (`m_modelSkeleton`), bone remapping, four weights per vertex → glTF skin;
+  `ctm_sas` imports into Unreal as a skeletal mesh in CS2's bind pose (94 bones, pelvis and head at CS2's heights).
+  [model.md](formats/model.md#skeleton-and-skinning).
+- [ ] M4.2 Clip decoder (`.vnmclip`: per-track quantised poses, 30 fps) and a decoded clip playing in Unreal as in CS2.
+- [ ] M4.3 Rig inputs in the replay export: velocity, duck amount, ground, walking, body yaw, active weapon and its
+  gameplay animation state, reload, jump / land ticks, defusing.
+- [ ] M4.4 Baked animation: locomotion (2D blend on local velocity × crouch), weapon idle / shoot / reload / deploy
+  layers, procedural aim on the spine; checked against CS2's demo playback from the side.
+- [ ] M4.5 Weapons in hand (weapon skeletal mesh on `weapon_hand_R`), each player's agent, knife and gloves from the
+  demo's model hashes.
+- [ ] M4.6 Deaths: ragdolls in Unreal from the demo's ragdoll force and bone.
+- [ ] Character materials (CS2's character shader: the agents render too glossy).
+
 ## Hard problems we know about
 
 - **Player animation.** Demos contain no skeleton poses; CS2 computes them while playing the demo. Plan: a "replay

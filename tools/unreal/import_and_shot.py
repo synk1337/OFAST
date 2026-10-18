@@ -29,7 +29,8 @@ def log(message):
 
 
 def import_gltf():
-    """Imports the glTF with Interchange and returns the static mesh."""
+    """Imports the glTF with Interchange and returns the mesh: a static mesh, or a skeletal mesh when the glTF has a
+    skin (agents, weapons with bones; Interchange makes the Skeleton and a PhysicsAsset with it)."""
     source = unreal.InterchangeManager.create_source_data(GLTF)
     params = unreal.ImportAssetParameters()
     params.is_automated = True
@@ -38,9 +39,28 @@ def import_gltf():
     objects = manager.import_asset("/Game/OFAST/" + NAME, source, params)
     log("imported %d assets: %s" % (len(objects), ", ".join(o.get_name() for o in objects)))
     meshes = [o for o in objects if isinstance(o, unreal.StaticMesh)]
+    meshes += [o for o in objects if isinstance(o, unreal.SkeletalMesh)]
     if not meshes:
-        raise RuntimeError("no static mesh in the import")
+        raise RuntimeError("no mesh in the import")
     return meshes[0]
+
+
+# Bones whose positions are logged for a skeletal mesh: with CS2's bind pose (A-pose facing +X) the pelvis sits
+# 42.8 in (108.8 cm) and the head 70.8 in (179.8 cm) above the feet.
+CHECK_BONES = ("root_motion", "pelvis", "head_0", "hand_R", "hand_L", "ankle_R")
+
+
+def log_bones(actor):
+    """Logs the skeleton's size and where a few bones are relative to the actor (cm, Unreal axes)."""
+    component = actor.skeletal_mesh_component
+    names = [str(n) for n in component.get_bone_names()] if hasattr(component, "get_bone_names") else []
+    log("skeletal mesh: %d bones" % component.get_num_bones())
+    base = actor.get_actor_location()
+    for bone in CHECK_BONES:
+        if names and bone not in names:
+            continue
+        p = component.get_socket_location(bone) - base
+        log("bone %s at (%.1f, %.1f, %.1f) cm" % (bone, p.x, p.y, p.z))
 
 
 def build_scene(mesh):
@@ -64,9 +84,12 @@ def build_scene(mesh):
     actor.set_actor_location(unreal.Vector(-origin.x, -origin.y, extent.z - origin.z + 30.0), False, False)
     origin, extent = actor.get_actor_bounds(False)
     log("mesh bounds: origin %s, half-size %s (cm)" % (origin, extent))
+    if isinstance(actor, unreal.SkeletalMeshActor):
+        log_bones(actor)
 
-    # Look at the long side: the camera sits along the shorter horizontal axis.
-    distance = max(extent.x, extent.y, extent.z) * 2.6
+    # Look at the long side: the camera sits along the shorter horizontal axis. Far enough for the height too: the
+    # 35 mm lens sees about ±16° vertically, so a standing agent (2 m) needs ~1.9 × its half-height per metre.
+    distance = max(extent.x, extent.y, extent.z * 1.9) * 2.6
     if extent.x >= extent.y:
         offset = unreal.Vector(0, -distance, extent.z * 0.6)
     else:

@@ -58,7 +58,10 @@ use crate::content::Content;
 use crate::coords;
 use crate::kv3::Value;
 use crate::map::Transform;
-use crate::model::{DrawCall, Mesh, Model};
+use crate::model::{
+    Affine, DrawCall, Mesh, Model, Skeleton, affine, compose, invert_rigid, normalize_quat,
+    quat_mul,
+};
 use crate::resource::{BlockKind, Resource};
 use crate::texture::{self, Format, Image, Texture};
 
@@ -90,6 +93,11 @@ pub struct ExportReport {
 }
 
 /// Exports the model at `model_path` (e.g. `weapons/models/ak47/weapon_rif_ak47.vmdl_c`) with its default meshes.
+///
+/// A model with a real skeleton (agents, weapons) is written skinned: its bones as glTF nodes and one skin
+/// (`GltfWriter::skin`), every mesh with `JOINTS_0` / `WEIGHTS_0` bound to it, so Unreal imports a skeletal mesh in
+/// CS2's bind pose. Mesh nodes whose names a bone already uses get a `_mesh` suffix: Unreal's glTF importer renames
+/// every clashing node, which would break bone names.
 pub fn export_model(
     content: &Content,
     model_path: &str,
@@ -103,14 +111,77 @@ pub fn export_model(
         .to_owned();
     // A model on its own has no placement tints: the options change nothing here.
     let mut writer = GltfWriter::new(content, out_dir, ExportOptions::default())?;
+    let skin = writer.skin(&model.skeleton);
+    let bone_names: HashSet<String> = model
+        .skeleton
+        .bones
+        .iter()
+        .map(|b| b.name.to_ascii_lowercase())
+        .collect();
     let mut roots = Vec::new();
     for mesh in model.default_meshes() {
         let draws: Vec<&DrawCall> = mesh.draw_calls.iter().collect();
-        if let Some(gltf_mesh) = writer.mesh(&mesh.name, mesh, &draws, [1.0; 4], 0.0)? {
-            roots.push(writer.node(&mesh.name, Some(gltf_mesh), None));
+        let remap = skin.as_ref().map(|_| model.bone_remap(mesh.mesh_index));
+        if let Some(gltf_mesh) = writer.mesh(&mesh.name, mesh, &draws, [1.0; 4], 0.0, remap)? {
+            let node_name = if bone_names.contains(&mesh.name.to_ascii_lowercase()) {
+                format!("{}_mesh", mesh.name)
+            } else {
+                mesh.name.clone()
+            };
+            let node = writer.node(&node_name, Some(gltf_mesh), None);
+            if let Some((_, skin_index)) = &skin
+                && !writer.bind_skin(node, *skin_index)
+            {
+                writer.report.warnings.push(format!(
+                    "mesh {}: no skin weights, exported rigid",
+                    mesh.name
+                ));
+            }
+            roots.push(node);
         }
     }
+    if let Some((bone_roots, _)) = skin {
+        roots.extend(bone_roots);
+    }
     writer.finish(&name, roots)
+}
+
+/// glTF `JOINTS_0` / `WEIGHTS_0` for vertices with CS2 bone indices `joints` (into the mesh's remapping slice
+/// `remap`) and weight bytes `weights` (empty when the mesh stores none: the first bone then takes the whole vertex).
+///
+/// Slots with weight 0 get joint 0 (they may hold leftover indices, and glTF wants unused joints at 0). Weights are
+/// rescaled to sum to exactly 255 (they already do on every CS2 agent vertex); an all-zero vertex follows its first
+/// bone. Indices outside the slice go to bone 0.
+pub fn skin_attributes(
+    joints: &[[u16; 4]],
+    weights: &[[u8; 4]],
+    remap: &[u32],
+) -> (Vec<[u16; 4]>, Vec<[u16; 4]>) {
+    joints
+        .iter()
+        .enumerate()
+        .map(|(i, local)| {
+            let mut w: [u16; 4] = weights.get(i).map_or([255, 0, 0, 0], |w| w.map(u16::from));
+            let sum: u16 = w.iter().sum();
+            if sum == 0 {
+                w = [255, 0, 0, 0];
+            } else if sum != 255 {
+                let scaled = w.map(|v| (u32::from(v) * 255 + u32::from(sum) / 2) / u32::from(sum));
+                w = scaled.map(|v| v as u16);
+                let total: i32 = w.iter().map(|&v| i32::from(v)).sum();
+                let largest = (0..4).max_by_key(|&k| w[k]).unwrap_or(0);
+                w[largest] = (i32::from(w[largest]) + 255 - total) as u16;
+            }
+            let bones = std::array::from_fn(|k| {
+                if w[k] == 0 {
+                    0
+                } else {
+                    remap.get(usize::from(local[k])).copied().unwrap_or(0) as u16
+                }
+            });
+            (bones, w)
+        })
+        .unzip()
 }
 
 /// Reads and decodes a model (`path` with or without `_c`).
@@ -354,6 +425,7 @@ pub(crate) struct GltfWriter<'c> {
     accessors: Vec<Json>,
     meshes: Vec<Json>,
     nodes: Vec<Json>,
+    skins: Vec<Json>,
     lights: Vec<Json>,
     materials: Vec<Json>,
     /// (material path, tint in 0–255) → material index.
@@ -374,8 +446,21 @@ pub(crate) struct GltfWriter<'c> {
 /// glTF component type and target constants.
 const FLOAT: u32 = 5126;
 const UNSIGNED_INT: u32 = 5125;
+const UNSIGNED_SHORT: u32 = 5123;
+const UNSIGNED_BYTE: u32 = 5121;
 const ARRAY_BUFFER: u32 = 34962;
 const ELEMENT_ARRAY_BUFFER: u32 = 34963;
+/// A buffer view that is neither vertex nor index data (inverse bind matrices): glTF wants no `target` there.
+const NO_TARGET: u32 = 0;
+
+/// The rotation that turns Source axes into glTF axes (`coords::source_dir_to_gltf`): −90° about X. A skeleton's
+/// root bones carry it, so their children keep CS2's own local rotations.
+const SOURCE_TO_GLTF_ROTATION: [f32; 4] = [
+    -std::f32::consts::FRAC_1_SQRT_2,
+    0.0,
+    0.0,
+    std::f32::consts::FRAC_1_SQRT_2,
+];
 
 /// Shaders whose geometry is not exported: `csgo_effects` draws additive dust / light-shaft cards that would show
 /// up as opaque white sheets in a plain PBR material (they come back as Unreal effects later).
@@ -417,6 +502,7 @@ impl<'c> GltfWriter<'c> {
             accessors: Vec::new(),
             meshes: Vec::new(),
             nodes: Vec::new(),
+            skins: Vec::new(),
             lights: Vec::new(),
             materials: Vec::new(),
             material_ids: BTreeMap::new(),
@@ -434,14 +520,150 @@ impl<'c> GltfWriter<'c> {
         while !self.bin.len().is_multiple_of(4) {
             self.bin.push(0);
         }
-        self.buffer_views.push(json!({
+        let mut view = json!({
             "buffer": 0,
             "byteOffset": self.bin.len(),
             "byteLength": bytes.len(),
-            "target": target,
-        }));
+        });
+        if target != NO_TARGET {
+            view["target"] = json!(target);
+        }
+        self.buffer_views.push(view);
         self.bin.extend_from_slice(bytes);
         self.buffer_views.len() - 1
+    }
+
+    /// Writes four integers per vertex (`JOINTS_0`, `WEIGHTS_0`) as unsigned bytes, or unsigned shorts when a value
+    /// exceeds 255. `normalized`: read as 0 – 1 (weights, which are bytes summing to 255).
+    fn vec4_int_accessor(&mut self, values: &[[u16; 4]], normalized: bool) -> usize {
+        let wide = values.iter().flatten().any(|&v| v > 255);
+        let bytes: Vec<u8> = if wide {
+            values
+                .iter()
+                .flatten()
+                .flat_map(|v| v.to_le_bytes())
+                .collect()
+        } else {
+            values.iter().flatten().map(|&v| v as u8).collect()
+        };
+        let view = self.view(&bytes, ARRAY_BUFFER);
+        let mut accessor = json!({
+            "bufferView": view,
+            "componentType": if wide { UNSIGNED_SHORT } else { UNSIGNED_BYTE },
+            "count": values.len(),
+            "type": "VEC4",
+        });
+        if normalized {
+            accessor["normalized"] = json!(true);
+        }
+        self.accessors.push(accessor);
+        self.accessors.len() - 1
+    }
+
+    /// Writes a skeleton as glTF nodes plus one skin; returns the root bone nodes and the skin index, or `None` for
+    /// a placeholder skeleton ([`Skeleton::is_real`]).
+    ///
+    /// Bone `i` is skin joint `i`, so the remapped `JOINTS_0` values are skeleton bone indices. Node transforms are
+    /// the bind pose in glTF axes: a root bone gets the Source → glTF rotation and a converted translation, every
+    /// other bone its CS2 local rotation and its translation in metres (the conversion is a rotation, inherited down
+    /// the chain). The inverse bind matrices are the inverses of the same chain, so they match the nodes exactly; Unreal
+    /// takes its reference pose from them.
+    pub(crate) fn skin(&mut self, skeleton: &Skeleton) -> Option<(Vec<usize>, usize)> {
+        if !skeleton.is_real() {
+            return None;
+        }
+        let first = self.nodes.len();
+        let mut world: Vec<Affine> = Vec::with_capacity(skeleton.bones.len());
+        let mut roots = Vec::new();
+        for (i, bone) in skeleton.bones.iter().enumerate() {
+            let (translation, rotation) = match bone.parent {
+                None => (
+                    coords::source_point_to_gltf(bone.position),
+                    normalize_quat(quat_mul(SOURCE_TO_GLTF_ROTATION, bone.rotation)),
+                ),
+                Some(_) => (
+                    bone.position.map(|c| c * coords::INCH_TO_METRE),
+                    bone.rotation,
+                ),
+            };
+            let local = affine(rotation, translation);
+            world.push(match bone.parent {
+                Some(p) => compose(&world[p], &local),
+                None => {
+                    roots.push(first + i);
+                    local
+                }
+            });
+            self.nodes.push(json!({
+                "name": bone.name,
+                "translation": translation.to_vec(),
+                "rotation": rotation.to_vec(),
+            }));
+        }
+        for (i, bone) in skeleton.bones.iter().enumerate() {
+            if let Some(p) = bone.parent {
+                let parent = &mut self.nodes[first + p];
+                match parent.get_mut("children").and_then(Json::as_array_mut) {
+                    Some(children) => children.push(json!(first + i)),
+                    None => parent["children"] = json!([first + i]),
+                }
+            }
+        }
+        self.report.nodes += skeleton.bones.len();
+        // glTF matrices are column-major.
+        let bytes: Vec<u8> = world
+            .iter()
+            .flat_map(|w| {
+                let m = invert_rigid(w);
+                let column_major: [f32; 16] = std::array::from_fn(|k| {
+                    let (col, row) = (k / 4, k % 4);
+                    match row {
+                        3 => {
+                            if col == 3 {
+                                1.0
+                            } else {
+                                0.0
+                            }
+                        }
+                        _ => m[row][col],
+                    }
+                });
+                column_major.into_iter().flat_map(f32::to_le_bytes)
+            })
+            .collect();
+        let view = self.view(&bytes, NO_TARGET);
+        self.accessors.push(json!({
+            "bufferView": view,
+            "componentType": FLOAT,
+            "count": skeleton.bones.len(),
+            "type": "MAT4",
+        }));
+        self.skins.push(json!({
+            "joints": (first..first + skeleton.bones.len()).collect::<Vec<_>>(),
+            "inverseBindMatrices": self.accessors.len() - 1,
+            "skeleton": roots.first().copied().unwrap_or(first),
+        }));
+        Some((roots, self.skins.len() - 1))
+    }
+
+    /// Binds a mesh node to a skin made by [`Self::skin`] when its mesh carries joints and weights (a node with a
+    /// skin must; a mesh without them stays an ordinary node).
+    pub(crate) fn bind_skin(&mut self, node: usize, skin: usize) -> bool {
+        let skinned = self.nodes[node]
+            .get("mesh")
+            .and_then(Json::as_u64)
+            .and_then(|m| self.meshes.get(m as usize))
+            .and_then(|m| m.get("primitives"))
+            .and_then(Json::as_array)
+            .is_some_and(|primitives| {
+                primitives
+                    .iter()
+                    .all(|p| p["attributes"].get("JOINTS_0").is_some())
+            });
+        if skinned {
+            self.nodes[node]["skin"] = json!(skin);
+        }
+        skinned
     }
 
     /// Writes `values` (N floats per element) as an accessor.
@@ -487,6 +709,9 @@ impl<'c> GltfWriter<'c> {
     ///
     /// `normal_offset` (inches) pushes every vertex along its normal: used for overlays/decals so they sit just in
     /// front of the surface they decorate instead of fighting with it for depth (CS2 uses a depth bias instead).
+    ///
+    /// `skin`: the mesh's bone remapping slice ([`crate::model::Model::bone_remap`]) when the mesh is written for a
+    /// skin made by [`Self::skin`]: its vertices then get `JOINTS_0` / `WEIGHTS_0` ([`skin_attributes`]).
     pub(crate) fn mesh(
         &mut self,
         name: &str,
@@ -494,6 +719,7 @@ impl<'c> GltfWriter<'c> {
         draws: &[&DrawCall],
         tint: [f32; 4],
         normal_offset: f32,
+        skin: Option<&[u32]>,
     ) -> Result<Option<usize>, ExportError> {
         let mut primitives = Vec::new();
         for draw in draws {
@@ -578,6 +804,19 @@ impl<'c> GltfWriter<'c> {
                 attributes.insert(
                     "COLOR_0".into(),
                     json!(self.float_accessor(weights, "VEC4", false)),
+                );
+            }
+            if let Some(remap) = skin
+                && g.joints.len() == g.positions.len()
+            {
+                let (joints, weights) = skin_attributes(&g.joints, &g.weights, remap);
+                attributes.insert(
+                    "JOINTS_0".into(),
+                    json!(self.vec4_int_accessor(&joints, false)),
+                );
+                attributes.insert(
+                    "WEIGHTS_0".into(),
+                    json!(self.vec4_int_accessor(&weights, true)),
                 );
             }
             let index_bytes: Vec<u8> = g.indices.iter().flat_map(|i| i.to_le_bytes()).collect();
@@ -1287,6 +1526,9 @@ impl<'c> GltfWriter<'c> {
             "bufferViews": self.buffer_views,
             "buffers": [{ "uri": bin_name, "byteLength": self.bin.len() }],
         });
+        if !self.skins.is_empty() {
+            document["skins"] = json!(self.skins);
+        }
         if !textures.is_empty() {
             document["textures"] = json!(textures);
             document["images"] = json!(images);
@@ -1752,6 +1994,7 @@ pub fn write_png(path: &Path, image: &Image) -> Result<(), ExportError> {
 mod tests {
     use super::*;
     use crate::map::{IDENTITY, entity_transform};
+    use crate::model::Bone;
 
     #[test]
     fn identity_placement_is_identity_in_gltf() {
@@ -2299,6 +2542,7 @@ mod tests {
                 draw([1.0; 3], 0.25),
                 draw([1.0; 3], 1.0),
             ],
+            bone_weight_count: 0,
         };
         let content = Content::new();
         let dir = temp_folder("draw-tint");
@@ -2309,7 +2553,7 @@ mod tests {
         let draws: Vec<&DrawCall> = mesh.draw_calls.iter().collect();
         // The scene object places it untinted (m_vTintColor 1, 1, 1, 1).
         let gltf_mesh = writer
-            .mesh("overlay", &mesh, &draws, [1.0; 4], 0.0)
+            .mesh("overlay", &mesh, &draws, [1.0; 4], 0.0, None)
             .expect("mesh")
             .expect("triangles");
         let materials: Vec<Json> = writer.meshes[gltf_mesh]["primitives"]
@@ -2496,5 +2740,113 @@ mod tests {
         let mut single = material("csgo_lightmappedgeneric.vfx");
         single.textures.clear();
         assert!(!single.is_vertex_blend());
+    }
+
+    #[test]
+    fn skin_attributes_remap_clear_unused_slots_and_sum_to_255() {
+        // Remapping slice: local index 0 → bone 5, 1 → bone 7, 2 → bone 9.
+        let remap = [5, 7, 9];
+        let joints = [[0, 1, 17, 6], [2, 0, 0, 0], [1, 2, 0, 0]];
+        let weights = [[200, 55, 0, 0], [255, 0, 0, 0], [100, 100, 0, 0]];
+        let (j, w) = skin_attributes(&joints, &weights, &remap);
+        // Zero-weight slots holding leftover indices (17, 6) become joint 0.
+        assert_eq!(j[0], [5, 7, 0, 0]);
+        assert_eq!(w[0], [200, 55, 0, 0]);
+        assert_eq!(j[1], [9, 0, 0, 0]);
+        // 200 in total is rescaled to 255.
+        assert_eq!(w[2].iter().sum::<u16>(), 255);
+        assert_eq!(j[2], [7, 9, 0, 0]);
+        // No weights stored (one bone per vertex): the first bone takes the whole vertex.
+        let (j, w) = skin_attributes(&[[1, 23, 17, 0]], &[], &remap);
+        assert_eq!((j[0], w[0]), ([7, 0, 0, 0], [255, 0, 0, 0]));
+    }
+
+    #[test]
+    fn skin_inverse_bind_matrices_undo_the_bone_nodes() {
+        let h = 0.5f32;
+        let bone =
+            |name: &str, parent: Option<usize>, position: [f32; 3], rotation: [f32; 4]| Bone {
+                name: name.into(),
+                parent,
+                position,
+                rotation,
+                flags: 0,
+            };
+        let skeleton = Skeleton {
+            bones: vec![
+                bone("root_motion", None, [10.0, 20.0, 0.0], [h, h, h, h]),
+                bone(
+                    "pelvis",
+                    Some(0),
+                    [0.0, 42.8248, -2.8535],
+                    [0.0, 0.0, 0.0, 1.0],
+                ),
+                bone(
+                    "spine_0",
+                    Some(1),
+                    [0.0, 0.0, 5.0],
+                    normalize_quat([0.1, 0.2, 0.0, 1.0]),
+                ),
+            ],
+        };
+        let content = Content::new();
+        let dir = temp_folder("skin");
+        let mut writer = GltfWriter::new(&content, &dir, ExportOptions::default()).expect("writer");
+        let (roots, skin) = writer.skin(&skeleton).expect("a real skeleton");
+        assert_eq!(roots, vec![0]);
+        assert_eq!(writer.nodes[1]["children"], json!([2]));
+        assert_eq!(writer.skins[skin]["joints"], json!([0, 1, 2]));
+
+        // Rebuild each node's world matrix from the written TRS and multiply by the written inverse bind matrix.
+        let mut world: Vec<Affine> = Vec::new();
+        for (i, b) in skeleton.bones.iter().enumerate() {
+            let node = &writer.nodes[i];
+            let t: Vec<f32> = node["translation"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap() as f32)
+                .collect();
+            let r: Vec<f32> = node["rotation"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap() as f32)
+                .collect();
+            let local = affine([r[0], r[1], r[2], r[3]], [t[0], t[1], t[2]]);
+            world.push(match b.parent {
+                Some(p) => compose(&world[p], &local),
+                None => local,
+            });
+        }
+        let accessor =
+            &writer.accessors[writer.skins[skin]["inverseBindMatrices"].as_u64().unwrap() as usize];
+        let view = &writer.buffer_views[accessor["bufferView"].as_u64().unwrap() as usize];
+        assert!(
+            view.get("target").is_none(),
+            "inverse bind matrices are not vertex data"
+        );
+        let offset = view["byteOffset"].as_u64().unwrap() as usize;
+        for (i, w) in world.iter().enumerate() {
+            let m: Vec<f32> = writer.bin[offset + i * 64..offset + (i + 1) * 64]
+                .chunks(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect();
+            // Column-major 4 × 4 → rows of a 3 × 4.
+            let ibm: Affine =
+                std::array::from_fn(|row| std::array::from_fn(|col| m[col * 4 + row]));
+            let id = compose(w, &ibm);
+            for (r, row) in id.iter().enumerate() {
+                for (c, v) in row.iter().enumerate() {
+                    let expected = if r == c { 1.0 } else { 0.0 };
+                    assert!((v - expected).abs() < 1e-4, "bone {i}: {id:?}");
+                }
+            }
+        }
+
+        // The root carries the Source → glTF rotation: a bone 42.8 inches up in Source (the pelvis) is 42.8 inches
+        // up the glTF Y axis, i.e. 1.0877 m above the root's glTF position.
+        let pelvis_y = world[1][1][3] - world[0][1][3];
+        assert!((pelvis_y - 42.8248 * 0.0254).abs() < 1e-3, "{pelvis_y}");
     }
 }

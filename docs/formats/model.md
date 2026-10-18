@@ -68,11 +68,43 @@ Triangle `k` of a draw call uses `IB[m_nStartIndex + k] + m_nBaseVertex`.
 | TEXCOORD | 34 `R16G16_FLOAT` (also 16, 35, 37) | half floats; origin top-left, no V flip needed for glTF |
 | NORMAL | 42 `R32_UINT` "CompressedTangentFrame" | see below |
 | NORMAL | 28 `R8G8B8A8_UNORM` (older) | two folded-octahedral byte pairs: normal, tangent |
-| BLENDINDICES | 30 `R8G8B8A8_UINT` | bone indices (through the mesh's remap table) |
+| BLENDINDICES | 30 `R8G8B8A8_UINT` (12 `R16G16B16A16_UINT` read too) | four bone indices into the mesh's remapping slice (see "Skeleton and skinning") |
+| BLENDWEIGHT (stored as `blendweight`) | 28 `R8G8B8A8_UNORM` | four weights, bytes summing to exactly 255 |
 
 **`R32_UINT` tangent frame**: bit 0 = bitangent sign (0 → −1), bits 1–11 = tangent angle (`/2047 × 2π`), bits 12–21
 = normal X, bits 22–31 = normal Y (octahedral, `/1023 × 2 − 1`, folded when `z < 0`). The tangent is a reference
 vector perpendicular to the normal, rotated around the normal by the stored angle.
+
+## Skeleton and skinning
+
+Player agents are `agents/models/<agent>/<agent>.vmdl_c` (0.5 – 1.4 MB; `characters/models/*` are 4.8 KB stubs with
+an orange box and one `dummy` bone). Everything is embedded, with no LODs. Meshes: `thirdperson_body`,
+`thirdperson_default_gloves`, `firstperson_default_gloves_arms`, `firstperson_sleeves`, and on 35 CT agents a
+`defusekit`. The default mesh-group mask picks body + default gloves, the full third-person agent. Glove skins are
+separate models (`agents/models/shared/arms/glove_*`, two root bones) meant to be bone-merged onto the agent.
+
+**`DATA → m_modelSkeleton`**, parallel arrays (`src/model/skeleton.rs`): `m_boneName`, `m_nParent` (−1 root),
+`m_bonePosParent` (inches, parent frame), `m_boneRotParent` (quaternion x, y, z, w), `m_boneScaleParent` (~1,
+ignored), `m_nFlag` (0x10 physics, 0x20 attachment, 0x40 animation, 0x80 mesh, 0x100 hitbox, 0x400… LODs, 0x400000
+procedural twist bones). Parents come before children in all 93 agent and glove models. Bind pose in model space:
+`W = W_parent · T(position) · R(rotation)`. Agents have 86 – 94 bones from `root_motion`, whose rotation (0.5, 0.5,
+0.5, 0.5) turns the A-pose to face +X: pelvis at (−2.85, 0, 42.82), head at 70.8 inches.
+
+**Remapping**: `DATA m_remappingTable` holds one slice per mesh, starting at `m_remappingTableStarts[mesh index]` and
+ending at the next start. A vertex's bone index `i` is skeleton bone `table[start + i]`. A slice begins with the
+mesh's own render bones (`MDAT m_skeleton.m_bones`, same order, each with an `m_invBindPose`) and on agents ends with
+19 hitbox bones that vertices never use. `MDAT m_skeleton.m_nBoneWeightCount` is 1 – 4; with 1 the mesh stores no
+weights (six `firstperson_sleeves` buffers): the first index takes the whole vertex. Slots with weight 0 can hold
+leftover indices.
+
+**glTF** (`GltfWriter::skin`, `export_model`): bones become nodes in bone order (glTF joint `i` = bone `i`); a root
+bone carries the Source → glTF rotation (−90° about X) and a converted translation, the others their CS2 rotation and
+their translation in metres. The inverse bind matrices are the inverses of the same chain, so they match the nodes
+exactly; Unreal takes its reference pose from them (`GLTFReader.cpp`). Joints are remapped to skeleton bones, unused
+slots set to 0, weights written as normalized bytes. Mesh nodes that share a bone's name get `_mesh` (Unreal renames
+clashing node names). Checked on `ctm_sas` in Unreal (2026-10-18): one Skeleton with 94 bones, pelvis 108.8 cm and
+head 179.8 cm above the feet, hands ±53.2 cm to the sides, every vertex weight sum 255; screenshot in
+`test-data/shots/agents/`. `tm_phoenix` (86 bones) and the AK-47 world model (7 bones) export skinned too.
 
 ## Meshopt buffers
 
@@ -89,6 +121,9 @@ and the glTF `EXT_meshopt_compression` spec, and passes meshoptimizer's own test
 ## Sources
 
 - ValveResourceFormat (MIT): `Resource/ResourceTypes/Model.cs`, `Mesh.cs`, `Resource/Blocks/VBIB.cs`,
-  `IO/Gltf/GltfModelExporter*.cs`, `Compression/MeshOptimizer*.cs`
+  `IO/Gltf/GltfModelExporter*.cs`, `Compression/MeshOptimizer*.cs`; skinning: `ModelAnimation/Skeleton.cs`,
+  `Bone.cs`, `ModelData/BoneRemapTable.cs`, `GltfModelExporter.Skeleton.cs`, `GltfModelExporter.Mesh.cs`
+- Unreal 5.8 Interchange source for the glTF skin import: `Parsers/GLTFCore/Private/GLTFReader.cpp`,
+  `Import/Private/Gltf/InterchangeGltfMesh.cpp` (4 influences read)
 - meshoptimizer (MIT): `src/vertexcodec.cpp`, `src/indexcodec.cpp`, `demo/tests.cpp` — https://github.com/zeux/meshoptimizer
 - Real data: `cargo run --release --example resource_dump -- weapons/models/ak47/weapon_rif_ak47.vmdl_c`
