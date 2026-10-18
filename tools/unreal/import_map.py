@@ -2490,6 +2490,25 @@ def cs2_tonemapper_instance(tonemap, hable, lut, lut_size):
 
 LIGHT_CLASSES = {"point": unreal.PointLight, "spot": unreal.SpotLight, "rect": unreal.RectLight}
 
+# CS2 local light brightness is given 100 units (inches) past the light, in cm.
+LIGHT_REFERENCE_DISTANCE_CM = 254.0
+
+# CS2's `directlight` values whose direct light CS2 draws at run time (2 dynamic, 3 stationary), with its barn-light
+# shader: inside the frustum only, times the cookie (Source 2 Viewer's lighting.barn.slang). Measured on de_vertigo's
+# CT spawn, lit by three stationary barn lights with the flashlight cookie: its far wall had 2.4x CS2's light as
+# hemisphere-wide rect lights, 1.05x as cookie spots. Static (baked, 1) barn lights keep the rect: what CS2's bake does
+# with their cookies is not settled (de_vertigo's T-spawn lamps barely light anything in CS2, de_nuke's garage lamps
+# do; see docs/formats/lighting.md, "Barn lights and their cookies").
+COOKIE_SPOT_DIRECT = (2, 3)
+
+
+def cookie_spot(light):
+    """The spot light (manifest `barn.spot`) standing in for a run-time barn light with a cookie, or None."""
+    barn = light.get("barn") or {}
+    if light.get("direct") in COOKIE_SPOT_DIRECT and barn.get("spot"):
+        return barn
+    return None
+
 
 def light_radius(light):
     """Unreal attenuation radius (cm) for a manifest light whose CS2 `range` is `attenuation_radius`.
@@ -2526,7 +2545,8 @@ RENDER_CVARS = (
 
 def setup_local_lights(manifest, imported, physical=False):
     """Replaces the glTF lights (punctual approximations, and Interchange drops their range) with Unreal lights
-    built from the manifest: real rect lights, CS2's fade-out range, source size and bounce strength. `physical`
+    built from the manifest: real rect lights, CS2's fade-out range, source size and bounce strength; run-time barn
+    lights with a cookie as the spot light that matches their frustum and cookie (cookie_spot). `physical`
     (realistic style) uses Hammer's real candela and plain physical bounce instead of the CS2-matched values."""
     for actor in imported:
         if isinstance(actor, unreal.Light):
@@ -2535,10 +2555,20 @@ def setup_local_lights(manifest, imported, physical=False):
     lights = manifest.get("lights") or []
     bounce_only = 0
     highlights = {"none": 0, "own": 0, "cubemap": 0, "unknown": 0}
+    cookie_spots = 0
     for light in lights:
         pitch, yaw, roll = light["rotation"]
-        actor = spawn(LIGHT_CLASSES[light["shape"]], light["location"], unreal.Rotator(roll=roll, pitch=pitch, yaw=yaw))
-        actor.set_actor_label("%s_%s" % (light["class"], light["shape"]))
+        rotation = unreal.Rotator(roll=roll, pitch=pitch, yaw=yaw)
+        barn = cookie_spot(light)
+        shape = "spot" if barn else light["shape"]
+        location = light["location"]
+        if barn:
+            # CS2 lights the frustum from its eye, `near` behind the origin (a fraction of an inch for most).
+            f = rotation.get_forward_vector()
+            location = [location[0] - barn["near"] * f.x, location[1] - barn["near"] * f.y,
+                        location[2] - barn["near"] * f.z]
+        actor = spawn(LIGHT_CLASSES[shape], location, rotation)
+        actor.set_actor_label("%s_%s" % (light["class"], shape))
         component = actor.light_component
         component.set_mobility(unreal.ComponentMobility.MOVABLE)
         r, g, b = light["color"]
@@ -2549,7 +2579,13 @@ def setup_local_lights(manifest, imported, physical=False):
         key = "intensity_cd_photometric" if physical else "intensity_cd"
         if key not in light:
             raise RuntimeError("the manifest has no %s: re-export the map with this version of OFAST" % key)
-        candela = light[key] / (2.0 if light["shape"] == "rect" else 1.0)
+        candela = light[key] / (2.0 if shape == "rect" else 1.0)
+        if barn:
+            # Uniform inside CS2's frustum, times the cookie (the fitted spot's scale), and given 100 units past the
+            # origin while it falls off from the eye.
+            reference = (LIGHT_REFERENCE_DISTANCE_CM + barn["near"]) / LIGHT_REFERENCE_DISTANCE_CM
+            candela *= barn["spot"]["scale"] * reference * reference
+            cookie_spots += 1
         scale = light.get("indirect_intensity", 1.0)
         # Realistic: plain physical bounce (0 only when the light has none, or for the -Disable bounce diagnostic).
         bounce = (1.0 if scale else 0.0) if physical else scale * LOCAL_BOUNCE_GAIN
@@ -2579,17 +2615,28 @@ def setup_local_lights(manifest, imported, physical=False):
             bounce_only += 1
         if light.get("attenuation_radius"):
             settings["attenuation_radius"] = light_radius(light)
-        if light["shape"] == "rect":
+        if barn:
+            # The cookie's spot: its cone, and a disc the size of the luminaire for the shadows' softness.
+            spot = barn["spot"]
+            settings.update(
+                {
+                    "source_radius": light.get("source_width", 0.0) / 2.0,
+                    "inner_cone_angle": spot["inner_cone"],
+                    "outer_cone_angle": min(spot["outer_cone"], 80.0),
+                }
+            )
+        elif shape == "rect":
             # No barn doors: CS2's rect lights emit over the whole hemisphere in front of them.
             settings.update(
                 {"source_width": light["source_width"], "source_height": light["source_height"], "barn_door_length": 0.0}
             )
         else:
             settings["source_radius"] = light.get("source_radius", 0.0)
-        if light["shape"] == "spot":
+        if shape == "spot" and not barn:
             settings.update({"inner_cone_angle": light["inner_cone"], "outer_cone_angle": min(light["outer_cone"], 80.0)})
         component.set_editor_properties(settings)
-    log("local lights: %d from the manifest (%d bounce only)" % (len(lights), bounce_only))
+    log("local lights: %d from the manifest (%d bounce only, %d barn lights as cookie spots)"
+        % (len(lights), bounce_only, cookie_spots))
     if not physical:
         log("local light highlights as in CS2: %(own)d own (stationary / dynamic), %(cubemap)d baked into cubemaps, "
             "%(none)d none (baked, or bounce only)" % highlights)

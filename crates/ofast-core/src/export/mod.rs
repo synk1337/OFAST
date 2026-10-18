@@ -5,11 +5,13 @@
 //! - [`sky`]: a map's 2D sky cube map as an equirectangular HDR image.
 //! - `environment` (internal): CS2's `csgo_environment(_blend)` materials, baked for glTF.
 //! - `tint` (internal): the model tints of CS2's prop shaders, masked by `g_tTintMask`.
+//! - `light_cookie` (internal): barn lights' cookies as a radial profile and a matching spot cone.
 //! - [`replay`]: one round of a demo (players' movement, kills, milestones) for Unreal's Level Sequence.
 //! - [`players`]: the players of a round as animated CS2 agents (one glTF per team).
 
 mod environment;
 pub mod gltf;
+mod light_cookie;
 pub mod map;
 pub mod players;
 pub mod replay;
