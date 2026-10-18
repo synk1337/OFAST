@@ -2026,6 +2026,10 @@ def set_unlit_blend_modes():
 # scales (light_environment bouncescale / skybouncescale, each light's bouncescale), fitted on de_mirage's four
 # calibration views (docs/formats/lighting.md): CT / T / palace / B apartments at 0.95 / 0.86 / 0.81 / 0.74 of CS2
 # before, 0.99 / 0.96 / 0.93 / 0.75 after (CT and T cells 0.88-1.04; the apartments' corridor bounce stays short).
+# Those references were taken at a raised CS2 brightness. Checked again against CS2's default picture (2026-10-18),
+# with the material taken out (shade / lamp light relative to the sunlit surfaces of the same views): CT shade 0.93-0.95,
+# T shade 0.96-0.99, palace 0.98 of CS2's light, so both gains stay; the picture's 5-6 % excess there is in the
+# sunlit surfaces too, i.e. the base colours.
 OUTDOOR_BOUNCE_GAIN = 1.25  # sun and sky light
 LOCAL_BOUNCE_GAIN = 2.0  # local lights (palace: CS2 bounces 0.7x the direct light, Lumen 0.43x)
 

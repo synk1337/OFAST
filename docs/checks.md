@@ -161,6 +161,42 @@ re-imported with all their views (`test-data/shots/lut_all/`; all 53 screenshots
 de_nuke's dim interiors (B site, lobby, decontamination) now sit lower; what keeps them dark is still items 6 and 7
 (unlit lamps and screens, the lights below the floor).
 
+### Light and material against the default picture (2026-10-18)
+
+de_mirage's lighting calibration measured again against CS2's default picture, with the material taken out
+([lighting.md](formats/lighting.md#against-cs2s-default-picture-2026-10-18), method and what-ifs there). Unreal /
+CS2 of the scene on the `lut_all` import, re-shot on the saved level, plus a `ShowFlag.Lighting 0` render of every view:
+**sunlit** blocks (Unreal light 1.5 units or more) measure the material, since the direct sun is the same formula in
+both engines; **shade** (0.15 – 0.9) and indoor (**lamp**) blocks the light × material, so their ratio to the sunlit
+one is the light alone (indoors: against the map's median sunlit 1.07). **Pairs**: neighbouring shaded and sunlit
+blocks of the same Unreal base colour, away from shadow edges.
+
+| View | Whole image | Sunlit | Shade / lamp | Light relative to the sun | Pairs |
+|---|---|---|---|---|---|
+| ct0 / t0 | 1.05 / 1.06 | 1.07 / 1.07 | 1.02 / 1.05 | 0.95 / 0.99 | 0.93 / 0.96 |
+| asite | 1.07 | 1.10 | 1.03 | 0.94 | too few |
+| stairs | 1.04 | 1.09 | 1.01 | 0.92 | 0.90 |
+| middle | 0.99 | 1.03 | 0.91 | 0.88 | 0.92 |
+| bsite | 0.93 | 1.07 | 0.78 | 0.73 | 0.82 |
+| bapps | 0.93 | 1.03 | 0.78 | 0.75 | 0.89 |
+| palace | 1.06 | — | 1.05 | 0.98 | — |
+| apps | 0.85 | — | 0.84 | 0.78 | — |
+| connector / sniper | 1.29 / 1.28 | — | 1.25 / 1.26 | 1.17 / 1.18 | — |
+| shop | 0.79 | — | 0.74 | 0.69 | — |
+| tramp | 1.10 | — | 0.84 – 1.09 | 0.79 – 1.02 | — |
+| underpass | 1.29 | — | 1.29 | 1.21 | — |
+
+Every outdoor view's sunlit surfaces read 1.03 – 1.10: Unreal's base colours are about 7 % above CS2's lit albedo
+(de_anubis: 1.08), and that, not the light, is most of what reads bright in the sunlit views. The calibration views'
+light is within 1 – 7 % of CS2's relative to the sun, so `OUTDOOR_BOUNCE_GAIN` 1.25, `LOCAL_BOUNCE_GAIN` 2.0 and the
+rect-light halving stay. `mat_fullbright` could not be used for this on de_mirage: it shows 1.2 – 1.5× the albedo
+the lit shader uses (Unreal's base colour 0.70× it in the CT spawn, CS2's lit ÷ fullbright on sunlit cobbles below
+the direct sun alone; lighting.md).
+
+The T ramp (`tramp`) varies from one editor session to the next: 1.10 (the import's shot), 1.15 – 1.17 in two later
+runs on the saved level, 0.84 in a third that shot every view seven times (the same in all seven). In that session
+the other views agreed with the import's shots within 1 % (the dark shop 3 %); the cause was not found.
+
 ## What was wrong
 
 ### Fixed
@@ -216,9 +252,12 @@ de_nuke's dim interiors (B site, lobby, decontamination) now sit lower; what kee
 9. **Interiors too bright on de_inferno** (church 2.6, sewer underpass 2.9, T-side apartments 1.75 before the
    fixes, more after) **and somewhat on de_mirage** (connector, sniper's nest, T ramp, underpass 1.2 – 1.4). The
    bounce gains (`LOCAL_BOUNCE_GAIN` 2, `OUTDOOR_BOUNCE_GAIN` 1.25) were fitted against references taken at the
-   brighter CS2 setting (see How), and de_inferno's Hable level and colour-correction table are being re-measured in
-   unmerged work (branch `claude/angry-dirac-c8379c`, the tone-fit session's uncommitted `tone_fit.py`). Re-fit the
-   bounce gains on brightness-corrected references once that lands; re-check these views then.
+   brighter CS2 setting (see How). Re-measured on de_mirage against the default picture (2026-10-18,
+   [above](#light-and-material-against-the-default-picture-2026-10-18)): the gains hold for the calibration views,
+   but relative to the sun the connector and sniper's nest get 1.17 / 1.18 of CS2's light (`LOCAL_BOUNCE_GAIN` 1.5
+   would fit them and leave the palace at 0.93) and the underpass 1.21, which follows the outdoor gain, not its lamp:
+   sky light reaching into an enclosed room. No one gain fits these and the palace; open. de_inferno's interiors were
+   measured with the refitted Hable level since (refit column above): 1.2 – 2.2.
 10. **Ropes and cables are missing** (`path_particle_rope_clientside`: 69 on de_nuke — the power lines in the yard
     and their shadows).
 11. **Dark rooms lit by daylight from outside stay too dark**: de_mirage's shop 0.73 (cells down to 0.22), de_dust2's

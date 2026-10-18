@@ -168,6 +168,16 @@ to 0.002 %) and the tone curve (fullbright against Unreal's base colour is flat 
 Unreal's `ShowFlag.Lighting 0` render, its base colour, skips the manual exposure (exposure 1: its sky pixels fit
 exposure 1.0 exactly) but keeps OFAST's tone mapper.
 
+Fullbright is not always the albedo the lit shader uses. On de_anubis and de_vertigo it agrees with Unreal's base
+colour to 0 – 8 %; on de_mirage Unreal's base colour is only 0.70× it in the CT spawn (0.78 palace, 0.88 B
+apartments) and on de_inferno 0.5 – 0.6×, and there CS2's own lit ÷ fullbright on sunlit ground is less than the sun
+alone gives: 1.64 – 1.73 units on de_mirage's CT-spawn cobbles, where the direct sun is 3 × 0.773 (its colour's
+luminance) × sin 60° = 2.01 and Unreal's light (lit ÷ base colour) is 2.43 – 2.46. So on those maps fullbright shows
+more than the lit albedo — on de_mirage 1.2 – 1.5× (B apartments … CT spawn), taking the lit albedo from the sunlit
+surfaces below — something the lit shader applies and fullbright skips, not found yet; and
+`tone_fit.py light` splits light from material wrongly there; [the calibration](#against-cs2s-default-picture-2026-10-18)
+uses the sunlit surfaces instead.
+
 Unreal, with Manual exposure (physical camera off) and its tone curve off (`ToneCurveAmount` 0, `ExpandGamut` 0,
 `BlueCorrection` 0), shows `luminance × 2^bias` (`PostProcessEyeAdaptation.cpp`; checked the same way: Unreal's
 sky pixels display at exactly the intended ratio). A CS2 scene value of 1 is a luminance of `LUX_PER_UNIT / π`, so:
@@ -314,8 +324,9 @@ own tone mapper with its curve off, and Hable maps `M_OFAST_TonemapHable_v2` (H(
 Same viewpoints in CS2 (`-insecure`, `setpos`/`setang`, HUD off, interiors at `mat_tonemap_force_scale 0.8` like
 Unreal) and Unreal, compared cell by cell on a 4 × 3 grid with `tools/compare/compare_shots.py` (ratio of mean
 linear luminance, Unreal / CS2). Views: `tools/compare/views/de_mirage.json` plus the two spawns. The references of
-this section and the next were taken at brightness 2.013, brighter than CS2's default; against the default picture
-the same imports are 4 – 7 % brighter than CS2 ([below](#against-cs2s-default-picture), and checks.md).
+this section and the next were taken at brightness 2.013, brighter than CS2's default. The calibration was measured
+again against the default picture on 2026-10-18 ([below](#against-cs2s-default-picture-2026-10-18)): the constants
+stand, and what reads too bright there is Unreal's base colours, not the light.
 
 | View | Whole image | Cells | Notes |
 |---|---|---|---|
@@ -358,6 +369,60 @@ either (the only differing pixels are palms moving in the wind; the 3D-skybox ho
 reproduces neither bloom nor fog: doing so would add differences, not remove them. Their settings stay in the
 manifest for reference. The colour-correction cvar switches nothing, but the table itself is applied (measured on
 de_anubis, where it is strong; [above](#the-colour-correction-table)); de_mirage's is nearly the identity.
+
+### Against CS2's default picture (2026-10-18)
+
+The constants above were fitted on references taken at brightness 2.013 (CS2's picture raised to 2.013 / 2.2,
+[above](#cs2s-brightness-setting-r_fullscreen_gamma)). Measured again on de_mirage against CS2's default picture: the
+same references read with `--cs2-gamma 2.013074` and, on the CS2 side, back through de_mirage's colour table; Unreal:
+the import of 2026-10-18 (colour table on every map, `test-data/shots/lut_all/`), the same views re-shot on the saved
+level, and a `ShowFlag.Lighting 0` render of every view for the base colour (`shoot_views.py -Try`).
+
+Whole image, the views read brighter against the default picture, the darker ones more: CT spawn 0.99 → 1.05, T spawn
+0.99 → 1.06, palace 0.95 → 1.06, B apartments 0.72 → 0.85 (same renders, uncorrected → corrected references). To tell
+light from material, each view's pixels are sorted by Unreal's own light (lit ÷ base colour, in 8 × 8-pixel blocks,
+sky left out): **sunlit** (1.5 units or more, mostly the direct sun), outdoor **shade** (0.15 – 0.9), and indoors
+everything (**lamp**-lit). The direct sun is the same formula in both engines (on de_anubis, where fullbright can be
+trusted, the light matched to 1.00), so the sunlit ratio is the material — Unreal's base colour against CS2's lit
+albedo — and shade ÷ sunlit within a view is the light alone. `mat_fullbright` cannot give the albedo on de_mirage
+([above](#exposure-and-tone-mapping--post_processing_volume--vpost)). A second, local check pairs shaded and sunlit
+blocks of the same Unreal base colour (each channel within 8 %, at most 10 blocks apart and at least 2 from the
+shadow edge, where CS2's lightmap shadows are blurrier), which takes the material out block by block.
+
+| View | Whole image | Sunlit | Shade / lamp-lit | Light relative to the sun | Same-material pairs |
+|---|---|---|---|---|---|
+| CT spawn | 1.05 | 1.07 | 1.02 | 0.95 | 0.93 |
+| T spawn | 1.06 | 1.07 | 1.05 | 0.99 | 0.96 |
+| Palace | 1.06 | — | 1.05 | 0.98 (against the map's sunlit 1.07) | — |
+| B apartments | 0.85 | — | 0.84 | 0.78 | — |
+
+Unreal / CS2 of the scene (each shot read back through its own exposure, curve and table); the other ten views are
+in [checks.md](../checks.md#light-and-material-against-the-default-picture-2026-10-18). Sunlit surfaces read 1.03 –
+1.10 in all seven outdoor views.
+
+What each constant does, from what-ifs on the saved level (`shoot_views.py -Try` multipliers, every view; change of the
+scene ratio against the import's values; the base configuration shot twice agreed to 0.1 %):
+
+| Change | Outdoor shade | Sunlit | Palace | Connector, sniper's nest | Underpass | B apartments |
+|---|---|---|---|---|---|---|
+| `OUTDOOR_BOUNCE_GAIN` 1.25 → 1.0 / 1.5 | −8 … −16 % / +8 … +16 % | −1 … −6 % / +1 … +4 % | −2 / +2 % | −2 … 0 / 0 … +2 % | −13 / +13 % | 0 |
+| `LOCAL_BOUNCE_GAIN` 2.0 → 1.5 / 2.5 | 0 … −2 / 0 … +2 % | 0 | −6 / +6 % | −10 … −12 / +10 … +12 % | −3 / +3 % | −2 / +2 % |
+| rect lights × 0.9 | 0 | 0 | −9 % | 0 | 0 | −0.5 % |
+
+**The constants stay.** Relative to the sun, the spawns' shade is 1 – 7 % darker than CS2's (0.95 / 0.99 by class,
+0.93 / 0.96 by pairs) and the palace 2 %, about the spread between the two methods. So neither the bounce gains nor
+the rect-light factor is what makes de_mirage 5 – 6 % bright against the default picture: its sunlit surfaces are
+7 % bright too, i.e. Unreal's base colours are about 7 % above CS2's lit albedo, as on de_anubis (1.08). Lowering the
+gains to hide that would leave the shade about 10 – 15 % dark relative to the sun once the base colours are right.
+What the light still gets wrong is local, and the same gain pulls it both ways:
+- outdoor shade at B site, the B-apartments balcony and middle is dark (0.73 – 0.92 relative to the sun), like the
+  B-apartments corridor (0.78): bounce Lumen carries only partly; raising `OUTDOOR_BOUNCE_GAIN` to 1.5 would bring
+  them to 0.78 – 0.98 but the T spawn's shade to 1.06 – 1.10;
+- the lamp-lit connector and sniper's nest are 1.17 / 1.18 relative to the sun: `LOCAL_BOUNCE_GAIN` 1.5 would bring
+  them to 1.04 – 1.06 but the palace to 0.93 and the B apartments to 0.77; the palace, lit by `light_rect`s only, is
+  the cleaner calibration;
+- the underpass reads 1.21 and follows the outdoor gain (13 % for 20 %), not its hanging lamp (3 %): sky light
+  reaching into an enclosed room.
 
 ## Checked on three more maps (2026-10-16 evening)
 
@@ -438,8 +503,9 @@ merged code (renders in `test-data/shots/refit/`), de_vertigo with the code of 2
 
 The real imports reproduce `tone_fit.py simulate` to 0.1 – 0.2 % (de_vertigo CT and T, re-toned from k = 3.4, w = 6).
 The linear maps do not use k and w; their numbers against the default picture are in checks.md. Their lighting
-calibration (bounce gains, rect lights, fitted at 2.013 on de_mirage) has not been redone against the default
-picture, where de_mirage's spawns and palace read 4 – 7 % bright.
+calibration (bounce gains, rect lights, fitted at 2.013 on de_mirage) was measured again against the default picture
+([above](#against-cs2s-default-picture-2026-10-18)): the light holds; de_mirage's spawns and palace read 5 – 6 %
+bright because its sunlit surfaces do, i.e. the base colours.
 
 ## Shadows from the back of walls
 
