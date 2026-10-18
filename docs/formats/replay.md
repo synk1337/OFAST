@@ -47,19 +47,21 @@ verification screenshots).
 | Element | How |
 |---|---|
 | Sequence | `/Game/OFAST/Replays/<demo>_r<round>`, display rate = tick rate (64 fps: one frame per tick), from the round start to its end |
-| Player proxy | engine cylinder scaled to CS2's 32 × 32 × 72-unit hull, CT blue / T orange, a grey visor at the eyes showing where the player faces; position (x, −y, z) × 2.54 cm, yaw → −yaw |
+| Player (animated) | with `ofast export-demo --players`: the team's agent (`<demo>_r<round>_ct.gltf` / `_t.gltf`, imported to `/Game/OFAST/Replays/Agents/`) as a skeletal mesh actor, feet on the positions, turned along the body yaw (−body_yaw), a Skeletal Animation track playing the player's baked locomotion (`player_<controller>`) from the round's first frame ([animation.md](animation.md#each-players-animation-animbake-exportplayers)) |
+| Player proxy | without the agents: engine cylinder scaled to CS2's 32 × 32 × 72-unit hull, CT blue / T orange, a grey visor at the eyes showing where the player faces; position (x, −y, z) × 2.54 cm, yaw → −yaw (eye yaw) |
 | Visibility | hidden while dead or without a pawn, and while the camera looks through that player's own eyes (CS2 does not draw your own body in first person either) |
 | First-person cameras | one per player at feet + eye height, aimed with Rotator(pitch = −pitch, yaw = −yaw), CS2's default field of view (90° at 4:3 = 106.26° horizontally at 16:9) |
 | Camera cuts | each kill in turn: the killer's camera from the previous cut until 0.5 s after the kill (the last one to the end of the round) |
 | Markers | marked frames at freeze time end, every kill (`attacker > victim (weapon, HS)`), bomb events and round end |
 | Keys | linear; keys a straight line through their neighbours reproduces within 0.2 cm / 0.1° are dropped (128,825 keys for that round, written in 3 s); yaw is unwrapped so it never spins the long way round |
 
-Verification screenshots (`-Shot`): the killer's view 8 ticks before each of the first three kills, and a view from
-above the players at the first kill. To compare with CS2: `demo_gototick <tick>`, `spec_player <name>` in first
-person, screenshot.
+Verification screenshots (`-Shot`): the killer's view 8 ticks before each of the first three kills, a view from
+above the players at the first kill, and with `-PovShots "tick:controller,…"` the view through any player's eyes at
+given ticks (that player's own body hidden in that frame). To compare with CS2: `demo_pause`, `demo_gototick <tick>`,
+spectate the player in first person (the demo bar's player arrows), Steam's F12.
 
 ## Not yet
 
-Real player models and animations (M4), weapons, grenades and their effects (M6), sounds, a name label above each
-proxy (Unreal's text render did not show in the screenshots; the names are the actors' labels in Sequencer), several
-rounds in one sequence.
+Each player's own agent model, weapons in hand, weapon actions and aim (M4.5 and later), ragdolls (M4.6), grenades
+and their effects (M6), sounds, a name label above each player (Unreal's text render did not show in the
+screenshots; the names are the actors' labels in Sequencer), several rounds in one sequence.

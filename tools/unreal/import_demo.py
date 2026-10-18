@@ -6,17 +6,22 @@ Run with tools/unreal/run_ue.ps1:
         -Replay test-data/exports/demos/<demo>_r2.ofast-replay.json -Shot test-data/shots
 
 Inputs (environment variables):
-    OFAST_REPLAY  the replay file written by `ofast export-demo` (format: docs/formats/replay.md)
-    OFAST_SHOT    optional folder for verification screenshots: the killer's view just before the first kills
+    OFAST_REPLAY     the replay file written by `ofast export-demo` (format: docs/formats/replay.md)
+    OFAST_SHOT       optional folder for verification screenshots: the killer's view just before the first kills
+    OFAST_POV_SHOTS  optional extra screenshots through players' eyes: "tick:controller,tick:controller" (into
+                     OFAST_SHOT; the watcher's own body is hidden in that frame)
 
 The map must have been imported first (tools/unreal/import_map.py): the sequence is built in its level
 /Game/OFAST/Maps/<map>. What the script makes, all rebuilt on every run:
 
 - /Game/OFAST/Replays/<demo>_r<round>: a Level Sequence at the demo's tick rate (64 fps: one frame per tick),
   playback from the round's start (freeze time included) to its end;
-- per player: a proxy (a capsule-sized cylinder in team colours: CT blue, T orange, with a "visor" at the eyes
-  showing where the player faces; actor label "CT <name>" / "T <name>"), moved along the demo's positions and turned
-  along its yaw, hidden while dead and while the camera looks through its own eyes;
+- per player, when `ofast export-demo --players` wrote the team's animated agent next to the replay
+  (<demo>_r<round>_ct.gltf / _t.gltf): that agent as a skeletal mesh, playing the player's baked animation
+  (`player_<controller>`), its feet on the demo's positions and turned along the body yaw; otherwise a proxy (a
+  capsule-sized cylinder in team colours: CT blue, T orange, with a "visor" at the eyes showing where the player
+  faces) turned along the eye yaw. Actor label "CT <name>" / "T <name>"; hidden while dead and while the camera looks
+  through the player's own eyes;
 - per player: a first-person camera at the eye (feet + the networked eye height), aimed along pitch and yaw, with
   CS2's default field of view (90 degrees at 4:3);
 - a camera cut track that follows the killer of each kill in turn (from the previous kill until half a second after
@@ -31,12 +36,17 @@ Rotator(pitch=-pitch, yaw=-yaw). Keys that a straight line through their neighbo
 import json
 import math
 import os
+import re
 import time
 
 import unreal
 
 REPLAY_PATH = os.environ["OFAST_REPLAY"]
 SHOT_DIR = os.environ.get("OFAST_SHOT", "")
+POV_SHOTS = [tuple(int(v) for v in item.split(":")) for item in os.environ.get("OFAST_POV_SHOTS", "").split(",")
+             if ":" in item]
+# Agent files written by `ofast export-demo --players`, per team: <demo>_r<round>_<suffix>.gltf.
+AGENT_SUFFIXES = {3: "ct", 2: "t"}
 WIDTH, HEIGHT = 1920, 1080
 TAG = unreal.Name("OFAST_replay")
 UNITS_TO_CM = 2.54
@@ -167,6 +177,57 @@ def spawn_proxy(player):
     return body, [visor]
 
 
+def import_agents(replay):
+    """Imports the players' animated agents written next to the replay by `ofast export-demo --players`, if any.
+    Returns team -> (skeletal mesh, {controller: AnimSequence}); Interchange names each AnimSequence
+    <file><animation>, so the controller is read from its `player_<controller>` ending."""
+    folder = os.path.dirname(REPLAY_PATH)
+    base = "%s_r%d" % (replay["demo"], replay["round"])
+    manager = unreal.InterchangeManager.get_interchange_manager_scripted()
+    agents = {}
+    for team, suffix in AGENT_SUFFIXES.items():
+        path = os.path.join(folder, "%s_%s.gltf" % (base, suffix))
+        if not os.path.exists(path):
+            continue
+        params = unreal.ImportAssetParameters()
+        params.is_automated = True
+        params.replace_existing = True
+        # A short folder: asset file paths must stay under Windows' 260 characters.
+        destination = "/Game/OFAST/Replays/Agents/%s_r%d_%s" % (replay["demo"][-12:], replay["round"], suffix)
+        objects = manager.import_asset(destination, unreal.InterchangeManager.create_source_data(path), params)
+        meshes = [o for o in objects if isinstance(o, unreal.SkeletalMesh)]
+        animations = {}
+        for o in objects:
+            match = re.search(r"player_(\d+)$", o.get_name()) if isinstance(o, unreal.AnimSequence) else None
+            if match:
+                animations[int(match.group(1))] = o
+        if not meshes:
+            log("agents %s: no skeletal mesh in %s" % (suffix, path))
+            continue
+        log("agents %s: %s with %d player animations" % (suffix, meshes[0].get_name(), len(animations)))
+        agents[team] = (meshes[0], animations)
+    return agents
+
+
+def spawn_agent(player, mesh):
+    """The player as the team's agent model (feet at the actor's origin, facing +X)."""
+    actor = actors.spawn_actor_from_object(mesh, unreal.Vector(0.0, 0.0, 0.0))
+    actor.tags = [TAG]
+    actor.set_actor_label("%s %s" % (TEAM_NAMES.get(player["team"], "?"), player["name"]))
+    return actor
+
+
+def key_animation(binding, animation, end_frame):
+    """A skeletal animation track playing `animation` from the sequence's first frame (the round's first tick, where
+    the baked animation starts too)."""
+    track = binding.add_track(unreal.MovieSceneSkeletalAnimationTrack)
+    section = track.add_section()
+    section.set_range(0, end_frame)
+    params = section.get_editor_property("params")
+    params.set_editor_property("animation", animation)
+    section.set_editor_property("params", params)
+
+
 def spawn_pov_camera(player):
     camera = spawn_tagged(unreal.CameraActor, "POV %s" % player["name"])
     component = camera.camera_component
@@ -271,21 +332,36 @@ def build(replay):
     started = time.monotonic()
     keys = 0
     cuts = camera_cut_plan(replay, {p["controller"] for p in replay["players"]}, end_frame, fps)
+    agents = import_agents(replay)
     for player in replay["players"]:
         track = replay["samples"]["players"][str(player["controller"])]
-        body, attached = spawn_proxy(player)
         positions = [None if p is None else to_unreal(p) for p in track["position"]]
-        # The cylinder's pivot is its middle: lift it by half the hull.
-        centres = [None if p is None else (p[0], p[1], p[2] + HULL_HALF_HEIGHT_CM) for p in positions]
         known = [a for a in track["angles"] if a is not None]
         yaws = iter(unwrap([-a[1] for a in known]))
         pitches = iter([-a[0] for a in known])
         rotations = [None if a is None else (next(pitches), next(yaws)) for a in track["angles"]]
-        body_rotations = [None if r is None else (0.0, r[1]) for r in rotations]
-        binding = sequence.add_possessable(body)
-        keys += key_transform(binding, frames, centres, body_rotations, HULL_SCALE, end_frame)
+        agent = agents.get(player["team"])
+        animation = agent[1].get(player["controller"]) if agent else None
+        if animation is not None:
+            # The agent: feet on the positions, turned along the body yaw (the way CS2 draws the model).
+            body = spawn_agent(player, agent[0])
+            attached = []
+            body_yaws = iter(unwrap([-y for y in track.get("body_yaw", []) if y is not None]))
+            body_rotations = [None if y is None else (0.0, next(body_yaws)) for y in track["body_yaw"]]
+            binding = sequence.add_possessable(body)
+            keys += key_transform(binding, frames, positions, body_rotations, (1.0, 1.0, 1.0), end_frame)
+            key_animation(binding, animation, end_frame)
+        else:
+            body, attached = spawn_proxy(player)
+            # The cylinder's pivot is its middle: lift it by half the hull.
+            centres = [None if p is None else (p[0], p[1], p[2] + HULL_HALF_HEIGHT_CM) for p in positions]
+            body_rotations = [None if r is None else (0.0, r[1]) for r in rotations]
+            binding = sequence.add_possessable(body)
+            keys += key_transform(binding, frames, centres, body_rotations, HULL_SCALE, end_frame)
         alive = [bool(a) and p is not None for a, p in zip(track["alive"], positions)]
         own_view = [(start, end) for start, end, who in cuts if who == player["controller"]]
+        # Frames shown through this player's eyes by the POV screenshots: hide the body there too.
+        own_view += [(t - tick0, t - tick0 + 1) for t, who in POV_SHOTS if who == player["controller"]]
         changes = visibility_changes(frames, alive, own_view)
         for actor in [body] + attached:
             key_visibility(sequence.add_possessable(actor) if actor is not body else binding, changes, end_frame)
@@ -295,8 +371,9 @@ def build(replay):
         camera_binding = sequence.add_possessable(camera)
         keys += key_transform(camera_binding, frames, eyes, rotations, (1.0, 1.0, 1.0), end_frame)
         cameras[player["controller"]] = (camera, camera_binding)
-    log("sequence %s: %d players, %d frames at %d fps, %d keys in %.0f s"
-        % (path, len(replay["players"]), end_frame, fps, keys, time.monotonic() - started))
+    log("sequence %s: %d players (%d animated agents), %d frames at %d fps, %d keys in %.0f s"
+        % (path, len(replay["players"]), sum(len(a[1]) for a in agents.values()), end_frame, fps, keys,
+           time.monotonic() - started))
     add_camera_cuts(sequence, cuts, cameras)
     add_markers(sequence, replay)
     assets.save_loaded_asset(sequence)
@@ -384,6 +461,11 @@ def verification_shots(sequence, replay, cameras):
         camera = overview_camera(replay, tick)
         if camera is not None:
             shots.append((tick - tick0, camera, os.path.join(SHOT_DIR, "replay_%s_overview.png" % prefix)))
+    # Requested views through a player's eyes (to compare with CS2: demo_gototick, spec_player in first person).
+    for tick, controller in POV_SHOTS:
+        if controller in cameras:
+            path = os.path.join(SHOT_DIR, "replay_%s_tick%d_pov%d.png" % (prefix, tick, controller))
+            shots.append((tick - tick0, cameras[controller], path))
     if not shots:
         unreal.SystemLibrary.quit_editor()
         return

@@ -6,6 +6,7 @@
 //! ofast export-map de_mirage --out exports/de_mirage   (--bake-model-tints: tints in the textures, for Blender)
 //! ofast demo-rounds match.dem                      a demo's rounds and their ticks
 //! ofast export-demo match.dem --round 3 --out exports/demos   one round as a replay file for Unreal
+//!                                       (--players: and the players as animated agents, one glTF per team)
 //! ofast vpk verify                                 check CS2's archive checksums
 //! ```
 //!
@@ -17,11 +18,12 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand};
 use ofast_core::content::Content;
-use ofast_core::demo::players::list_rounds;
+use ofast_core::demo::players::{list_rounds, track_round};
 use ofast_core::export::ExportOptions;
 use ofast_core::export::gltf::{ExportReport, export_model_with_clips};
 use ofast_core::export::map::{Skybox, export_map};
-use ofast_core::export::replay::export_round;
+use ofast_core::export::players::export_players;
+use ofast_core::export::replay::write_replay;
 use ofast_core::game::Cs2Install;
 use ofast_core::map::{Map, sky_to_world};
 use ofast_core::vpk::Vpk;
@@ -89,6 +91,10 @@ enum Command {
         /// Output folder (created if needed).
         #[arg(long, short)]
         out: PathBuf,
+        /// Also write the players as animated CS2 agents, one glTF per team (`<demo>_r<round>_ct.gltf`, `_t.gltf`),
+        /// their locomotion baked from the demo. Needs the CS2 install (agent models, animation clips).
+        #[arg(long)]
+        players: bool,
     },
     /// Archive tools.
     Vpk {
@@ -163,10 +169,16 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             return Ok(());
         }
-        Command::ExportDemo { demo, round, out } => {
+        Command::ExportDemo {
+            demo,
+            round,
+            out,
+            players,
+        } => {
             let data = std::fs::read(demo).map_err(|e| format!("{}: {e}", demo.display()))?;
             let name = demo.file_stem().and_then(|s| s.to_str()).unwrap_or("demo");
-            let report = export_round(&data, name, *round, out).map_err(|e| e.to_string())?;
+            let track = track_round(&data, *round).map_err(|e| e.to_string())?;
+            let report = write_replay(&track, name, out).map_err(|e| e.to_string())?;
             println!("wrote {}", report.path.display());
             println!(
                 "{} round {round}: {} players, {} ticks ({:.0} s), {} kills in {:.1}s",
@@ -177,6 +189,28 @@ fn run(cli: Cli) -> Result<(), String> {
                 report.kills,
                 started.elapsed().as_secs_f32()
             );
+            if *players {
+                let install = match &cli.cs2 {
+                    Some(root) => Cs2Install::from_root(root),
+                    None => Cs2Install::locate(),
+                }
+                .ok_or("CS2 not found — pass --cs2 <folder> or set OFAST_CS2_DIR")?;
+                let content = Content::game(&install).map_err(|e| e.to_string())?;
+                let report =
+                    export_players(&content, &track, name, out).map_err(|e| e.to_string())?;
+                for file in &report.files {
+                    println!("wrote {}", file.display());
+                }
+                println!(
+                    "{} players animated, {} frames each, in {:.1}s",
+                    report.players,
+                    report.frames,
+                    started.elapsed().as_secs_f32()
+                );
+                for warning in &report.warnings {
+                    println!("warning: {warning}");
+                }
+            }
             return Ok(());
         }
         _ => {}

@@ -75,7 +75,17 @@ pub fn export_round(
     out_dir: &Path,
 ) -> Result<ReplayReport, ExportError> {
     let track = track_round(data, round)?;
-    let replay = replay_json(&track, demo_name);
+    write_replay(&track, demo_name, out_dir)
+}
+
+/// Writes the replay file of an already tracked round into `out_dir` (`<demo_name>_r<round>.ofast-replay.json`).
+pub fn write_replay(
+    track: &RoundTrack,
+    demo_name: &str,
+    out_dir: &Path,
+) -> Result<ReplayReport, ExportError> {
+    let round = track.round;
+    let replay = replay_json(track, demo_name);
     fs::create_dir_all(out_dir)?;
     let path = out_dir.join(format!("{demo_name}_r{round}.ofast-replay.json"));
     fs::write(

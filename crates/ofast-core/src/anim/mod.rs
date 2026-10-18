@@ -21,11 +21,14 @@
 //! Knowledge from ValveResourceFormat (MIT; `ModelAnimation2/AnimationClip.cs`, `SkeletonRetargeter.cs`), checked on
 //! local CS2 files; independent implementation. Details: `docs/formats/animation.md`.
 
+pub mod bake;
 mod clip;
+pub mod locomotion;
 mod retarget;
 mod skeleton;
 
 pub use clip::{Clip, TrackSettings};
+pub use locomotion::Locomotion;
 pub use retarget::Retargeter;
 pub use skeleton::NmSkeleton;
 
@@ -99,4 +102,7 @@ pub enum AnimError {
         /// Length of the pose data (u16 units).
         len: usize,
     },
+    /// An animation graph does not have the structure OFAST reads (a CS2 update may have changed it).
+    #[error("animation graph: {0}")]
+    Graph(String),
 }

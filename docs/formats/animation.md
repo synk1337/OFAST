@@ -91,6 +91,63 @@ ofast export-model agents/models/ctm_sas/ctm_sas.vmdl_c --out exports/ctm_sas \
     --clip animation/anims/world/rifle/_default_rifle/run_n_rifle.vnmclip
 ```
 
+A channel that never changes (a bone the clips do not move) is written with two keys, at the start and the end,
+instead of one per frame; rotations are kept in one hemisphere from key to key, so interpolating takes the short way.
+
+## Locomotion graph (`worldmodel_locomotion.vnmgraph`)
+
+A compiled graph is KV3 in the `DATA` block: `m_variationID`, `m_controlParameterIDs` (the graph's inputs, by
+index), `m_nodePaths` (editor names), `m_resources` (the clips, by data slot) and `m_nodes`, each with `_class`
+(`CNmClipNode::CDefinition`, `CNmBlend2DNode::CDefinition`, `CNmStateMachineNode::CDefinition`…) and indices of the
+nodes it reads. Third-person locomotion has three variations, `+rifle`, `+pistol` and `+knife`, with the same nodes
+and different clips (`animation/anims/world/<set>/_default_<set>/`); their legs move identically, only the upper
+body differs. Its control parameters: `move_speed_horizontal`, `move_crouch_amount`, `move_type`,
+`air_height_above_ground`, ladder angles, `ground_action`, `move_speed_x`, `move_speed_y`,
+`ground_turn_angle_or_velocity`, `move_is_walking`, `move_crouch_amount_eased`…
+
+**Moving on the ground** (`crates/ofast-core/src/anim/locomotion.rs`) is a `CNmBlend1DNode` on `move_crouch_amount`
+(0 – 1) between two `CNmBlend2DNode`s on `move_speed_x` (forward) and `move_speed_y` (left), in units/s:
+
+| 2D blend | Points (`m_values`) |
+|---|---|
+| standing | `idle` at (0, 0); `run_n, ne, e, se, s, sw, w, nw` at 225 (diagonals ±159, ±159); `walk_*` at 136 (±96) |
+| crouched | `idle_crouch` at (0, 0); `crouch_*` at 96 (±67) |
+
+Each 2D blend stores its triangles (`m_indices`, 24 for standing) and outline (`m_hullIndices`, the 8 outer points).
+A velocity inside a triangle blends its three clips with barycentric weights; outside the outline it takes the
+nearest point of the outline (a knife runs at 250: the run clips alone). The idles sit under a
+`CNmDurationScaleNode` (scale 1) and play at `m_flSpeedMultiplier` 0.167; every other clip at 1. The clips play in
+step: one normalised phase for all, advancing by `dt / D` with `D` the weighted average of the sources' durations at
+their speeds (run 0.733 s, walk 1.0 s, crouch 0.8 s, idle 0.73 / 0.167 = 4.4 s, so mixing in the idle slows the
+stride at low speed). This is AnimGraph 2's synchronised blending (Esoterica's design) simplified to one phase; the
+clips' foot sync tracks are not read.
+
+**The other states** — starting, stopping and planted direction changes (`planted_*`), turning on the spot
+(`turn_*`), jumps and air (`jump_*`, `inair_*`, 2D blends on the eased crouch amount), ladders — are not rebuilt yet.
+
+The graph does not scale a clip's playback to the actual speed. `examples/locomotion_clips.rs` estimates each
+clip's own speed from its feet (a planted ankle slides back under the body): 130 – 205 units/s for the runs, 37 – 83
+for the walks, below the 225 and 136 the blends place them at. Either the feet slide a little in CS2 too, or the
+estimate (ankle within 1.5 inches of its lowest) is rough; not checked yet.
+
+## Each player's animation (`anim::bake`, `export::players`)
+
+For every tick a player is alive: the weapon in hand picks the set (rifles, SMGs, shotguns, machine guns and snipers
+→ rifle; pistols and the Zeus → pistol; knives — and, an assumption not yet checked in CS2, grenades, the C4 and
+empty hands → knife), the velocity is turned into the body's frame by the body yaw, and the set's blend gives the
+clips, weights and cycle length; the phase advances by the tick. Poses are sampled at 30 fps from the round's first
+tick, retargeted onto the team's agent and written as one glTF per team:
+
+```bash
+ofast export-demo match.dem --round 5 --out exports/demos --players
+# → <demo>_r5.ofast-replay.json, <demo>_r5_ct.gltf (ctm_sas, animations player_6 … player_10), <demo>_r5_t.gltf
+```
+
+Every CT wears the SAS agent and every T the Phoenix for now (each player's own agent comes with M4.5). A 76-second
+round: 10 players × 2278 frames, about 13 MB per team, in 2 s. `tools/unreal/import_demo.py` imports them and plays
+each player's animation on an agent actor moved along the replay's positions and turned along its body yaw
+([replay.md](replay.md#in-unreal-import_demopy)).
+
 ## Verified
 
 - `crates/ofast-core/tests/cs2_anim.rs` (2026-10-18): **all 2735 clip files, 4309 clips with the nested ones, decode;
@@ -114,10 +171,21 @@ ofast export-model agents/models/ctm_sas/ctm_sas.vmdl_c --out exports/ctm_sas \
   graph's weapon and aim layers ([decision 013](../decisions/013-replay-rig-baked-in-rust.md), M4.4), not from the
   base clip. Side by side: `test-data/shots/agents/cs2_run/compare_knife.png`. (The first version of this check
   named P1 as the runner, from his apparent distance; the rig inputs corrected it.)
+- **A whole round in Unreal** (2026-10-18, M4.4): round 5 of the match demo exported with `--players` and imported
+  with `import_demo.py`: 10 animated agents in the de_nuke level (sequence built in 9 s, 70,991 keys). Through the
+  eyes of the same teammate at ticks 26508 – 26528 (`-PovShots`), the three CTs running along the wall stand where
+  CS2 draws them, face the same way and run through the same stride cycle; the phase within the stride can differ
+  (CS2's carries the history before the round, OFAST's starts at the round's first tick), and the arms differ: CS2's
+  weapon layers (knife and grenade in hand, the reaching arm) are not baked yet. In the killers' views the
+  Terrorists show as Phoenix agents. Side by side: `test-data/shots/replay_r5/compare_locomotion_r5.png`.
+- `tests/cs2_anim.rs` `locomotion_graphs_read`: the three locomotion graphs give the blends above (17 standing and
+  9 crouched points, `run_n` at 225, all clips decoded); `tests/cs2_demo.rs` `players_export_one_animation_per_player`:
+  round 1 exports one animation per player, 30 fps over the whole round.
 
 ## Not done yet
 
-- **Additive clips**: composing a delta onto a base pose (needed for M4.4's weapon idle, shoot and flinch layers).
+- **Additive clips**: composing a delta onto a base pose (for the weapon idle, shoot and flinch layers).
 - **Secondary clips** (weapon parts) are decoded but not exported.
-- **Events and sync tracks** are not read.
-- The graph (`.vnmgraph`): its blending is rebuilt from demo data in M4.4 rather than read.
+- **Events and sync tracks** are not read (the locomotion blends share one phase instead).
+- **The rest of the graphs**: weapon layers and actions (`worldmodel_gun`, `_knife`, `_grenade`), aim, the
+  locomotion graph's start, stop, turn, jump, air and ladder states.

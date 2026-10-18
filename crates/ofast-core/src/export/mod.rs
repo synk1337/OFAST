@@ -6,10 +6,12 @@
 //! - `environment` (internal): CS2's `csgo_environment(_blend)` materials, baked for glTF.
 //! - `tint` (internal): the model tints of CS2's prop shaders, masked by `g_tTintMask`.
 //! - [`replay`]: one round of a demo (players' movement, kills, milestones) for Unreal's Level Sequence.
+//! - [`players`]: the players of a round as animated CS2 agents (one glTF per team).
 
 mod environment;
 pub mod gltf;
 pub mod map;
+pub mod players;
 pub mod replay;
 pub mod sky;
 mod tint;
@@ -59,6 +61,9 @@ pub enum ExportError {
     /// A demo could not be read.
     #[error(transparent)]
     Demo(#[from] crate::demo::players::TrackError),
+    /// An animation (graph, blend, pose) could not be computed.
+    #[error(transparent)]
+    Anim(#[from] crate::anim::AnimError),
     /// An animation clip could not be decoded.
     #[error("clip {path}: {source}")]
     Clip {

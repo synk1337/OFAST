@@ -20,6 +20,8 @@ param(
     [string]$Try = "",
     # For import_demo.py: the replay file written by `ofast export-demo`.
     [string]$Replay = "",
+    # For import_demo.py: extra screenshots through players' eyes, "tick:controller,tick:controller".
+    [string]$PovShots = "",
     [string]$Engine = "C:\Program Files\Epic Games\UE_5.8"
 )
 
@@ -40,6 +42,7 @@ $env:OFAST_ONLY = $Only
 # A .json file is resolved here: Unreal changes its working directory at startup, so relative paths would break.
 $env:OFAST_TRY = if ($Try.ToLower().EndsWith(".json")) { & $resolve $Try } else { $Try }
 $env:OFAST_REPLAY = if ($Replay) { & $resolve $Replay } else { "" }
+$env:OFAST_POV_SHOTS = $PovShots
 if ($Shot) {
     # -Shot is either a .png file (single screenshot) or a folder (scripts that take several).
     if ($env:OFAST_SHOT.ToLower().EndsWith(".png")) {

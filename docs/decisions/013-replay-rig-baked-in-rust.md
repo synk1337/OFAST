@@ -1,7 +1,8 @@
 # 013 — Players: skinned agents, and their animation baked in Rust from demo data
 
 - **Date:** 2026-10-18
-- **Status:** accepted (M4.1 done; the rest is the M4 plan)
+- **Status:** accepted (M4.1 – M4.4 done: skinned agents, clip decoder, rig inputs, baked locomotion read from
+  CS2's own locomotion graph; weapon layers, aim, per-player agents and ragdolls to come)
 
 ## Context
 

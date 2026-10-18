@@ -116,12 +116,40 @@ pub fn export_model_with_clips(
     clip_paths: &[String],
     out_dir: &Path,
 ) -> Result<ExportReport, ExportError> {
+    export_model_animated(content, model_path, out_dir, None, |model, warnings| {
+        clip_animations(content, model, clip_paths, warnings)
+    })
+}
+
+/// An animation keyed on a model's skin: for every frame, each bone of the model's skeleton relative to its parent
+/// (translation in inches and rotation, Source axes, as [`crate::anim::Retargeter::locals`] gives them).
+#[derive(Debug, Clone)]
+pub struct BoneAnimation {
+    /// The glTF animation's name (Unreal names the AnimSequence `<file><name>`).
+    pub name: String,
+    /// `frames[f][bone]`.
+    pub frames: Vec<Vec<([f32; 3], [f32; 4])>>,
+    /// Frames per second (30 is one Unreal recognises; it guesses the rate from the key times).
+    pub fps: f32,
+}
+
+/// [`export_model`] with the animations `animate` makes for the loaded model (it may add warnings), written as
+/// `<file_name>.gltf` (default: the model's file name). A model without a skeleton is written without them.
+pub fn export_model_animated(
+    content: &Content,
+    model_path: &str,
+    out_dir: &Path,
+    file_name: Option<&str>,
+    animate: impl FnOnce(&Model, &mut Vec<String>) -> Result<Vec<BoneAnimation>, ExportError>,
+) -> Result<ExportReport, ExportError> {
     let model = load_model(content, model_path)?;
-    let name = Path::new(model_path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("model")
-        .to_owned();
+    let name = file_name.map(str::to_owned).unwrap_or_else(|| {
+        Path::new(model_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("model")
+            .to_owned()
+    });
     // A model on its own has no placement tints: the options change nothing here.
     let mut writer = GltfWriter::new(content, out_dir, ExportOptions::default())?;
     let skin = writer.skin(&model.skeleton);
@@ -153,64 +181,88 @@ pub fn export_model_with_clips(
             roots.push(node);
         }
     }
-    if let Some((_, skin_index)) = &skin {
-        let mut skeletons: HashMap<String, NmSkeleton> = HashMap::new();
-        for clip_path in clip_paths {
-            let clip_name = Path::new(clip_path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("clip")
-                .trim_end_matches(".vnmclip")
-                .to_owned();
-            let clip = Clip::parse(&kv3_data(content, clip_path)?).map_err(|source| {
-                ExportError::Clip {
-                    path: clip_path.clone(),
-                    source,
-                }
-            })?;
-            if clip.is_additive() {
-                writer.report.warnings.push(format!(
-                    "clip {clip_path}: additive (deltas over another clip), not exported yet"
-                ));
-                continue;
+    let animations = animate(&model, &mut writer.report.warnings)?;
+    match &skin {
+        Some((_, skin_index)) => {
+            for animation in &animations {
+                writer.animation(
+                    &animation.name,
+                    &model.skeleton,
+                    *skin_index,
+                    &animation.frames,
+                    animation.fps,
+                );
             }
-            if !skeletons.contains_key(&clip.skeleton) {
-                let skeleton = NmSkeleton::parse(&kv3_data(content, &clip.skeleton)?);
-                skeletons.insert(clip.skeleton.clone(), skeleton);
-            }
-            let retargeter = Retargeter::new(&model.skeleton, &skeletons[&clip.skeleton]);
-            // Keys on a 30 fps grid rather than the clip's own frames: Unreal's glTF import guesses an animation's
-            // frame rate from its key times, and a still clip such as `idle_rifle` stores 2 frames over 0.73 s
-            // (1.4 fps). Past the clip's end the last key holds its last frame.
-            let keys = (clip.duration * ANIMATION_FPS).round().max(0.0) as usize + 1;
-            let frames = (0..keys)
-                .map(|k| {
-                    clip.sample(k as f32 / ANIMATION_FPS, false)
-                        .map(|pose| retargeter.locals(&pose))
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|source| ExportError::Clip {
-                    path: clip_path.clone(),
-                    source,
-                })?;
-            writer.animation(
-                &clip_name,
-                &model.skeleton,
-                *skin_index,
-                &frames,
-                ANIMATION_FPS,
-            );
         }
-    } else if !clip_paths.is_empty() {
-        writer
-            .report
-            .warnings
-            .push(format!("{model_path} has no skeleton: clips not exported"));
+        None if !animations.is_empty() => writer.report.warnings.push(format!(
+            "{model_path} has no skeleton: animations not exported"
+        )),
+        None => {}
     }
     if let Some((bone_roots, _)) = skin {
         roots.extend(bone_roots);
     }
     writer.finish(&name, roots)
+}
+
+/// CS2 clips as animations on `model`'s skeleton (see [`export_model_with_clips`]).
+fn clip_animations(
+    content: &Content,
+    model: &Model,
+    clip_paths: &[String],
+    warnings: &mut Vec<String>,
+) -> Result<Vec<BoneAnimation>, ExportError> {
+    let mut skeletons: HashMap<String, NmSkeleton> = HashMap::new();
+    let mut animations = Vec::new();
+    for clip_path in clip_paths {
+        let clip_name = Path::new(clip_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("clip")
+            .trim_end_matches(".vnmclip")
+            .to_owned();
+        let clip =
+            Clip::parse(&kv3_data(content, clip_path)?).map_err(|source| ExportError::Clip {
+                path: clip_path.clone(),
+                source,
+            })?;
+        if clip.is_additive() {
+            warnings.push(format!(
+                "clip {clip_path}: additive (deltas over another clip), not exported yet"
+            ));
+            continue;
+        }
+        if !skeletons.contains_key(&clip.skeleton) {
+            let skeleton = NmSkeleton::parse(&kv3_data(content, &clip.skeleton)?);
+            skeletons.insert(clip.skeleton.clone(), skeleton);
+        }
+        let retargeter = Retargeter::new(&model.skeleton, &skeletons[&clip.skeleton]);
+        // Keys on a 30 fps grid rather than the clip's own frames: Unreal's glTF import guesses an animation's
+        // frame rate from its key times, and a still clip such as `idle_rifle` stores 2 frames over 0.73 s
+        // (1.4 fps). Past the clip's end the last key holds its last frame.
+        let keys = (clip.duration * ANIMATION_FPS).round().max(0.0) as usize + 1;
+        let frames = (0..keys)
+            .map(|k| {
+                clip.sample(k as f32 / ANIMATION_FPS, false)
+                    .map(|pose| retargeter.locals(&pose))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|source| ExportError::Clip {
+                path: clip_path.clone(),
+                source,
+            })?;
+        animations.push(BoneAnimation {
+            name: clip_name,
+            frames,
+            fps: ANIMATION_FPS,
+        });
+    }
+    Ok(animations)
+}
+
+/// The KV3 `DATA` block of a resource (`path` with or without `_c`), for other exporters.
+pub(crate) fn resource_data(content: &Content, path: &str) -> Result<Value, ExportError> {
+    kv3_data(content, path)
 }
 
 /// The KV3 `DATA` block of a resource (`path` with or without `_c`).
@@ -528,6 +580,12 @@ const ELEMENT_ARRAY_BUFFER: u32 = 34963;
 /// A buffer view that is neither vertex nor index data (inverse bind matrices): glTF wants no `target` there.
 const NO_TARGET: u32 = 0;
 
+/// Whether every key of a channel equals the first (within float noise of 1e-6), or there are none.
+fn still<const N: usize>(keys: &[[f32; N]]) -> bool {
+    keys.iter()
+        .all(|k| k.iter().zip(&keys[0]).all(|(a, b)| (a - b).abs() <= 1e-6))
+}
+
 /// Key rate of exported animations: CS2's player clips are authored at 30 fps.
 const ANIMATION_FPS: f32 = 30.0;
 
@@ -737,6 +795,9 @@ impl<'c> GltfWriter<'c> {
         frames: &[Vec<([f32; 3], [f32; 4])>],
         fps: f32,
     ) {
+        if frames.is_empty() {
+            return;
+        }
         let joints: Vec<usize> = self.skins[skin]["joints"]
             .as_array()
             .map(|j| {
@@ -748,11 +809,15 @@ impl<'c> GltfWriter<'c> {
             .unwrap_or_default();
         let times: Vec<[f32; 1]> = (0..frames.len()).map(|f| [f as f32 / fps]).collect();
         let input = self.float_accessor(&times, "SCALAR", true);
+        // A channel that never changes (a bone the animation does not move) gets two keys, at the start and the end,
+        // instead of one per frame: a round-long player animation would otherwise repeat ~30 still bones per frame.
+        let last = times.last().map_or(0.0, |t| t[0]);
+        let ends = self.float_accessor(&[[0.0], [last]], "SCALAR", true);
         let mut samplers = Vec::new();
         let mut channels = Vec::new();
         for (b, bone) in skeleton.bones.iter().enumerate() {
             let Some(&node) = joints.get(b) else { continue };
-            let (translations, rotations): (Vec<[f32; 3]>, Vec<[f32; 4]>) = frames
+            let (translations, mut rotations): (Vec<[f32; 3]>, Vec<[f32; 4]>) = frames
                 .iter()
                 .map(|pose| {
                     let (t, r) = pose
@@ -768,15 +833,39 @@ impl<'c> GltfWriter<'c> {
                     }
                 })
                 .unzip();
-            for (path, output) in [
+            // q and −q are the same rotation; keep neighbouring keys on the same side so interpolating between
+            // them takes the short way.
+            for k in 1..rotations.len() {
+                let dot: f32 = (0..4).map(|c| rotations[k][c] * rotations[k - 1][c]).sum();
+                if dot < 0.0 {
+                    rotations[k] = rotations[k].map(|c| -c);
+                }
+            }
+            let translation_still = still(&translations);
+            let rotation_still = still(&rotations);
+            for (path, output, key_times) in [
                 (
                     "translation",
-                    self.float_accessor(&translations, "VEC3", false),
+                    if translation_still {
+                        self.float_accessor(&[translations[0], translations[0]], "VEC3", false)
+                    } else {
+                        self.float_accessor(&translations, "VEC3", false)
+                    },
+                    if translation_still { ends } else { input },
                 ),
-                ("rotation", self.float_accessor(&rotations, "VEC4", false)),
+                (
+                    "rotation",
+                    if rotation_still {
+                        self.float_accessor(&[rotations[0], rotations[0]], "VEC4", false)
+                    } else {
+                        self.float_accessor(&rotations, "VEC4", false)
+                    },
+                    if rotation_still { ends } else { input },
+                ),
             ] {
-                samplers
-                    .push(json!({ "input": input, "output": output, "interpolation": "LINEAR" }));
+                samplers.push(
+                    json!({ "input": key_times, "output": output, "interpolation": "LINEAR" }),
+                );
                 channels.push(json!({
                     "sampler": samplers.len() - 1,
                     "target": { "node": node, "path": path },

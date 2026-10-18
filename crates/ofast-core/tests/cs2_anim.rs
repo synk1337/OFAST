@@ -65,6 +65,59 @@ fn check(path: &str, clip: &Clip, worst_norm: &mut f32) -> usize {
         .sum::<usize>()
 }
 
+/// The three locomotion graphs give the moving-on-the-ground blends described in `anim::locomotion`: standing =
+/// idle + 8 runs at 225 units/s + 8 walks at 136, crouched = crouch idle + 8 crouch walks at 96, all clips decoded.
+#[test]
+fn locomotion_graphs_read() {
+    use ofast_core::anim::Locomotion;
+    let install = Cs2Install::locate().expect("CS2 install found");
+    let vpk = Vpk::open(install.main_vpk()).expect("pak01_dir.vpk opens");
+    let data = |path: &str| {
+        let bytes = vpk
+            .read_path(&format!("{path}_c"))
+            .unwrap_or_else(|e| panic!("{path}: {e}"));
+        Resource::parse(&bytes)
+            .unwrap()
+            .kv3(BlockKind::DATA)
+            .unwrap()
+            .root
+    };
+    for set in ["rifle", "pistol", "knife"] {
+        let graph = data(&format!(
+            "animation/graphs/worldmodel/worldmodel_locomotion.vnmgraph+{set}.vnmgraph"
+        ));
+        let loco = Locomotion::from_graph(&graph, |path: &str| Clip::parse(&data(path)))
+            .unwrap_or_else(|e| panic!("{set}: {e}"));
+        let name = |space: &ofast_core::anim::locomotion::Blend2D, i: usize| {
+            loco.clips[space.sources[i].clip]
+                .0
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        };
+        println!(
+            "{set}: variation {}, {} clips, standing {} points, crouched {} points",
+            loco.variation,
+            loco.clips.len(),
+            loco.standing.points.len(),
+            loco.crouched.points.len()
+        );
+        assert_eq!(loco.standing.points.len(), 17);
+        assert_eq!(loco.crouched.points.len(), 9);
+        assert_eq!(loco.standing.points[1], [225.0, 0.0]);
+        assert_eq!(name(&loco.standing, 1), format!("run_n_{set}.vnmclip"));
+        assert_eq!(name(&loco.standing, 9), format!("walk_n_{set}.vnmclip"));
+        assert_eq!(loco.crouched.points[1], [96.0, 0.0]);
+        assert_eq!(name(&loco.crouched, 1), format!("crouch_n_{set}.vnmclip"));
+        assert_eq!(name(&loco.standing, 0), format!("idle_{set}.vnmclip"));
+        // A run forward at full speed is the run clip alone, one cycle in its own length.
+        let run = loco.blend([225.0, 0.0], 0.0);
+        assert_eq!(run.clips.len(), 1);
+        assert!((run.duration - 0.7333).abs() < 1e-3, "{}", run.duration);
+    }
+}
+
 #[test]
 fn every_clip_decodes() {
     let install = Cs2Install::locate().expect("CS2 install found");

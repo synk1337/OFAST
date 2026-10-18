@@ -329,6 +329,52 @@ fn rig_inputs_match_movement_and_demoparser2() {
     );
 }
 
+/// `export_players` on round 1: one glTF per team, each with an animation per player of that team, keyed every 1/30 s
+/// over the whole round.
+#[test]
+fn players_export_one_animation_per_player() {
+    use ofast_core::content::Content;
+    use ofast_core::export::players::{PLAYER_ANIMATION_FPS, export_players};
+    let Some((_, data)) = load() else { return };
+    let Some(install) = Cs2Install::locate() else {
+        println!("SKIPPED: no CS2 install");
+        return;
+    };
+    let content = Content::game(&install).expect("archives open");
+    let track = track_round(&data, 1).expect("round 1");
+    let out = std::env::temp_dir().join("ofast_players_test");
+    let report = export_players(&content, &track, "demo", &out).expect("players export");
+    let teams: HashMap<u32, u32> = track
+        .samples
+        .iter()
+        .flat_map(|s| &s.players)
+        .map(|p| (p.controller, p.team))
+        .collect();
+    assert_eq!(report.players, teams.len());
+    let seconds = (track.end_tick - track.start_tick) as f32 * track.tick_interval;
+    assert_eq!(report.frames, (seconds * PLAYER_ANIMATION_FPS) as usize + 1);
+    for file in &report.files {
+        let gltf: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(file).expect("glTF reads"))
+                .expect("JSON");
+        let animations = gltf["animations"].as_array().expect("animations");
+        let suffix = if file.to_string_lossy().ends_with("_ct.gltf") {
+            3
+        } else {
+            2
+        };
+        let expected = teams.values().filter(|&&t| t == suffix).count();
+        assert_eq!(animations.len(), expected, "{}", file.display());
+        println!(
+            "{}: {} animations, {} frames",
+            file.display(),
+            animations.len(),
+            report.frames
+        );
+    }
+    std::fs::remove_dir_all(&out).ok();
+}
+
 #[test]
 fn round_starts_match_demoparser2() {
     let Some((path, data)) = load() else { return };

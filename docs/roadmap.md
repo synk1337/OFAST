@@ -131,8 +131,13 @@ player and round.
   landing ticks (game ticks converted to demo ticks). Round 1 of the match demo equals demoparser2 on every field it
   can read (50,740 rows); velocity follows the positions. Found on the way: `GameTick_t` is a signed varint.
   [demo.md](formats/demo.md#rig-inputs), [replay.md](formats/replay.md).
-- [ ] M4.4 Baked animation: locomotion (2D blend on local velocity × crouch), weapon idle / shoot / reload / deploy
-  layers, procedural aim on the spine; checked against CS2's demo playback from the side.
+- [x] **M4.4 Baked locomotion**: CS2's own locomotion graph read from the game (crouch blend of two 2D blends on
+  the body-relative velocity, its triangles and synchronised phase), baked per player and tick from the rig inputs
+  (`ofast export-demo --players`: one glTF per team), played in Unreal on agent actors moved by the replay; round 5
+  checked through a player's eyes against CS2 (positions, facing and stride match; arms differ).
+  [animation.md](formats/animation.md#locomotion-graph-worldmodel_locomotionvnmgraph).
+- [ ] M4.4b Weapon layers and aim: weapon idle / shoot / reload / deploy (additive clips, `worldmodel_gun` and
+  friends), procedural aim on the spine; the locomotion graph's starts, stops, turns on the spot, jumps and ladders.
 - [ ] M4.5 Weapons in hand (weapon skeletal mesh on `weapon_hand_R`), each player's agent, knife and gloves from the
   demo's model hashes.
 - [ ] M4.6 Deaths: ragdolls in Unreal from the demo's ragdoll force and bone.
