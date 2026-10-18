@@ -27,6 +27,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod anim;
 pub mod bytes;
 pub mod content;
 pub mod coords;

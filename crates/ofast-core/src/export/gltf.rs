@@ -54,6 +54,7 @@ use serde_json::{Value as Json, json};
 
 use super::{ExportError, ExportOptions};
 use super::{environment, tint};
+use crate::anim::{Clip, NmSkeleton, Retargeter};
 use crate::content::Content;
 use crate::coords;
 use crate::kv3::Value;
@@ -103,6 +104,18 @@ pub fn export_model(
     model_path: &str,
     out_dir: &Path,
 ) -> Result<ExportReport, ExportError> {
+    export_model_with_clips(content, model_path, &[], out_dir)
+}
+
+/// [`export_model`], plus CS2 animation clips (`.vnmclip` paths) as glTF animations on the model's skin, retargeted
+/// onto its skeleton by bone name ([`crate::anim::Retargeter`]). Each animation is named after its clip's file. An
+/// additive clip (deltas over another clip) is skipped with a warning: composing it needs its base pose.
+pub fn export_model_with_clips(
+    content: &Content,
+    model_path: &str,
+    clip_paths: &[String],
+    out_dir: &Path,
+) -> Result<ExportReport, ExportError> {
     let model = load_model(content, model_path)?;
     let name = Path::new(model_path)
         .file_stem()
@@ -140,10 +153,71 @@ pub fn export_model(
             roots.push(node);
         }
     }
+    if let Some((_, skin_index)) = &skin {
+        let mut skeletons: HashMap<String, NmSkeleton> = HashMap::new();
+        for clip_path in clip_paths {
+            let clip_name = Path::new(clip_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("clip")
+                .trim_end_matches(".vnmclip")
+                .to_owned();
+            let clip = Clip::parse(&kv3_data(content, clip_path)?).map_err(|source| {
+                ExportError::Clip {
+                    path: clip_path.clone(),
+                    source,
+                }
+            })?;
+            if clip.is_additive() {
+                writer.report.warnings.push(format!(
+                    "clip {clip_path}: additive (deltas over another clip), not exported yet"
+                ));
+                continue;
+            }
+            if !skeletons.contains_key(&clip.skeleton) {
+                let skeleton = NmSkeleton::parse(&kv3_data(content, &clip.skeleton)?);
+                skeletons.insert(clip.skeleton.clone(), skeleton);
+            }
+            let retargeter = Retargeter::new(&model.skeleton, &skeletons[&clip.skeleton]);
+            // Keys on a 30 fps grid rather than the clip's own frames: Unreal's glTF import guesses an animation's
+            // frame rate from its key times, and a still clip such as `idle_rifle` stores 2 frames over 0.73 s
+            // (1.4 fps). Past the clip's end the last key holds its last frame.
+            let keys = (clip.duration * ANIMATION_FPS).round().max(0.0) as usize + 1;
+            let frames = (0..keys)
+                .map(|k| {
+                    clip.sample(k as f32 / ANIMATION_FPS, false)
+                        .map(|pose| retargeter.locals(&pose))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|source| ExportError::Clip {
+                    path: clip_path.clone(),
+                    source,
+                })?;
+            writer.animation(
+                &clip_name,
+                &model.skeleton,
+                *skin_index,
+                &frames,
+                ANIMATION_FPS,
+            );
+        }
+    } else if !clip_paths.is_empty() {
+        writer
+            .report
+            .warnings
+            .push(format!("{model_path} has no skeleton: clips not exported"));
+    }
     if let Some((bone_roots, _)) = skin {
         roots.extend(bone_roots);
     }
     writer.finish(&name, roots)
+}
+
+/// The KV3 `DATA` block of a resource (`path` with or without `_c`).
+fn kv3_data(content: &Content, path: &str) -> Result<Value, ExportError> {
+    let bytes = content.read_resource(path)?;
+    let resource = Resource::parse(&bytes)?;
+    Ok(resource.kv3(BlockKind::DATA)?.root)
 }
 
 /// glTF `JOINTS_0` / `WEIGHTS_0` for vertices with CS2 bone indices `joints` (into the mesh's remapping slice
@@ -426,6 +500,7 @@ pub(crate) struct GltfWriter<'c> {
     meshes: Vec<Json>,
     nodes: Vec<Json>,
     skins: Vec<Json>,
+    animations: Vec<Json>,
     lights: Vec<Json>,
     materials: Vec<Json>,
     /// (material path, tint in 0–255) → material index.
@@ -452,6 +527,9 @@ const ARRAY_BUFFER: u32 = 34962;
 const ELEMENT_ARRAY_BUFFER: u32 = 34963;
 /// A buffer view that is neither vertex nor index data (inverse bind matrices): glTF wants no `target` there.
 const NO_TARGET: u32 = 0;
+
+/// Key rate of exported animations: CS2's player clips are authored at 30 fps.
+const ANIMATION_FPS: f32 = 30.0;
 
 /// The rotation that turns Source axes into glTF axes (`coords::source_dir_to_gltf`): −90° about X. A skeleton's
 /// root bones carry it, so their children keep CS2's own local rotations.
@@ -503,6 +581,7 @@ impl<'c> GltfWriter<'c> {
             meshes: Vec::new(),
             nodes: Vec::new(),
             skins: Vec::new(),
+            animations: Vec::new(),
             lights: Vec::new(),
             materials: Vec::new(),
             material_ids: BTreeMap::new(),
@@ -644,6 +723,71 @@ impl<'c> GltfWriter<'c> {
             "skeleton": roots.first().copied().unwrap_or(first),
         }));
         Some((roots, self.skins.len() - 1))
+    }
+
+    /// Writes one glTF animation keying every bone of `skeleton` on the joints of skin `skin` (made by
+    /// [`Self::skin`]): `frames[f][bone]` is the bone's translation (inches) and rotation relative to its parent, in
+    /// Source axes, at `fps` frames per second. Root bones get the Source → glTF rotation as in the bind pose, the
+    /// others their translation in metres.
+    pub(crate) fn animation(
+        &mut self,
+        name: &str,
+        skeleton: &Skeleton,
+        skin: usize,
+        frames: &[Vec<([f32; 3], [f32; 4])>],
+        fps: f32,
+    ) {
+        let joints: Vec<usize> = self.skins[skin]["joints"]
+            .as_array()
+            .map(|j| {
+                j.iter()
+                    .filter_map(Json::as_u64)
+                    .map(|n| n as usize)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let times: Vec<[f32; 1]> = (0..frames.len()).map(|f| [f as f32 / fps]).collect();
+        let input = self.float_accessor(&times, "SCALAR", true);
+        let mut samplers = Vec::new();
+        let mut channels = Vec::new();
+        for (b, bone) in skeleton.bones.iter().enumerate() {
+            let Some(&node) = joints.get(b) else { continue };
+            let (translations, rotations): (Vec<[f32; 3]>, Vec<[f32; 4]>) = frames
+                .iter()
+                .map(|pose| {
+                    let (t, r) = pose
+                        .get(b)
+                        .copied()
+                        .unwrap_or((bone.position, bone.rotation));
+                    match bone.parent {
+                        None => (
+                            coords::source_point_to_gltf(t),
+                            normalize_quat(quat_mul(SOURCE_TO_GLTF_ROTATION, r)),
+                        ),
+                        Some(_) => (t.map(|c| c * coords::INCH_TO_METRE), r),
+                    }
+                })
+                .unzip();
+            for (path, output) in [
+                (
+                    "translation",
+                    self.float_accessor(&translations, "VEC3", false),
+                ),
+                ("rotation", self.float_accessor(&rotations, "VEC4", false)),
+            ] {
+                samplers
+                    .push(json!({ "input": input, "output": output, "interpolation": "LINEAR" }));
+                channels.push(json!({
+                    "sampler": samplers.len() - 1,
+                    "target": { "node": node, "path": path },
+                }));
+            }
+        }
+        self.animations.push(json!({
+            "name": name,
+            "samplers": samplers,
+            "channels": channels,
+        }));
     }
 
     /// Binds a mesh node to a skin made by [`Self::skin`] when its mesh carries joints and weights (a node with a
@@ -1528,6 +1672,9 @@ impl<'c> GltfWriter<'c> {
         });
         if !self.skins.is_empty() {
             document["skins"] = json!(self.skins);
+        }
+        if !self.animations.is_empty() {
+            document["animations"] = json!(self.animations);
         }
         if !textures.is_empty() {
             document["textures"] = json!(textures);

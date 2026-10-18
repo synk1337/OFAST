@@ -19,7 +19,7 @@ use clap::{Parser, Subcommand};
 use ofast_core::content::Content;
 use ofast_core::demo::players::list_rounds;
 use ofast_core::export::ExportOptions;
-use ofast_core::export::gltf::{ExportReport, export_model};
+use ofast_core::export::gltf::{ExportReport, export_model_with_clips};
 use ofast_core::export::map::{Skybox, export_map};
 use ofast_core::export::replay::export_round;
 use ofast_core::game::Cs2Install;
@@ -55,6 +55,10 @@ enum Command {
         /// Output folder (created if needed).
         #[arg(long, short)]
         out: PathBuf,
+        /// CS2 animation clips to add as glTF animations, retargeted onto the model's skeleton (repeatable), e.g.
+        /// `animation/anims/world/rifle/_default_rifle/run_n_rifle.vnmclip`.
+        #[arg(long = "clip")]
+        clips: Vec<String>,
     },
     /// Export a whole map (world, props, lights) to glTF plus an OFAST manifest for Unreal.
     ExportMap {
@@ -194,9 +198,10 @@ fn run(cli: Cli) -> Result<(), String> {
                 }
             }
         }
-        Command::ExportModel { model, out } => {
+        Command::ExportModel { model, out, clips } => {
             let content = Content::game(&install).map_err(|e| e.to_string())?;
-            let report = export_model(&content, &model, &out).map_err(|e| e.to_string())?;
+            let report = export_model_with_clips(&content, &model, &clips, &out)
+                .map_err(|e| e.to_string())?;
             print_report(&report, started);
         }
         Command::ExportMap {

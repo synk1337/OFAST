@@ -120,7 +120,12 @@ player and round.
 - [x] **M4.1 Skinned agents**: skeleton (`m_modelSkeleton`), bone remapping, four weights per vertex → glTF skin;
   `ctm_sas` imports into Unreal as a skeletal mesh in CS2's bind pose (94 bones, pelvis and head at CS2's heights).
   [model.md](formats/model.md#skeleton-and-skinning).
-- [ ] M4.2 Clip decoder (`.vnmclip`: per-track quantised poses, 30 fps) and a decoded clip playing in Unreal as in CS2.
+- [x] **M4.2 Clip decoder** (`.vnmclip`: per-track quantised poses, 30 fps): all 2735 CS2 clips decode exactly,
+  retargeted onto the agent's skeleton by bone name, exported as glTF animations (`ofast export-model … --clip …`).
+  In Unreal the clips import as 30 fps AnimSequences and pose the agent where the decoder puts the bones checked
+  (pelvis, head, hands, ankle: within 0.1 cm);
+  from a CS2 player's viewpoint in a demo, the knife run's stride matches CS2's, while CS2's arms and lean come from
+  the graph's weapon and aim layers (M4.4). [animation.md](formats/animation.md#verified).
 - [ ] M4.3 Rig inputs in the replay export: velocity, duck amount, ground, walking, body yaw, active weapon and its
   gameplay animation state, reload, jump / land ticks, defusing.
 - [ ] M4.4 Baked animation: locomotion (2D blend on local velocity × crouch), weapon idle / shoot / reload / deploy

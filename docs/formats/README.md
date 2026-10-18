@@ -9,7 +9,8 @@ synthetic test fixtures are built straight from them.
 | VPK archive | `pak01_dir.vpk`, `pak01_000.vpk`… | [vpk.md](vpk.md) | reader done, verified on CS2 |
 | KeyValues3 | text `.vmat`, `.vpcf`…; binary inside compiled resources | [kv3.md](kv3.md) | binary decoder done, verified on all CS2 files; text writer done |
 | Resource container | every `*_c` file (`.vmat_c`, `.vmdl_c`, `.vtex_c`…) | [resource.md](resource.md) | block splitter done |
-| Model + mesh | `.vmdl_c` (`CTRL`, `MDAT`, `MVTX`, `MIDX`, older `VBIB`/`MBUF`), meshopt buffers | [model.md](model.md) | reader done, all 13,105 CS2 models decode; glTF export |
+| Model + mesh | `.vmdl_c` (`CTRL`, `MDAT`, `MVTX`, `MIDX`, older `VBIB`/`MBUF`), meshopt buffers | [model.md](model.md) | reader done, all 13,105 CS2 models decode; glTF export; skeletons and skins |
+| Animation | `.vnmskel_c`, `.vnmclip_c` (AnimGraph 2) | [animation.md](animation.md) | clip decoder done, all 2735 CS2 clips decode; retargeted onto agents; glTF animations |
 | Map | `world.vwrld_c`, `*.vwnod_c`, `*.vents_c` in `maps/<map>.vpk` | [map.md](map.md) | reader + glTF export, verified on de_mirage against CS2 |
 | Material | `.vmat_c` (shader channel conventions, layer blending) | [material.md](material.md) | glTF + Unreal layer-blend material |
 | Texture | `.vtex_c` | [vtex.md](vtex.md) | header, mips, LZ4, BC1/3/4/5/7 + uncompressed → RGBA8; BC6H/float → HDR; cube maps |

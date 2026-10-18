@@ -59,4 +59,12 @@ pub enum ExportError {
     /// A demo could not be read.
     #[error(transparent)]
     Demo(#[from] crate::demo::players::TrackError),
+    /// An animation clip could not be decoded.
+    #[error("clip {path}: {source}")]
+    Clip {
+        /// The clip's path.
+        path: String,
+        /// What went wrong.
+        source: crate::anim::AnimError,
+    },
 }
