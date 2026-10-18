@@ -587,6 +587,13 @@ sniper's nest 1.26 / 1.27 → 1.20 / 1.22, underpass 1.28 (unchanged; per view i
 now CT shade 0.97, T shade 1.05, palace 1.00: `OUTDOOR_BOUNCE_GAIN`, `LOCAL_BOUNCE_GAIN` and the rect halving stay.
 Indoors the baked lamps' highlights are gone too; the B apartments, short of the corridor bounce already, drop further.
 
+**On the other maps** (2026-10-18; re-exported, re-imported, per view in
+[checks.md](../checks.md#the-highlight-rule-on-the-other-maps-2026-10-18)): every one bakes its sun, and the sunlit
+surfaces drop by 4 – 11 % — pooled de_anubis 1.06 → 1.01, de_dust2 1.18 → 1.13, de_inferno 0.97 → 0.91, de_nuke
+1.24 → 1.11, de_vertigo 1.16 → 1.07. The outdoor shade moves by 0 – 4 %. Lamp-lit rooms follow their lamps: de_nuke
+bakes 97 of its 153 baked lamps' highlights into the cubemaps and its rooms change by 0 – 1 % (its ramp room, half
+lit by lamps without one, by 16 %); de_vertigo's T-spawn hall, lit by static barn lamps without one, by 6 %.
+
 Two further differences, measured but not changed:
 - **Interchange's glTF master reflects twice as much.** Unreal's unlit view adds 0.45 × the specular colour (F0), so
   the difference between `ShowFlag.Lighting 0` renders with and without `ShowFlag.Specular 0` gives each pixel's F0:
@@ -673,11 +680,16 @@ Measured 2026-10-17 / 18. Every reference above was taken at this machine's brig
 measured on that picture (k = 2.85, w = 4.2), Unreal / CS2, whole image; de_anubis and de_inferno re-imported with the
 merged code (renders in `test-data/shots/refit/`), de_vertigo with the code of 2026-10-17:
 
-| View | Brighter references, k 3.4 | Default picture, k 3.4 | Default picture, k 2.85 | Notes |
-|---|---|---|---|---|
-| de_anubis CT / T | 1.01 / 1.01 | 1.11 / 1.08 | 1.04 / 1.02 | lit surfaces 2.67 / 2.77 against k = 2.85: read as base colours a few % above CS2's albedo (1.08 in the CT view); the base colours are right (0.99), it is mostly the sun highlight ([highlights](#highlights-cs2-does-not-draw-2026-10-18)) |
-| de_inferno CT / T | 0.76 / 1.22 | 0.81 / 1.44 | 0.75 / 1.30 | sky right (k 2.82); surfaces too dark from its materials (base colour 0.5 – 0.6× CS2's albedo); its 12 other views in [checks.md](../checks.md#after-merging-all-branches-2026-10-18) |
-| de_vertigo CT / T | — | 1.42 / 2.04 | 1.27 / 1.82 | new map; the shade too bright from its barn lights (light 2 – 4× CS2's in the T spawn's hall), materials right (base colour 1.00 – 1.01). With the stationary barn lights as cookie spots (2026-10-18): 0.82 / 1.61 — the CT floor now short of sky, the T spawn's static lamps open ([barn lights](#barn-lights-and-their-cookies)) |
+| View | Brighter references, k 3.4 | Default picture, k 3.4 | Default picture, k 2.85 | Highlights only where CS2 draws them (2026-10-18): level before → re-imported | Notes |
+|---|---|---|---|---|---|
+| de_anubis CT / T | 1.01 / 1.01 | 1.11 / 1.08 | 1.04 / 1.02 | 1.04 / 1.02 → **1.01 / 1.01** | lit surfaces 2.67 / 2.77 against k = 2.85: read as base colours a few % above CS2's albedo (1.08 in the CT view); the base colours are right (0.99), it was mostly the sun highlight ([highlights](#highlights-cs2-does-not-draw-2026-10-18)): sunlit 1.06 → 1.01 |
+| de_inferno CT / T | 0.76 / 1.22 | 0.81 / 1.44 | 0.75 / 1.30 | 0.79 / 1.41 → **0.77 / 1.37** | sky right (k 2.82); surfaces too dark from its materials (base colour 0.5 – 0.6× CS2's albedo); its 12 other views in [checks.md](../checks.md#the-highlight-rule-on-the-other-maps-2026-10-18) |
+| de_vertigo CT / T | — | 1.42 / 2.04 | 1.27 / 1.82 | 0.82 / 1.61 → **0.82 / 1.48** | new map; the shade too bright from its barn lights (light 2 – 4× CS2's in the T spawn's hall), materials right (base colour 1.00 – 1.01). With the stationary barn lights as cookie spots (2026-10-18): 0.82 / 1.61 — the CT floor now short of sky, the T spawn's static lamps open ([barn lights](#barn-lights-and-their-cookies)); without their highlights the T spawn's shade 1.73 → 1.63 |
+
+The "before" of the highlight column is the level as other sessions had last imported it, shot again on the day
+(de_inferno has moved since the k = 2.85 column, by other imports in the shared sandbox); the linear maps, the same
+way: de_mirage 1.05 / 1.05 → 1.02 / 1.04 (scene), de_dust2 0.28 / 1.06 → 0.28 / 1.03, de_nuke 1.00 / 0.97 →
+0.93 / 0.92.
 
 The real imports reproduce `tone_fit.py simulate` to 0.1 – 0.2 % (de_vertigo CT and T, re-toned from k = 3.4, w = 6).
 The linear maps do not use k and w; their numbers against the default picture are in checks.md. Their lighting

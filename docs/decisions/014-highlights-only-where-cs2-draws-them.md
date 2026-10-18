@@ -46,5 +46,8 @@ realistic style keeps physical highlights. Base-colour renders are taken with `S
   lose their highlights too (B apartments 0.84 → 0.75).
 - Other maps need a re-export for the new manifest keys; until then they keep Unreal's highlights. de_cache's sun is
   stationary and keeps its highlight; de_nuke, de_inferno and de_vertigo bake many local highlights into cubemaps.
+  Done for de_anubis, de_dust2, de_inferno, de_nuke and de_vertigo (2026-10-18): sunlit surfaces 4 – 11 % down
+  (de_anubis 1.06 → 1.01 of CS2), shade 0 – 4 %, de_nuke's rooms, which keep their cubemap highlights, 0 – 1 %
+  ([checks.md](../checks.md#the-highlight-rule-on-the-other-maps-2026-10-18)).
 - Interchange's glTF master still reflects with F0 0.08 where CS2 uses 0.04 (Lumen's reflections, 1 – 1.5 % of the
   sunlit light, more in the shade): open, to be measured with the bounce gains.

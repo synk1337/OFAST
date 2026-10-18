@@ -231,6 +231,130 @@ method as the table above; "all" is every non-sky block):
 | shop / tramp / underpass | 0.71 / 1.09 / 1.28 → 0.70 / 1.08 / 1.28 | — | same | 0.69 / 1.07 / 1.26 |
 | all seven outdoor views, pooled | | 1.07 → **1.01** | | |
 
+### The highlight rule on the other maps (2026-10-18)
+
+de_anubis, de_dust2, de_inferno, de_nuke and de_vertigo re-exported for the new manifest keys and re-imported with the
+rule; the importer also has the barn-light work (de_vertigo's export and level already had it), so de_vertigo keeps
+its cookie spots. de_dust2's and de_vertigo's exports came out byte-identical but for the manifest, which only gained
+keys (replaced in `test-data/exports`). de_anubis's, de_inferno's and de_nuke's glTF differed as well — their exports
+predated the unlit `black_simple` materials (`KHR_materials_unlit`, 1 – 3 materials each) — so their new exports are
+in `test-data/exports_hl/` and the shared ones were left as they were. Every map's views were shot on the level as
+other sessions had left it (**before**), the map re-imported and shot again (**after**), and in the same editor
+session once more with Unreal's highlights put back on the sun and every light that is not bounce-only (**rule
+alone** = after ÷ that, whole image). Unreal / CS2 against the default picture (`--cs2-gamma 2.013074`): the whole
+image as in the tables above, and the scene (each picture read back through its tone rule: k 2.85 / w 4.2 on the
+Hable maps, the colour table on every map) over sunlit and outdoor-shade blocks as in the de_mirage table (views with
+fewer than 30 sunlit blocks have neither). Renders, numbers and the scratch scripts that made them (local only):
+`test-data/shots/highlights_maps/`.
+
+| | de_anubis | de_dust2 | de_inferno | de_mirage | de_nuke | de_vertigo |
+|---|---|---|---|---|---|---|
+| sun | baked | baked | baked | baked | baked | baked |
+| local lights: own highlight (stationary / dynamic) / baked into cubemaps / baked, none / bounce only | 1 / 14 / 5 / 13 | 2 / 1 / 27 / 1 | 6 / 22 / 162 / 17 | 0 / 0 / 66 / 6 | 15 / 97 / 56 / 6 | 3 / 24 / 62 / 0 |
+| spawns CT / T, whole image | 1.04 / 1.02 → 1.01 / 1.01 | 0.28 / 1.06 → 0.28 / 1.03 | 0.79 / 1.41 → 0.77 / 1.37 | 1.05 / 1.05 → 1.02 / 1.04 (scene) | 1.00 / 0.97 → 0.93 / 0.92 | 0.82 / 1.61 → 0.82 / 1.48 |
+| sunlit, all views pooled | 1.06 → **1.01** | 1.18 → **1.13** | 0.97 → **0.91** | 1.07 → **1.01** | 1.24 → **1.11** | 1.16 → **1.07** |
+| rule alone on the sunlit blocks | −5 % | −4 % | −6 % | −6 % | −11 % | −7 % |
+| outdoor shade, per view | 0 % | 0 – −3 % | −2 – +1 %; A site −7 % (the rule −1 %, the rest between editor sessions) | 0 – −1 % | 0 – −4 % | −1 / −6 % |
+| lamp-lit interiors, per view | — | 0 – −3 % | 0 – −8 % (church −8 %) | 0 – −11 % (palace −4 %, B apartments −11 %) | 0 – −1 %; B site's far corner −6 %, ramp room −16 % | — |
+
+- **Sunlit surfaces** lose the sun's highlight everywhere: 4 – 7 %, de_nuke 11 % (more of its sunlit light was
+  Unreal's highlight). de_anubis now reads 1.01 like de_mirage. de_dust2 (1.13) and de_nuke
+  (1.11) stay above CS2 and de_inferno below (its materials, base colour 0.6× CS2's albedo, lighting.md): not the
+  highlight, open.
+- **Shade** hardly moves (Lumen's reflections stay; the bounce gains were not touched), except where baked lamps
+  without a cubemap highlight light it: de_vertigo's T-spawn hall (its 36 static barn lamps) 1.73 → 1.63.
+- **Interiors** follow their lamps: de_nuke bakes 97 of its 153 baked lamps' highlights into the cubemaps, and its
+  rooms keep them (decontamination, lobby, observation, tunnels within 1 %); the ramp room, where 15 of the 37 lamps
+  within 15 m bake none, drops 16 %. de_inferno bakes few (22 of 184): its church, T-side apartments hall and
+  library lose 5 – 8 %, the sewer underpass, lit through its openings, nothing. Its apartment room with the wall
+  lamp read 1.51 – 1.79 in three shots of the same re-imported level (1.53 every time with the highlights back,
+  2.05 before): too unsettled to measure the rule on.
+- **Repeatability**: de_inferno's after and highlights-back shots were taken three times each (one editor session,
+  a throw-away shot after each switch); the other views agreed to 0.5 % (the T-side apartments hall, banana and
+  A site to 2 %), and its table gives their means.
+- **de_nuke's B site** moved for another reason: the two stationary barn lights with a cookie are now cookie spots
+  (the barn-light work), one 7 m from the B-site camera and one near `secret` and `garage`. B site 0.78 → 0.63,
+  B site far corner 0.49 → 0.41 and secret 1.14 → 1.18 of which the rule is −1 %, −6 % and −1 %.
+
+Per view, before → after (Unreal / CS2; the rule alone from the whole image):
+
+**de_anubis** (exposure 0.7, Hable)
+
+| View | Whole image | Sunlit | Shade | Rule alone |
+|---|---|---|---|---|
+| ct0 | 1.04 → 1.01 | 1.07 → 0.99 | 0.97 → 0.96 | −2 % |
+| t0 | 1.02 → 1.01 | 1.06 → 1.03 | 0.99 → 0.98 | −1 % |
+
+**de_dust2** (exposure 0.925)
+
+| View | Whole image | Sunlit | Shade | Rule alone |
+|---|---|---|---|---|
+| ct0 | 0.28 → 0.28 | — | — | −1 % |
+| t0 | 1.06 → 1.03 | 1.11 → 1.05 | 0.83 → 0.83 | −3 % |
+| asite | 1.00 → 0.97 | 1.10 → 1.05 | 0.80 → 0.78 | −2 % |
+| bsite | 1.16 → 1.13 | 1.20 → 1.12 | 1.17 → 1.16 | −3 % |
+| bwindow | 1.14 → 1.10 | 1.19 → 1.13 | 1.04 → 1.03 | −3 % |
+| longa | 1.05 → 1.02 | 1.14 → 1.08 | 0.78 → 0.77 | −3 % |
+| lowertunnel | 0.63 → 0.63 | — | — | 0 % |
+| middle | 1.10 → 1.07 | 1.16 → 1.09 | 1.06 → 1.06 | −3 % |
+| middoors | 1.18 → 1.15 | 1.21 → 1.16 | 1.15 → 1.15 | −3 % |
+| outsidelong | 1.05 → 1.02 | 1.11 → 1.07 | 0.78 → 0.77 | −3 % |
+| pit | 1.02 → 1.01 | 1.15 → 1.08 | 0.97 → 0.97 | −1 % |
+| tbluedoor | 1.27 → 1.24 | 1.30 → 1.25 | 1.17 → 1.16 | −2 % |
+| tcar | 1.28 → 1.25 | 1.35 → 1.30 | 0.84 → 0.83 | −2 % |
+| tdoor | 1.25 → 1.22 | 1.36 → 1.29 | 1.05 → 1.05 | −2 % |
+| tsalmon | 1.19 → 1.17 | 1.24 → 1.18 | 1.12 → 1.11 | −2 % |
+| undera | 0.98 → 0.97 | 1.08 → 1.04 | 0.92 → 0.92 | −1 % |
+| uppertunnel | 0.93 → 0.92 | — | — | −3 % |
+| uppertunnel2 | 1.14 → 1.13 | 1.23 → 1.18 | 1.13 → 1.13 | −1 % |
+
+**de_inferno** (exposure 0.8, Hable; after and rule alone: means of three shots)
+
+| View | Whole image | Sunlit | Shade | Rule alone |
+|---|---|---|---|---|
+| ct0 | 0.79 → 0.77 | 0.76 → 0.72 | 0.45 → 0.45 | −3 % |
+| t0 | 1.41 → 1.37 | 2.64 → 2.46 | 1.19 → 1.17 | −3 % |
+| asite | 0.86 → 0.80 | 0.88 → 0.78 | 0.64 → 0.59 | −5 % |
+| bsite | 0.82 → 0.80 | 0.92 → 0.87 | 0.60 → 0.60 | −3 % |
+| middle | 0.85 → 0.82 | 0.94 → 0.85 | 0.75 → 0.75 | −4 % |
+| pit | 0.76 → 0.73 | 0.93 → 0.83 | 0.53 → 0.53 | −5 % |
+| balcony | 0.78 → 0.77 | 0.81 → 0.77 | 0.59 → 0.60 | −1 % |
+| arch | 0.57 → 0.56 | 1.10 → 0.99 | 0.49 → 0.48 | −3 % |
+| banana | 1.31 → 1.28 | 1.96 → 1.78 | 1.08 → 1.06 | −2 % |
+| ruins (church) | 1.86 → 1.72 | 3.80 → 3.39 | 1.79 → 1.67 | −8 % |
+| apartments2 | 1.16 → 1.11 | 1.13 → 0.98 | 1.14 → 1.12 | −6 % |
+| library | 0.49 → 0.47 | 1.31 → 1.08 | 0.54 → 0.52 | −5 % |
+| underpass | 2.16 → 2.16 | 2.60 → 2.60 | 1.48 → 1.48 | 0 % |
+| apartments | 2.05 → 1.51 – 1.79 | — | — | unsettled (see above) |
+
+**de_nuke** (exposure 1.0)
+
+| View | Whole image | Sunlit | Shade | Rule alone |
+|---|---|---|---|---|
+| ct0 | 1.00 → 0.93 | 1.17 → 0.97 | 0.87 → 0.85 | −8 % |
+| t0 | 0.97 → 0.92 | 1.15 → 1.06 | 0.88 → 0.87 | −5 % |
+| ctcrates | 1.04 → 1.01 | 1.17 → 1.06 | 0.91 → 0.89 | −3 % |
+| tdoors | 1.01 → 0.96 | 1.17 → 0.98 | 0.94 → 0.93 | −5 % |
+| outside | 0.96 → 0.92 | 1.11 → 1.01 | 0.69 → 0.68 | −4 % |
+| garage | 1.30 → 1.26 | 1.90 → 1.80 | 0.90 → 0.87 | −3 % |
+| asite | 0.23 → 0.23 | — | — | −1 % |
+| bsite | 0.78 → 0.63 | — | — | −1 % (cookie spot) |
+| bsite2 | 0.49 → 0.41 | — | — | −6 % (cookie spot) |
+| secret | 1.14 → 1.18 | — | — | −1 % (cookie spot) |
+| ramproom | 1.35 → 1.13 | — | — | −16 % |
+| observation | 1.65 → 1.65 | — | — | −1 % |
+| decon | 0.77 → 0.77 | — | — | 0 % |
+| decondoor | 0.82 → 0.82 | — | — | 0 % |
+| lobby | 0.60 → 0.60 | — | — | 0 % |
+| tunnels | 2.05 → 2.03 | 2.22 → 2.21 | 1.65 → 1.63 | 0 % |
+
+**de_vertigo** (exposure 0.8, Hable)
+
+| View | Whole image | Sunlit | Shade | Rule alone |
+|---|---|---|---|---|
+| ct0 | 0.82 → 0.82 | 1.04 → 1.00 | 0.77 → 0.76 | −1 % |
+| t0 | 1.61 → 1.48 | 1.19 → 1.09 | 1.73 → 1.63 | −8 % |
+
 ## What was wrong
 
 ### Fixed
