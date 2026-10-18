@@ -26,7 +26,7 @@ use super::events::{EventDescriptors, GameEvent};
 use super::frame::{FrameError, Frames};
 use super::proto::{
     CDemoClassInfo, CDemoFileHeader, CDemoFullPacket, CDemoPacket, CDemoSendTables,
-    CDemoStringTables, CMsgSource1LegacyGameEvent, CMsgSource1LegacyGameEventList,
+    CDemoStringTables, CMsgSource1LegacyGameEvent, CMsgSource1LegacyGameEventList, CnetMsgTick,
     CsvcMsgCreateStringTable, CsvcMsgPacketEntities, CsvcMsgServerInfo, CsvcMsgUpdateStringTable,
     EBaseGameEvents, EDemoCommands, NetMessages, SvcMessages,
 };
@@ -115,6 +115,8 @@ pub struct DemoParser<'a> {
     baselines: HashMap<u32, Vec<u8>>,
     entities: Entities,
     tick: Option<u32>,
+    /// The server's game tick from the latest `CNETMsg_Tick`.
+    server_tick: Option<u32>,
     event_descriptors: EventDescriptors,
     /// Game events read since the last [`DemoParser::take_events`].
     events: Vec<GameEvent>,
@@ -143,6 +145,7 @@ impl<'a> DemoParser<'a> {
             baselines: HashMap::new(),
             entities: Entities::default(),
             tick: None,
+            server_tick: None,
             event_descriptors: EventDescriptors::default(),
             events: Vec::new(),
             warnings: Vec::new(),
@@ -196,6 +199,20 @@ impl<'a> DemoParser<'a> {
     /// Tick of the most recently processed frame.
     pub fn tick(&self) -> Option<u32> {
         self.tick
+    }
+
+    /// The server's game tick, from the latest `CNETMsg_Tick` (`None` before the first one). Game-time fields count in
+    /// it (`GameTick_t`, such as a pawn's last jump tick); it runs a constant distance ahead of the demo's own
+    /// [`tick`](Self::tick) (2403 ticks on the local match demo), so `demo tick = game tick − (server tick − tick)`.
+    pub fn server_tick(&self) -> Option<u32> {
+        self.server_tick
+    }
+
+    /// A game tick (`GameTick_t` field) as a demo tick, using the current distance between the two clocks. `None`
+    /// before the first `CNETMsg_Tick`, or for a game tick before the demo started.
+    pub fn game_tick_to_demo(&self, game_tick: u32) -> Option<u32> {
+        let offset = i64::from(self.server_tick?) - i64::from(self.tick?);
+        u32::try_from(i64::from(game_tick) - offset).ok()
     }
 
     /// The serializers, once the send tables have been read.
@@ -372,7 +389,12 @@ impl<'a> DemoParser<'a> {
                 self.string_tables.clear();
                 self.baselines.clear();
             } else if kind == NetMessages::NetTick as i32 {
-                // The server tick (frame tick + a constant offset); the frame tick is what we report.
+                // The server tick (frame tick + a constant offset); the frame tick is what we report, the server
+                // tick converts game-tick fields (`game_tick_to_demo`).
+                let msg: CnetMsgTick = decode("CNETMsg_Tick", body)?;
+                if let Some(tick) = msg.tick {
+                    self.server_tick = Some(tick);
+                }
             } else if kind == EBaseGameEvents::GeSource1LegacyGameEventList as i32 {
                 let list: CMsgSource1LegacyGameEventList =
                     decode("CMsgSource1LegacyGameEventList", body)?;

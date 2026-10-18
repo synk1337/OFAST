@@ -18,9 +18,16 @@
 //! 5). It lasts until the tick before the next round starts, the match ends, or the demo ends — so it includes the
 //! few seconds after the round is decided. Its number is `m_totalRoundsPlayed + 1` at the start. See
 //! `docs/formats/demo.md`.
+//!
+//! What drives a player's animation ([`RigInputs`]: velocity, ground, crouch, walking, the weapon in hand and its
+//! animation state, jumps and landings) comes from the pawn, its movement and weapon services, and the active
+//! weapon's entity. Those fields are looked up leniently: if a CS2 update renames one, it reads as its default and
+//! the positions keep working.
+
+use std::collections::HashMap;
 
 use super::decoder::FieldValue;
-use super::entity::{Entity, handle_to_index};
+use super::entity::{Entity, ServerClass, handle_to_index};
 use super::events::GameEvent;
 use super::fieldpath::FieldPath;
 use super::parser::{DemoError, DemoParser};
@@ -59,7 +66,62 @@ pub struct PlayerSample {
     pub yaw: f32,
     /// The pawn is alive (`m_lifeState` = 0).
     pub alive: bool,
+    /// What the player's animation follows: movement, crouch, weapon.
+    pub rig: RigInputs,
 }
+
+/// What CS2's player animation is driven by at one tick, besides position and view: the inputs of OFAST's replay
+/// rig (`docs/decisions/013-replay-rig-baked-in-rust.md`). "Rig inputs" in `docs/formats/demo.md` lists the fields
+/// and how they were checked.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RigInputs {
+    /// Which way the body faces, degrees like [`PlayerSample::yaw`] (`CBodyComponent` → `m_angRotation` yaw, the
+    /// rotation the model is drawn with). It follows the eye yaw with a lag and limits, so it can differ from it by
+    /// tens of degrees while the player stands and looks around.
+    pub body_yaw: f32,
+    /// Velocity in units per second (`m_vecVelocity`): what the locomotion blend follows (running is 215 – 250
+    /// units/s depending on the weapon, walking about half).
+    pub velocity: [f32; 3],
+    /// Standing on the ground or on an object (`m_fFlags` bit 0, `FL_ONGROUND`); off while jumping or falling.
+    pub on_ground: bool,
+    /// How far crouched, from 0 (standing) to 1 (`m_pMovementServices.m_flDuckAmount`), gradual while going down or
+    /// up.
+    pub duck_amount: f32,
+    /// The walk key is held (`m_bIsWalking`).
+    pub walking: bool,
+    /// Looking through a scope (`m_bIsScoped`).
+    pub scoped: bool,
+    /// Defusing the bomb (`m_bIsDefusing`).
+    pub defusing: bool,
+    /// Climbing a ladder (`m_MoveType` = [`MOVETYPE_LADDER`]).
+    pub on_ladder: bool,
+    /// Demo tick of the player's latest jump (`m_pMovementServices.m_nLastJumpTick`, a game tick), if any so far.
+    pub last_jump_tick: Option<u32>,
+    /// Demo tick of the player's latest landing (`m_pMovementServices.m_ModernJump.m_nLastLandedTick`).
+    pub last_landing_tick: Option<u32>,
+    /// The weapon in hand (`m_pWeaponServices.m_hActiveWeapon`), if any.
+    pub weapon: Option<ActiveWeapon>,
+}
+
+/// The weapon a player holds at one tick.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveWeapon {
+    /// Item definition index (`m_AttributeManager.m_Item.m_iItemDefinitionIndex`), the game's weapon id: 7 = AK-47,
+    /// 16 = M4A4, 60 = M4A1-S, 42 = CT knife, 59 = T knife, 49 = C4 (`docs/formats/demo.md`, "Rig inputs").
+    pub item: u32,
+    /// The weapon entity's class (`CAK47`, `CWeaponM4A1`, `CKnife`, `CC4`, …).
+    pub class: String,
+    /// What the weapon's animation is doing (`m_iWeaponGameplayAnimState`): idle, deploying, shooting, reloading…
+    /// The values are listed in `docs/formats/demo.md`.
+    pub anim_state: i64,
+    /// Reloading (`m_bInReload`).
+    pub reloading: bool,
+}
+
+/// `m_fFlags` bit: the pawn stands on something.
+pub const FL_ONGROUND: u64 = 1;
+/// `m_MoveType` while on a ladder.
+pub const MOVETYPE_LADDER: u64 = 9;
 
 impl PlayerSample {
     /// Where the first-person camera is: [`position`](Self::position) + [`view_offset`](Self::view_offset).
@@ -146,10 +208,79 @@ struct Paths {
     freeze_period: FieldPath,
     warmup_period: FieldPath,
     game_phase: FieldPath,
+    rig: RigPaths,
+}
+
+/// Field paths of the rig inputs. Each is optional: a missing one reads as its default.
+#[derive(Debug, Default)]
+struct RigPaths {
+    body_rotation: Option<FieldPath>,
+    velocity: Option<[FieldPath; 3]>,
+    flags: Option<FieldPath>,
+    move_type: Option<FieldPath>,
+    walking: Option<FieldPath>,
+    scoped: Option<FieldPath>,
+    defusing: Option<FieldPath>,
+    duck_amount: Option<FieldPath>,
+    last_jump: Option<FieldPath>,
+    last_landing: Option<FieldPath>,
+    active_weapon: Option<FieldPath>,
+    /// Per weapon class id: every class with an item definition index (each weapon has its own serializer, so the
+    /// same field sits at a different path in each).
+    weapons: HashMap<u32, WeaponPaths>,
+}
+
+/// Field paths in one weapon class.
+#[derive(Debug)]
+struct WeaponPaths {
+    item: FieldPath,
+    anim_state: Option<FieldPath>,
+    reloading: Option<FieldPath>,
+}
+
+impl RigPaths {
+    fn find(serializers: &Serializers, classes: &[Option<ServerClass>]) -> Self {
+        let pawn = serializers.by_name("CCSPlayerPawn");
+        let path = |field: &str| pawn.and_then(|s| serializers.path_of(s, field));
+        let velocity = ["X", "Y", "Z"].map(|axis| path(&format!("m_vecVelocity.m_vec{axis}")));
+        let weapons = classes
+            .iter()
+            .flatten()
+            .filter_map(|class| {
+                let field = |name: &str| serializers.path_of(class.serializer, name);
+                let paths = WeaponPaths {
+                    item: field("m_AttributeManager.m_Item.m_iItemDefinitionIndex")?,
+                    anim_state: field("m_iWeaponGameplayAnimState"),
+                    reloading: field("m_bInReload"),
+                };
+                Some((class.id, paths))
+            })
+            .collect();
+        Self {
+            body_rotation: path("CBodyComponent.m_angRotation"),
+            velocity: match velocity {
+                [Some(x), Some(y), Some(z)] => Some([x, y, z]),
+                _ => None,
+            },
+            flags: path("m_fFlags"),
+            move_type: path("m_MoveType"),
+            walking: path("m_bIsWalking"),
+            scoped: path("m_bIsScoped"),
+            defusing: path("m_bIsDefusing"),
+            duck_amount: path("m_pMovementServices.m_flDuckAmount"),
+            last_jump: path("m_pMovementServices.m_nLastJumpTick"),
+            last_landing: path("m_pMovementServices.m_ModernJump.m_nLastLandedTick"),
+            active_weapon: path("m_pWeaponServices.m_hActiveWeapon"),
+            weapons,
+        }
+    }
 }
 
 impl Paths {
-    fn find(serializers: &Serializers) -> Result<Self, TrackError> {
+    fn find(
+        serializers: &Serializers,
+        classes: &[Option<ServerClass>],
+    ) -> Result<Self, TrackError> {
         let path = |class: &str, field: &str| {
             serializers
                 .by_name(class)
@@ -185,6 +316,7 @@ impl Paths {
             freeze_period: path(rules, "m_pGameRules.m_bFreezePeriod")?,
             warmup_period: path(rules, "m_pGameRules.m_bWarmupPeriod")?,
             game_phase: path(rules, "m_pGameRules.m_gamePhase")?,
+            rig: RigPaths::find(serializers, classes),
         })
     }
 }
@@ -277,7 +409,7 @@ fn walk_rounds(
         };
         if paths.is_none() {
             let serializers = parser.serializers().ok_or(DemoError::MissingSendTables)?;
-            paths = Some(Paths::find(serializers)?);
+            paths = Some(Paths::find(serializers, parser.classes())?);
         }
         let paths = paths.as_ref().expect("set above");
         let Some(rules) = read_rules(&parser, paths) else {
@@ -444,9 +576,73 @@ fn read_players(parser: &DemoParser<'_>, paths: &Paths) -> Vec<PlayerSample> {
                 .and_then(FieldValue::as_u64)
                 .unwrap_or(0)
                 == 0,
+            rig: read_rig(parser, &paths.rig, pawn),
         });
     }
     players
+}
+
+/// The rig inputs of one pawn (fields the server never sent read as their defaults: 0, false, none).
+fn read_rig(parser: &DemoParser<'_>, paths: &RigPaths, pawn: &Entity) -> RigInputs {
+    let get = |path: &Option<FieldPath>| path.as_ref().and_then(|p| pawn.get(p));
+    let flag = |path: &Option<FieldPath>| get(path).and_then(FieldValue::as_bool).unwrap_or(false);
+    let number = |path: &Option<FieldPath>| get(path).and_then(FieldValue::as_u64).unwrap_or(0);
+    // A game tick of 0 means "never".
+    let demo_tick = |path: &Option<FieldPath>| {
+        get(path)
+            .and_then(FieldValue::as_u64)
+            .filter(|&t| t > 0)
+            .and_then(|t| u32::try_from(t).ok())
+            .and_then(|t| parser.game_tick_to_demo(t))
+    };
+    let entities = parser.entities();
+    let weapon = get(&paths.active_weapon)
+        .and_then(FieldValue::as_u64)
+        .and_then(handle_to_index)
+        .and_then(|i| entities.get(i))
+        .and_then(|w| {
+            let fields = paths.weapons.get(&w.class_id)?;
+            Some(ActiveWeapon {
+                item: w.get(&fields.item)?.as_u64()? as u32,
+                class: parser.class_name(w.class_id)?.to_owned(),
+                anim_state: fields
+                    .anim_state
+                    .as_ref()
+                    .and_then(|p| w.get(p))
+                    .and_then(FieldValue::as_i64)
+                    .unwrap_or(0),
+                reloading: fields
+                    .reloading
+                    .as_ref()
+                    .and_then(|p| w.get(p))
+                    .and_then(FieldValue::as_bool)
+                    .unwrap_or(false),
+            })
+        });
+    RigInputs {
+        body_yaw: get(&paths.body_rotation)
+            .and_then(FieldValue::as_vector3)
+            .map_or(0.0, |angles| angles[1]),
+        velocity: paths
+            .velocity
+            .as_ref()
+            .map(|axes| {
+                axes.each_ref()
+                    .map(|p| pawn.get(p).and_then(FieldValue::as_f32).unwrap_or(0.0))
+            })
+            .unwrap_or_default(),
+        on_ground: number(&paths.flags) & FL_ONGROUND != 0,
+        duck_amount: get(&paths.duck_amount)
+            .and_then(FieldValue::as_f32)
+            .unwrap_or(0.0),
+        walking: flag(&paths.walking),
+        scoped: flag(&paths.scoped),
+        defusing: flag(&paths.defusing),
+        on_ladder: number(&paths.move_type) == MOVETYPE_LADDER,
+        last_jump_tick: demo_tick(&paths.last_jump),
+        last_landing_tick: demo_tick(&paths.last_landing),
+        weapon,
+    }
 }
 
 /// `cell × 512 − 16384 + offset` for each axis.
@@ -473,19 +669,25 @@ mod tests {
     use crate::demo::fieldpath::write_paths;
     use crate::demo::frame::testing::{DemoBuilder, push_varint};
     use crate::demo::proto::{
-        CDemoClassInfo, CDemoFileHeader, CDemoPacket, CDemoSendTables, CsvcMsgCreateStringTable,
-        CsvcMsgPacketEntities, CsvcMsgServerInfo, CsvcMsgUpdateStringTable, EDemoCommands,
-        SvcMessages, c_demo_class_info,
+        CDemoClassInfo, CDemoFileHeader, CDemoPacket, CDemoSendTables, CnetMsgTick,
+        CsvcMsgCreateStringTable, CsvcMsgPacketEntities, CsvcMsgServerInfo,
+        CsvcMsgUpdateStringTable, EDemoCommands, NetMessages, SvcMessages, c_demo_class_info,
     };
     use crate::demo::serializer::testing::{F, message};
 
-    // Class ids (3 classes → 2 bits) and entity indices used by the fixture.
+    // Class ids (4 classes → 3 bits) and entity indices used by the fixture.
     const RULES_CLASS: u32 = 0;
     const CONTROLLER_CLASS: u32 = 1;
     const PAWN_CLASS: u32 = 2;
+    const WEAPON_CLASS: u32 = 3;
+    const CLASS_COUNT: u32 = 4;
+    const CLASS_ID_BITS: u32 = 3;
     const RULES: u32 = 3;
     const CONTROLLER: u32 = 1;
     const PAWN: u32 = 10;
+    const WEAPON: u32 = 20;
+    /// The server's game tick runs this far ahead of the demo tick (2403 on the local match demo).
+    const SERVER_TICK_OFFSET: u32 = 1000;
 
     fn send_tables() -> Vec<u8> {
         let f = |name, ty| F {
@@ -520,6 +722,18 @@ mod tests {
                     noscale("m_vecZ"),
                 ],
             ),
+            // The pawn's services: declared before the pawn that points to them.
+            (
+                "CCSPlayer_MovementServices",
+                vec![
+                    f("m_flDuckAmount", "float32"),
+                    f("m_nLastJumpTick", "GameTick_t"),
+                ],
+            ),
+            (
+                "CCSPlayer_WeaponServices",
+                vec![f("m_hActiveWeapon", "CHandle< CBasePlayerWeapon >")],
+            ),
             (
                 "CCSPlayerPawn",
                 vec![
@@ -536,6 +750,29 @@ mod tests {
                     view_offset("m_vecX", 10, Some(-64.0), 4),
                     view_offset("m_vecY", 10, Some(-64.0), 4),
                     view_offset("m_vecZ", 12, None, 2),
+                    // Rig inputs (fields 6 – 9).
+                    f("m_fFlags", "uint32"),
+                    f("m_bIsWalking", "bool"),
+                    F {
+                        serializer: Some("CCSPlayer_MovementServices"),
+                        ..f("m_pMovementServices", "CPlayer_MovementServices*")
+                    },
+                    F {
+                        serializer: Some("CCSPlayer_WeaponServices"),
+                        ..f("m_pWeaponServices", "CPlayer_WeaponServices*")
+                    },
+                ],
+            ),
+            (
+                // A weapon: CS2 sends the item definition index flattened under its send node.
+                "CAK47",
+                vec![
+                    F {
+                        send_node: Some("m_AttributeManager.m_Item"),
+                        ..f("m_iItemDefinitionIndex", "uint16")
+                    },
+                    f("m_iWeaponGameplayAnimState", "WeaponGameplayAnimState"),
+                    f("m_bInReload", "bool"),
                 ],
             ),
             (
@@ -585,6 +822,7 @@ mod tests {
                 class(RULES_CLASS, "CCSGameRulesProxy"),
                 class(CONTROLLER_CLASS, "CCSPlayerController"),
                 class(PAWN_CLASS, "CCSPlayerPawn"),
+                class(WEAPON_CLASS, "CAK47"),
             ],
         }
         .encode_to_vec()
@@ -592,11 +830,18 @@ mod tests {
 
     /// A packet frame payload holding the given (message type, protobuf) pairs.
     fn packet(messages: &[(SvcMessages, Vec<u8>)]) -> Vec<u8> {
+        let raw: Vec<(u32, Vec<u8>)> = messages
+            .iter()
+            .map(|(kind, body)| (*kind as u32, body.clone()))
+            .collect();
+        packet_raw(&raw)
+    }
+
+    /// [`packet`] with message type numbers, for messages of other enums (`NetMessages::NetTick`).
+    fn packet_raw(messages: &[(u32, Vec<u8>)]) -> Vec<u8> {
         let mut w = BitWriter::default();
         for (kind, body) in messages {
-            w.ubitvar(*kind as u32)
-                .varint(body.len() as u64)
-                .bytes(body);
+            w.ubitvar(*kind).varint(body.len() as u64).bytes(body);
         }
         CDemoPacket {
             data: Some(w.finish()),
@@ -624,7 +869,7 @@ mod tests {
     fn create_header(w: &mut BitWriter, previous: i64, index: u32, class: u32) {
         w.ubitvar((i64::from(index) - previous - 1) as u32)
             .bits(0b10, 2)
-            .bits(u64::from(class), 2)
+            .bits(u64::from(class), CLASS_ID_BITS)
             .bits(1, 17)
             .varint(0);
     }
@@ -641,7 +886,8 @@ mod tests {
 
     /// Pawn position (cell 32 on each axis, so world position = offset), eye angles (20-bit precise angles) and the
     /// view offset's z (12 bits, value = (raw + 1) / 64). The view offset's x and y are never sent, so they keep
-    /// their default 0 (CS2's are 0 too).
+    /// their default 0 (CS2's are 0 too). With `rig`, also the rig inputs: on the ground, walking, half crouched,
+    /// last jump at game tick 1011, holding the AK-47 entity.
     fn pawn_fields(
         w: &mut BitWriter,
         with_pointer: bool,
@@ -649,12 +895,16 @@ mod tests {
         pitch_raw: u64,
         yaw_raw: u64,
         eye_raw: u64,
+        rig: bool,
     ) {
         let mut paths: Vec<&[i32]> = Vec::new();
         if with_pointer {
             paths.extend([&[0][..], &[0, 0], &[0, 1], &[0, 2]]);
         }
         paths.extend([&[0, 3][..], &[0, 4], &[0, 5], &[1], &[5]]);
+        if rig {
+            paths.extend([&[6][..], &[7], &[8], &[8, 0], &[8, 1], &[9], &[9, 0]]);
+        }
         write_paths(w, &paths);
         if with_pointer {
             // Present, then cells: 32 × 512 − 16384 = 0.
@@ -669,6 +919,15 @@ mod tests {
             .bits(pitch_raw, 20)
             .bits(yaw_raw, 20)
             .bits(eye_raw, 12);
+        if rig {
+            w.varint(FL_ONGROUND) // m_fFlags
+                .bool(true) // m_bIsWalking
+                .bool(true) // m_pMovementServices present
+                .bits(u64::from(0.5f32.to_bits()), 32) // m_flDuckAmount
+                .varint_signed(1011) // m_nLastJumpTick: a signed (zigzag) varint
+                .bool(true) // m_pWeaponServices present
+                .varint((3 << 14) | u64::from(WEAPON)); // m_hActiveWeapon: serial 3, entity WEAPON
+        }
     }
 
     fn synthetic_demo() -> Vec<u8> {
@@ -686,7 +945,7 @@ mod tests {
         );
 
         let server_info = CsvcMsgServerInfo {
-            max_classes: Some(3),
+            max_classes: Some(CLASS_COUNT as i32),
             tick_interval: Some(1.0 / 64.0),
             ..Default::default()
         };
@@ -706,7 +965,8 @@ mod tests {
         demo.frame(EDemoCommands::DemSendTables, None, &send_tables(), true);
         demo.frame(EDemoCommands::DemClassInfo, None, &class_info(), false);
 
-        // Tick 10: full snapshot. Controller ("synk", Steam id, pawn handle), rules (no freeze), pawn.
+        // Tick 10: full snapshot. Controller ("synk", Steam id, pawn handle), rules (no freeze), pawn, and an AK-47
+        // (item 7) in its idle state (50), reloading.
         let mut w = BitWriter::default();
         create_header(&mut w, -1, CONTROLLER, CONTROLLER_CLASS);
         write_paths(&mut w, &[&[1], &[2], &[3]]);
@@ -717,7 +977,18 @@ mod tests {
         rules_fields(&mut w, false, 0);
         create_header(&mut w, i64::from(RULES), PAWN, PAWN_CLASS);
         // Standing: eye height (4093 + 1) / 64 = 63.96875.
-        pawn_fields(&mut w, true, [100.0, 200.0, -50.0], 1 << 19, 1 << 19, 4093);
+        pawn_fields(
+            &mut w,
+            true,
+            [100.0, 200.0, -50.0],
+            1 << 19,
+            1 << 19,
+            4093,
+            false,
+        );
+        create_header(&mut w, i64::from(PAWN), WEAPON, WEAPON_CLASS);
+        write_paths(&mut w, &[&[0], &[1], &[2]]);
+        w.varint(7).varint(50).bool(true);
         // The controller's team (3) only comes from its class baseline, which this same packet adds to the
         // `instancebaseline` table *after* the entity message: string tables must be applied first.
         let mut baseline = BitWriter::default();
@@ -741,7 +1012,7 @@ mod tests {
             string_data: Some(entry.finish()),
         };
         let messages = [
-            entities(3, false, &w),
+            entities(4, false, &w),
             (SvcMessages::SvcUpdateStringTable, update.encode_to_vec()),
         ];
         demo.frame(
@@ -751,7 +1022,8 @@ mod tests {
             false,
         );
 
-        // Tick 11: freeze time starts → round 1 starts. Ticks 12-13: the pawn moves; tick 13 also ends freeze time.
+        // Tick 11: freeze time starts → round 1 starts. Ticks 12-13: the pawn moves; tick 13 also ends freeze time and
+        // sends the rig inputs, after the server's tick (13 + SERVER_TICK_OFFSET).
         let mut w = BitWriter::default();
         update_header(&mut w, -1, RULES);
         rules_fields(&mut w, true, 0);
@@ -773,11 +1045,29 @@ mod tests {
             }
             update_header(&mut w, previous, PAWN);
             // pitch: 3/8 turn − 180° = −45°; yaw: 5/8 turn − 180° = 45°; crouched: (2941 + 1) / 64 = 45.96875.
-            pawn_fields(&mut w, false, [x, 200.0, -50.0], 3 << 17, 5 << 17, 2941);
+            let rig = tick == 13;
+            pawn_fields(
+                &mut w,
+                false,
+                [x, 200.0, -50.0],
+                3 << 17,
+                5 << 17,
+                2941,
+                rig,
+            );
+            let server_tick = CnetMsgTick {
+                tick: Some(tick + SERVER_TICK_OFFSET),
+                ..Default::default()
+            };
+            let (kind, body) = entities(count, true, &w);
+            let messages = [
+                (NetMessages::NetTick as u32, server_tick.encode_to_vec()),
+                (kind as u32, body),
+            ];
             demo.frame(
                 EDemoCommands::DemPacket,
                 Some(tick),
-                &packet(&[entities(count, true, &w)]),
+                &packet_raw(&messages),
                 false,
             );
         }
@@ -825,6 +1115,27 @@ mod tests {
         assert!(close(last.view_offset, [0.0, 0.0, 45.96875]));
         assert!(close(last.eye_position(), [108.0, 200.0, -4.03125]));
         assert_eq!((last.pitch, last.yaw), (-45.0, 45.0));
+
+        // Rig inputs: defaults until sent (tick 12), then what tick 13 sent. The jump at game tick 1011 is demo tick
+        // 11 (the server ran 1000 ticks ahead). Velocity was never sent: zero.
+        assert_eq!(track.samples[1].players[0].rig, RigInputs::default());
+        assert_eq!(
+            last.rig,
+            RigInputs {
+                velocity: [0.0; 3],
+                on_ground: true,
+                duck_amount: 0.5,
+                walking: true,
+                last_jump_tick: Some(11),
+                weapon: Some(ActiveWeapon {
+                    item: 7,
+                    class: "CAK47".into(),
+                    anim_state: 50,
+                    reloading: true,
+                }),
+                ..RigInputs::default()
+            }
+        );
 
         let rounds = list_rounds(&data).unwrap();
         let round = |round, start_tick, end_tick| RoundInfo {

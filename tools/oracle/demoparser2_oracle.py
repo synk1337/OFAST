@@ -14,6 +14,13 @@ Usage:
         CSV, one row per player_death event: tick,headshot,weapon,victim,attacker
         (names with their commas replaced by ';', so every line splits into exactly 5 fields; an empty attacker
         means nobody, e.g. fall damage)
+    python -I demoparser2_oracle.py rig <demo.dem> <first_tick> <last_tick>
+        CSV, one row per player per tick: the inputs of OFAST's animation rig as demoparser2 reads them:
+        tick,steamid,flags,duck_amount,walking,scoped,defusing,move_type,item,anim_state,reloading,last_jump_raw,
+        body_yaw,name (name last; empty item / anim_state / reloading without a weapon in hand; item and anim_state
+        may print as floats; body_yaw is the yaw of the pawn's `CBodyComponent` rotation). last_jump_raw is `m_nLastJumpTick` as demoparser2 decodes it: unsigned, i.e. the zigzag code,
+        twice the game tick. Not the velocity: demoparser2 names fields without their send node, so
+        `CCSPlayerPawn.m_vecX/Y/Z` mixes `m_vecVelocity` and `m_vecViewOffset` (z came out as the eye height).
 
 Setup (any folder outside the repository; on Linux/macOS use oracle-venv/bin/python instead of Scripts):
     python -m venv oracle-venv
@@ -53,6 +60,47 @@ def deaths(demo: str) -> None:
         print(f"{int(row.tick)},{bool(row.headshot)},{row.weapon},{name(row.user_name)},{name(row.attacker_name)}")
 
 
+RIG_PROPS = {
+    "flags": "CCSPlayerPawn.m_fFlags",
+    "duck_amount": "CCSPlayerPawn.CCSPlayer_MovementServices.m_flDuckAmount",
+    "walking": "is_walking",
+    "scoped": "is_scoped",
+    "defusing": "is_defusing",
+    "move_type": "move_type",
+    "item": "item_def_idx",
+    "anim_state": "m_iWeaponGameplayAnimState",
+    "reloading": "m_bInReload",
+    "last_jump_raw": "CCSPlayerPawn.CCSPlayer_MovementServices.m_nLastJumpTick",
+    # A (pitch, yaw, roll) triple: only the yaw is written.
+    "body_yaw": "CCSPlayerPawn.CBodyComponentBaseAnimGraph.m_angRotation",
+}
+
+
+def rig(demo: str, first: int, last: int) -> None:
+    frame = DemoParser(demo).parse_ticks(list(RIG_PROPS.values()), ticks=list(range(first, last + 1)))
+
+    def text(value) -> str:
+        # Missing values (no weapon in hand) come as NaN or None; floats are printed exactly with repr(); of an
+        # angle triple, the yaw.
+        if value is None:
+            return ""
+        if hasattr(value, "__len__") and not isinstance(value, str):
+            return repr(float(value[1])) if len(value) == 3 else ""
+        if value != value:
+            return ""
+        if isinstance(value, float):
+            return repr(value)
+        return str(value)
+
+    out = sys.stdout
+    out.write("tick,steamid," + ",".join(RIG_PROPS) + ",name\n")
+    columns = list(RIG_PROPS.values())
+    for row in frame.to_dict("records"):
+        values = ",".join(text(row.get(c)) for c in columns)
+        name = str(row["name"]).replace("\n", " ")
+        out.write(f"{row['tick']},{row['steamid']},{values},{name}\n")
+
+
 def main() -> None:
     # Player names can contain any Unicode; Windows consoles default to a legacy code page.
     sys.stdout.reconfigure(encoding="utf-8")
@@ -63,6 +111,8 @@ def main() -> None:
         round_starts(sys.argv[2])
     elif command == "deaths":
         deaths(sys.argv[2])
+    elif command == "rig":
+        rig(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
     else:
         sys.exit(f"unknown command {command!r}")
 

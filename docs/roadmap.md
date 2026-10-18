@@ -126,8 +126,11 @@ player and round.
   (pelvis, head, hands, ankle: within 0.1 cm);
   from a CS2 player's viewpoint in a demo, the knife run's stride matches CS2's, while CS2's arms and lean come from
   the graph's weapon and aim layers (M4.4). [animation.md](formats/animation.md#verified).
-- [ ] M4.3 Rig inputs in the replay export: velocity, duck amount, ground, walking, body yaw, active weapon and its
-  gameplay animation state, reload, jump / land ticks, defusing.
+- [x] **M4.3 Rig inputs** in the round tracks and the replay export: body yaw, velocity, ground, crouch amount,
+  walking, scoped, defusing, ladder, the weapon in hand (item and class), its animation state, reloading, jump and
+  landing ticks (game ticks converted to demo ticks). Round 1 of the match demo equals demoparser2 on every field it
+  can read (50,740 rows); velocity follows the positions. Found on the way: `GameTick_t` is a signed varint.
+  [demo.md](formats/demo.md#rig-inputs), [replay.md](formats/replay.md).
 - [ ] M4.4 Baked animation: locomotion (2D blend on local velocity × crouch), weapon idle / shoot / reload / deploy
   layers, procedural aim on the spine; checked against CS2's demo playback from the side.
 - [ ] M4.5 Weapons in hand (weapon skeletal mesh on `weapon_hand_R`), each player's agent, knife and gloves from the

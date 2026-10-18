@@ -267,7 +267,10 @@ impl Decoder {
             | "EntityDisolveType_t"
             | "PrecipitationType_t"
             | "AmmoIndex_t"
-            | "TakeDamageFlags_t" => Self::Signed,
+            | "TakeDamageFlags_t"
+            // A game tick (`int32`): zigzag-coded like the other signed integers. Read as unsigned, a pawn's
+            // `m_nLastJumpTick` came out as twice the game tick (every raw value even).
+            | "GameTick_t" => Self::Signed,
             "char" | "CUtlString" | "CUtlSymbolLarge" | "CGlobalSymbol" => Self::String,
             "CUtlBinaryBlock" => Self::BinaryBlock,
             "GameTime_t" => Self::Float(FloatDecoder::NoScale),
@@ -551,6 +554,7 @@ mod tests {
         use Decoder as D;
         assert_eq!(D::for_field(&encoding("bool", "", None)), D::Bool);
         assert_eq!(D::for_field(&encoding("int32", "", None)), D::Signed);
+        assert_eq!(D::for_field(&encoding("GameTick_t", "", None)), D::Signed);
         assert_eq!(D::for_field(&encoding("uint16", "", None)), D::Unsigned);
         assert_eq!(D::for_field(&encoding("CHandle", "", None)), D::Unsigned);
         assert_eq!(

@@ -102,14 +102,18 @@ ofast export-model agents/models/ctm_sas/ctm_sas.vmdl_c --out exports/ctm_sas \
   0.4 s (`tools/unreal/run_shot.ps1 -Anim run_n_rifle -AnimTimes 0,0.2,0.4`), the pelvis, head, both hands and the
   right ankle sit where `examples/anim_inspect.rs` computes them from the clip, to 0.1 cm; the right ankle swings
   from 3.4 cm ahead of the root to 65.8 cm behind and back. Screenshots in `test-data/shots/agents/ctm_sas_run_*`.
-- **Against CS2** (2026-10-18): in the local match demo (de_nuke, round 5, ticks 26508 – 26528) CT "P1", an SAS
-  agent, runs with his knife out (rifle slung), seen almost side-on by a teammate 4.6 m away. Unreal renders
-  `ctm_sas` with `run_n_knife` from that teammate's eye, placed relative to P1 from the demo's positions and view
-  angles, with CS2's field of view (`run_shot.ps1 -Camera`). The legs go through the same stride as in CS2: the
-  rear foot kicked up behind, the long reach of the front leg, frames 0.25 s and 0.35 s of the clip matching ticks
-  26508 and 26513. The upper body does not: CS2 reaches the left arm forward and leans the torso further. Those come
-  from the graph's weapon and aim layers ([decision 013](../decisions/013-replay-rig-baked-in-rust.md), M4.4), not
-  from the base clip. Side by side: `test-data/shots/agents/cs2_run/compare_knife.png`.
+- **Against CS2** (2026-10-18): in the local match demo (de_nuke, round 5, ticks 26508 – 26528) CT "vg", an SAS
+  agent, runs straight at 250 units/s with his knife out (rifle slung), seen almost side-on by a teammate 4.7 m
+  away. The demo's rig inputs (M4.3) identify him: his weapon in hand is the CT knife (item 42); P1 next to him,
+  hidden behind another teammate, holds an M4A4. Unreal renders `ctm_sas` with `run_n_knife` from that teammate's
+  eye, placed relative to vg from the demo's positions and view angles, with CS2's field of view
+  (`run_shot.ps1 -Camera`): the agent lands where CS2 draws vg, within 10 pixels of a 1920-wide frame. The legs go
+  through the same stride as in CS2 — the rear foot kicked up behind, the long reach of the front leg, the leg
+  nearer the camera in front at the same moments — with clip times 0.40 – 0.70 s against ticks 26508 – 26528. The
+  upper body does not match: CS2 reaches the left arm forward and leans the torso further. Those come from the
+  graph's weapon and aim layers ([decision 013](../decisions/013-replay-rig-baked-in-rust.md), M4.4), not from the
+  base clip. Side by side: `test-data/shots/agents/cs2_run/compare_knife.png`. (The first version of this check
+  named P1 as the runner, from his apparent distance; the rig inputs corrected it.)
 
 ## Not done yet
 

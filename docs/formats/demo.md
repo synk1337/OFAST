@@ -281,9 +281,9 @@ Chosen per field, in this order:
    | `QAngle` | encoder `qangle_precise` → 3 presence bits, then for each present component `angle(20) − 180`; bit count ≥ 32 → 3 floats; bit count 1–31 → 3 × angle(n); none → 3 presence bits, then a bit coord per present component |
 
 2. by name: `m_iClip1` → varint − 1; `m_flSimulationTime` and `m_flAnimTime` always use the `simtime` encoder;
-3. by base type, fixed: `bool` → 1 bit; `int8/16/32/64` and a few signed enums (`HSequence`, `CEntityIndex`, …) →
-   signed varint; `char`, `CUtlString`, `CUtlSymbolLarge`, `CGlobalSymbol` → string; `CUtlBinaryBlock` → varint
-   length + bytes; `GameTime_t` → 32-bit float;
+3. by base type, fixed: `bool` → 1 bit; `int8/16/32/64`, `GameTick_t` and a few signed enums (`HSequence`,
+   `CEntityIndex`, …) → signed varint; `char`, `CUtlString`, `CUtlSymbolLarge`, `CGlobalSymbol` → string;
+   `CUtlBinaryBlock` → varint length + bytes; `GameTime_t` → 32-bit float;
 4. everything else (unsigned integers, handles, enums, colors, string tokens) → varint.
 
 **Quantized floats** store a value in `low..high` as an n-bit integer, with optional flag bits in front:
@@ -417,6 +417,48 @@ ended; number = `m_totalRoundsPlayed + 1`; lasts until the tick before the next 
 demo ends — so it includes the seconds after the round is decided. Start ticks equal the `round_start` game event.
 A player sample for tick T is the state after the last packet of frame tick T (demoparser2 samples the same way).
 
+## Rig inputs
+
+What drives a player's animation in CS2, read per player and tick into `PlayerSample::rig`
+(`crates/ofast-core/src/demo/players.rs`) for OFAST's replay rig
+([decision 013](../decisions/013-replay-rig-baked-in-rust.md)). Each field is looked up leniently: if a CS2 update
+renames one, it reads as its default and positions keep working.
+
+| Input | Field | Notes |
+|---|---|---|
+| body yaw | pawn `CBodyComponent` → `m_skeletonInstance.m_angRotation` (yaw; pitch and roll 0) | the way the model faces; it follows the eye yaw with a lag: round 5, living players, median gap 0°, 90 % within 10°, 99 % within 40°, up to 128° during fast turns |
+| velocity | pawn `m_vecVelocity.m_vecX/Y/Z` (20-bit quantized, ±16384) | units/s; running 215 – 250 depending on the weapon |
+| on the ground | pawn `m_fFlags` bit 0 (`FL_ONGROUND`) | off while jumping or falling |
+| crouch amount | `m_pMovementServices` → `m_flDuckAmount` | 0 standing … 1 crouched, gradual |
+| walking, scoped, defusing | pawn `m_bIsWalking`, `m_bIsScoped`, `m_bIsDefusing` | |
+| on a ladder | pawn `m_MoveType` = 9 (`MOVETYPE_LADDER`; 2 = walking) | round 5: 185 samples, 184 of them moving mostly vertically over a 234-unit climb |
+| last jump, last landing | `m_pMovementServices` → `m_nLastJumpTick`, `m_ModernJump.m_nLastLandedTick` | game ticks, converted to demo ticks (below) |
+| weapon in hand | `m_pWeaponServices` → `m_hActiveWeapon` → the weapon entity | its class (`CAK47`, `CWeaponM4A1`, `CKnife`…) and the fields below; each weapon class has its own serializer, so paths are looked up per class |
+| weapon id | weapon `m_AttributeManager.m_Item.m_iItemDefinitionIndex` | 1 Desert Eagle, 4 Glock-18, 7 AK-47, 16 M4A4, 36 P250, 42 CT knife, 43 flashbang, 44 HE, 45 smoke, 48 incendiary, 49 C4, 59 T knife, 61 USP-S, 500+ knife skins (509, 514 seen) |
+| weapon animation state | weapon `m_iWeaponGameplayAnimState` | see below |
+| reloading | weapon `m_bInReload` | |
+
+**Weapon animation states** seen in round 5 of the match demo, by the weapons holding them: 11 = draw (after every
+switch, every weapon), 50 = idle, 100 = shooting (rifles and pistols), 200 / 202 = grenade (pin, throw), 300 = C4
+planting, 500 / 501 / 503 = knife attacks, 800 / 801 = reloading (with `m_bInReload`), 1000 / 1001 = after a draw
+on every weapon, mostly knives (7,162 of 9,945 samples): very likely the inspect animation and its end (not yet
+checked in the game).
+
+**Game ticks.** `GameTick_t` fields count the server's ticks, not the demo's. `CNETMsg_Tick` carries the server
+tick of each packet; it runs a constant distance ahead of the frame tick (2403 on the match demo, the same figure
+CS2's console prints when seeking: "demo tick 48270 (game tick 50673)"). `DemoParser::game_tick_to_demo` converts.
+`GameTick_t` is an `int32` sent as a zigzag (signed) varint: read as unsigned it comes out doubled and always even,
+which is what demoparser2 0.42.0 exports. Converted, each jump falls one tick before the first airborne sample and
+each landing on, or one tick before, the first sample back on the ground.
+
+**Checked** (`rig_inputs_match_movement_and_demoparser2` in `tests/cs2_demo.rs`, 2026-10-18): over round 1, all
+50,740 player × tick rows equal demoparser2's body yaw (within 0.01°), ground flag, crouch amount, walking, scoped,
+defusing, ladder, weapon id, animation state and reload flag; every raw jump tick is even and halves to OFAST's jump tick plus one constant
+(2403); the velocity agrees with the position change between ticks (median difference 1.9 units/s for players moving
+faster than 50 units/s — positions advance by sub-tick moves). Round 5 compared the same way: 48,590 rows, no
+difference. demoparser2 cannot check the velocity (its `CCSPlayerPawn.m_vecX/Y/Z` mixes the velocity and the view
+offset, see below).
+
 ## Where the references disagree
 
 | Topic | demoparser2 | demoinfocs-golang | OFAST (checked how) |
@@ -431,6 +473,7 @@ A player sample for tick T is the state after the last packet of frame tick T (d
 | polymorphic pointer | always reads the type ubitvar | only if present | only if present |
 | entity "leaves the update set" (`01`) | deletes the entity | keeps it | keeps it (it was not deleted: `11` is delete) |
 | `m_iClip1` raw 0 | 0 | wraps to `u32::MAX` | −1 ("no clip"); the wire value is `ammo + 1` |
+| `GameTick_t` (`m_nLastJumpTick`…) | unsigned varint: twice the tick, always even (0.42.0) | — | signed (zigzag) varint, like `int32`; halved values meet the jump in the positions one tick later, every time |
 | same member under two send nodes (`m_vecViewOffset.m_vecZ`, `m_vecVelocity.m_vecZ`) | one prop `CCSPlayerPawn.m_vecZ` holding whichever changed last, so it cannot export the view offset (0.42.0) | renames clashing fields to `send_node.member` | always `send_node.member`; the view offset is checked against CS2 itself instead |
 | shrinking variable arrays | — | clears elements past the end | same |
 | string table problems | fatal | updates to unknown tables ignored; only a few tables decoded | fatal only for `instancebaseline`; otherwise a warning (`DemoParser::warnings()`) |
@@ -451,7 +494,7 @@ allocation. Limits, each far above what a real CS2 match uses (measured on the d
 
 ## Not implemented yet
 
-Grenades and their trajectories, weapons in hand, user commands, `userinfo` decoding, animation data frames, alternate
+Grenades and their trajectories, user commands, `userinfo` decoding, animation data frames, alternate
 baselines (`"12:3"` keys), seeking via full packets, the `coord_size_params` overrides in the serializer message
 (absent in the CS2 demo checked, so the bit sizes above apply).
 

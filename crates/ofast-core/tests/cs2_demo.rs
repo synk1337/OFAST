@@ -194,6 +194,141 @@ fn round_one_is_sane() {
     compare_with_demoparser2(&path, &track);
 }
 
+/// The animation rig's inputs over round 1: the velocity agrees with how far players move from tick to tick, and,
+/// with demoparser2, every other input equals its reading (body yaw, ground flag, crouch amount, walking, scoped,
+/// defusing, ladder, weapon item, weapon animation state, reloading) and the last jump tick is its raw value halved
+/// (zigzag) minus one constant clock offset.
+#[test]
+fn rig_inputs_match_movement_and_demoparser2() {
+    let Some((path, data)) = load() else { return };
+    let track = track_round(&data, 1).expect("round 1");
+
+    // Velocity against the position change between consecutive ticks, for players moving faster than 50 units/s.
+    // Not equal: the position advances by sub-tick moves, the velocity is the end-of-tick value.
+    let mut differences = Vec::new();
+    for pair in track.samples.windows(2) {
+        let [a, b] = pair else { unreachable!() };
+        if b.tick != a.tick + 1 {
+            continue;
+        }
+        for p in b.players.iter().filter(|p| p.alive) {
+            let Some(before) = a
+                .players
+                .iter()
+                .find(|q| q.controller == p.controller && q.alive)
+            else {
+                continue;
+            };
+            let v = p.rig.velocity;
+            if v[0].hypot(v[1]) < 50.0 {
+                continue;
+            }
+            let moved = [0, 1].map(|k| (p.position[k] - before.position[k]) / track.tick_interval);
+            differences.push((moved[0] - v[0]).hypot(moved[1] - v[1]));
+        }
+    }
+    differences.sort_by(f32::total_cmp);
+    let median = differences[differences.len() / 2];
+    println!(
+        "velocity vs position change: {} samples, median difference {median:.2} units/s",
+        differences.len()
+    );
+    assert!(median < 5.0, "velocity follows the movement");
+    let jumps: HashSet<(u32, u32)> = track
+        .samples
+        .iter()
+        .flat_map(|s| &s.players)
+        .filter_map(|p| p.rig.last_jump_tick.map(|t| (p.controller, t)))
+        .collect();
+    println!("{} distinct jumps seen", jumps.len());
+
+    let Some(csv) = run_oracle(&[
+        "rig",
+        &path.to_string_lossy(),
+        &track.start_tick.to_string(),
+        &track.end_tick.to_string(),
+    ]) else {
+        return;
+    };
+    let mut ours: HashMap<(u32, u64, &str), &ofast_core::demo::players::PlayerSample> =
+        HashMap::new();
+    for sample in &track.samples {
+        for p in &sample.players {
+            ours.insert((sample.tick, p.steam_id, p.name.as_str()), p);
+        }
+    }
+    let (mut rows, mut matched) = (0usize, 0usize);
+    let mut clock_offsets: HashSet<i64> = HashSet::new();
+    // Largest gap between body and eye yaw: the body follows the eyes with a lag, so they are not the same field.
+    let mut largest_body_turn = 0.0f32;
+    let truthy = |s: &str| s == "True";
+    // Integers that pandas may print as floats ("7.0"); empty = no weapon.
+    let integer = |s: &str| (!s.is_empty()).then(|| s.parse::<f64>().expect("number") as i64);
+    for line in csv.lines().skip(1) {
+        // tick,steamid,flags,duck_amount,walking,scoped,defusing,move_type,item,anim_state,reloading,last_jump_raw,
+        // body_yaw,name
+        let c: Vec<&str> = line.splitn(14, ',').collect();
+        rows += 1;
+        let key = (
+            c[0].parse().expect("tick"),
+            c[1].parse().expect("steam id"),
+            c[13],
+        );
+        let Some(p) = ours.get(&key) else { continue };
+        matched += 1;
+        let rig = &p.rig;
+        let at = format!("tick {} {}", key.0, key.2);
+        let flags: u64 = c[2].parse().expect("flags");
+        assert_eq!(rig.on_ground, flags & 1 == 1, "{at}: on ground");
+        let duck: f32 = c[3].parse().expect("duck amount");
+        assert!((rig.duck_amount - duck).abs() < 1e-6, "{at}: duck amount");
+        assert_eq!(
+            (rig.walking, rig.scoped, rig.defusing),
+            (truthy(c[4]), truthy(c[5]), truthy(c[6])),
+            "{at}: walking, scoped, defusing"
+        );
+        assert_eq!(rig.on_ladder, c[7] == "9", "{at}: ladder");
+        let weapon = rig.weapon.as_ref();
+        assert_eq!(
+            weapon.map(|w| i64::from(w.item)),
+            integer(c[8]),
+            "{at}: weapon item"
+        );
+        if let Some(w) = weapon {
+            assert_eq!(Some(w.anim_state), integer(c[9]), "{at}: anim state");
+            assert_eq!(w.reloading, truthy(c[10]), "{at}: reloading");
+        }
+        if !c[12].is_empty() {
+            let body_yaw: f32 = c[12].parse().expect("body yaw");
+            let d = angle_difference(rig.body_yaw, body_yaw);
+            assert!(
+                d <= ORACLE_TOLERANCE,
+                "{at}: body yaw {} vs {body_yaw}",
+                rig.body_yaw
+            );
+            if p.alive {
+                largest_body_turn = largest_body_turn.max(angle_difference(rig.body_yaw, p.yaw));
+            }
+        }
+        if let (Some(raw), Some(ours)) = (integer(c[11]).filter(|&r| r > 0), rig.last_jump_tick) {
+            assert_eq!(raw % 2, 0, "{at}: a zigzag code of a positive tick is even");
+            clock_offsets.insert(raw / 2 - i64::from(ours));
+        }
+    }
+    println!(
+        "demoparser2 rig: {matched} of {rows} rows matched; game tick − demo tick of jumps: {clock_offsets:?}; \
+         body yaw up to {largest_body_turn:.1}° from the eye yaw"
+    );
+    assert!(
+        rows > 0 && matched * 100 >= rows * 99,
+        "rows have counterparts"
+    );
+    assert!(
+        clock_offsets.len() <= 1,
+        "one constant offset between game and demo ticks"
+    );
+}
+
 #[test]
 fn round_starts_match_demoparser2() {
     let Some((path, data)) = load() else { return };

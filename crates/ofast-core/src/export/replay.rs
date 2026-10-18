@@ -6,8 +6,11 @@
 //!
 //! - the round's tick range and the tick its freeze time ended;
 //! - the players (controller entity index, name, Steam id as text, team);
-//! - per player and per sampled tick: feet position, eye height above the feet, eye pitch and yaw, alive or not —
-//!   one array entry per tick in `samples.ticks`, `null` where the player had no pawn;
+//! - per player and per sampled tick: feet position, eye height above the feet, eye pitch and yaw, alive or not, and
+//!   what drives the player's animation (body yaw, velocity, on the ground, crouch amount, walking, scoped,
+//!   defusing, on a ladder, the weapon in hand, its animation state, reloading) — one array entry per tick in `samples.ticks`,
+//!   `null` where the player had no pawn;
+//! - the round's jumps and landings (tick, player), and the weapons seen (item definition index → entity class);
 //! - kills (`player_death`): tick, victim, attacker, assister (controller indices; `null` = nobody, e.g. fall
 //!   damage), weapon, headshot and the other flags CS2's kill feed shows;
 //! - round milestones (`round_freeze_end`, bomb events, `round_end`), with their keys as sent.
@@ -20,7 +23,7 @@ use serde_json::{Value as Json, json};
 
 use super::ExportError;
 use crate::demo::events::{EventValue, GameEvent};
-use crate::demo::players::{RoundTrack, track_round};
+use crate::demo::players::{PlayerSample, RoundTrack, track_round};
 
 /// Format version written into the file; bump on incompatible changes.
 pub const REPLAY_VERSION: u32 = 1;
@@ -108,38 +111,57 @@ pub fn replay_json(track: &RoundTrack, demo_name: &str) -> Json {
         }
     }
 
-    // Per-player arrays aligned with `ticks`.
+    // Per-player arrays aligned with `ticks`, one per key of `TRACK_KEYS`.
     let ticks: Vec<u32> = track.samples.iter().map(|s| s.tick).collect();
-    let mut tracks: BTreeMap<u32, [Vec<Json>; 4]> = players
+    let mut tracks: BTreeMap<u32, Vec<Vec<Json>>> = players
         .keys()
-        .map(|&c| (c, std::array::from_fn(|_| Vec::with_capacity(ticks.len()))))
+        .map(|&c| (c, vec![Vec::with_capacity(ticks.len()); TRACK_KEYS.len()]))
         .collect();
     for sample in &track.samples {
-        for (controller, [position, eye, angles, alive]) in &mut tracks {
-            match sample.players.iter().find(|p| p.controller == *controller) {
-                Some(p) => {
-                    position.push(json!(p.position.map(|v| round(v, 100.0))));
-                    eye.push(json!(round(p.view_offset[2], 10_000.0)));
-                    angles.push(json!([round(p.pitch, 100.0), round(p.yaw, 100.0)]));
-                    alive.push(json!(p.alive));
-                }
-                None => {
-                    for array in [position, eye, angles, alive] {
-                        array.push(Json::Null);
-                    }
-                }
+        for (controller, arrays) in &mut tracks {
+            let values = sample
+                .players
+                .iter()
+                .find(|p| p.controller == *controller)
+                .map(track_values);
+            for (k, array) in arrays.iter_mut().enumerate() {
+                array.push(values.as_ref().map_or(Json::Null, |v| v[k].clone()));
             }
         }
     }
     let samples: serde_json::Map<String, Json> = tracks
         .into_iter()
-        .map(|(controller, [position, eye_height, angles, alive])| {
-            (
-                controller.to_string(),
-                json!({ "position": position, "eye_height": eye_height, "angles": angles, "alive": alive }),
-            )
+        .map(|(controller, arrays)| {
+            let fields: serde_json::Map<String, Json> = TRACK_KEYS
+                .iter()
+                .zip(arrays)
+                .map(|(key, array)| ((*key).to_owned(), Json::Array(array)))
+                .collect();
+            (controller.to_string(), Json::Object(fields))
         })
         .collect();
+
+    // Jumps and landings: each distinct "last jump / landing tick" a player showed during the round.
+    let mut jumps = std::collections::BTreeSet::new();
+    let mut landings = std::collections::BTreeSet::new();
+    let mut weapons: BTreeMap<u32, String> = BTreeMap::new();
+    for p in track.samples.iter().flat_map(|s| &s.players) {
+        let in_round = |tick: &u32| (track.start_tick..=track.end_tick).contains(tick);
+        if let Some(tick) = p.rig.last_jump_tick.filter(in_round) {
+            jumps.insert((tick, p.controller));
+        }
+        if let Some(tick) = p.rig.last_landing_tick.filter(in_round) {
+            landings.insert((tick, p.controller));
+        }
+        if let Some(w) = &p.rig.weapon {
+            weapons.entry(w.item).or_insert_with(|| w.class.clone());
+        }
+    }
+    let tick_list = |set: std::collections::BTreeSet<(u32, u32)>| -> Vec<Json> {
+        set.into_iter()
+            .map(|(tick, player)| json!({ "tick": tick, "player": player }))
+            .collect()
+    };
 
     let kills: Vec<Json> = track
         .events
@@ -186,9 +208,55 @@ pub fn replay_json(track: &RoundTrack, demo_name: &str) -> Json {
         "end_tick": track.end_tick,
         "players": players.into_values().collect::<Vec<_>>(),
         "samples": { "ticks": ticks, "players": samples },
+        "weapons": weapons.into_iter().map(|(item, class)| (item.to_string(), json!(class))).collect::<serde_json::Map<_, _>>(),
+        "jumps": tick_list(jumps),
+        "landings": tick_list(landings),
         "kills": kills,
         "events": milestones,
     })
+}
+
+/// Names of the per-player arrays in `samples.players.<controller>`, in the order [`track_values`] fills them.
+const TRACK_KEYS: [&str; 15] = [
+    "position",
+    "eye_height",
+    "angles",
+    "alive",
+    "body_yaw",
+    "velocity",
+    "on_ground",
+    "duck",
+    "walking",
+    "scoped",
+    "defusing",
+    "ladder",
+    "weapon",
+    "weapon_state",
+    "reloading",
+];
+
+/// One player's values at one tick, in [`TRACK_KEYS`] order. Without a weapon in hand the three weapon values are
+/// `null`.
+fn track_values(p: &PlayerSample) -> [Json; TRACK_KEYS.len()] {
+    let rig = &p.rig;
+    let weapon = rig.weapon.as_ref();
+    [
+        json!(p.position.map(|v| round(v, 100.0))),
+        json!(round(p.view_offset[2], 10_000.0)),
+        json!([round(p.pitch, 100.0), round(p.yaw, 100.0)]),
+        json!(p.alive),
+        json!(round(rig.body_yaw, 100.0)),
+        json!(rig.velocity.map(|v| round(v, 10.0))),
+        json!(rig.on_ground),
+        json!(round(rig.duck_amount, 1000.0)),
+        json!(rig.walking),
+        json!(rig.scoped),
+        json!(rig.defusing),
+        json!(rig.on_ladder),
+        weapon.map_or(Json::Null, |w| json!(w.item)),
+        weapon.map_or(Json::Null, |w| json!(w.anim_state)),
+        weapon.map_or(Json::Null, |w| json!(w.reloading)),
+    ]
 }
 
 /// A game event as JSON: tick, name and its keys.
@@ -214,9 +282,28 @@ fn round(value: f32, scale: f32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::demo::players::{PlayerSample, TickSample};
+    use crate::demo::players::{ActiveWeapon, RigInputs, TickSample};
 
+    /// Player 1 runs with an AK-47 and jumped at tick 101 (and once before the round, at tick 50); player 2 holds
+    /// nothing.
     fn player(controller: u32, x: f32, alive: bool) -> PlayerSample {
+        let rig = if controller == 1 {
+            RigInputs {
+                velocity: [215.04, -1.0, 0.0],
+                on_ground: x < 1.5,
+                duck_amount: 0.25,
+                last_jump_tick: Some(if x < 1.0 { 50 } else { 101 }),
+                weapon: Some(ActiveWeapon {
+                    item: 7,
+                    class: "CAK47".into(),
+                    anim_state: 50,
+                    reloading: false,
+                }),
+                ..RigInputs::default()
+            }
+        } else {
+            RigInputs::default()
+        };
         PlayerSample {
             controller,
             name: format!("p{controller}"),
@@ -227,6 +314,7 @@ mod tests {
             pitch: 1.5,
             yaw: -90.0,
             alive,
+            rig,
         }
     }
 
@@ -279,5 +367,19 @@ mod tests {
         assert_eq!(kill["assister"], Json::Null);
         assert_eq!(kill["headshot"], json!(true));
         assert_eq!(replay["players"][1]["steam_id"], json!("76561198000000002"));
+
+        // Rig inputs: arrays aligned with the ticks like the positions.
+        let p1 = &replay["samples"]["players"]["1"];
+        assert_eq!(p1["velocity"][0], json!([215.0, -1.0, 0.0]));
+        assert_eq!(p1["on_ground"], json!([true, true, false]));
+        assert_eq!(p1["duck"][0], json!(0.25));
+        assert_eq!(p1["weapon"], json!([7, 7, 7]));
+        assert_eq!(p1["weapon_state"][2], json!(50));
+        assert_eq!(p2["weapon"], json!([null, null, null]));
+        assert_eq!(p2["reloading"][1], Json::Null);
+        assert_eq!(replay["weapons"], json!({ "7": "CAK47" }));
+        // The jump before the round (tick 50) is not one of its jumps.
+        assert_eq!(replay["jumps"], json!([{ "tick": 101, "player": 1 }]));
+        assert_eq!(replay["landings"], json!([]));
     }
 }

@@ -4,9 +4,12 @@
 //! cargo run --release --example demo_round -- path/to/match.dem 1 > round1.csv
 //! ```
 //!
-//! Columns: `tick,steamid,name,team,alive,x,y,z,pitch,yaw,view_offset_x,view_offset_y,view_offset_z`. x, y, z are
-//! the feet; the first-person camera is at x + view_offset_x, y + view_offset_y, z + view_offset_z (the view offset
-//! columns come last so that scripts written for the older columns keep working). Without a path, the newest demo
+//! Columns: `tick,steamid,name,team,alive,x,y,z,pitch,yaw,view_offset_x,view_offset_y,view_offset_z`, then the rig
+//! inputs (`velocity_x/y/z,on_ground,duck_amount,walking,scoped,defusing,on_ladder,last_jump_tick,
+//! last_landing_tick,weapon_item,weapon_class,weapon_anim_state,reloading,body_yaw`; empty when absent). x, y, z are
+//! the feet;
+//! the first-person camera is at x + view_offset_x, y + view_offset_y, z + view_offset_z. Newer columns come last so
+//! that scripts written for the older ones keep working. Without a path, the newest demo
 //! in CS2's `game/csgo/replays` folder is used; the round defaults to 1.
 
 use std::io::Write;
@@ -54,14 +57,20 @@ fn main() {
     let mut out = std::io::BufWriter::new(stdout.lock());
     writeln!(
         out,
-        "tick,steamid,name,team,alive,x,y,z,pitch,yaw,view_offset_x,view_offset_y,view_offset_z"
+        "tick,steamid,name,team,alive,x,y,z,pitch,yaw,view_offset_x,view_offset_y,view_offset_z,\
+         velocity_x,velocity_y,velocity_z,on_ground,duck_amount,walking,scoped,defusing,on_ladder,\
+         last_jump_tick,last_landing_tick,weapon_item,weapon_class,weapon_anim_state,reloading,body_yaw"
     )
     .unwrap();
+    // An absent value (no jump yet, no weapon) is an empty column.
+    let text = |value: Option<String>| value.unwrap_or_default();
     for sample in &track.samples {
         for p in &sample.players {
+            let rig = &p.rig;
+            let weapon = rig.weapon.as_ref();
             writeln!(
                 out,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 sample.tick,
                 p.steam_id,
                 p.name.replace(',', " "),
@@ -74,7 +83,23 @@ fn main() {
                 p.yaw,
                 p.view_offset[0],
                 p.view_offset[1],
-                p.view_offset[2]
+                p.view_offset[2],
+                rig.velocity[0],
+                rig.velocity[1],
+                rig.velocity[2],
+                rig.on_ground,
+                rig.duck_amount,
+                rig.walking,
+                rig.scoped,
+                rig.defusing,
+                rig.on_ladder,
+                text(rig.last_jump_tick.map(|t| t.to_string())),
+                text(rig.last_landing_tick.map(|t| t.to_string())),
+                text(weapon.map(|w| w.item.to_string())),
+                text(weapon.map(|w| w.class.clone())),
+                text(weapon.map(|w| w.anim_state.to_string())),
+                text(weapon.map(|w| w.reloading.to_string())),
+                rig.body_yaw,
             )
             .unwrap();
         }

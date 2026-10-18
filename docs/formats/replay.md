@@ -13,7 +13,9 @@ The map must be imported first (`import_map.py`): the sequence is built in its l
 
 ## Contents (version 1)
 
-Everything is in CS2's own units and axes: Source units (1 unit = 1 inch), x/y/z as in the game, angles in
+The rig inputs, `weapons`, `jumps` and `landings` were added in M4.3 (2026-10-18) without changing the version:
+they are new keys, so readers of older files keep working; check for them before use. Everything is in CS2's own
+units and axes: Source units (1 unit = 1 inch), x/y/z as in the game, angles in
 degrees (pitch positive = looking down, yaw counter-clockwise from +x, −180..180).
 
 | Key | What |
@@ -24,11 +26,16 @@ degrees (pitch positive = looking down, yaw counter-clockwise from +x, −180..1
 | `start_tick`, `freeze_end_tick`, `end_tick` | round start (freeze time begins), freeze time end (`round_freeze_end`), last tick of the round |
 | `players` | `controller` (entity index = player slot + 1), `name`, `steam_id` (text: 64-bit ids lose digits in float JSON readers), `team` (2 T, 3 CT) |
 | `samples.ticks` | every tick of the round with entity updates (one per tick in practice) |
-| `samples.players.<controller>` | arrays aligned with `samples.ticks`: `position` (feet, [x, y, z], 0.01 unit), `eye_height` (eye above the feet, networked view offset z), `angles` ([pitch, yaw], 0.01°), `alive`; `null` where the player had no pawn |
+| `samples.players.<controller>` | arrays aligned with `samples.ticks`: `position` (feet, [x, y, z], 0.01 unit), `eye_height` (eye above the feet, networked view offset z), `angles` ([pitch, yaw], 0.01°), `alive`, and the rig inputs (below); `null` where the player had no pawn |
+| rig inputs (per tick, same arrays) | `body_yaw` (the way the model faces, 0.01°), `velocity` ([x, y, z] units/s, 0.1), `on_ground`, `duck` (crouch amount 0 – 1, 0.001), `walking`, `scoped`, `defusing`, `ladder`, `weapon` (item definition index), `weapon_state` (weapon animation state), `reloading`; the three weapon values are `null` with nothing in hand. Fields and values: [demo.md, Rig inputs](demo.md#rig-inputs) |
+| `weapons` | item definition index (as text) → weapon entity class seen in the round, e.g. `{"7": "CAK47", "42": "CKnife"}` |
+| `jumps`, `landings` | `{tick, player}` (controller) for every jump / landing of the round, from the pawns' last jump and landing ticks |
 | `kills` | `player_death` events: `tick`, `victim`, `attacker`, `assister` (controllers; `null` = nobody, e.g. fall damage), `weapon`, and the kill-feed flags `headshot`, `penetrated`, `noscope`, `thrusmoke`, `attackerblind`, `assistedflash`, `attackerinair` |
 | `events` | round milestones with their raw keys: `round_freeze_end`, `bomb_beginplant`, `bomb_planted`, `bomb_begindefuse`, `bomb_defused`, `bomb_exploded`, `round_end` |
 
-A 111-second round of de_nuke: 10 players, 7,086 ticks, 9 kills, about 4 MB, written in 0.5 s.
+A 111-second round of de_nuke: 10 players, 7,086 ticks, 9 kills, 64 jumps, about 8 MB (4 MB before the rig
+inputs), written in 0.8 s. `import_demo.py` reads only the keys it needs, so the rig inputs change nothing there yet;
+the animation bake (M4.4) uses them.
 
 Checked: the kills of all 20 rounds of a real match equal demoparser2's (`kills_match_demoparser2`); positions and
 angles are the round tracks already checked against demoparser2 and CS2 (`docs/formats/demo.md`); in Unreal each
