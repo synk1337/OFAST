@@ -46,5 +46,7 @@ realistic style keeps physical highlights. Base-colour renders are taken with `S
   lose their highlights too (B apartments 0.84 → 0.75).
 - Other maps need a re-export for the new manifest keys; until then they keep Unreal's highlights. de_cache's sun is
   stationary and keeps its highlight; de_nuke, de_inferno and de_vertigo bake many local highlights into cubemaps.
-- Interchange's glTF master still reflects with F0 0.08 where CS2 uses 0.04 (Lumen's reflections, 1 – 1.5 % of the
-  sunlit light, more in the shade): open, to be measured with the bounce gains.
+- Interchange's glTF master reflected with F0 0.08 where CS2 uses 0.04; `import_map.py` now sets its instances'
+  `SpecularFactor` to 0.5 (`set_gltf_specular`, 2026-10-18): de_mirage's sunlit surfaces pool at 1.00, and relative
+  to the sun the light is CT shade 0.94, T shade 1.02, palace 0.97 (from 0.97 / 1.05 / 1.00). The bounce gains were
+  not refitted ([lighting.md](../formats/lighting.md#reflections-of-interchanges-gltf-master-2026-10-18)).

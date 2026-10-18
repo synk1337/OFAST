@@ -481,6 +481,7 @@ lit skybox master (they need its depth offset); for `csgo_black_unlit` lit black
 | `csgo_effects` (dust and light-shaft cards) | not exported (they appeared as white sheets; to be rebuilt as Unreal effects) |
 | tints (`m_vTintColor`, `rendercolor`, a draw call's own tint) | a scene object's tint of (0, 0, 0, 0) is none (older 3D skyboxes, [map.md](map.md#world-node-vwnod_c-data)); material named `<name>_tintRRGGBB` (`<name>_tintRRGGBBAA` when the alpha is not full); `baseColorFactor` (sRGB → linear) when the tint covers the whole surface; environment shaders tint only their tint mask, in Unreal's material ("Model tint" above), and so do prop shaders with `F_TINT_MASK` ("Model tint of prop shaders" above); the draw call's tint multiplies the placement's first ("Draw-call tint" above) |
 | same file name in two folders | the second material is renamed `<name>_<folder>` (Unreal matches slots by name) |
+| reflectance of non-metals | F0 0.04, CS2's for every non-metal but weapons (Source 2 Viewer's `complex.frag.slang`) and glTF's at its default IOR 1.5: OFAST's own masters leave Unreal's Specular at 0.5; Interchange's glTF master draws 0.08 for a material without a specular texture, so `import_map.py` sets `SpecularFactor` 0.5 on its instances (`set_gltf_specular`; [lighting.md](lighting.md#reflections-of-interchanges-gltf-master-2026-10-18)) |
 
 ## Unreal project requirement
 

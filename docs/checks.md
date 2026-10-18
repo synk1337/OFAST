@@ -213,8 +213,12 @@ has the method and the evidence):
   none (slope 0.92; −0.08 without it). Baked local lights draw none either, unless Hammer bakes their highlight into
   the cubemaps. **Fixed**: the manifest says how CS2 draws each light (`direct` on the sun; `bake_specular`,
   `bake_specular_scale` on local lights) and `import_map.py` sets each light's Specular Scale to match.
-- Interchange's glTF master reflects with F0 0.08 where CS2 (and OFAST's own masters) use 0.04: about 1 – 1.5 % of
-  the sunlit light, more in the shade. Not changed (follow-up, with the bounce gains).
+- Interchange's glTF master reflected with F0 0.08 where CS2 (and OFAST's own masters) use 0.04. **Fixed** the same
+  day (`set_gltf_specular`: `SpecularFactor` 0.5; F0 0.039 in every view after the re-import): sunlit pooled
+  1.014 → 1.001, CT / T / palace 1.02 / 1.03 / 1.01 → 1.00 / 1.01 / 0.97, connector / sniper 1.20 / 1.23 → 1.14 /
+  1.16, underpass 1.28 → 1.22, the dark B site / B apartments / shop 2 – 4 % darker; relative to the sun CT shade
+  0.94, T shade 1.02, palace 0.97, bounce gains unchanged
+  ([lighting.md](formats/lighting.md#reflections-of-interchanges-gltf-master-2026-10-18)).
 
 de_mirage re-exported (the manifest only: glTF, binary and textures came out byte-identical) and re-imported with the
 fix; the import's own shots, all 15 right this time, against the `lut_all` import's (Unreal / CS2 of the scene, same
