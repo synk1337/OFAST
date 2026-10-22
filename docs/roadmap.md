@@ -154,8 +154,12 @@ player and round.
   (no glove skins in the local demo). [animation.md](formats/animation.md#weapons-in-hand-and-holstered-exportloadout),
   [demo.md](formats/demo.md#models).
 - [ ] M4.6 Deaths: ragdolls in Unreal from the demo's ragdoll force and bone.
-- [ ] Character and weapon materials (CS2's character and weapon shaders: agents render too glossy, weapons too
-  metallic).
+- [x] **Character and weapon materials, first pass**: roughness read where each material keeps it (94 character
+  materials, the SAS body among them, keep it in `g_tAnisoGloss`, not the normal map: they rendered mirror-smooth),
+  weapons' 2 % dielectric specular. The SAS agents now read as dark cloth like CS2's.
+  [material.md](formats/material.md#characters-and-weapons-csgo_character-csgo_weapon).
+- [ ] Characters' cloth sheen, retro-reflectivity and colour adjustments; why CS2's knife blades look brighter
+  (`g_flMetalnessTransitionBias`?).
 - [ ] Weapon skins (paint kits, wear, seed, stickers: M10), and the molotov / incendiary holster if CS2 shows one.
 
 ## Hard problems we know about

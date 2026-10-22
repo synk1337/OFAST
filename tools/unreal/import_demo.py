@@ -214,6 +214,24 @@ def character_pipelines(fps):
             unreal.SoftObjectPath("/Interchange/Pipelines/DefaultGLTFPipeline.DefaultGLTFPipeline")]
 
 
+def apply_specular_factors(gltf_path, objects):
+    """Sets the glTF master's SpecularFactor on the imported material instances whose glTF material carries
+    KHR_materials_specular (CS2's weapon materials: 0.5, a 2 % reflectance for non-metals). Interchange creates the
+    parameter but leaves it at 1."""
+    with open(gltf_path, encoding="utf-8") as f:
+        materials = json.load(f).get("materials", [])
+    factors = {m["name"]: m["extensions"]["KHR_materials_specular"].get("specularFactor", 1.0)
+               for m in materials if "KHR_materials_specular" in m.get("extensions", {})}
+    count = 0
+    for o in objects:
+        if isinstance(o, unreal.MaterialInstanceConstant) and o.get_name() in factors:
+            unreal.MaterialEditingLibrary.set_material_instance_scalar_parameter_value(
+                o, "SpecularFactor", factors[o.get_name()])
+            count += 1
+    if count:
+        log("  specular factor set on %d of %d weapon materials" % (count, len(factors)))
+
+
 def import_agents(replay):
     """Imports the players' animated agents written next to the replay by `ofast export-demo --players`, if any: the
     files <demo>_r<round>.agents.json lists, one per agent look. Returns controller -> (skeletal mesh,
@@ -238,7 +256,12 @@ def import_agents(replay):
         params.override_pipelines = pipelines
         # A short folder: asset file paths must stay under Windows' 260 characters.
         destination = "/Game/OFAST/Replays/Agents/%s_r%d_%s" % (replay["demo"][-12:], replay["round"], look)
+        # Fresh every run: Interchange keeps existing material instances on a re-import (decision 006), so a
+        # changed material conversion would not show. The level's old replay actors are already gone.
+        if assets.does_directory_exist(destination):
+            assets.delete_directory(destination)
         objects = manager.import_asset(destination, unreal.InterchangeManager.create_source_data(path), params)
+        apply_specular_factors(path, objects)
         # Interchange leaves imported assets in memory only: saved, the level's actors keep them when reopened.
         assets.save_directory(destination, only_if_is_dirty=True, recursive=True)
         meshes = [o for o in objects if isinstance(o, unreal.SkeletalMesh)]

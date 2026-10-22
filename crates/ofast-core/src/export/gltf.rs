@@ -503,16 +503,21 @@ impl TextureRole {
 
 /// Where the channels of a glTF metallic-roughness texture (G = roughness, B = metalness) come from.
 ///
-/// CS2 never stores that combination: roughness is the blue channel of the normal map (`csgo_*` shaders) or the red
-/// channel of `g_tMetalness` (`csgo_weapon`), and metalness is the green channel of `g_tMetalness`. The two may
-/// have different sizes; the output takes the larger one.
+/// CS2 never stores that combination: roughness is the blue channel of the normal map (`csgo_*` shaders), the red
+/// channel of `g_tMetalness` (`csgo_weapon`) or, for materials with anisotropic roughness, the red and green channels
+/// of `g_tAnisoGloss` (the normal map then has no blue channel); metalness is the green channel of `g_tMetalness`.
+/// The textures may have different sizes; the output takes the larger one.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct OrmSource {
-    /// Texture path and channel (0 = R … 3 = A) holding roughness.
+    /// Texture path and channel (0 = R … 3 = A, or [`MEAN_RG`]) holding roughness.
     roughness: Option<(String, usize)>,
     /// Texture path and channel holding metalness.
     metalness: Option<(String, usize)>,
 }
+
+/// An [`OrmSource`] channel standing for the mean of R and G: `g_tAnisoGloss` holds roughness along two surface
+/// directions there, and glTF has one isotropic roughness.
+const MEAN_RG: usize = 4;
 
 /// A texture to decode and write when the export finishes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1474,8 +1479,10 @@ impl<'c> GltfWriter<'c> {
         }
 
         // CS2 shaders (csgo_*): hemi-octahedral normal in RG with roughness in B; metalness in g_tMetalness.G,
-        // whose R is the roughness for weapons only (see ValveResourceFormat's complex shader). Otherwise a
-        // uniform g_flMetalness.
+        // whose R is the roughness for weapons only (see ValveResourceFormat's complex shader). Materials with
+        // anisotropic roughness (94 `csgo_character` ones, the SAS body among them) compile their normal map to two
+        // channels and keep roughness in g_tAnisoGloss.RG instead (`examples/material_channels.rs`); reading the
+        // normal's missing blue channel made those bodies mirror-smooth. Otherwise a uniform g_flMetalness.
         let csgo = info.shader.starts_with("csgo_");
         let normal = info.first_texture(NORMAL_PARAMS).map(|(_, p)| p.to_owned());
         if let Some(path) = &normal {
@@ -1483,12 +1490,19 @@ impl<'c> GltfWriter<'c> {
             material["normalTexture"] = json!({ "index": id });
         }
         let metal = info.textures.get("g_tMetalness").cloned();
-        let roughness = match (&metal, &normal) {
-            (Some(m), _) if info.shader == "csgo_weapon.vfx" => Some((m.clone(), 0)),
-            (_, Some(n)) if csgo => Some((n.clone(), 2)),
+        let aniso = info.textures.get("g_tAnisoGloss").cloned();
+        let roughness = match (&metal, &aniso, &normal) {
+            (Some(m), _, _) if info.shader == "csgo_weapon.vfx" => Some((m.clone(), 0)),
+            (_, Some(a), _) if csgo => Some((a.clone(), MEAN_RG)),
+            (_, _, Some(n)) if csgo => Some((n.clone(), 2)),
             _ => None,
         };
         let metalness = metal.map(|m| (m, 1));
+        if info.shader == "csgo_weapon.vfx" {
+            // CS2's weapon shader reflects 2 % at normal incidence off its non-metals, not glTF's 4 %
+            // (ValveResourceFormat's complex shader: `F0 = 0.02` for csgo_weapon): half the specular.
+            material["extensions"]["KHR_materials_specular"] = json!({ "specularFactor": 0.5 });
+        }
         let pbr = &mut material["pbrMetallicRoughness"];
         pbr["metallicFactor"] = json!(if metalness.is_some() {
             1.0
@@ -1994,12 +2008,14 @@ impl<'c> GltfWriter<'c> {
             extensions_used.push("KHR_lights_punctual");
             document["extensions"] = json!({ "KHR_lights_punctual": { "lights": self.lights } });
         }
-        if self
-            .materials
-            .iter()
-            .any(|m| m["extensions"].get("KHR_materials_unlit").is_some())
-        {
-            extensions_used.push("KHR_materials_unlit");
+        for extension in ["KHR_materials_unlit", "KHR_materials_specular"] {
+            if self
+                .materials
+                .iter()
+                .any(|m| m["extensions"].get(extension).is_some())
+            {
+                extensions_used.push(extension);
+            }
         }
         if !extensions_used.is_empty() {
             document["extensionsUsed"] = json!(extensions_used);
@@ -2301,7 +2317,12 @@ fn assemble_orm(content: &Content, source: &OrmSource) -> Result<Image, ExportEr
             Some((img, channel)) => {
                 let sx = x * img.width / width;
                 let sy = y * img.height / height;
-                img.rgba[(sy * img.width + sx) * 4 + channel]
+                let pixel = (sy * img.width + sx) * 4;
+                if *channel == MEAN_RG {
+                    ((u16::from(img.rgba[pixel]) + u16::from(img.rgba[pixel + 1])) / 2) as u8
+                } else {
+                    img.rgba[pixel + channel]
+                }
             }
             None => default,
         }
@@ -3053,6 +3074,87 @@ mod tests {
     /// de_mirage's `wrongway_timer` (`csgo_unlitgeneric`, translucent) and `black_simple` (`csgo_black_unlit`, no
     /// texture) next to a lit material: only the unlit ones get `KHR_materials_unlit`, the file declares it, and
     /// `extras.ofast` keeps the CS2 shader.
+    #[test]
+    fn character_and_weapon_roughness_sources() {
+        let content = Content::new();
+        let dir = temp_folder("character");
+        let mut writer = GltfWriter::new(&content, &dir, ExportOptions::default()).expect("writer");
+        let texture = |name: &str, path: &str| (name.to_owned(), path.to_owned());
+        let materials = [
+            // Anisotropic roughness: a two-channel normal map and g_tAnisoGloss (the SAS body).
+            (
+                "characters/body.vmat",
+                "csgo_character.vfx",
+                vec![
+                    texture("g_tNormal", "body_normal.vtex"),
+                    texture("g_tAnisoGloss", "body_gloss.vtex"),
+                    texture("g_tMetalness", "body_metal.vtex"),
+                ],
+            ),
+            // Roughness in the normal map's blue channel (the SAS legs).
+            (
+                "characters/legs.vmat",
+                "csgo_character.vfx",
+                vec![
+                    texture("g_tNormal", "legs_normal.vtex"),
+                    texture("g_tMetalness", "legs_cloth.vtex"),
+                ],
+            ),
+            // A weapon: roughness in g_tMetalness.R, 2 % specular for non-metals.
+            (
+                "weapons/ak47.vmat",
+                "csgo_weapon.vfx",
+                vec![
+                    texture("g_tNormal", "ak_normal.vtex"),
+                    texture("g_tMetalness", "ak_rough.vtex"),
+                ],
+            ),
+        ];
+        for (path, shader, textures) in materials {
+            let info = MaterialInfo {
+                shader: shader.into(),
+                textures: textures.into_iter().collect(),
+                ..Default::default()
+            };
+            writer.material_infos.insert(path.to_owned(), Some(info));
+            writer.material(path, [1.0; 4]);
+        }
+        let orm = |roughness: &str| {
+            writer.texture_jobs.iter().find_map(|t| match &t.job {
+                TextureJob::Orm(source)
+                    if source.roughness.as_ref().is_some_and(|r| r.0 == roughness) =>
+                {
+                    Some(source.clone())
+                }
+                _ => None,
+            })
+        };
+        let body = orm("body_gloss.vtex").expect("the body's roughness from g_tAnisoGloss");
+        assert_eq!(body.roughness.as_ref().map(|r| r.1), Some(MEAN_RG));
+        assert_eq!(body.metalness, Some(("body_metal.vtex".into(), 1)));
+        assert_eq!(
+            orm("legs_normal.vtex")
+                .and_then(|s| s.roughness)
+                .map(|r| r.1),
+            Some(2)
+        );
+        assert_eq!(
+            orm("ak_rough.vtex").and_then(|s| s.roughness).map(|r| r.1),
+            Some(0)
+        );
+        assert!(orm("body_normal.vtex").is_none());
+        let specular: Vec<bool> = writer
+            .materials
+            .iter()
+            .map(|m| m["extensions"].get("KHR_materials_specular").is_some())
+            .collect();
+        assert_eq!(specular, [false, false, true]);
+        assert_eq!(
+            writer.materials[2]["extensions"]["KHR_materials_specular"]["specularFactor"],
+            json!(0.5)
+        );
+    }
+
     #[test]
     fn unlit_shaders_get_khr_materials_unlit() {
         let content = Content::new();

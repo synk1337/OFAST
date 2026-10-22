@@ -16,7 +16,8 @@ These were the source of the "missing textures" and the blue-grey mirror walls i
 | Texture | Channels |
 |---|---|
 | `g_tColor` | RGB colour. **Alpha is a mask, not opacity**, unless `F_TRANSLUCENT` / `F_ALPHA_TEST` / overlay. |
-| `g_tNormal`, `g_tLayer*NormalRoughness` | **Hemi-octahedral normal in RG, roughness in B** — for every `csgo_*` shader, whatever the texture format (BC7 or BC5). |
+| `g_tNormal`, `g_tLayer*NormalRoughness` | **Hemi-octahedral normal in RG, roughness in B** — except where the material keeps roughness elsewhere (below): then the texture is two-channel BC5 and has no B. |
+| `g_tAnisoGloss` | roughness along two surface directions in R and G (anisotropic roughness; the normal map is then BC5). OFAST writes their mean. |
 | `g_tMetalness` | **Metalness in G**. R is roughness only for `csgo_weapon` (otherwise retro-reflectivity); B is a cloth mask on characters. |
 | no `g_tMetalness` | uniform `g_flMetalness`. |
 
@@ -28,6 +29,37 @@ Y correlates with the height map's slope down the image rows, r ≈ +0.2 to +0.3
 the columns, r ≈ −0.15 to −0.35). Unreal's convention is +Y down: Interchange sets `flip_green_channel` on the glTF
 normal textures it imports, and `import_map.py` sets it on the ones it imports itself for the blend materials (it
 did not before 2026-10-16, so their bumps were lit upside down).
+
+## Characters and weapons (`csgo_character`, `csgo_weapon`)
+
+Where each of CS2's 807 character and weapon materials keeps its roughness (`examples/material_channels.rs`,
+2026-10-22):
+
+| Materials | Normal map | Roughness |
+|---|---|---|
+| 463 `csgo_character` | BC7 | normal map B |
+| 94 `csgo_character` (the SAS body, …) | BC5 (RG only), plus `g_tAnisoGloss` | `g_tAnisoGloss` R and G (anisotropic) |
+| 250 `csgo_weapon` | BC5 | `g_tMetalness` R |
+
+The texture compiler notes in each texture's editor info say the same (`Mip HemiOctIsoRoughness_RG_B` for normal
+maps holding roughness, `Mip AnisoRoughness_RG` for `g_tAnisoGloss`). Until 2026-10-22 OFAST read B of every
+`csgo_*` normal map, which is 0 on BC5: the 94 anisotropic bodies were mirror-smooth, the "too glossy" agents of
+M4.1. Weapons were right (R of `g_tMetalness`).
+
+**Weapons' specular.** `csgo_weapon` reflects 2 % at normal incidence off non-metals, not the 4 % glTF assumes
+(ValveResourceFormat's complex shader, `F0 = 0.02`): the export adds `KHR_materials_specular` with
+`specularFactor` 0.5. Unreal's Interchange creates the glTF master's `SpecularFactor` parameter but leaves it at 1,
+so `import_demo.py` sets it from the file.
+
+**Not converted** (glTF has no equivalent OFAST uses yet): characters' cloth shading (`g_tMetalness` B × (1 − G) is
+a cloth mask; CS2 gives those areas a sheen lobe, F0 = `sqrt(albedo) · g_flSheenScale`), retro-reflectivity
+(`g_tMetalness` R with `F_RETRO_REFLECTIVE`), the characters' colour and roughness adjustments, anisotropy itself, and
+`g_flMetalnessTransitionBias` on weapons, which no public reference explains. Metal parts take their colour as F0 as
+in the standard model; knife blades, whose colour texture is dark grey (sRGB ≈ 0.38), render darker than in CS2.
+
+Checked on round 5 of the match demo against CS2 through players' eyes (`test-data/shots/replay_r5e/
+agents_26508_cs2_old_new.png`, `compare_materials_r5.png`): the SAS jackets and sleeves lost their silvery mirror
+sheen and read as dark navy cloth like CS2's; CS2's blue is a little more saturated (its cloth sheen).
 
 ## Two-layer blend materials (`csgo_lightmappedgeneric`, `F_LAYERS`)
 

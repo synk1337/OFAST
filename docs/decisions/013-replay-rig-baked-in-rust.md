@@ -64,7 +64,9 @@ M4 replaces the proxies with CS2's own agents, animated. Four research passes (2
   solver, all unit-testable on synthetic clips and checked against CS2 (demo playback at a tick, spectating a player
   from the side).
 - Changing the rig means re-exporting the round; Unreal assets stay simple (one AnimSequence per player and round).
-- Materials: agents use CS2's character shader, not handled yet; they render too glossy (M4 follow-up).
+- Materials: agents use CS2's character shader. They rendered too glossy until their roughness was read from
+  `g_tAnisoGloss` (2026-10-22, [material.md](../formats/material.md#characters-and-weapons-csgo_character-csgo_weapon));
+  cloth sheen is still not converted.
 - Glove skins need bone-merging onto the agent skeleton; Unreal must see one root bone per skin. Done in M4.5 by
   merging the glove meshes into the agent's own skin by bone name (on all 80 agent models their bind poses agree to
   0.003 inch and 0.8°).
