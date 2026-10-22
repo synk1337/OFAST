@@ -146,6 +146,8 @@ fn weapon_clips_found_in_the_graphs() {
         "weapon_knife",
         "weapon_hegrenade",
         "weapon_awp",
+        "weapon_knife_tactical",
+        "weapon_knife_survival_bowie",
     ] {
         let clips = WeaponClips::find(&main, weapon, |p| graph(p)).expect("weapon clips");
         println!(

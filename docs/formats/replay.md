@@ -46,7 +46,7 @@ one glTF per look (agent model, mesh groups, glove skin), each with an animation
 | Key | What |
 |---|---|
 | `format`, `version` | `"ofast-agents"`, 1 |
-| `demo`, `round`, `fps` | as the replay; the animations' key rate (30) |
+| `demo`, `round`, `fps` | as the replay; the animations' key rate: the tick rate (64), one key per tick |
 | `agents[].file` | `<demo>_r<round>_<agent>_<mesh groups>[_<gloves>].gltf`, in the same folder |
 | `agents[].model`, `.mesh_groups`, `.gloves` | the agent model path, its mesh-group mask (0 = the model's default), the glove model path or `null` |
 | `agents[].players` | the controllers animated in that file (animations `player_<controller>`) |
@@ -62,7 +62,7 @@ verification screenshots).
 | Element | How |
 |---|---|
 | Sequence | `/Game/OFAST/Replays/<demo>_r<round>`, display rate = tick rate (64 fps: one frame per tick), from the round start to its end |
-| Player (animated) | with `ofast export-demo --players`: the player's look from the agents manifest (imported to `/Game/OFAST/Replays/Agents/` and saved, with the glTF pipeline copy `/Game/OFAST/Pipelines/GLTFCharacters` that combines a skeleton's meshes, so the weapons are part of the agent) as a skeletal mesh actor, feet on the positions, turned along the body yaw (−body_yaw), a Skeletal Animation track playing the player's baked animation (`player_<controller>`: body and weapons) from the round's first frame ([animation.md](animation.md#each-players-animation-animbake-exportplayers)) |
+| Player (animated) | with `ofast export-demo --players`: the player's look from the agents manifest (imported to `/Game/OFAST/Replays/Agents/` and saved, with the glTF pipeline copy `/Game/OFAST/Pipelines/GLTFCharacters` that combines a skeleton's meshes, so the weapons are part of the agent, and samples the animations at the manifest's `fps` with frame snapping: one AnimSequence frame per tick) as a skeletal mesh actor, feet on the positions, turned along the body yaw (−body_yaw), a Skeletal Animation track playing the player's baked animation (`player_<controller>`: body and weapons) from the round's first frame ([animation.md](animation.md#each-players-animation-animbake-exportplayers)) |
 | Player proxy | without the agents: engine cylinder scaled to CS2's 32 × 32 × 72-unit hull, CT blue / T orange, a grey visor at the eyes showing where the player faces; position (x, −y, z) × 2.54 cm, yaw → −yaw (eye yaw) |
 | Visibility | hidden while dead or without a pawn, and while the camera looks through that player's own eyes (CS2 does not draw your own body in first person either) |
 | First-person cameras | one per player at feet + eye height, aimed with Rotator(pitch = −pitch, yaw = −yaw), CS2's default field of view (90° at 4:3 = 106.26° horizontally at 16:9) |
@@ -72,8 +72,10 @@ verification screenshots).
 
 Verification screenshots (`-Shot`): the killer's view 8 ticks before each of the first three kills, a view from
 above the players at the first kill, and with `-PovShots "tick:controller,…"` the view through any player's eyes at
-given ticks (that player's own body hidden in that frame). To compare with CS2: `demo_pause`, `demo_gototick <tick>`,
-spectate the player in first person (the demo bar's player arrows), Steam's F12.
+given ticks (that player's own body hidden in that frame), and with `-CloseShots "tick:controller,…"` a close-up of a
+player from 1.3 m in front and to his right at chest height (to inspect the pose and the weapons). To compare with
+CS2: `demo_pause`, `demo_gototick <tick>`, spectate the player in first person (the demo bar's player arrows),
+Steam's F12.
 
 ## Not yet
 

@@ -10,6 +10,8 @@ Inputs (environment variables):
     OFAST_SHOT       optional folder for verification screenshots: the killer's view just before the first kills
     OFAST_POV_SHOTS  optional extra screenshots through players' eyes: "tick:controller,tick:controller" (into
                      OFAST_SHOT; the watcher's own body is hidden in that frame)
+    OFAST_CLOSE_SHOTS optional close-ups of players, "tick:controller,…": from 1.3 m in front and to the right at
+                     chest height, to inspect a pose and the weapons (into OFAST_SHOT)
 
 The map must have been imported first (tools/unreal/import_map.py): the sequence is built in its level
 /Game/OFAST/Maps/<map>. What the script makes, all rebuilt on every run:
@@ -45,6 +47,8 @@ REPLAY_PATH = os.environ["OFAST_REPLAY"]
 SHOT_DIR = os.environ.get("OFAST_SHOT", "")
 POV_SHOTS = [tuple(int(v) for v in item.split(":")) for item in os.environ.get("OFAST_POV_SHOTS", "").split(",")
              if ":" in item]
+CLOSE_SHOTS = [tuple(int(v) for v in item.split(":"))
+               for item in os.environ.get("OFAST_CLOSE_SHOTS", "").split(",") if ":" in item]
 WIDTH, HEIGHT = 1920, 1080
 TAG = unreal.Name("OFAST_replay")
 UNITS_TO_CM = 2.54
@@ -175,20 +179,36 @@ def spawn_proxy(player):
     return body, [visor]
 
 
-def character_pipelines():
-    """The Interchange pipelines agent files import with: the glTF defaults, except that all meshes of one skeleton
-    combine into one skeletal mesh. The default glTF pipeline makes one skeletal mesh per glTF mesh, and the weapons
-    and gloves an agent file holds (bones of its own skeleton) would become separate meshes the player's actor does
-    not show. The modified copy is saved once, as /Game/OFAST/Pipelines/GLTFCharacters."""
+def character_pipelines(fps):
+    """The Interchange pipelines agent files import with: the glTF defaults, except that
+    - all meshes of one skeleton combine into one skeletal mesh: the default glTF pipeline makes one skeletal mesh
+      per glTF mesh, and the weapons and gloves an agent file holds (bones of its own skeleton) would become separate
+      meshes the player's actor does not show;
+    - animations are sampled at `fps`, the rate the export keyed them at (the demo's tick rate): left to guess,
+      Interchange picks a standard rate and would blend between the ticks.
+    The modified copy is saved as /Game/OFAST/Pipelines/GLTFCharacters."""
     path = "/Game/OFAST/Pipelines/GLTFCharacters"
     pipeline = assets.load_asset(path) if assets.does_asset_exist(path) else None
     if pipeline is None:
         pipeline = assets.duplicate_loaded_asset(
             assets.load_asset("/Interchange/Pipelines/DefaultGLTFAssetsPipeline"), path)
+    changed = False
     behaviour = unreal.InterchangeCombineSkeletalMeshesBehavior.BY_SKELETON
     meshes = pipeline.get_editor_property("mesh_pipeline")
     if meshes.get_editor_property("combine_skeletal_meshes_behavior") != behaviour:
         meshes.set_editor_property("combine_skeletal_meshes_behavior", behaviour)
+        changed = True
+    animation = pipeline.get_editor_property("animation_pipeline")
+    # Interchange measures the animation a hair longer than its last key (75.922 s for 4859 ticks of 1/64 s) and
+    # refuses lengths between frames unless they snap: the keys stay on the ticks, the length gains the last frame.
+    snap = unreal.InterchangeFrameAlignment.SNAP_TO_CLOSEST
+    if (animation.get_editor_property("custom_bone_animation_sample_rate") != int(fps)
+            or animation.get_editor_property("frame_alignment") != snap):
+        animation.set_editor_property("use30_hz_to_bake_bone_animation", False)
+        animation.set_editor_property("custom_bone_animation_sample_rate", int(fps))
+        animation.set_editor_property("frame_alignment", snap)
+        changed = True
+    if changed:
         assets.save_loaded_asset(pipeline)
     return [unreal.SoftObjectPath(pipeline.get_path_name()),
             unreal.SoftObjectPath("/Interchange/Pipelines/DefaultGLTFPipeline.DefaultGLTFPipeline")]
@@ -207,7 +227,7 @@ def import_agents(replay):
     with open(manifest_path, encoding="utf-8") as f:
         manifest = json.load(f)
     manager = unreal.InterchangeManager.get_interchange_manager_scripted()
-    pipelines = character_pipelines()
+    pipelines = character_pipelines(manifest.get("fps", 30))
     agents = {}
     for entry in manifest["agents"]:
         path = os.path.join(folder, entry["file"])
@@ -230,8 +250,13 @@ def import_agents(replay):
         if not meshes:
             log("agents %s: no skeletal mesh in %s" % (look, path))
             continue
-        log("agents %s: %s with %d player animations, %d weapons"
-            % (look, meshes[0].get_name(), len(animations), len(entry.get("weapons", []))))
+        rate = ""
+        if animations:
+            sample = next(iter(animations.values()))
+            rate = ", %d frames over %.3f s" % (unreal.AnimationLibrary.get_num_frames(sample),
+                                                sample.get_play_length())
+        log("agents %s: %s with %d player animations%s, %d weapons"
+            % (look, meshes[0].get_name(), len(animations), rate, len(entry.get("weapons", []))))
         for controller in entry["players"]:
             if controller in animations:
                 agents[controller] = (meshes[0], animations[controller])
@@ -470,6 +495,27 @@ def overview_camera(replay, tick):
     return camera
 
 
+def close_camera(replay, tick, controller):
+    """A camera 1.3 m in front of a player and 0.5 m to his right at chest height (45 units above the feet),
+    turned with his body yaw and looking at his chest: to inspect the pose and what he holds."""
+    ticks = replay["samples"]["ticks"]
+    index = min(range(len(ticks)), key=lambda i: abs(ticks[i] - tick))
+    track = replay["samples"]["players"].get(str(controller))
+    if track is None or track["position"][index] is None:
+        return None
+    x, y, z = track["position"][index]
+    yaw = math.radians(track["body_yaw"][index] or 0.0)
+    forward, right = (math.cos(yaw), math.sin(yaw)), (math.sin(yaw), -math.cos(yaw))
+    chest = unreal.Vector(*to_unreal((x, y, z + 45)))
+    eye = (x + 51 * forward[0] + 20 * right[0], y + 51 * forward[1] + 20 * right[1], z + 50)
+    location = unreal.Vector(*to_unreal(eye))
+    camera = spawn_tagged(unreal.CameraActor, "close %d at %d" % (controller, tick))
+    camera.set_actor_location(location, False, False)
+    camera.set_actor_rotation(unreal.MathLibrary.find_look_at_rotation(location, chest), False)
+    camera.camera_component.set_editor_property("field_of_view", 60.0)
+    return camera
+
+
 def verification_shots(sequence, replay, cameras):
     """Screenshots from the killer's eye 8 ticks before the first three kills, to compare with CS2 (demo_gototick,
     spec_player in first person), and one from above the players at the first kill."""
@@ -494,6 +540,11 @@ def verification_shots(sequence, replay, cameras):
         if controller in cameras:
             path = os.path.join(SHOT_DIR, "replay_%s_tick%d_pov%d.png" % (prefix, tick, controller))
             shots.append((tick - tick0, cameras[controller], path))
+    for tick, controller in CLOSE_SHOTS:
+        camera = close_camera(replay, tick, controller)
+        if camera is not None:
+            path = os.path.join(SHOT_DIR, "replay_%s_tick%d_close%d.png" % (prefix, tick, controller))
+            shots.append((tick - tick0, camera, path))
     if not shots:
         unreal.SystemLibrary.quit_editor()
         return

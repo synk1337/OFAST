@@ -9,8 +9,8 @@
 //! - the gloves' world model (`items_game.txt` → `model_world`) bone-merged onto it, when the look has glove skins;
 //! - one bone per weapon the look's players carry, with the weapon's world model (its own model: a knife skin's
 //!   blade, the CS:GO-era mesh some gun skins need) rigidly on it ([`super::loadout`]);
-//! - one animation per player, `player_<controller>` (the controller index of the replay file), keyed at
-//!   [`PLAYER_ANIMATION_FPS`] from the round's first tick to its last: CS2's locomotion and weapon layers baked from
+//! - one animation per player, `player_<controller>` (the controller index of the replay file), keyed on every
+//!   tick ([`animation_fps`]) from the round's first tick to its last: CS2's locomotion and weapon layers baked from
 //!   the demo's rig inputs ([`crate::anim::bake`]) and retargeted onto the agent, plus every weapon bone on the hand,
 //!   on its holster, or scaled to 0.
 //!
@@ -48,9 +48,13 @@ use crate::model::{Affine, Model, compose, invert_rigid};
 pub const CT_AGENT: &str = "agents/models/ctm_sas/ctm_sas.vmdl";
 /// Agent model of Terrorists whose own is unknown.
 pub const T_AGENT: &str = "agents/models/tm_phoenix/tm_phoenix.vmdl";
-/// Key rate of the players' animations: one Unreal's glTF import recognises (the replay's 64 ticks per second are
-/// not), fine enough for a run cycle of 0.73 s.
-pub const PLAYER_ANIMATION_FPS: f32 = 30.0;
+/// Key rate of a round's player animations: the demo's tick rate (64), one key per tick. Keys then fall on the
+/// ticks the sequence shows (`import_demo.py` plays it at the tick rate and imports the animations at this rate),
+/// so a weapon switch happens on its tick: at 30 keys per second (M4.4) the weapon vanished for two frames, 66 ms,
+/// around every switch, and Unreal's blend between keys an eighth of a tick apart smeared each change.
+pub fn animation_fps(track: &RoundTrack) -> f32 {
+    (1.0 / track.tick_interval).round().max(1.0)
+}
 
 /// What [`export_players`] wrote.
 #[derive(Debug, Clone)]
@@ -63,6 +67,8 @@ pub struct PlayersReport {
     pub players: usize,
     /// Weapon bones over all files.
     pub weapons: usize,
+    /// Key rate of the animations ([`animation_fps`]).
+    pub fps: f32,
     /// Frames per animation.
     pub frames: usize,
     /// Problems that did not stop the export.
@@ -113,6 +119,8 @@ struct Round<'a> {
     upper: Option<UpperBody>,
     /// Model resource id → path.
     models: HashMap<u64, String>,
+    /// Key rate of the animations.
+    fps: f32,
     /// For each animation frame: its demo tick and sample index.
     frames: Vec<(f32, usize)>,
 }
@@ -158,7 +166,8 @@ pub fn export_players(
         clip_skeleton,
         upper,
         models: content.resource_paths("vmdl"),
-        frames: frame_samples(track, PLAYER_ANIMATION_FPS),
+        fps: animation_fps(track),
+        frames: frame_samples(track, animation_fps(track)),
     };
 
     // Each player's look, from the last sample where they were alive (else their last one).
@@ -210,6 +219,7 @@ pub fn export_players(
         manifest: out_dir.join(format!("{demo_name}_r{}.agents.json", track.round)),
         players: 0,
         weapons: 0,
+        fps: round.fps,
         frames: round.frames.len(),
         warnings,
     };
@@ -249,7 +259,7 @@ pub fn export_players(
             "version": 1,
             "demo": demo_name,
             "round": track.round,
-            "fps": PLAYER_ANIMATION_FPS,
+            "fps": round.fps,
             "agents": manifest,
         }))
         .expect("JSON serializes"),
@@ -293,7 +303,7 @@ fn export_look(
             controller,
             &round.sets,
             round.upper.as_ref(),
-            PLAYER_ANIMATION_FPS,
+            round.fps,
         )?;
         let carried: Vec<Vec<(Slot, Place)>> = round
             .frames
@@ -441,7 +451,7 @@ fn export_look(
         animations.push(BoneAnimation {
             name: format!("player_{controller}"),
             frames,
-            fps: PLAYER_ANIMATION_FPS,
+            fps: round.fps,
             scales,
         });
     }

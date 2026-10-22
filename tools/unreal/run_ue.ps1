@@ -22,6 +22,8 @@ param(
     [string]$Replay = "",
     # For import_demo.py: extra screenshots through players' eyes, "tick:controller,tick:controller".
     [string]$PovShots = "",
+    # For import_demo.py: close-ups of players, "tick:controller,tick:controller".
+    [string]$CloseShots = "",
     [string]$Engine = "C:\Program Files\Epic Games\UE_5.8"
 )
 
@@ -43,6 +45,7 @@ $env:OFAST_ONLY = $Only
 $env:OFAST_TRY = if ($Try.ToLower().EndsWith(".json")) { & $resolve $Try } else { $Try }
 $env:OFAST_REPLAY = if ($Replay) { & $resolve $Replay } else { "" }
 $env:OFAST_POV_SHOTS = $PovShots
+$env:OFAST_CLOSE_SHOTS = $CloseShots
 if ($Shot) {
     # -Shot is either a .png file (single screenshot) or a folder (scripts that take several).
     if ($env:OFAST_SHOT.ToLower().EndsWith(".png")) {

@@ -184,21 +184,24 @@ main graph) picks the locomotion set, the velocity is turned into the body's fra
 blend gives the clips, weights and cycle length; the phase advances by the tick. Over that: the weapon's additive
 idle pose (blended by crouch), its draw or reload clip in model space while the weapon's gameplay state is 11 or
 800 / 801 (from the state's first tick, fading in over 0.15 s and out over 0.25 s), its additive shot from each tick
-the state enters 100 or 101, and the aim from the eye angles and body yaw. Poses are sampled at 30 fps from the
-round's first tick, retargeted onto the player's own agent (the pawn's `m_hModel`, [demo.md](demo.md#models)) and
-written as one glTF per look — agent, mesh groups, glove skin — with every weapon the look's players carry
-(below):
+the state enters 100 or 101, and the aim from the eye angles and body yaw. Poses are keyed on every tick (64 per
+second, `export::players::animation_fps`) from the round's first tick, retargeted onto the player's own agent (the
+pawn's `m_hModel`, [demo.md](demo.md#models)) and written as one glTF per look — agent, mesh groups, glove skin —
+with every weapon the look's players carry (below):
 
 ```bash
 ofast export-demo match.dem --round 5 --out exports/demos --players
 # → <demo>_r5.ofast-replay.json, <demo>_r5.agents.json (the files and their players),
-#   <demo>_r5_ctm_sas_5.gltf (3 players, 8 weapons), <demo>_r5_ctm_sas_6.gltf (2 players with defuse kits,
-#   12 weapons), <demo>_r5_tm_phoenix_1.gltf (5 players, 12 weapons)
+#   <demo>_r5_ctm_sas_5.gltf (3 players, 9 weapons), <demo>_r5_ctm_sas_6.gltf (2 players with defuse kits,
+#   12 weapons), <demo>_r5_tm_phoenix_1.gltf (5 players, 13 weapons)
 ```
 
-A 76-second round: 10 players × 2278 frames and 32 weapon bones, 19 – 27 MB per look, in 13 s.
-`tools/unreal/import_demo.py` imports them and plays each player's animation on an agent actor moved along the
-replay's positions and turned along its body yaw ([replay.md](replay.md#in-unreal-import_demopy)).
+A 76-second round: 10 players × 4860 frames and 34 weapon bones, 27 – 51 MB per look, in 14 s.
+`tools/unreal/import_demo.py` imports them (at the tick rate) and plays each player's animation on an agent actor
+moved along the replay's positions and turned along its body yaw ([replay.md](replay.md#in-unreal-import_demopy)).
+Until 2026-10-22 the animations were keyed at 30 fps (a rate Unreal's glTF import guesses by itself): a weapon
+switch then fell between keys and the weapon vanished for 66 ms around it — a skinned knife held up to the tick of a
+switch was already gone in the frame compared with CS2.
 
 ## Weapons in hand and holstered (`export::loadout`)
 
@@ -224,7 +227,7 @@ holstered).
 copy: a second flashbang is a second bone) a bone of its own, `ofast_weapon_<n>`, child of the agent's root, with
 the weapon rigidly on it. Every frame of a player's animation puts that bone on `wpn`, on the holster, or scales
 it to 0 (step keys) while the player does not carry the weapon. A weapon moving between two places (holster to
-hand) hides on the last frame at the old place and the first at the new one, and a hidden frame is keyed at the
+hand) hides on the last tick at the old place and the first at the new one, and a hidden frame is keyed at the
 place of its neighbour that shows the weapon (`loadout::hide_changes`, `key_places`): Unreal blends the scale
 between keys, so the weapon shrinks and grows where it is and only travels while hidden — it never sweeps through
 the body. In Unreal the weapons are part of the agent's skeletal mesh: no attached actors, and scrubbing shows the
@@ -276,11 +279,18 @@ same weapons as playback.
   very tick and CS2 still shows it slung (CS2's draw takes the weapon from the holster partway through the clip,
   timed by clip events; OFAST puts it in hand at once); CS2's knife hand is raised (the knife pose, M4.4c); the
   weapons render too metallic (CS2's weapon shader is not converted yet, like the agents' character shader).
+- **Skinned knives** (2026-10-22, close-ups from `import_demo.py`'s `-CloseShots`, `test-data/shots/replay_r5d`):
+  the Bowie (Wajam, tick 26041) and the Huntsman (tick 26508) are in their owners' right hands, blade up, posed by
+  their own `idle_bowie` / `idle_tactical` clips. They are hard to see from a distance: the blade renders near-black
+  (its colour texture is dark grey, sRGB ≈ 100, and fully metallic, so Unreal makes a dark mirror of it; CS2's
+  weapon shader shows bright steel), seen edge-on it is a thin line, and CS2 holds the Huntsman raised by the head
+  while OFAST holds it at the belly, behind the arm from a teammate's view (the knife pose, M4.4c). The paint of
+  knife skins is not applied (M10).
 - `tests/cs2_anim.rs` `weapon_clips_found_in_the_graphs` finds every tested weapon's clips and category through the
   graphs; `item_names_read` reads 2059 item names from `items_game.txt`.
 - `tests/cs2_anim.rs` `locomotion_graphs_read`: the three locomotion graphs give the blends above (17 standing and
   9 crouched points, `run_n` at 225, all clips decoded); `tests/cs2_demo.rs` `players_export_one_animation_per_player`:
-  round 1 exports one animation per player, 30 fps over the whole round, one file per look with a bone per weapon
+  round 1 exports one animation per player, keyed on every tick over the whole round, one file per look with a bone per weapon
   listed (every player of the pistol round carries a knife and a pistol); `glove_skins_merge_onto_the_agent`: glove
   skins replace the agent's own gloves in the look's file.
 

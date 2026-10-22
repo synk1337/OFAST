@@ -330,12 +330,12 @@ fn rig_inputs_match_movement_and_demoparser2() {
 }
 
 /// `export_players` on round 1: one glTF per agent look, listed in the manifest with its players, each with an
-/// animation per player keyed every 1/30 s over the whole round, and a skeleton of the agent's bones plus one bone
+/// animation per player keyed on every tick (64 per second) over the whole round, and a skeleton of the agent's bones plus one bone
 /// per weapon listed (every player of a pistol round carries a knife and a pistol).
 #[test]
 fn players_export_one_animation_per_player() {
     use ofast_core::content::Content;
-    use ofast_core::export::players::{PLAYER_ANIMATION_FPS, export_players};
+    use ofast_core::export::players::{animation_fps, export_players};
     let Some((_, data)) = load() else { return };
     let Some(install) = Cs2Install::locate() else {
         println!("SKIPPED: no CS2 install");
@@ -353,7 +353,11 @@ fn players_export_one_animation_per_player() {
         .collect();
     assert_eq!(report.players, players.len());
     let seconds = (track.end_tick - track.start_tick) as f32 * track.tick_interval;
-    assert_eq!(report.frames, (seconds * PLAYER_ANIMATION_FPS) as usize + 1);
+    assert_eq!(report.fps, 64.0);
+    assert_eq!(
+        report.frames,
+        (seconds * animation_fps(&track)).round() as usize + 1
+    );
     let manifest: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&report.manifest).expect("manifest reads"))
             .expect("JSON");
