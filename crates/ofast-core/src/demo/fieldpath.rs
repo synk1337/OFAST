@@ -56,6 +56,17 @@ impl FieldPath {
         p.len = len as u8;
         p
     }
+
+    /// The path one level deeper: element `index` of the array at this path (`None` past [`MAX_DEPTH`]).
+    pub fn child(&self, index: i32) -> Option<Self> {
+        let len = self.len as usize;
+        (len < MAX_DEPTH).then(|| {
+            let mut p = *self;
+            p.indices[len] = index;
+            p.len += 1;
+            p
+        })
+    }
 }
 
 /// Error while reading the list of field paths.

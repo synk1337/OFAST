@@ -122,3 +122,43 @@ fn a_material_has_its_shader_and_textures() {
             .is_some()
     );
 }
+
+/// Every reference of the sampled resources names its target by [`resource_id`] of the target's path: the hash a
+/// demo's `m_hModel` uses too.
+#[test]
+fn resource_ids_match_references() {
+    use ofast_core::resource::resource_id;
+    let install = Cs2Install::locate().expect("CS2 install found");
+    let vpk = Vpk::open(install.main_vpk()).expect("pak01_dir.vpk opens");
+    let mut by_extension: BTreeMap<&str, Vec<_>> = BTreeMap::new();
+    for entry in vpk.entries() {
+        if let Some((_, ext)) = entry.path().rsplit_once('.')
+            && ext.ends_with("_c")
+        {
+            by_extension.entry(ext).or_default().push(entry);
+        }
+    }
+    let (mut refs, mut wrong) = (0usize, Vec::new());
+    let limit = per_extension_limit();
+    for entries in by_extension.values() {
+        let step = (entries.len() / limit).max(1);
+        for entry in entries.iter().step_by(step).take(limit) {
+            let data = vpk.read(entry).expect("CRC-checked read");
+            let Ok(resource) = Resource::parse(&data) else {
+                continue;
+            };
+            for r in resource.external_refs().expect("RERL reads") {
+                refs += 1;
+                if resource_id(&r.path) != r.id {
+                    wrong.push(format!("{}: {} {:016x}", entry.path(), r.path, r.id));
+                }
+            }
+        }
+    }
+    println!("{refs} references, {} with another id", wrong.len());
+    for line in wrong.iter().take(20) {
+        println!("  {line}");
+    }
+    assert!(refs > 1000, "{refs} references");
+    assert!(wrong.is_empty());
+}

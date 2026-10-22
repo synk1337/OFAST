@@ -32,7 +32,31 @@ all — e.g. physics-only gibs).
 | `m_refLODGroupMasks[mesh]` | bit `L` set → mesh is used at LOD `L` |
 
 OFAST's default selection: meshes in the default groups and in the most detailed LOD. For the AK-47 that is
-`body_hd` (the legacy CS:GO body is mesh group 1).
+`body_hd` (the legacy CS:GO body is mesh group 1). An entity can choose other groups (`m_MeshGroupMask`, the same
+bit per group: [demo.md](demo.md#models)); `Model::meshes_in_groups` selects for any mask. Agents name their groups
+after what they switch: `defusekit_hidden` / `defusekit_visible`, `thirdperson_default` /
+`thirdperson_hide_default_gloves` / `firstperson_*` (SAS default 5 = kit hidden + third-person body).
+
+## Attachments
+
+Named points that follow bones, in each mesh's `MDAT` → `m_attachments` (every LOD repeats them;
+`Model::attachment`): a list of `{ key, value }`, the value holding `m_influenceNames`, `m_vInfluenceOffsets`
+(inches, bone frame), `m_vInfluenceRotations` (quaternions `x, y, z, w`), `m_influenceWeights` — three slots, of
+which the first `m_nInfluences` count — and `m_bIgnoreRotation`. Every player and weapon attachment seen has one
+influence of weight 1 (`Attachment::on_bone`). What players use them for:
+
+| Model | Attachment | Bone | Use |
+|---|---|---|---|
+| agent | `weapon` | `wpn`, no offset | the weapon in hand |
+| agent | `primary` / `primary_smg` | `jiggle_primary` / `spine_3` | slung rifles / SMGs |
+| agent | `pistol`, `knife` | `leg_upper_R`, `leg_upper_L` | thigh holsters |
+| agent | `grenade0` – `grenade4`, `defusekit`, `eholster` | `spine_0`, `pelvis` | the vest, the Zeus |
+| agent | `c4` | `spine_3` | the bomb on the back |
+| weapon | `weapon_holster_center` | `weapon_offset` | the point that goes onto a holster |
+| weapon | `muzzle_flash`, `shell_eject`, `stattrak`, `nametag`, `keychain` (+ `_legacy`) | `weapon_offset` | effects and decorations |
+
+Weapon models have a root bone `weapon` (with `weapon_offset` on it, then `bolt`, `clip`, `trigger`, and the hand
+guide `ag1_hand_r`); how weapons sit on agents is in [animation.md](animation.md#weapons-in-hand-and-holstered).
 
 ## `CTRL → embedded_meshes[]` (current layout)
 
@@ -105,6 +129,16 @@ slots set to 0, weights written as normalized bytes. Mesh nodes that share a bon
 clashing node names). Checked on `ctm_sas` in Unreal (2026-10-18): one Skeleton with 94 bones, pelvis 108.8 cm and
 head 179.8 cm above the feet, hands ±53.2 cm to the sides, every vertex weight sum 255; screenshot in
 `test-data/shots/agents/`. `tm_phoenix` (86 bones) and the AK-47 world model (7 bones) export skinned too.
+
+**Characters** (`export_character`): an agent with other models merged into its skeleton, one glTF. Glove models are
+skinned by bone name (each glove bone onto the agent bone of the same name, else its nearest ancestor's): each of
+the 12 glove models shares 52 bones with every one of CS2's 80 agent models, and their bind poses agree to 0.003 inch
+and 0.8° (the worst, on a twist bone), so the vertices need no rebinding and the agent's inverse bind matrices serve
+(`attachments_and_glove_skeletons_fit_the_agents` in `tests/cs2_model.rs`; it also checks that every agent's
+`weapon` attachment is `wpn` with no offset and that no attachment weapons use follows positions only). Weapons are written rigid on
+bones added to the skeleton (`ofast_weapon_<n>`), their vertices moved into those bones' bind frames. Unreal's
+glTF pipeline makes one skeletal mesh per glTF mesh by default; `import_demo.py` imports characters with a copy that
+combines a skeleton's meshes (`combine_skeletal_meshes_behavior = BY_SKELETON`), so the actor shows them all.
 
 ## Meshopt buffers
 

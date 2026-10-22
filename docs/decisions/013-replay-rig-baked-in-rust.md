@@ -1,8 +1,9 @@
 # 013 — Players: skinned agents, and their animation baked in Rust from demo data
 
 - **Date:** 2026-10-18
-- **Status:** accepted (M4.1 – M4.4 done: skinned agents, clip decoder, rig inputs, baked locomotion read from
-  CS2's own locomotion graph; weapon layers, aim, per-player agents and ragdolls to come)
+- **Status:** accepted (M4.1 – M4.5 done: skinned agents, clip decoder, rig inputs, baked locomotion read from
+  CS2's own locomotion graph, weapon layers and aim, per-player agents with their weapons baked as bones; the rest
+  of the graph and ragdolls to come)
 
 ## Context
 
@@ -64,4 +65,11 @@ M4 replaces the proxies with CS2's own agents, animated. Four research passes (2
   from the side).
 - Changing the rig means re-exporting the round; Unreal assets stay simple (one AnimSequence per player and round).
 - Materials: agents use CS2's character shader, not handled yet; they render too glossy (M4 follow-up).
-- Glove skins need bone-merging onto the agent skeleton; Unreal must see one root bone per skin.
+- Glove skins need bone-merging onto the agent skeleton; Unreal must see one root bone per skin. Done in M4.5 by
+  merging the glove meshes into the agent's own skin by bone name (on all 80 agent models their bind poses agree to
+  0.003 inch and 0.8°).
+- Weapons follow the same design (M4.5): instead of weapon actors attached to sockets in Unreal, each weapon a
+  look's players carry is a bone of the agent with the weapon rigidly on it, placed per frame in Rust (hand,
+  holster, or scaled to 0). No conversion of attachment frames into Unreal's bone axes is needed, scrubbing stays
+  exact, and the sequence needs no visibility tracks per weapon; the cost is that each look's skeletal mesh carries
+  all its players' weapons (19 – 27 MB per look for a 76-second round).

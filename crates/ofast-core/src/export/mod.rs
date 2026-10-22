@@ -6,10 +6,13 @@
 //! - `environment` (internal): CS2's `csgo_environment(_blend)` materials, baked for glTF.
 //! - `tint` (internal): the model tints of CS2's prop shaders, masked by `g_tTintMask`.
 //! - [`replay`]: one round of a demo (players' movement, kills, milestones) for Unreal's Level Sequence.
-//! - [`players`]: the players of a round as animated CS2 agents (one glTF per team).
+//! - [`players`]: the players of a round as animated CS2 agents, with their weapons in hand and holstered (one glTF
+//!   per agent look).
+//! - [`loadout`]: where each weapon a player carries sits on the agent, frame by frame.
 
 mod environment;
 pub mod gltf;
+pub mod loadout;
 pub mod map;
 pub mod players;
 pub mod replay;
@@ -72,4 +75,7 @@ pub enum ExportError {
         /// What went wrong.
         source: crate::anim::AnimError,
     },
+    /// A character (agent with weapons and gloves) could not be put together.
+    #[error("character: {0}")]
+    Character(String),
 }

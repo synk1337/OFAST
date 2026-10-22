@@ -68,7 +68,50 @@ pub struct PlayerSample {
     pub alive: bool,
     /// What the player's animation follows: movement, crouch, weapon.
     pub rig: RigInputs,
+    /// The agent model, its mesh groups and the gloves.
+    pub appearance: Appearance,
+    /// Every weapon the player carries, the one in hand included (`m_pWeaponServices.m_hMyWeapons`), in the order
+    /// the game lists them.
+    pub weapons: Vec<CarriedWeapon>,
 }
+
+/// What a player looks like. Models are named by resource id ([`crate::resource::resource_id`] of the `.vmdl`
+/// path), as entities send them; 0 = not sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Appearance {
+    /// The agent (`CBodyComponent` → `m_skeletonInstance.m_modelState.m_hModel`), e.g. the id of
+    /// `agents/models/ctm_sas/ctm_sas.vmdl`.
+    pub model: u64,
+    /// The model's mesh groups shown, one bit per group (`m_MeshGroupMask`). On agents: the defuse kit hidden or
+    /// shown, the third-person body with or without its own gloves (`docs/formats/demo.md`, "Models").
+    pub mesh_groups: u64,
+    /// Item definition index of the gloves (`m_EconGloves.m_iItemDefinitionIndex`); 0 = the agent's own.
+    pub gloves: u32,
+}
+
+/// A weapon a player carries: in hand, holstered or slung.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CarriedWeapon {
+    /// The weapon's entity index; [`ActiveWeapon::entity`] names the one in hand.
+    pub entity: u32,
+    /// Item definition index (7 = AK-47, …).
+    pub item: u32,
+    /// The weapon's world model (resource id): a knife skin's own model, for example.
+    pub model: u64,
+    /// The world model's mesh groups shown: on guns bit 0 is the current model, bit 1 the CS:GO-era one that older
+    /// skins are painted for.
+    pub mesh_groups: u64,
+    /// How many of it the player has: 1, except flashbangs, of which a player can carry two in one entity (the
+    /// count is the pawn's `m_pWeaponServices.m_iAmmo[FLASHBANG_AMMO]`).
+    pub count: u32,
+}
+
+/// Index of the flashbangs in the pawn's ammo counts (`m_pWeaponServices.m_iAmmo`). Observed on the local match
+/// demo, from the grenades each player carried: 13 HE, 14 flashbangs (2 with one flashbang entity), 15 smoke,
+/// 16 molotov or incendiary.
+pub const FLASHBANG_AMMO: i32 = 14;
+/// Item definition index of the flashbang.
+pub const FLASHBANG_ITEM: u32 = 43;
 
 /// What CS2's player animation is driven by at one tick, besides position and view: the inputs of OFAST's replay
 /// rig (`docs/decisions/013-replay-rig-baked-in-rust.md`). "Rig inputs" in `docs/formats/demo.md` lists the fields
@@ -106,6 +149,8 @@ pub struct RigInputs {
 /// The weapon a player holds at one tick.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveWeapon {
+    /// The weapon's entity index (its entry in [`PlayerSample::weapons`]).
+    pub entity: u32,
     /// Item definition index (`m_AttributeManager.m_Item.m_iItemDefinitionIndex`), the game's weapon id: 7 = AK-47,
     /// 16 = M4A4, 60 = M4A1-S, 42 = CT knife, 59 = T knife, 49 = C4 (`docs/formats/demo.md`, "Rig inputs").
     pub item: u32,
@@ -209,6 +254,37 @@ struct Paths {
     warmup_period: FieldPath,
     game_phase: FieldPath,
     rig: RigPaths,
+    appearance: AppearancePaths,
+}
+
+/// The model's resource id and mesh groups, at the same place in every class with a body.
+const MODEL_FIELD: &str = "CBodyComponent.m_skeletonInstance.m_modelState.m_hModel";
+const MESH_GROUPS_FIELD: &str = "CBodyComponent.m_skeletonInstance.m_modelState.m_MeshGroupMask";
+
+/// Field paths of a pawn's appearance and weapon list. Each is optional, like the rig's.
+#[derive(Debug, Default)]
+struct AppearancePaths {
+    model: Option<FieldPath>,
+    mesh_groups: Option<FieldPath>,
+    gloves: Option<FieldPath>,
+    /// The weapon handle array (its length; the handles one level deeper).
+    weapons: Option<FieldPath>,
+    /// The ammo counts by ammo type (a fixed array: element `i` one level deeper).
+    ammo: Option<FieldPath>,
+}
+
+impl AppearancePaths {
+    fn find(serializers: &Serializers) -> Self {
+        let pawn = serializers.by_name("CCSPlayerPawn");
+        let path = |field: &str| pawn.and_then(|s| serializers.path_of(s, field));
+        Self {
+            model: path(MODEL_FIELD),
+            mesh_groups: path(MESH_GROUPS_FIELD),
+            gloves: path("m_EconGloves.m_iItemDefinitionIndex"),
+            weapons: path("m_pWeaponServices.m_hMyWeapons"),
+            ammo: path("m_pWeaponServices.m_iAmmo"),
+        }
+    }
 }
 
 /// Field paths of the rig inputs. Each is optional: a missing one reads as its default.
@@ -236,6 +312,8 @@ struct WeaponPaths {
     item: FieldPath,
     anim_state: Option<FieldPath>,
     reloading: Option<FieldPath>,
+    model: Option<FieldPath>,
+    mesh_groups: Option<FieldPath>,
 }
 
 impl RigPaths {
@@ -252,6 +330,8 @@ impl RigPaths {
                     item: field("m_AttributeManager.m_Item.m_iItemDefinitionIndex")?,
                     anim_state: field("m_iWeaponGameplayAnimState"),
                     reloading: field("m_bInReload"),
+                    model: field(MODEL_FIELD),
+                    mesh_groups: field(MESH_GROUPS_FIELD),
                 };
                 Some((class.id, paths))
             })
@@ -317,6 +397,7 @@ impl Paths {
             warmup_period: path(rules, "m_pGameRules.m_bWarmupPeriod")?,
             game_phase: path(rules, "m_pGameRules.m_gamePhase")?,
             rig: RigPaths::find(serializers, classes),
+            appearance: AppearancePaths::find(serializers),
         })
     }
 }
@@ -577,9 +658,69 @@ fn read_players(parser: &DemoParser<'_>, paths: &Paths) -> Vec<PlayerSample> {
                 .unwrap_or(0)
                 == 0,
             rig: read_rig(parser, &paths.rig, pawn),
+            appearance: read_appearance(&paths.appearance, pawn),
+            weapons: read_weapons(parser, paths, pawn),
         });
     }
     players
+}
+
+/// The pawn's model, mesh groups and gloves (0 where not sent).
+fn read_appearance(paths: &AppearancePaths, pawn: &Entity) -> Appearance {
+    let number = |path: &Option<FieldPath>| {
+        path.as_ref()
+            .and_then(|p| pawn.get(p))
+            .and_then(FieldValue::as_u64)
+            .unwrap_or(0)
+    };
+    Appearance {
+        model: number(&paths.model),
+        mesh_groups: number(&paths.mesh_groups),
+        gloves: number(&paths.gloves) as u32,
+    }
+}
+
+/// The weapons in the pawn's `m_hMyWeapons` whose entities exist and have an item definition index.
+fn read_weapons(parser: &DemoParser<'_>, paths: &Paths, pawn: &Entity) -> Vec<CarriedWeapon> {
+    let Some(array) = &paths.appearance.weapons else {
+        return Vec::new();
+    };
+    let count = pawn.get(array).and_then(FieldValue::as_u64).unwrap_or(0);
+    let flashbangs = paths
+        .appearance
+        .ammo
+        .as_ref()
+        .and_then(|p| p.child(FLASHBANG_AMMO))
+        .and_then(|p| pawn.get(&p))
+        .and_then(FieldValue::as_u64)
+        .unwrap_or(1)
+        .clamp(1, 2) as u32;
+    let entities = parser.entities();
+    (0..count.min(64) as i32)
+        .filter_map(|k| {
+            let handle = pawn.get(&array.child(k)?)?.as_u64()?;
+            let weapon = entities.get(handle_to_index(handle)?)?;
+            let fields = paths.rig.weapons.get(&weapon.class_id)?;
+            let number = |path: &Option<FieldPath>| {
+                path.as_ref()
+                    .and_then(|p| weapon.get(p))
+                    .and_then(FieldValue::as_u64)
+                    .unwrap_or(0)
+            };
+            let item = weapon.get(&fields.item)?.as_u64()? as u32;
+            Some(CarriedWeapon {
+                entity: weapon.index,
+                item,
+                model: number(&fields.model),
+                mesh_groups: number(&fields.mesh_groups),
+                count: if item == FLASHBANG_ITEM {
+                    flashbangs
+                } else {
+                    1
+                },
+            })
+        })
+        .collect()
 }
 
 /// The rig inputs of one pawn (fields the server never sent read as their defaults: 0, false, none).
@@ -603,6 +744,7 @@ fn read_rig(parser: &DemoParser<'_>, paths: &RigPaths, pawn: &Entity) -> RigInpu
         .and_then(|w| {
             let fields = paths.weapons.get(&w.class_id)?;
             Some(ActiveWeapon {
+                entity: w.index,
                 item: w.get(&fields.item)?.as_u64()? as u32,
                 class: parser.class_name(w.class_id)?.to_owned(),
                 anim_state: fields
@@ -720,6 +862,15 @@ mod tests {
                     noscale("m_vecX"),
                     noscale("m_vecY"),
                     noscale("m_vecZ"),
+                    // The model (fields 6 – 7), flattened under their send node like CS2 sends them.
+                    F {
+                        send_node: Some("m_skeletonInstance.m_modelState"),
+                        ..f("m_hModel", "CStrongHandle< InfoForResourceTypeCModel >")
+                    },
+                    F {
+                        send_node: Some("m_skeletonInstance.m_modelState"),
+                        ..f("m_MeshGroupMask", "uint64")
+                    },
                 ],
             ),
             // The pawn's services: declared before the pawn that points to them.
@@ -732,7 +883,13 @@ mod tests {
             ),
             (
                 "CCSPlayer_WeaponServices",
-                vec![f("m_hActiveWeapon", "CHandle< CBasePlayerWeapon >")],
+                vec![
+                    f("m_hActiveWeapon", "CHandle< CBasePlayerWeapon >"),
+                    f(
+                        "m_hMyWeapons",
+                        "CNetworkUtlVectorBase< CHandle< CBasePlayerWeapon > >",
+                    ),
+                ],
             ),
             (
                 "CCSPlayerPawn",
@@ -761,6 +918,11 @@ mod tests {
                         serializer: Some("CCSPlayer_WeaponServices"),
                         ..f("m_pWeaponServices", "CPlayer_WeaponServices*")
                     },
+                    // Field 10: the gloves.
+                    F {
+                        send_node: Some("m_EconGloves"),
+                        ..f("m_iItemDefinitionIndex", "uint16")
+                    },
                 ],
             ),
             (
@@ -773,6 +935,10 @@ mod tests {
                     },
                     f("m_iWeaponGameplayAnimState", "WeaponGameplayAnimState"),
                     f("m_bInReload", "bool"),
+                    F {
+                        serializer: Some("CBodyComponentBaseAnimGraph"),
+                        ..f("CBodyComponent", "CBodyComponent")
+                    },
                 ],
             ),
             (
@@ -884,10 +1050,25 @@ mod tests {
             .varint_signed(rounds);
     }
 
+    /// Mesh groups of the synthetic agent (defuse kit hidden, third-person body) and its gloves' item.
+    const AGENT_GROUPS: u64 = 5;
+    const GLOVES: u64 = 5030;
+    /// Mesh groups of the synthetic AK-47 (its CS:GO-era model).
+    const AK_GROUPS: u64 = 2;
+
+    fn agent_model() -> u64 {
+        crate::resource::resource_id("agents/models/ctm_sas/ctm_sas.vmdl")
+    }
+
+    fn ak_model() -> u64 {
+        crate::resource::resource_id("weapons/models/ak47/weapon_rif_ak47.vmdl")
+    }
+
     /// Pawn position (cell 32 on each axis, so world position = offset), eye angles (20-bit precise angles) and the
     /// view offset's z (12 bits, value = (raw + 1) / 64). The view offset's x and y are never sent, so they keep
     /// their default 0 (CS2's are 0 too). With `rig`, also the rig inputs: on the ground, walking, half crouched,
-    /// last jump at game tick 1011, holding the AK-47 entity.
+    /// last jump at game tick 1011, holding the AK-47 entity; and the appearance: the SAS agent, its mesh groups,
+    /// gloves, and the AK-47 as the only weapon carried.
     fn pawn_fields(
         w: &mut BitWriter,
         with_pointer: bool,
@@ -901,9 +1082,24 @@ mod tests {
         if with_pointer {
             paths.extend([&[0][..], &[0, 0], &[0, 1], &[0, 2]]);
         }
-        paths.extend([&[0, 3][..], &[0, 4], &[0, 5], &[1], &[5]]);
+        paths.extend([&[0, 3][..], &[0, 4], &[0, 5]]);
         if rig {
-            paths.extend([&[6][..], &[7], &[8], &[8, 0], &[8, 1], &[9], &[9, 0]]);
+            paths.extend([&[0, 6][..], &[0, 7]]);
+        }
+        paths.extend([&[1][..], &[5]]);
+        if rig {
+            paths.extend([
+                &[6][..],
+                &[7],
+                &[8],
+                &[8, 0],
+                &[8, 1],
+                &[9],
+                &[9, 0],
+                &[9, 1],
+                &[9, 1, 0],
+                &[10],
+            ]);
         }
         write_paths(w, &paths);
         if with_pointer {
@@ -912,6 +1108,9 @@ mod tests {
         }
         for v in pos {
             w.bits(u64::from(v.to_bits()), 32);
+        }
+        if rig {
+            w.varint(agent_model()).varint(AGENT_GROUPS);
         }
         w.bool(true)
             .bool(true)
@@ -926,7 +1125,10 @@ mod tests {
                 .bits(u64::from(0.5f32.to_bits()), 32) // m_flDuckAmount
                 .varint_signed(1011) // m_nLastJumpTick: a signed (zigzag) varint
                 .bool(true) // m_pWeaponServices present
-                .varint((3 << 14) | u64::from(WEAPON)); // m_hActiveWeapon: serial 3, entity WEAPON
+                .varint((3 << 14) | u64::from(WEAPON)) // m_hActiveWeapon: serial 3, entity WEAPON
+                .varint(1) // m_hMyWeapons: one weapon…
+                .varint((3 << 14) | u64::from(WEAPON)) // … the same AK-47
+                .varint(GLOVES); // m_EconGloves.m_iItemDefinitionIndex
         }
     }
 
@@ -987,8 +1189,13 @@ mod tests {
             false,
         );
         create_header(&mut w, i64::from(PAWN), WEAPON, WEAPON_CLASS);
-        write_paths(&mut w, &[&[0], &[1], &[2]]);
-        w.varint(7).varint(50).bool(true);
+        write_paths(&mut w, &[&[0], &[1], &[2], &[3], &[3, 6], &[3, 7]]);
+        w.varint(7)
+            .varint(50)
+            .bool(true)
+            .bool(true) // CBodyComponent present
+            .varint(ak_model())
+            .varint(AK_GROUPS);
         // The controller's team (3) only comes from its class baseline, which this same packet adds to the
         // `instancebaseline` table *after* the entity message: string tables must be applied first.
         let mut baseline = BitWriter::default();
@@ -1128,6 +1335,7 @@ mod tests {
                 walking: true,
                 last_jump_tick: Some(11),
                 weapon: Some(ActiveWeapon {
+                    entity: WEAPON,
                     item: 7,
                     class: "CAK47".into(),
                     anim_state: 50,
@@ -1135,6 +1343,30 @@ mod tests {
                 }),
                 ..RigInputs::default()
             }
+        );
+        // Appearance and weapons: nothing until sent, then the agent and the AK-47 by resource id.
+        assert_eq!(
+            track.samples[1].players[0].appearance,
+            Appearance::default()
+        );
+        assert!(track.samples[1].players[0].weapons.is_empty());
+        assert_eq!(
+            last.appearance,
+            Appearance {
+                model: agent_model(),
+                mesh_groups: AGENT_GROUPS,
+                gloves: GLOVES as u32,
+            }
+        );
+        assert_eq!(
+            last.weapons,
+            [CarriedWeapon {
+                entity: WEAPON,
+                item: 7,
+                model: ak_model(),
+                mesh_groups: AK_GROUPS,
+                count: 1,
+            }]
         );
 
         let rounds = list_rounds(&data).unwrap();

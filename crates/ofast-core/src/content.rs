@@ -7,7 +7,10 @@
 //!
 //! Paths are archive-relative (`materials/de_mirage/doors/door_b.vmat_c`); backslashes are accepted.
 
+use std::collections::HashMap;
+
 use crate::game::Cs2Install;
+use crate::resource::resource_id;
 use crate::vpk::{Vpk, VpkError};
 
 /// An ordered list of archives searched front to back.
@@ -67,6 +70,23 @@ impl Content {
             }
         }
         Err(VpkError::NotFound(path.to_owned()))
+    }
+
+    /// Every compiled resource of type `extension` (`vmdl`, `vmat`, …) by its resource id
+    /// ([`crate::resource::resource_id`]), as entities name them (a demo's `m_hModel`): id → path without `_c`.
+    /// Archives earlier in the search path win.
+    pub fn resource_paths(&self, extension: &str) -> HashMap<u64, String> {
+        let suffix = format!(".{extension}_c");
+        let mut paths = HashMap::new();
+        for vpk in self.archives.iter().rev() {
+            for entry in vpk.entries() {
+                if let Some(stem) = entry.path().strip_suffix(&suffix) {
+                    let path = format!("{stem}.{extension}");
+                    paths.insert(resource_id(&path), path);
+                }
+            }
+        }
+        paths
     }
 
     /// Reads a compiled resource given the path stored inside other resources, which omits the `_c` suffix and may

@@ -148,3 +148,136 @@ fn sampled_models_decode_completely() {
     }
     assert!(failures.is_empty(), "{} failures", failures.len());
 }
+
+/// Agents carry their weapons on attachments: `weapon` on the `wpn` bone with no offset, the holsters on body bones.
+/// Weapons carry a `weapon` root bone and a `weapon_holster_center` attachment (`export::loadout`). Glove models are
+/// bone-merged onto agents by name, so their bones' bind poses must be the agents' — checked here for every glove
+/// model against both default agents (worst gap printed).
+#[test]
+fn attachments_and_glove_skeletons_fit_the_agents() {
+    use ofast_core::export::loadout::{AgentMounts, WeaponFrames};
+    let vpk = vpk();
+    let model = |path: &str| {
+        let data = vpk
+            .read_path(path)
+            .unwrap_or_else(|e| panic!("{path}: {e}"));
+        Model::parse(&Resource::parse(&data).unwrap()).unwrap_or_else(|e| panic!("{path}: {e}"))
+    };
+    // Every agent model: those with the `weapon` attachment under agents/models (not the shared parts).
+    let agents: Vec<(String, Model)> = vpk
+        .entries()
+        .iter()
+        .map(|e| e.path().to_owned())
+        .filter(|p| {
+            p.starts_with("agents/models/") && !p.contains("/shared/") && p.ends_with(".vmdl_c")
+        })
+        .map(|p| {
+            let m = model(&p);
+            (p, m)
+        })
+        .filter(|(_, m)| m.attachment("weapon").is_some())
+        .collect();
+    println!("{} agent models", agents.len());
+    assert!(agents.len() >= 20, "{} agents", agents.len());
+    for (path, agent) in &agents {
+        for name in [
+            "weapon",
+            "primary",
+            "primary_smg",
+            "pistol",
+            "knife",
+            "c4",
+            "grenade0",
+            "grenade1",
+            "grenade2",
+            "grenade3",
+            "grenade4",
+            "eholster",
+        ] {
+            if let Some(a) = agent.attachment(name) {
+                assert!(!a.ignore_rotation, "{path} {name}: follows positions only");
+            }
+        }
+        let mounts = AgentMounts::of(agent);
+        let (bone, offset) = mounts.hand.expect("weapon attachment");
+        assert_eq!(agent.skeleton.bones[bone].name, "wpn", "{path}");
+        assert!(
+            offset
+                .iter()
+                .flatten()
+                .zip([1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+                .all(|(a, b)| (a - b).abs() < 1e-5),
+            "{offset:?}"
+        );
+        for name in ["primary", "pistol", "knife", "c4", "grenade0", "grenade4"] {
+            assert!(mounts.holsters.contains_key(name), "{path} {name}");
+        }
+    }
+    for weapon in [
+        "weapons/models/ak47/weapon_rif_ak47.vmdl_c",
+        "weapons/models/glock18/weapon_pist_glock18.vmdl_c",
+        "weapons/models/knife/knife_bowie/weapon_knife_bowie.vmdl_c",
+        "weapons/models/grenade/hegrenade/weapon_hegrenade.vmdl_c",
+        "weapons/models/c4/weapon_c4.vmdl_c",
+    ] {
+        let frames = WeaponFrames::of(&model(weapon)).expect("weapon bone");
+        assert!(frames.holster_center.is_some(), "{weapon}: holster centre");
+    }
+    let gloves: Vec<String> = vpk
+        .entries()
+        .iter()
+        .map(|e| e.path().to_owned())
+        .filter(|p| p.starts_with("agents/models/shared/arms/glove_") && p.ends_with(".vmdl_c"))
+        .collect();
+    assert!(gloves.len() >= 10, "{gloves:?}");
+    // Worst gap over all gloves and agents: distance (inches) and angle (degrees) between shared bones' bind poses.
+    let (mut worst_gap, mut worst_angle) = ((0.0f32, String::new()), (0.0f32, String::new()));
+    for glove in &gloves {
+        let glove_model = model(glove);
+        let glove_world = glove_model.skeleton.world_transforms();
+        for (path, agent) in &agents {
+            let agent_world = agent.skeleton.world_transforms();
+            let mut shared = 0;
+            for (i, bone) in glove_model.skeleton.bones.iter().enumerate() {
+                let Some(j) = agent.skeleton.find(&bone.name) else {
+                    continue;
+                };
+                shared += 1;
+                let (g, a) = (&glove_world[i], &agent_world[j]);
+                let gap = (0..3)
+                    .map(|k| (g[k][3] - a[k][3]).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                // Angle of a⁻¹·g: trace of aᵀ·g = 1 + 2 cos θ.
+                let trace: f32 = (0..3)
+                    .flat_map(|r| (0..3).map(move |c| (r, c)))
+                    .filter(|(r, c)| r == c)
+                    .map(|(c, _)| (0..3).map(|k| a[k][c] * g[k][c]).sum::<f32>())
+                    .sum();
+                let angle = ((trace - 1.0) / 2.0).clamp(-1.0, 1.0).acos().to_degrees();
+                let at = format!("{glove} on {path} at {}", bone.name);
+                if gap > worst_gap.0 {
+                    worst_gap = (gap, at.clone());
+                }
+                if angle > worst_angle.0 {
+                    worst_angle = (angle, at);
+                }
+            }
+            assert!(shared > 10, "{glove} on {path}: shares {shared} bones");
+        }
+    }
+    println!(
+        "{} gloves on {} agents: worst bind gap {:.3} in ({}), worst angle {:.2}° ({})",
+        gloves.len(),
+        agents.len(),
+        worst_gap.0,
+        worst_gap.1,
+        worst_angle.0,
+        worst_angle.1
+    );
+    assert!(worst_gap.0 < 0.05, "bind positions differ: {worst_gap:?}");
+    assert!(
+        worst_angle.0 < 1.0,
+        "bind rotations differ: {worst_angle:?}"
+    );
+}

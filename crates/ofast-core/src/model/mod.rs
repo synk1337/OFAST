@@ -197,6 +197,52 @@ pub struct Mesh {
     /// Bone influences per vertex the compiler kept (`m_skeleton.m_nBoneWeightCount`, 1 – 4 on agents; 0 when the
     /// mesh is not skinned). With 1, CS2 stores no weights: every vertex follows its first bone index fully.
     pub bone_weight_count: u32,
+    /// Named points on the skeleton (`m_attachments`): where a player's weapons sit, a weapon's muzzle, …
+    pub attachments: Vec<Attachment>,
+}
+
+/// A named point that follows bones: `weapon` on an agent's `wpn` bone, `pistol` on its right thigh,
+/// `weapon_holster_center` on a weapon, `muzzle_flash`, …
+#[derive(Debug, Clone, PartialEq)]
+pub struct Attachment {
+    /// Attachment name.
+    pub name: String,
+    /// The bones it follows, each with its offset from that bone (1 on every CS2 player and weapon attachment).
+    pub influences: Vec<Influence>,
+    /// Follows the bones' positions only (`m_bIgnoreRotation`).
+    pub ignore_rotation: bool,
+}
+
+/// One bone an [`Attachment`] follows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Influence {
+    /// Bone name, as the model's skeleton spells it or in lower case (`hand_r` for `hand_R`).
+    pub bone: String,
+    /// Translation from the bone, inches, bone frame.
+    pub offset: [f32; 3],
+    /// Rotation from the bone, `(x, y, z, w)`.
+    pub rotation: [f32; 4],
+    /// Share of this bone (the weights sum to 1).
+    pub weight: f32,
+}
+
+impl Attachment {
+    /// The attachment's frame relative to its bone and that bone's index in `skeleton`, for the single-bone
+    /// attachments CS2 players and weapons use. `None` when it follows several bones, a bone the skeleton lacks, or
+    /// only the bone's position ([`Self::ignore_rotation`]: no fixed offset from the bone describes that; none of
+    /// the player and weapon attachments OFAST uses does it, `tests/cs2_model.rs` checks).
+    pub fn on_bone(&self, skeleton: &Skeleton) -> Option<(usize, Affine)> {
+        let [influence] = self.influences.as_slice() else {
+            return None;
+        };
+        if self.ignore_rotation {
+            return None;
+        }
+        Some((
+            skeleton.find(&influence.bone)?,
+            affine(influence.rotation, influence.offset),
+        ))
+    }
 }
 
 impl Mesh {
@@ -313,6 +359,20 @@ impl Model {
 
     /// Meshes shown by default: in the default mesh groups and in the most detailed LOD.
     pub fn default_meshes(&self) -> impl Iterator<Item = &Mesh> {
+        self.meshes_in_groups(self.default_mesh_group_mask)
+    }
+
+    /// The attachment named `name` (in the first mesh that has it: every LOD repeats them).
+    pub fn attachment(&self, name: &str) -> Option<&Attachment> {
+        self.meshes
+            .iter()
+            .flat_map(|m| &m.attachments)
+            .find(|a| a.name == name)
+    }
+
+    /// Meshes shown with the mesh groups `mask` (bit per [`Self::mesh_groups`] entry, as an entity's
+    /// `m_MeshGroupMask` names them), in the most detailed LOD.
+    pub fn meshes_in_groups(&self, mask: u64) -> impl Iterator<Item = &Mesh> {
         let lowest_lod = self
             .lod_masks
             .iter()
@@ -322,7 +382,7 @@ impl Model {
             let in_group = self
                 .mesh_group_masks
                 .get(mesh.mesh_index)
-                .is_none_or(|mask| mask & self.default_mesh_group_mask != 0);
+                .is_none_or(|groups| groups & mask != 0);
             let in_lod = self
                 .lod_masks
                 .get(mesh.mesh_index)
@@ -428,6 +488,7 @@ fn read_embedded_mesh(resource: &Resource<'_>, entry: &Value) -> Result<Mesh, Mo
 
     Ok(Mesh {
         draw_calls: read_draw_calls(&mesh_data),
+        attachments: read_attachments(&mesh_data),
         bone_weight_count: mesh_data
             .get("m_skeleton")
             .and_then(|s| s.get("m_nBoneWeightCount"))
@@ -439,6 +500,55 @@ fn read_embedded_mesh(resource: &Resource<'_>, entry: &Value) -> Result<Mesh, Mo
         vertex_buffers,
         index_buffers,
     })
+}
+
+/// The attachments of a mesh (`MDAT` → `m_attachments`: a list of `{ key, value }`, the value holding up to three
+/// influences of which the first `m_nInfluences` count).
+fn read_attachments(mesh_data: &Value) -> Vec<Attachment> {
+    let numbers = |v: Option<&Value>| -> Vec<f32> {
+        let mut out = Vec::new();
+        if let Some(v) = v {
+            crate::map::numbers(v, &mut out);
+        }
+        out
+    };
+    mesh_data
+        .get("m_attachments")
+        .and_then(Value::as_array)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|entry| {
+            let value = entry.get("value")?;
+            let name = value.get("m_name").and_then(Value::as_str)?.to_owned();
+            let bones = strings(value.get("m_influenceNames"));
+            let offsets = numbers(value.get("m_vInfluenceOffsets"));
+            let rotations = numbers(value.get("m_vInfluenceRotations"));
+            let weights = numbers(value.get("m_influenceWeights"));
+            let count = value
+                .get("m_nInfluences")
+                .and_then(Value::as_i64)
+                .unwrap_or(1)
+                .clamp(0, bones.len() as i64) as usize;
+            let influences = (0..count)
+                .map(|i| Influence {
+                    bone: bones[i].clone(),
+                    offset: std::array::from_fn(|k| offsets.get(3 * i + k).copied().unwrap_or(0.0)),
+                    rotation: normalize_quat(std::array::from_fn(|k| {
+                        rotations
+                            .get(4 * i + k)
+                            .copied()
+                            .unwrap_or(if k == 3 { 1.0 } else { 0.0 })
+                    })),
+                    weight: weights.get(i).copied().unwrap_or(1.0),
+                })
+                .collect();
+            Some(Attachment {
+                name,
+                influences,
+                ignore_rotation: flag(value, &["m_bIgnoreRotation"]),
+            })
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

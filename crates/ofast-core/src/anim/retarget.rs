@@ -69,7 +69,11 @@ impl Retargeter {
     /// The model's bones relative to their parents for a clip pose: translation (inches) and rotation, ready to
     /// key on the model's own bones.
     pub fn locals(&self, pose: &[Transform]) -> Vec<([f32; 3], [f32; 4])> {
-        let world = self.world(pose);
+        self.locals_of(&self.world(pose))
+    }
+
+    /// [`Self::locals`] from model-space poses already computed with [`Self::world`].
+    pub fn locals_of(&self, world: &[Affine]) -> Vec<([f32; 3], [f32; 4])> {
         (0..self.parents.len())
             .map(|m| {
                 let local = match self.parents[m] {

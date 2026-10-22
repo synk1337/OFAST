@@ -304,6 +304,7 @@ mod tests {
                 duck_amount: 0.25,
                 last_jump_tick: Some(if x < 1.0 { 50 } else { 101 }),
                 weapon: Some(ActiveWeapon {
+                    entity: 300,
                     item: 7,
                     class: "CAK47".into(),
                     anim_state: 50,
@@ -325,6 +326,8 @@ mod tests {
             yaw: -90.0,
             alive,
             rig,
+            appearance: Default::default(),
+            weapons: Vec::new(),
         }
     }
 

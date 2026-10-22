@@ -329,8 +329,9 @@ fn rig_inputs_match_movement_and_demoparser2() {
     );
 }
 
-/// `export_players` on round 1: one glTF per team, each with an animation per player of that team, keyed every 1/30 s
-/// over the whole round.
+/// `export_players` on round 1: one glTF per agent look, listed in the manifest with its players, each with an
+/// animation per player keyed every 1/30 s over the whole round, and a skeleton of the agent's bones plus one bone
+/// per weapon listed (every player of a pistol round carries a knife and a pistol).
 #[test]
 fn players_export_one_animation_per_player() {
     use ofast_core::content::Content;
@@ -344,35 +345,199 @@ fn players_export_one_animation_per_player() {
     let track = track_round(&data, 1).expect("round 1");
     let out = std::env::temp_dir().join("ofast_players_test");
     let report = export_players(&content, &track, "demo", &out).expect("players export");
-    let teams: HashMap<u32, u32> = track
+    let players: HashSet<u32> = track
         .samples
         .iter()
         .flat_map(|s| &s.players)
-        .map(|p| (p.controller, p.team))
+        .map(|p| p.controller)
         .collect();
-    assert_eq!(report.players, teams.len());
+    assert_eq!(report.players, players.len());
     let seconds = (track.end_tick - track.start_tick) as f32 * track.tick_interval;
     assert_eq!(report.frames, (seconds * PLAYER_ANIMATION_FPS) as usize + 1);
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&report.manifest).expect("manifest reads"))
+            .expect("JSON");
+    let mut listed = HashSet::new();
+    for entry in manifest["agents"].as_array().expect("agents") {
+        let file = out.join(entry["file"].as_str().expect("file"));
+        let gltf: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).expect("glTF reads"))
+                .expect("JSON");
+        let animations = gltf["animations"].as_array().expect("animations");
+        let entry_players = entry["players"].as_array().expect("players");
+        let weapons: Vec<&str> = entry["weapons"]
+            .as_array()
+            .expect("weapons")
+            .iter()
+            .map(|w| w["model"].as_str().expect("model"))
+            .collect();
+        assert_eq!(animations.len(), entry_players.len(), "{}", file.display());
+        listed.extend(
+            entry_players
+                .iter()
+                .map(|p| p.as_u64().expect("controller") as u32),
+        );
+        let joints = gltf["skins"][0]["joints"].as_array().expect("joints").len();
+        let weapon_bones = gltf["nodes"]
+            .as_array()
+            .expect("nodes")
+            .iter()
+            .filter(|n| {
+                n["name"]
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("ofast_weapon_"))
+            })
+            .count();
+        assert_eq!(weapon_bones, weapons.len());
+        assert!(weapons.iter().any(|w| w.contains("/knife")), "{weapons:?}");
+        assert!(weapons.iter().any(|w| w.contains("_pist_")), "{weapons:?}");
+        println!(
+            "{}: {} animations, {joints} joints, weapons {:?}",
+            entry["file"],
+            animations.len(),
+            weapons
+                .iter()
+                .map(|w| w.rsplit('/').next().unwrap_or(w))
+                .collect::<Vec<_>>()
+        );
+    }
+    assert_eq!(listed, players);
+    for warning in &report.warnings {
+        println!("warning: {warning}");
+    }
+    std::fs::remove_dir_all(&out).ok();
+}
+
+/// Glove skins: round 1 with every player given the Bloodhound gloves (item 5027) and the agent's
+/// `thirdperson_hide_default_gloves` mesh group, as CS2 sends them for a player wearing glove skins (the local demo
+/// has none). Each look's file then holds the glove model's meshes, bone-merged onto the agent, and not the agent's
+/// own gloves.
+#[test]
+fn glove_skins_merge_onto_the_agent() {
+    use ofast_core::content::Content;
+    use ofast_core::export::players::export_players;
+    let Some((_, data)) = load() else { return };
+    let Some(install) = Cs2Install::locate() else {
+        println!("SKIPPED: no CS2 install");
+        return;
+    };
+    let content = Content::game(&install).expect("archives open");
+    let mut track = track_round(&data, 1).expect("round 1");
+    let models = content.resource_paths("vmdl");
+    let mut groups: HashMap<u64, u64> = HashMap::new();
+    for p in track.samples.iter_mut().flat_map(|s| &mut s.players) {
+        let mask = *groups.entry(p.appearance.model).or_insert_with(|| {
+            let path = &models[&p.appearance.model];
+            let model = ofast_core::export::gltf::load_model(&content, path).expect("agent");
+            let bit = |name: &str| {
+                model
+                    .mesh_groups
+                    .iter()
+                    .position(|g| g.ends_with(name))
+                    .map_or(0, |i| 1u64 << i)
+            };
+            bit("defusekit_hidden") | bit("thirdperson_hide_default_gloves")
+        });
+        p.appearance.gloves = 5027;
+        p.appearance.mesh_groups = mask;
+    }
+    let out = std::env::temp_dir().join("ofast_gloves_test");
+    let report = export_players(&content, &track, "demo", &out).expect("players export");
     for file in &report.files {
         let gltf: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(file).expect("glTF reads"))
                 .expect("JSON");
-        let animations = gltf["animations"].as_array().expect("animations");
-        let suffix = if file.to_string_lossy().ends_with("_ct.gltf") {
-            3
-        } else {
-            2
-        };
-        let expected = teams.values().filter(|&&t| t == suffix).count();
-        assert_eq!(animations.len(), expected, "{}", file.display());
-        println!(
-            "{}: {} animations, {} frames",
-            file.display(),
-            animations.len(),
-            report.frames
+        let meshes: Vec<&str> = gltf["nodes"]
+            .as_array()
+            .expect("nodes")
+            .iter()
+            .filter(|n| n.get("mesh").is_some())
+            .filter_map(|n| n["name"].as_str())
+            .collect();
+        println!("{}: {meshes:?}", file.display());
+        assert!(
+            meshes.iter().any(|m| m.starts_with("gloves_")),
+            "{meshes:?}"
         );
+        assert!(
+            !meshes.contains(&"thirdperson_default_gloves"),
+            "{meshes:?}"
+        );
+        assert!(file.to_string_lossy().ends_with("_glove_bloodhound.gltf"));
     }
     std::fs::remove_dir_all(&out).ok();
+}
+
+/// Every living player's agent and every weapon carried resolve to CS2 models by resource id (`m_hModel`), the
+/// weapon in hand is one of those carried, and in round 5 at tick 26508 "vg" runs with the CT knife out and an
+/// M4A4 slung, as CS2 shows him (`docs/formats/animation.md`, "Verified").
+#[test]
+fn models_resolve_by_resource_id() {
+    use ofast_core::content::Content;
+    let Some((demo_path, data)) = load() else {
+        return;
+    };
+    let Some(install) = Cs2Install::locate() else {
+        println!("SKIPPED: no CS2 install");
+        return;
+    };
+    let models = Content::game(&install)
+        .expect("archives open")
+        .resource_paths("vmdl");
+    let track = track_round(&data, 5).expect("round 5");
+    let (mut players, mut weapons) = (0usize, 0usize);
+    let mut agents: HashMap<&str, usize> = HashMap::new();
+    for p in track
+        .samples
+        .iter()
+        .flat_map(|s| &s.players)
+        .filter(|p| p.alive)
+    {
+        let agent = models
+            .get(&p.appearance.model)
+            .unwrap_or_else(|| panic!("{}: agent {:016x}", p.name, p.appearance.model));
+        assert!(agent.starts_with("agents/models/"), "{agent}");
+        *agents.entry(agent.as_str()).or_default() += 1;
+        players += 1;
+        for w in &p.weapons {
+            let path = models
+                .get(&w.model)
+                .unwrap_or_else(|| panic!("{}: weapon {} {:016x}", p.name, w.item, w.model));
+            assert!(path.starts_with("weapons/models/"), "{path}");
+            weapons += 1;
+        }
+        if let Some(active) = &p.rig.weapon {
+            assert!(
+                p.weapons.iter().any(|w| w.entity == active.entity),
+                "{}: the weapon in hand is carried",
+                p.name
+            );
+        }
+    }
+    println!("{players} player samples, {weapons} carried weapons, agents {agents:?}");
+    if demo_path.file_name().and_then(|n| n.to_str()) == Some(CS2_CHECKED_DEMO) {
+        let sample = track
+            .samples
+            .iter()
+            .find(|s| s.tick == 26508)
+            .expect("tick 26508");
+        let vg = sample.players.iter().find(|p| p.name == "vg").expect("vg");
+        let path = |id: u64| {
+            models[&id]
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let active = vg.rig.weapon.as_ref().expect("weapon in hand");
+        let carried: Vec<String> = vg.weapons.iter().map(|w| path(w.model)).collect();
+        println!(
+            "vg at 26508: in hand item {}, carries {carried:?}",
+            active.item
+        );
+        assert_eq!(active.item, 42);
+        assert!(carried.contains(&"weapon_rif_m4a4.vmdl".to_owned()));
+    }
 }
 
 #[test]

@@ -276,16 +276,9 @@ pub fn bake_player(
         })
         .collect();
 
-    let seconds = track.end_tick.saturating_sub(track.start_tick) as f32 * track.tick_interval;
-    let frames = (seconds * fps).floor() as usize + 1;
-    let mut out = Vec::with_capacity(frames);
-    let mut index = 0usize;
-    for k in 0..frames {
-        // The demo tick this frame shows (fractional), and the last sample at or before it.
-        let tick = track.start_tick as f32 + k as f32 / fps / track.tick_interval;
-        while index + 1 < track.samples.len() && track.samples[index + 1].tick as f32 <= tick {
-            index += 1;
-        }
+    let frames = frame_samples(track, fps);
+    let mut out = Vec::with_capacity(frames.len());
+    for (tick, index) in frames {
         let pose = match steps.get(index).and_then(Option::as_ref) {
             Some(step) => {
                 let extra = (tick - step.tick as f32).max(0.0) * track.tick_interval;
@@ -301,6 +294,23 @@ pub fn bake_player(
         out.push(pose);
     }
     Ok(out)
+}
+
+/// The frames of a round's animations at `fps`, from its first tick to its last: for each, the demo tick it shows
+/// (fractional) and the index of the last sample at or before it in `track.samples`.
+pub fn frame_samples(track: &RoundTrack, fps: f32) -> Vec<(f32, usize)> {
+    let seconds = track.end_tick.saturating_sub(track.start_tick) as f32 * track.tick_interval;
+    let frames = (seconds * fps).floor() as usize + 1;
+    let mut index = 0usize;
+    (0..frames)
+        .map(|k| {
+            let tick = track.start_tick as f32 + k as f32 / fps / track.tick_interval;
+            while index + 1 < track.samples.len() && track.samples[index + 1].tick as f32 <= tick {
+                index += 1;
+            }
+            (tick, index)
+        })
+        .collect()
 }
 
 /// Blends two poses of the same clip pair by the crouch amount (standing, crouched).

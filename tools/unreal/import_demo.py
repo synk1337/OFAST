@@ -16,12 +16,12 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
 
 - /Game/OFAST/Replays/<demo>_r<round>: a Level Sequence at the demo's tick rate (64 fps: one frame per tick),
   playback from the round's start (freeze time included) to its end;
-- per player, when `ofast export-demo --players` wrote the team's animated agent next to the replay
-  (<demo>_r<round>_ct.gltf / _t.gltf): that agent as a skeletal mesh, playing the player's baked animation
-  (`player_<controller>`), its feet on the demo's positions and turned along the body yaw; otherwise a proxy (a
-  capsule-sized cylinder in team colours: CT blue, T orange, with a "visor" at the eyes showing where the player
-  faces) turned along the eye yaw. Actor label "CT <name>" / "T <name>"; hidden while dead and while the camera looks
-  through the player's own eyes;
+- per player, when `ofast export-demo --players` wrote the animated agents next to the replay (listed in
+  <demo>_r<round>.agents.json, one glTF per agent look): the player's agent as a skeletal mesh, playing the player's
+  baked animation (`player_<controller>`: body, weapons in hand and holstered), its feet on the demo's positions and
+  turned along the body yaw; otherwise a proxy (a capsule-sized cylinder in team colours: CT blue, T orange, with a
+  "visor" at the eyes showing where the player faces) turned along the eye yaw. Actor label "CT <name>" /
+  "T <name>"; hidden while dead and while the camera looks through the player's own eyes;
 - per player: a first-person camera at the eye (feet + the networked eye height), aimed along pitch and yaw, with
   CS2's default field of view (90 degrees at 4:3);
 - a camera cut track that follows the killer of each kill in turn (from the previous kill until half a second after
@@ -45,8 +45,6 @@ REPLAY_PATH = os.environ["OFAST_REPLAY"]
 SHOT_DIR = os.environ.get("OFAST_SHOT", "")
 POV_SHOTS = [tuple(int(v) for v in item.split(":")) for item in os.environ.get("OFAST_POV_SHOTS", "").split(",")
              if ":" in item]
-# Agent files written by `ofast export-demo --players`, per team: <demo>_r<round>_<suffix>.gltf.
-AGENT_SUFFIXES = {3: "ct", 2: "t"}
 WIDTH, HEIGHT = 1920, 1080
 TAG = unreal.Name("OFAST_replay")
 UNITS_TO_CM = 2.54
@@ -177,24 +175,52 @@ def spawn_proxy(player):
     return body, [visor]
 
 
+def character_pipelines():
+    """The Interchange pipelines agent files import with: the glTF defaults, except that all meshes of one skeleton
+    combine into one skeletal mesh. The default glTF pipeline makes one skeletal mesh per glTF mesh, and the weapons
+    and gloves an agent file holds (bones of its own skeleton) would become separate meshes the player's actor does
+    not show. The modified copy is saved once, as /Game/OFAST/Pipelines/GLTFCharacters."""
+    path = "/Game/OFAST/Pipelines/GLTFCharacters"
+    pipeline = assets.load_asset(path) if assets.does_asset_exist(path) else None
+    if pipeline is None:
+        pipeline = assets.duplicate_loaded_asset(
+            assets.load_asset("/Interchange/Pipelines/DefaultGLTFAssetsPipeline"), path)
+    behaviour = unreal.InterchangeCombineSkeletalMeshesBehavior.BY_SKELETON
+    meshes = pipeline.get_editor_property("mesh_pipeline")
+    if meshes.get_editor_property("combine_skeletal_meshes_behavior") != behaviour:
+        meshes.set_editor_property("combine_skeletal_meshes_behavior", behaviour)
+        assets.save_loaded_asset(pipeline)
+    return [unreal.SoftObjectPath(pipeline.get_path_name()),
+            unreal.SoftObjectPath("/Interchange/Pipelines/DefaultGLTFPipeline.DefaultGLTFPipeline")]
+
+
 def import_agents(replay):
-    """Imports the players' animated agents written next to the replay by `ofast export-demo --players`, if any.
-    Returns team -> (skeletal mesh, {controller: AnimSequence}); Interchange names each AnimSequence
-    <file><animation>, so the controller is read from its `player_<controller>` ending."""
+    """Imports the players' animated agents written next to the replay by `ofast export-demo --players`, if any: the
+    files <demo>_r<round>.agents.json lists, one per agent look. Returns controller -> (skeletal mesh,
+    AnimSequence); Interchange names each AnimSequence <file><animation>, so the controller is read from its
+    `player_<controller>` ending."""
     folder = os.path.dirname(REPLAY_PATH)
     base = "%s_r%d" % (replay["demo"], replay["round"])
+    manifest_path = os.path.join(folder, base + ".agents.json")
+    if not os.path.exists(manifest_path):
+        return {}
+    with open(manifest_path, encoding="utf-8") as f:
+        manifest = json.load(f)
     manager = unreal.InterchangeManager.get_interchange_manager_scripted()
+    pipelines = character_pipelines()
     agents = {}
-    for team, suffix in AGENT_SUFFIXES.items():
-        path = os.path.join(folder, "%s_%s.gltf" % (base, suffix))
-        if not os.path.exists(path):
-            continue
+    for entry in manifest["agents"]:
+        path = os.path.join(folder, entry["file"])
+        look = entry["file"][len(base) + 1:-len(".gltf")]  # <agent>_<mesh groups>[_<gloves>]
         params = unreal.ImportAssetParameters()
         params.is_automated = True
         params.replace_existing = True
+        params.override_pipelines = pipelines
         # A short folder: asset file paths must stay under Windows' 260 characters.
-        destination = "/Game/OFAST/Replays/Agents/%s_r%d_%s" % (replay["demo"][-12:], replay["round"], suffix)
+        destination = "/Game/OFAST/Replays/Agents/%s_r%d_%s" % (replay["demo"][-12:], replay["round"], look)
         objects = manager.import_asset(destination, unreal.InterchangeManager.create_source_data(path), params)
+        # Interchange leaves imported assets in memory only: saved, the level's actors keep them when reopened.
+        assets.save_directory(destination, only_if_is_dirty=True, recursive=True)
         meshes = [o for o in objects if isinstance(o, unreal.SkeletalMesh)]
         animations = {}
         for o in objects:
@@ -202,10 +228,13 @@ def import_agents(replay):
             if match:
                 animations[int(match.group(1))] = o
         if not meshes:
-            log("agents %s: no skeletal mesh in %s" % (suffix, path))
+            log("agents %s: no skeletal mesh in %s" % (look, path))
             continue
-        log("agents %s: %s with %d player animations" % (suffix, meshes[0].get_name(), len(animations)))
-        agents[team] = (meshes[0], animations)
+        log("agents %s: %s with %d player animations, %d weapons"
+            % (look, meshes[0].get_name(), len(animations), len(entry.get("weapons", []))))
+        for controller in entry["players"]:
+            if controller in animations:
+                agents[controller] = (meshes[0], animations[controller])
     return agents
 
 
@@ -340,9 +369,8 @@ def build(replay):
         yaws = iter(unwrap([-a[1] for a in known]))
         pitches = iter([-a[0] for a in known])
         rotations = [None if a is None else (next(pitches), next(yaws)) for a in track["angles"]]
-        agent = agents.get(player["team"])
-        animation = agent[1].get(player["controller"]) if agent else None
-        if animation is not None:
+        agent = agents.get(player["controller"])
+        if agent is not None:
             # The agent: feet on the positions, turned along the body yaw (the way CS2 draws the model).
             body = spawn_agent(player, agent[0])
             attached = []
@@ -350,7 +378,7 @@ def build(replay):
             body_rotations = [None if y is None else (0.0, next(body_yaws)) for y in track["body_yaw"]]
             binding = sequence.add_possessable(body)
             keys += key_transform(binding, frames, positions, body_rotations, (1.0, 1.0, 1.0), end_frame)
-            key_animation(binding, animation, end_frame)
+            key_animation(binding, agent[1], end_frame)
         else:
             body, attached = spawn_proxy(player)
             # The cylinder's pivot is its middle: lift it by half the hull.
@@ -372,7 +400,7 @@ def build(replay):
         keys += key_transform(camera_binding, frames, eyes, rotations, (1.0, 1.0, 1.0), end_frame)
         cameras[player["controller"]] = (camera, camera_binding)
     log("sequence %s: %d players (%d animated agents), %d frames at %d fps, %d keys in %.0f s"
-        % (path, len(replay["players"]), sum(len(a[1]) for a in agents.values()), end_frame, fps, keys,
+        % (path, len(replay["players"]), len(agents), end_frame, fps, keys,
            time.monotonic() - started))
     add_camera_cuts(sequence, cuts, cameras)
     add_markers(sequence, replay)

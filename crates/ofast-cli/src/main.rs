@@ -6,7 +6,7 @@
 //! ofast export-map de_mirage --out exports/de_mirage   (--bake-model-tints: tints in the textures, for Blender)
 //! ofast demo-rounds match.dem                      a demo's rounds and their ticks
 //! ofast export-demo match.dem --round 3 --out exports/demos   one round as a replay file for Unreal
-//!                                       (--players: and the players as animated agents, one glTF per team)
+//!                                       (--players: and the players as animated agents with their weapons)
 //! ofast vpk verify                                 check CS2's archive checksums
 //! ```
 //!
@@ -91,8 +91,9 @@ enum Command {
         /// Output folder (created if needed).
         #[arg(long, short)]
         out: PathBuf,
-        /// Also write the players as animated CS2 agents, one glTF per team (`<demo>_r<round>_ct.gltf`, `_t.gltf`),
-        /// their locomotion baked from the demo. Needs the CS2 install (agent models, animation clips).
+        /// Also write the players as animated CS2 agents with their weapons in hand and holstered: one glTF per agent
+        /// look (`<demo>_r<round>_<agent>_<mesh groups>.gltf`) and `<demo>_r<round>.agents.json` listing them, their
+        /// animation baked from the demo. Needs the CS2 install (agent and weapon models, animation clips).
         #[arg(long)]
         players: bool,
     },
@@ -201,9 +202,11 @@ fn run(cli: Cli) -> Result<(), String> {
                 for file in &report.files {
                     println!("wrote {}", file.display());
                 }
+                println!("wrote {}", report.manifest.display());
                 println!(
-                    "{} players animated, {} frames each, in {:.1}s",
+                    "{} players animated with {} weapon bones, {} frames each, in {:.1}s",
                     report.players,
+                    report.weapons,
                     report.frames,
                     started.elapsed().as_secs_f32()
                 );

@@ -37,6 +37,21 @@ A 111-second round of de_nuke: 10 players, 7,086 ticks, 9 kills, 64 jumps, about
 inputs), written in 0.8 s. `import_demo.py` reads only the keys it needs, so the rig inputs change nothing there yet;
 the animation bake (M4.4) uses them.
 
+## Agents manifest (`<demo>_r<round>.agents.json`)
+
+Written by `ofast export-demo --players` next to the replay (`export::players`): the animated agents of the round,
+one glTF per look (agent model, mesh groups, glove skin), each with an animation per player
+([animation.md](animation.md#each-players-animation-animbake-exportplayers)).
+
+| Key | What |
+|---|---|
+| `format`, `version` | `"ofast-agents"`, 1 |
+| `demo`, `round`, `fps` | as the replay; the animations' key rate (30) |
+| `agents[].file` | `<demo>_r<round>_<agent>_<mesh groups>[_<gloves>].gltf`, in the same folder |
+| `agents[].model`, `.mesh_groups`, `.gloves` | the agent model path, its mesh-group mask (0 = the model's default), the glove model path or `null` |
+| `agents[].players` | the controllers animated in that file (animations `player_<controller>`) |
+| `agents[].weapons` | the weapon bones in order (`ofast_weapon_0`, `_1`, …): `model`, `mesh_groups`, `instance` (a second copy carried at once) |
+
 Checked: the kills of all 20 rounds of a real match equal demoparser2's (`kills_match_demoparser2`); positions and
 angles are the round tracks already checked against demoparser2 and CS2 (`docs/formats/demo.md`); in Unreal each
 killer's camera, 8 ticks before the kill, has the victim at the crosshair (within 1° in the data, on screen in the
@@ -47,7 +62,7 @@ verification screenshots).
 | Element | How |
 |---|---|
 | Sequence | `/Game/OFAST/Replays/<demo>_r<round>`, display rate = tick rate (64 fps: one frame per tick), from the round start to its end |
-| Player (animated) | with `ofast export-demo --players`: the team's agent (`<demo>_r<round>_ct.gltf` / `_t.gltf`, imported to `/Game/OFAST/Replays/Agents/`) as a skeletal mesh actor, feet on the positions, turned along the body yaw (−body_yaw), a Skeletal Animation track playing the player's baked locomotion (`player_<controller>`) from the round's first frame ([animation.md](animation.md#each-players-animation-animbake-exportplayers)) |
+| Player (animated) | with `ofast export-demo --players`: the player's look from the agents manifest (imported to `/Game/OFAST/Replays/Agents/` and saved, with the glTF pipeline copy `/Game/OFAST/Pipelines/GLTFCharacters` that combines a skeleton's meshes, so the weapons are part of the agent) as a skeletal mesh actor, feet on the positions, turned along the body yaw (−body_yaw), a Skeletal Animation track playing the player's baked animation (`player_<controller>`: body and weapons) from the round's first frame ([animation.md](animation.md#each-players-animation-animbake-exportplayers)) |
 | Player proxy | without the agents: engine cylinder scaled to CS2's 32 × 32 × 72-unit hull, CT blue / T orange, a grey visor at the eyes showing where the player faces; position (x, −y, z) × 2.54 cm, yaw → −yaw (eye yaw) |
 | Visibility | hidden while dead or without a pawn, and while the camera looks through that player's own eyes (CS2 does not draw your own body in first person either) |
 | First-person cameras | one per player at feet + eye height, aimed with Rotator(pitch = −pitch, yaw = −yaw), CS2's default field of view (90° at 4:3 = 106.26° horizontally at 16:9) |
@@ -62,6 +77,6 @@ spectate the player in first person (the demo bar's player arrows), Steam's F12.
 
 ## Not yet
 
-Each player's own agent model, weapons in hand, weapon actions and aim (M4.5 and later), ragdolls (M4.6), grenades
+Knife attacks, grenade throws, planting and the rest of CS2's animation graph (M4.4c), weapon skins, ragdolls (M4.6), grenades
 and their effects (M6), sounds, a name label above each player (Unreal's text render did not show in the
 screenshots; the names are the actors' labels in Sequencer), several rounds in one sequence.

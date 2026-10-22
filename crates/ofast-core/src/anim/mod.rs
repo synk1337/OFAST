@@ -46,6 +46,7 @@ pub mod weapon;
 pub use clip::{Clip, TrackSettings};
 pub use locomotion::Locomotion;
 pub use retarget::Retargeter;
+pub(crate) use retarget::matrix_to_quat;
 pub use skeleton::NmSkeleton;
 
 use crate::model::{Affine, normalize_quat, quat_matrix};

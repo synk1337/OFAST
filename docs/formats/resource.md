@@ -39,6 +39,28 @@ All integers little-endian.
 A KV3 block is recognized by its magic (see [kv3.md](kv3.md)). Real CS2 files checked on 2026-10-15 carry `RED2`
 and KV3 `DATA`; no `NTRO` was needed for the sampled types.
 
+## External references (`RERL`)
+
+The resources a file uses, each by id and path (`Resource::external_refs`):
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u32 | entries offset, **relative to this field** (8: right after the header) |
+| 4 | u32 | entry count |
+| entry +0 | u64 | the referenced resource's id |
+| entry +8 | u32 | offset of its NUL-terminated path, **relative to this field** |
+| entry +12 | u32 | unused (0) |
+
+Paths are lowercase, with forward slashes and without the `_c` suffix
+(`materials/models/weapons/v_models/rif_ak47/ak47.vmat`).
+
+**Resource id.** The id is MurmurHash64B (Austin Appleby's 64-bit MurmurHash2 for 32-bit machines: two 32-bit
+halves fed alternate words, `m = 0x5bd1e995`, `r = 24`) of the path's bytes, seed `0xEDABCDEF`
+(`resource::resource_id`). Entities send these ids instead of paths: a demo's `m_hModel` is the id of the entity's
+`.vmdl` ([demo.md](demo.md#models)). Checked: all 4,320 references of the resources sampled per type in `pak01`
+match (`resource_ids_match_references` in `tests/cs2_kv3.rs`); unit tests pin four ids of the AK-47's references,
+covering even and odd word counts and a 2-byte tail.
+
 ## Sources
 
 - ValveResourceFormat (MIT): `ValveResourceFormat/Resource/Resource.cs`, `Resource/Enums/BlockType.cs`,

@@ -108,7 +108,7 @@ de_fachwerk) — probably stored in another archive.
   killer's camera has the victim at the crosshair just before the kill.
 - [x] Compare first-person frames with CS2 itself (`demo_gototick`, `spec_player`): de_nuke round 2, tick 8135 —
   the killer's view and the victim's position match (within ~3° vertically, CS2 interpolating the paused demo).
-- [ ] Several rounds / a whole match in one sequence; weapons in hand; grenades (M6).
+- [ ] Several rounds / a whole match in one sequence; grenades (M6). (Weapons in hand: M4.5.)
 - [ ] Studio demo browser (Tauri app).
 
 ## M4 progress
@@ -142,12 +142,21 @@ player and round.
   IK). Checked through players' eyes against CS2: a rifle draw matches, a rifle firing stance is close (CS2's hands
   sit higher and its head drops to the sights). [animation.md](formats/animation.md#the-main-graphs-upper-body-worldmodelvnmgraph).
 - [ ] M4.4c The rest of the graph: knife attacks, grenade throws, planting and defusing, the locomotion graph's
-  starts, stops, turns on the spot, jumps and ladders, clip events (hand IK timing), and why CS2's knife run stands
-  more upright.
-- [ ] M4.5 Weapons in hand (weapon skeletal mesh on `weapon_hand_R`), each player's agent, knife and gloves from the
-  demo's model hashes.
+  starts, stops, turns on the spot, jumps and ladders, clip events (hand IK timing; a drawn weapon leaving its
+  holster when the hand reaches it), CS2's raised knife hand, and why CS2's knife run stands more upright.
+- [x] **M4.5 Weapons and each player's look**: models named by resource id (`m_hModel` = MurmurHash64B of the path,
+  checked on every resource reference); each player's own agent, mesh groups (defuse kit) and glove skin, one glTF
+  per look; every weapon carried (`m_hMyWeapons`, its own model: knife skins, CS:GO-era meshes) baked as a bone of
+  the agent — in hand on `wpn` (the weapons' hand guides show it is CS2's reference), holstered on the agent's
+  attachments (rifles slung, pistols and knives on the thighs, grenades on the vest, the C4 on the back), hidden when
+  not carried. Round 5 against CS2 through players' eyes: knife in hand, rifles slung on the same diagonal,
+  holstered pistols and grenades where CS2 draws them. Glove skins merged by bone name but not seen in the game yet
+  (no glove skins in the local demo). [animation.md](formats/animation.md#weapons-in-hand-and-holstered-exportloadout),
+  [demo.md](formats/demo.md#models).
 - [ ] M4.6 Deaths: ragdolls in Unreal from the demo's ragdoll force and bone.
-- [ ] Character materials (CS2's character shader: the agents render too glossy).
+- [ ] Character and weapon materials (CS2's character and weapon shaders: agents render too glossy, weapons too
+  metallic).
+- [ ] Weapon skins (paint kits, wear, seed, stickers: M10), and the molotov / incendiary holster if CS2 shows one.
 
 ## Hard problems we know about
 

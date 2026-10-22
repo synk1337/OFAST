@@ -13,6 +13,7 @@ is kept below.
 | [demoinfocs-golang](https://github.com/markus-wa/demoinfocs-golang) | CS2 demo format | MIT |
 | [HLAE / advancedfx](https://github.com/advancedfx/advancedfx) | Game capture, camera paths, `.cam` format, recording streams | MIT |
 | [SourceIO](https://github.com/REDxEYE/SourceIO) | CS2 shader parameter meanings | MIT |
+| [MurmurHash2](https://github.com/aappleby/smhasher) | `MurmurHash64B`, the hash Source 2 names resources by (`resource::resource_id`, written from the reference) | public domain, Austin Appleby |
 | [meshoptimizer](https://github.com/zeux/meshoptimizer) | Vertex/index codec bitstreams (OFAST has its own decoder); its test vectors are copied into `src/meshopt.rs` tests | MIT, © Arseny Kapoulkine |
 | [Valve Developer Community wiki](https://developer.valvesoftware.com/) | File formats, units, coordinates | CC BY-NC-SA 3.0 (docs only) |
 | [SteamDatabase GameTracking-CS2](https://github.com/SteamDatabase/GameTracking-CS2) | Protobuf definitions (Valve's demo `.proto` files are copied unchanged into `crates/ofast-core/proto/`), game file listings | see repository |

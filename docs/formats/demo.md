@@ -459,6 +459,32 @@ faster than 50 units/s — positions advance by sub-tick moves). Round 5 compare
 difference. demoparser2 cannot check the velocity (its `CCSPlayerPawn.m_vecX/Y/Z` mixes the velocity and the view
 offset, see below).
 
+## Models
+
+What each player looks like and carries, read per tick into `PlayerSample::appearance` and `PlayerSample::weapons`
+(`crates/ofast-core/src/demo/players.rs`), leniently like the rig inputs. Entities name models by **resource id**,
+not by path: `m_hModel` (a `CStrongHandle<InfoForResourceTypeCModel>`, sent as an unsigned varint) is MurmurHash64B
+of the `.vmdl` path with seed `0xEDABCDEF` — the id resources store next to the paths they refer to
+([resource.md](resource.md#external-references-rerl)). `Content::resource_paths("vmdl")` hashes every model path in
+the archives once (13,105 in `pak01`) and resolves them.
+
+| What | Field | Notes |
+|---|---|---|
+| agent | pawn `CBodyComponent` → `m_skeletonInstance.m_modelState.m_hModel` | e.g. `agents/models/ctm_sas/ctm_sas.vmdl` |
+| agent mesh groups | same, `m_MeshGroupMask` (`uint64`, bit per mesh group of the model) | SAS: 5 = defuse kit hidden + third-person body, 6 = defuse kit shown + body; Phoenix: 1; a glove skin adds `thirdperson_hide_default_gloves` |
+| gloves | pawn `m_EconGloves.m_iItemDefinitionIndex` | 0 = the agent's own; else an item whose `model_world` in `items_game.txt` is the glove model (`agents/models/shared/arms/glove_*`); every player of the local match demo has 0 |
+| weapons carried | `m_pWeaponServices` → `m_hMyWeapons` (array of handles: length at the array's path, handles one level deeper) | every weapon the player has, the one in hand included; two flashbangs are one entity (never two in five rounds checked) |
+| ammo counts | `m_pWeaponServices` → `m_iAmmo[32]`, by ammo type | observed from the grenades carried: 13 HE, 14 flashbangs (2 with one flashbang entity), 15 smoke, 16 molotov or incendiary; OFAST reads the flashbang count |
+| weapon model | each weapon's `CBodyComponent` → `m_skeletonInstance.m_modelState.m_hModel` | the item's own world model: a knife skin's blade (`weapon_knife_bowie.vmdl`, `weapon_knife_tactical.vmdl` seen), `weapon_rif_ak47.vmdl`… |
+| weapon mesh groups | the weapon's `m_MeshGroupMask` | guns: 1 = `body_hd`, 2 = `body_legacy` (the CS:GO-era mesh some skins are painted for; 2 of 4 AK-47s and M4A4s in round 5); knives and grenades send every bit (the model's default is meant) |
+
+**Checked** (`models_resolve_by_resource_id` in `tests/cs2_demo.rs`, 2026-10-22): over round 5, every living
+player's model (33,671 samples) resolves to an agent and every carried weapon (129,526) to a weapon model; the
+weapon in hand is always one of those carried; at tick 26508 "vg" holds the CT knife with an M4A4 carried, as CS2
+shows him (rifle slung, `docs/formats/animation.md`). The resource id matches all 4,320 references of the sampled
+resources (`resource_ids_match_references` in `tests/cs2_kv3.rs`). `examples/demo_models.rs` lists every entity's
+model at a tick, `examples/round_weapons.rs` what each player holds and carries.
+
 ## Where the references disagree
 
 | Topic | demoparser2 | demoinfocs-golang | OFAST (checked how) |

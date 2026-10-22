@@ -131,6 +131,10 @@ pub struct BoneAnimation {
     pub frames: Vec<Vec<([f32; 3], [f32; 4])>>,
     /// Frames per second (30 is one Unreal recognises; it guesses the rate from the key times).
     pub fps: f32,
+    /// `scales[f][bone]`: uniform scale, 0 to hide what the bone carries (a weapon not carried). A frame or bone
+    /// missing here has scale 1 (empty: no scale keys at all). Written as glTF step keys; Unreal's AnimSequence
+    /// still blends between keys, so a bone shrinks or grows over one frame.
+    pub scales: Vec<Vec<f32>>,
 }
 
 /// [`export_model`] with the animations `animate` makes for the loaded model (it may add warnings), written as
@@ -185,13 +189,7 @@ pub fn export_model_animated(
     match &skin {
         Some((_, skin_index)) => {
             for animation in &animations {
-                writer.animation(
-                    &animation.name,
-                    &model.skeleton,
-                    *skin_index,
-                    &animation.frames,
-                    animation.fps,
-                );
+                writer.animation(&model.skeleton, *skin_index, animation);
             }
         }
         None if !animations.is_empty() => writer.report.warnings.push(format!(
@@ -203,6 +201,159 @@ pub fn export_model_animated(
         roots.extend(bone_roots);
     }
     writer.finish(&name, roots)
+}
+
+/// A model merged into a character ([`export_character`]): gloves on an agent, a weapon in its hand.
+#[derive(Debug, Clone)]
+pub struct MergedModel<'m> {
+    /// Prefix of its mesh nodes' names (keeps them apart from the base model's and each other's).
+    pub label: String,
+    /// The model.
+    pub model: &'m Model,
+    /// Its mesh groups to write, one bit per group (as an entity's `m_MeshGroupMask`).
+    pub mesh_groups: u64,
+    /// How its meshes follow the character's skeleton.
+    pub binding: Binding,
+}
+
+/// How a merged model's meshes follow the character's skeleton.
+#[derive(Debug, Clone, Copy)]
+pub enum Binding {
+    /// Skinned by bone name: each of its bones is the character's bone of the same name, or that bone's nearest
+    /// ancestor the character has — how CS2 bone-merges glove models onto an agent.
+    ByName,
+    /// Every vertex on character bone `bone`, moved by `placement` from the model's space to the character's model
+    /// space at its bind pose (Source axes, inches).
+    Rigid {
+        /// The character bone.
+        bone: usize,
+        /// The merged model's space → the character's model space at bind pose.
+        placement: Affine,
+    },
+}
+
+/// Writes a character as `<file_name>.gltf`: `skeleton` (the base model's bones, possibly followed by added ones),
+/// the base model's meshes in mesh groups `mesh_groups`, the `merged` models' meshes, and `animations` keyed on
+/// `skeleton`.
+#[allow(clippy::too_many_arguments)]
+pub fn export_character(
+    content: &Content,
+    base: &Model,
+    mesh_groups: u64,
+    skeleton: &Skeleton,
+    merged: &[MergedModel<'_>],
+    animations: &[BoneAnimation],
+    out_dir: &Path,
+    file_name: &str,
+) -> Result<ExportReport, ExportError> {
+    let mut writer = GltfWriter::new(content, out_dir, ExportOptions::default())?;
+    let (bone_roots, skin_index) = writer.skin(skeleton).ok_or_else(|| {
+        ExportError::Character(format!("{file_name}: the skeleton has no real bones"))
+    })?;
+    let bone_names: HashSet<String> = skeleton
+        .bones
+        .iter()
+        .map(|b| b.name.to_ascii_lowercase())
+        .collect();
+    let mut roots = Vec::new();
+    let mut add = |writer: &mut GltfWriter<'_>,
+                   node_name: String,
+                   mesh: &Mesh,
+                   skin: MeshSkin<'_>,
+                   placement: Option<&Affine>|
+     -> Result<(), ExportError> {
+        let draws: Vec<&DrawCall> = mesh.draw_calls.iter().collect();
+        if let Some(gltf_mesh) = writer.mesh_with(
+            &node_name,
+            mesh,
+            &draws,
+            [1.0; 4],
+            0.0,
+            Some(skin),
+            placement,
+        )? {
+            let node_name = if bone_names.contains(&node_name.to_ascii_lowercase()) {
+                format!("{node_name}_mesh")
+            } else {
+                node_name
+            };
+            let node = writer.node(&node_name, Some(gltf_mesh), None);
+            if !writer.bind_skin(node, skin_index) {
+                writer
+                    .report
+                    .warnings
+                    .push(format!("mesh {node_name}: no skin weights, exported rigid"));
+            }
+            roots.push(node);
+        }
+        Ok(())
+    };
+    for mesh in base.meshes_in_groups(mesh_groups) {
+        let remap = base.bone_remap(mesh.mesh_index);
+        add(
+            &mut writer,
+            mesh.name.clone(),
+            mesh,
+            MeshSkin::Remap(remap),
+            None,
+        )?;
+    }
+    for part in merged {
+        for mesh in part.model.meshes_in_groups(part.mesh_groups) {
+            let name = format!("{}_{}", part.label, mesh.name);
+            match part.binding {
+                Binding::ByName => {
+                    let remap: Vec<u32> = part
+                        .model
+                        .bone_remap(mesh.mesh_index)
+                        .iter()
+                        .map(|&b| merged_bone(&part.model.skeleton, b as usize, skeleton) as u32)
+                        .collect();
+                    add(&mut writer, name, mesh, MeshSkin::Remap(&remap), None)?;
+                }
+                Binding::Rigid { bone, placement } => {
+                    add(
+                        &mut writer,
+                        name,
+                        mesh,
+                        MeshSkin::Bone(bone as u16),
+                        Some(&placement),
+                    )?;
+                }
+            }
+        }
+    }
+    for animation in animations {
+        writer.animation(skeleton, skin_index, animation);
+    }
+    roots.extend(bone_roots);
+    writer.finish(file_name, roots)
+}
+
+/// The bone of `target` that bone `bone` of `source` merges onto: the one of the same name (ignoring case), else
+/// that of its nearest ancestor that has one, else the root.
+fn merged_bone(source: &Skeleton, bone: usize, target: &Skeleton) -> usize {
+    let mut current = Some(bone);
+    while let Some(b) = current {
+        let Some(found) = source.bones.get(b) else {
+            break;
+        };
+        if let Some(index) = target.find(&found.name) {
+            return index;
+        }
+        current = found.parent;
+    }
+    0
+}
+
+/// How [`GltfWriter::mesh_with`] binds a mesh's vertices to a skin.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum MeshSkin<'a> {
+    /// The mesh's own bone indices through a remapping slice ([`Model::bone_remap`], or one translated onto another
+    /// skeleton).
+    Remap(&'a [u32]),
+    /// Every vertex fully on one joint.
+    Bone(u16),
 }
 
 /// CS2 clips as animations on `model`'s skeleton (see [`export_model_with_clips`]).
@@ -255,6 +406,7 @@ fn clip_animations(
             name: clip_name,
             frames,
             fps: ANIMATION_FPS,
+            scales: Vec::new(),
         });
     }
     Ok(animations)
@@ -786,15 +938,20 @@ impl<'c> GltfWriter<'c> {
     /// Writes one glTF animation keying every bone of `skeleton` on the joints of skin `skin` (made by
     /// [`Self::skin`]): `frames[f][bone]` is the bone's translation (inches) and rotation relative to its parent, in
     /// Source axes, at `fps` frames per second. Root bones get the Source → glTF rotation as in the bind pose, the
-    /// others their translation in metres.
+    /// others their translation in metres. A bone whose scale ever differs from 1 also gets a `scale` channel.
     pub(crate) fn animation(
         &mut self,
-        name: &str,
         skeleton: &Skeleton,
         skin: usize,
-        frames: &[Vec<([f32; 3], [f32; 4])>],
-        fps: f32,
+        animation: &BoneAnimation,
     ) {
+        let BoneAnimation {
+            name,
+            frames,
+            fps,
+            scales,
+        } = animation;
+        let fps = *fps;
         if frames.is_empty() {
             return;
         }
@@ -869,6 +1026,18 @@ impl<'c> GltfWriter<'c> {
                 channels.push(json!({
                     "sampler": samplers.len() - 1,
                     "target": { "node": node, "path": path },
+                }));
+            }
+            let bone_scales: Vec<f32> = (0..frames.len())
+                .map(|f| scales.get(f).and_then(|s| s.get(b)).copied().unwrap_or(1.0))
+                .collect();
+            if bone_scales.iter().any(|&s| s != 1.0) {
+                let values: Vec<[f32; 3]> = bone_scales.iter().map(|&s| [s; 3]).collect();
+                let output = self.float_accessor(&values, "VEC3", false);
+                samplers.push(json!({ "input": input, "output": output, "interpolation": "STEP" }));
+                channels.push(json!({
+                    "sampler": samplers.len() - 1,
+                    "target": { "node": node, "path": "scale" },
                 }));
             }
         }
@@ -954,6 +1123,31 @@ impl<'c> GltfWriter<'c> {
         normal_offset: f32,
         skin: Option<&[u32]>,
     ) -> Result<Option<usize>, ExportError> {
+        self.mesh_with(
+            name,
+            mesh,
+            draws,
+            tint,
+            normal_offset,
+            skin.map(MeshSkin::Remap),
+            None,
+        )
+    }
+
+    /// [`Self::mesh`] with more control, for meshes merged into another model's skeleton
+    /// ([`export_character`]): `placement` moves every vertex (Source model space → the skeleton's model space at
+    /// its bind pose) before writing, and [`MeshSkin::Bone`] binds every vertex fully to one joint.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mesh_with(
+        &mut self,
+        name: &str,
+        mesh: &Mesh,
+        draws: &[&DrawCall],
+        tint: [f32; 4],
+        normal_offset: f32,
+        skin: Option<MeshSkin<'_>>,
+        placement: Option<&Affine>,
+    ) -> Result<Option<usize>, ExportError> {
         let mut primitives = Vec::new();
         for draw in draws {
             if !draw.material.is_empty()
@@ -972,6 +1166,22 @@ impl<'c> GltfWriter<'c> {
                 continue;
             }
             self.report.triangles += g.indices.len() / 3;
+            if let Some(m) = placement {
+                let rotate = |v: [f32; 3]| -> [f32; 3] {
+                    std::array::from_fn(|i| (0..3).map(|k| m[i][k] * v[k]).sum())
+                };
+                for p in &mut g.positions {
+                    let r = rotate(*p);
+                    *p = std::array::from_fn(|i| r[i] + m[i][3]);
+                }
+                for n in &mut g.normals {
+                    *n = rotate(*n);
+                }
+                for t in &mut g.tangents {
+                    let r = rotate([t[0], t[1], t[2]]);
+                    *t = [r[0], r[1], r[2], t[3]];
+                }
+            }
 
             let to_gltf = coords::source_dir_to_gltf;
             let positions: Vec<[f32; 3]> = g
@@ -1039,10 +1249,17 @@ impl<'c> GltfWriter<'c> {
                     json!(self.float_accessor(weights, "VEC4", false)),
                 );
             }
-            if let Some(remap) = skin
-                && g.joints.len() == g.positions.len()
-            {
-                let (joints, weights) = skin_attributes(&g.joints, &g.weights, remap);
+            let skinning = match skin {
+                Some(MeshSkin::Remap(remap)) if g.joints.len() == g.positions.len() => {
+                    Some(skin_attributes(&g.joints, &g.weights, remap))
+                }
+                Some(MeshSkin::Bone(joint)) => Some((
+                    vec![[joint, 0, 0, 0]; g.positions.len()],
+                    vec![[255, 0, 0, 0]; g.positions.len()],
+                )),
+                _ => None,
+            };
+            if let Some((joints, weights)) = skinning {
                 attributes.insert(
                     "JOINTS_0".into(),
                     json!(self.vec4_int_accessor(&joints, false)),
@@ -2779,6 +2996,7 @@ mod tests {
                 draw([1.0; 3], 1.0),
             ],
             bone_weight_count: 0,
+            attachments: Vec::new(),
         };
         let content = Content::new();
         let dir = temp_folder("draw-tint");
@@ -2995,6 +3213,35 @@ mod tests {
         // No weights stored (one bone per vertex): the first bone takes the whole vertex.
         let (j, w) = skin_attributes(&[[1, 23, 17, 0]], &[], &remap);
         assert_eq!((j[0], w[0]), ([7, 0, 0, 0], [255, 0, 0, 0]));
+    }
+
+    /// Glove bones merge onto the agent bone of the same name (any case), or their nearest ancestor's.
+    #[test]
+    fn merged_bones_follow_names_then_ancestors() {
+        let bone = |name: &str, parent: Option<usize>| Bone {
+            name: name.into(),
+            parent,
+            position: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            flags: 0,
+        };
+        let agent = Skeleton {
+            bones: vec![
+                bone("root_motion", None),
+                bone("pelvis", Some(0)),
+                bone("hand_R", Some(1)),
+            ],
+        };
+        let glove = Skeleton {
+            bones: vec![
+                bone("hand_r", None),
+                bone("glove_strap", Some(0)),
+                bone("loose", None),
+            ],
+        };
+        assert_eq!(merged_bone(&glove, 0, &agent), 2);
+        assert_eq!(merged_bone(&glove, 1, &agent), 2);
+        assert_eq!(merged_bone(&glove, 2, &agent), 0);
     }
 
     #[test]

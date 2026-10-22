@@ -178,6 +178,84 @@ impl<'a> Resource<'a> {
         kv3::binary::decode(self.block_data(block))
             .map_err(|source| ResourceError::Kv3 { kind, source })
     }
+
+    /// The resources this one refers to: the `RERL` block, empty when there is none.
+    ///
+    /// The block is `u32` offset to the entries (relative to the field) and `u32` count; each entry is 16 bytes:
+    /// the referenced resource's [`resource_id`] (`u64`), an offset to its NUL-terminated path (`u32`, relative to
+    /// the field) and 4 unused bytes.
+    pub fn external_refs(&self) -> Result<Vec<ExternalRef>, ResourceError> {
+        let Some(block) = self.block(BlockKind::RERL) else {
+            return Ok(Vec::new());
+        };
+        let mut r = ByteReader::new(self.block_data(block));
+        let entries = r.u32("RERL entries offset")? as usize;
+        let count = r.u32("RERL entry count")? as usize;
+        let mut refs = Vec::with_capacity(count.min(4096));
+        for index in 0..count {
+            let entry = entries + 16 * index;
+            r.seek(entry, "RERL entry")?;
+            let id = r.u64("RERL id")?;
+            let name_field = r.position();
+            let name_offset = r.u32("RERL name offset")? as usize;
+            r.seek(name_field + name_offset, "RERL name")?;
+            let path = String::from_utf8_lossy(r.cstr("RERL name")?).into_owned();
+            refs.push(ExternalRef { id, path });
+        }
+        Ok(refs)
+    }
+}
+
+/// One resource another refers to (see [`Resource::external_refs`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalRef {
+    /// The resource's id: [`resource_id`] of its path.
+    pub id: u64,
+    /// Its path without the `_c` suffix (`materials/models/weapons/v_models/rif_ak47/ak47.vmat`).
+    pub path: String,
+}
+
+/// Seed of the hash that names resources ([`resource_id`]).
+pub const RESOURCE_ID_SEED: u32 = 0xEDAB_CDEF;
+
+/// The 64-bit id Source 2 names a resource by: MurmurHash64B (Austin Appleby's 64-bit hash for 32-bit machines) of
+/// its path without the `_c` suffix, seed [`RESOURCE_ID_SEED`].
+///
+/// Resources store these ids next to the paths they refer to ([`Resource::external_refs`]), and entities send them
+/// instead of paths: a demo's `m_hModel` is the id of the entity's `.vmdl`. The path is used as written; CS2's
+/// paths are lowercase with forward slashes, so pass them that way. Checked against every reference of every
+/// resource in CS2's archive (the `resource_ids_match_references` oracle test).
+pub fn resource_id(path: &str) -> u64 {
+    const M: u32 = 0x5bd1_e995;
+    let mix = |k: u32| {
+        let k = k.wrapping_mul(M);
+        (k ^ (k >> 24)).wrapping_mul(M)
+    };
+    let data = path.as_bytes();
+    let mut h1 = RESOURCE_ID_SEED ^ data.len() as u32;
+    let mut h2 = 0u32; // the high half of the 64-bit seed
+    let (words, tail) = data.as_chunks::<4>();
+    // Whole 4-byte words go alternately into the two halves.
+    for (i, word) in words.iter().enumerate() {
+        let k = mix(u32::from_le_bytes(*word));
+        if i % 2 == 0 {
+            h1 = h1.wrapping_mul(M) ^ k;
+        } else {
+            h2 = h2.wrapping_mul(M) ^ k;
+        }
+    }
+    // The last 1 – 3 bytes go into the second half.
+    if !tail.is_empty() {
+        for (i, &byte) in tail.iter().enumerate() {
+            h2 ^= u32::from(byte) << (8 * i);
+        }
+        h2 = h2.wrapping_mul(M);
+    }
+    h1 = (h1 ^ (h2 >> 18)).wrapping_mul(M);
+    h2 = (h2 ^ (h1 >> 22)).wrapping_mul(M);
+    h1 = (h1 ^ (h2 >> 17)).wrapping_mul(M);
+    h2 = (h2 ^ (h1 >> 19)).wrapping_mul(M);
+    (u64::from(h1) << 32) | u64::from(h2)
 }
 
 #[cfg(test)]
@@ -222,6 +300,76 @@ mod tests {
             resource.kv3(BlockKind::RERL),
             Err(ResourceError::MissingBlock(BlockKind::RERL))
         ));
+    }
+
+    /// Ids CS2 stores next to these paths (the AK-47 model's references), covering paths of an even and an odd
+    /// number of 4-byte words and with a 2-byte tail.
+    #[test]
+    fn resource_ids_match_cs2() {
+        for (path, id) in [
+            (
+                "animation/skeletons/weapons/ak47.vnmskel",
+                0xb437_c30c_3ebc_bc99,
+            ),
+            (
+                "materials/models/weapons/v_models/rif_ak47/ak47.vmat",
+                0x027b_33f3_ca99_2e1f,
+            ),
+            (
+                "weapons/models/ak47/weapon_rif_ak47.vgcxdata",
+                0xd665_7de7_e590_2d55,
+            ),
+            (
+                "weapons/models/shared/materials/sticker_gaps/sticker_gaps.vmat",
+                0x11d7_7a8d_5f1a_ed61,
+            ),
+        ] {
+            assert_eq!(resource_id(path), id, "{path}");
+        }
+    }
+
+    #[test]
+    fn reads_external_refs() {
+        // Header (entries 8 bytes after the field, 2 entries), two entries, then the names.
+        let mut rerl = Vec::new();
+        rerl.extend_from_slice(&8u32.to_le_bytes());
+        rerl.extend_from_slice(&2u32.to_le_bytes());
+        let names_at = 8 + 2 * 16;
+        let names = [&b"a.vmat\0"[..], b"bb.vtex\0"];
+        let mut name_offset = names_at;
+        for (i, name) in names.iter().enumerate() {
+            let entry = 8 + 16 * i;
+            rerl.extend_from_slice(&(i as u64 + 10).to_le_bytes());
+            rerl.extend_from_slice(&((name_offset - (entry + 8)) as u32).to_le_bytes());
+            rerl.extend_from_slice(&0u32.to_le_bytes());
+            name_offset += name.len();
+        }
+        for name in names {
+            rerl.extend_from_slice(name);
+        }
+        let file = build(&[(b"RERL", &rerl)]);
+        let refs = Resource::parse(&file).unwrap().external_refs().unwrap();
+        assert_eq!(
+            refs,
+            [
+                ExternalRef {
+                    id: 10,
+                    path: "a.vmat".into()
+                },
+                ExternalRef {
+                    id: 11,
+                    path: "bb.vtex".into()
+                },
+            ]
+        );
+        let none = build(&[(b"DATA", b"x")]);
+        assert!(
+            Resource::parse(&none)
+                .unwrap()
+                .external_refs()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

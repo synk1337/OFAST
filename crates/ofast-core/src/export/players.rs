@@ -1,34 +1,53 @@
-//! The players of a demo round as animated CS2 agents, for Unreal (M4.4).
+//! The players of a demo round as animated CS2 agents with their weapons, for Unreal (M4.4, M4.5).
 //!
-//! One glTF per team, next to the round's replay file: `<demo>_r<round>_ct.gltf` and `<demo>_r<round>_t.gltf`. Each
-//! holds the team's agent model, skinned ([`super::gltf`]), and one animation per player of that team, named
-//! `player_<controller>` (the controller index of the replay file), keyed at [`PLAYER_ANIMATION_FPS`] from the
-//! round's first tick to its last. The animations are CS2's ground locomotion baked from the demo's rig inputs
-//! ([`crate::anim::bake`]) and retargeted onto the agent's skeleton; `tools/unreal/import_demo.py` plays them on
-//! the players' actors, which the replay file's positions and body yaw move.
+//! Players who look the same share one glTF, next to the round's replay file:
+//! `<demo>_r<round>_<agent>_<mesh groups>[_<gloves>].gltf`. A look is the agent model (the pawn's `m_hModel`,
+//! resolved by resource id over CS2's models; the team's default agent when it is unknown), its mesh groups (a CT
+//! agent shows or hides a defuse kit) and the glove skin. Each file holds ([`super::gltf::export_character`]):
 //!
-//! Every CT uses the SAS agent and every T the Phoenix agent for now; each player's own agent, weapon and knife come
-//! with M4.5.
+//! - the agent, skinned, with the meshes of those mesh groups;
+//! - the gloves' world model (`items_game.txt` → `model_world`) bone-merged onto it, when the look has glove skins;
+//! - one bone per weapon the look's players carry, with the weapon's world model (its own model: a knife skin's
+//!   blade, the CS:GO-era mesh some gun skins need) rigidly on it ([`super::loadout`]);
+//! - one animation per player, `player_<controller>` (the controller index of the replay file), keyed at
+//!   [`PLAYER_ANIMATION_FPS`] from the round's first tick to its last: CS2's locomotion and weapon layers baked from
+//!   the demo's rig inputs ([`crate::anim::bake`]) and retargeted onto the agent, plus every weapon bone on the hand,
+//!   on its holster, or scaled to 0.
+//!
+//! `<demo>_r<round>.agents.json` lists the files, their looks and their players (`docs/formats/replay.md`);
+//! `tools/unreal/import_demo.py` plays each animation on its player's actor, which the replay's positions and body
+//! yaw move.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
+use serde_json::json;
+
 use super::ExportError;
-use super::gltf::{BoneAnimation, export_model_animated, resource_data};
+use super::gltf::{
+    Binding, BoneAnimation, MergedModel, export_character, load_model, resource_data,
+};
+use super::loadout::{
+    AgentMounts, Place, Slot, WeaponFrames, WeaponLook, carried_places, hide_changes, key_places,
+    skeleton_with_slots, slot_target,
+};
 use crate::anim::aim::AimBones;
-use crate::anim::bake::{LocomotionSets, UpperBody, WeaponAnimation, WeaponSet, bake_player};
+use crate::anim::bake::{
+    LocomotionSets, UpperBody, WeaponAnimation, WeaponSet, bake_player, frame_samples,
+};
 use crate::anim::graph::Graph;
 use crate::anim::layers::BoneMask;
 use crate::anim::weapon::WeaponClips;
-use crate::anim::{Clip, Locomotion, NmSkeleton, Retargeter, Transform};
+use crate::anim::{Clip, Locomotion, NmSkeleton, Retargeter, Transform, matrix_to_quat};
 use crate::content::Content;
-use crate::demo::players::RoundTrack;
-use crate::items::item_names;
+use crate::demo::players::{PlayerSample, RoundTrack};
+use crate::items::{item_names, item_values};
+use crate::model::{Affine, Model, compose, invert_rigid};
 
-/// Agent model every Counter-Terrorist wears for now.
-pub const CT_AGENT: &str = "agents/models/ctm_sas/ctm_sas.vmdl_c";
-/// Agent model every Terrorist wears for now.
-pub const T_AGENT: &str = "agents/models/tm_phoenix/tm_phoenix.vmdl_c";
+/// Agent model of Counter-Terrorists whose own is unknown.
+pub const CT_AGENT: &str = "agents/models/ctm_sas/ctm_sas.vmdl";
+/// Agent model of Terrorists whose own is unknown.
+pub const T_AGENT: &str = "agents/models/tm_phoenix/tm_phoenix.vmdl";
 /// Key rate of the players' animations: one Unreal's glTF import recognises (the replay's 64 ticks per second are
 /// not), fine enough for a run cycle of 0.73 s.
 pub const PLAYER_ANIMATION_FPS: f32 = 30.0;
@@ -36,10 +55,14 @@ pub const PLAYER_ANIMATION_FPS: f32 = 30.0;
 /// What [`export_players`] wrote.
 #[derive(Debug, Clone)]
 pub struct PlayersReport {
-    /// The glTF files, one per team that had players.
+    /// The glTF files, one per look.
     pub files: Vec<PathBuf>,
+    /// The manifest listing them.
+    pub manifest: PathBuf,
     /// Players animated.
     pub players: usize,
+    /// Weapon bones over all files.
+    pub weapons: usize,
     /// Frames per animation.
     pub frames: usize,
     /// Problems that did not stop the export.
@@ -70,8 +93,32 @@ pub fn load_locomotion(content: &Content) -> Result<LocomotionSets, ExportError>
     })
 }
 
+/// How a group of players looks: what one glTF holds besides their animations.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Look {
+    /// Agent model path (`.vmdl`, no `_c`).
+    agent: String,
+    /// The agent's mesh groups shown (0 = the model's default).
+    mesh_groups: u64,
+    /// Glove world model path, when the players wear glove skins.
+    gloves: Option<String>,
+}
+
+/// What every look's export shares.
+struct Round<'a> {
+    content: &'a Content,
+    track: &'a RoundTrack,
+    sets: LocomotionSets,
+    clip_skeleton: NmSkeleton,
+    upper: Option<UpperBody>,
+    /// Model resource id → path.
+    models: HashMap<u64, String>,
+    /// For each animation frame: its demo tick and sample index.
+    frames: Vec<(f32, usize)>,
+}
+
 /// Writes the round's players as animated agents into `out_dir` (see the module docs). `demo_name` names the files
-/// like the replay file (`<demo>_r<round>_ct.gltf`).
+/// like the replay file (`<demo>_r<round>_…`).
 pub fn export_players(
     content: &Content,
     track: &RoundTrack,
@@ -83,65 +130,380 @@ pub fn export_players(
     let skeleton_data = resource_data(content, &skeleton_path)?;
     let clip_skeleton = NmSkeleton::parse(&skeleton_data);
     let mut warnings = Vec::new();
+    let items_text = match content.read(ITEMS_GAME) {
+        Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+        Err(e) => {
+            warnings.push(format!(
+                "{ITEMS_GAME}: {e}: no weapon layers, holsters or glove skins"
+            ));
+            None
+        }
+    };
     let upper = load_upper_body(
         content,
         track,
+        items_text.as_deref(),
         &skeleton_data,
         &clip_skeleton,
         &mut warnings,
     )?;
+    let glove_models = items_text
+        .as_deref()
+        .map(|text| item_values(text, "model_world"))
+        .unwrap_or_default();
+    let round = Round {
+        content,
+        track,
+        sets,
+        clip_skeleton,
+        upper,
+        models: content.resource_paths("vmdl"),
+        frames: frame_samples(track, PLAYER_ANIMATION_FPS),
+    };
 
-    // Each player's team: the last one seen in the round.
-    let mut teams: BTreeMap<u32, u32> = BTreeMap::new();
+    // Each player's look, from the last sample where they were alive (else their last one).
+    let mut last: BTreeMap<u32, &PlayerSample> = BTreeMap::new();
     for p in track.samples.iter().flat_map(|s| &s.players) {
-        teams.insert(p.controller, p.team);
+        if p.alive || last.get(&p.controller).is_none_or(|q| !q.alive) {
+            last.insert(p.controller, p);
+        }
     }
+    let mut groups: BTreeMap<Look, Vec<u32>> = BTreeMap::new();
+    for (&controller, p) in &last {
+        // Mesh-group bits belong to one model: a default agent gets its own default groups.
+        let (agent, mesh_groups) = match round
+            .models
+            .get(&p.appearance.model)
+            .filter(|path| path.starts_with("agents/models/"))
+        {
+            Some(path) => (path.clone(), p.appearance.mesh_groups),
+            None => {
+                if p.appearance.model != 0 {
+                    warnings.push(format!(
+                        "player {controller}: model {:016x} is not a known agent: the team's default",
+                        p.appearance.model
+                    ));
+                }
+                let agent = if p.team == 3 { CT_AGENT } else { T_AGENT };
+                (agent.to_owned(), 0)
+            }
+        };
+        let gloves = (p.appearance.gloves != 0)
+            .then(|| glove_models.get(&p.appearance.gloves).cloned())
+            .flatten();
+        if p.appearance.gloves != 0 && gloves.is_none() {
+            warnings.push(format!(
+                "player {controller}: gloves item {} has no world model: the agent's own",
+                p.appearance.gloves
+            ));
+        }
+        let look = Look {
+            agent,
+            mesh_groups,
+            gloves,
+        };
+        groups.entry(look).or_default().push(controller);
+    }
+
     let mut report = PlayersReport {
         files: Vec::new(),
+        manifest: out_dir.join(format!("{demo_name}_r{}.agents.json", track.round)),
         players: 0,
-        frames: 0,
+        weapons: 0,
+        frames: round.frames.len(),
         warnings,
     };
-    for (team, suffix, agent) in [(3, "ct", CT_AGENT), (2, "t", T_AGENT)] {
-        let players: Vec<u32> = teams
-            .iter()
-            .filter(|&(_, &t)| t == team)
-            .map(|(&c, _)| c)
-            .collect();
-        if players.is_empty() {
-            continue;
+    let mut manifest = Vec::new();
+    for (look, players) in &groups {
+        let mut name = format!(
+            "{demo_name}_r{}_{}_{}",
+            track.round,
+            stem(&look.agent),
+            look.mesh_groups
+        );
+        if let Some(gloves) = &look.gloves {
+            name = format!("{name}_{}", stem(gloves));
         }
-        let file_name = format!("{demo_name}_r{}_{suffix}", track.round);
-        let mut frames_written = 0;
-        let written =
-            export_model_animated(content, agent, out_dir, Some(&file_name), |model, _| {
-                let retargeter = Retargeter::new(&model.skeleton, &clip_skeleton);
-                let mut animations = Vec::new();
-                for &controller in &players {
-                    let poses = bake_player(
-                        track,
-                        controller,
-                        &sets,
-                        upper.as_ref(),
-                        PLAYER_ANIMATION_FPS,
-                    )
-                    .map_err(ExportError::Anim)?;
-                    let poses = hold_gaps(poses, &clip_skeleton.reference);
-                    frames_written = poses.len();
-                    animations.push(BoneAnimation {
-                        name: format!("player_{controller}"),
-                        frames: poses.iter().map(|pose| retargeter.locals(pose)).collect(),
-                        fps: PLAYER_ANIMATION_FPS,
-                    });
-                }
-                Ok(animations)
-            })?;
+        let (written, weapons) = export_look(&round, look, players, out_dir, &name)?;
+        manifest.push(json!({
+            "file": format!("{name}.gltf"),
+            "model": look.agent,
+            "mesh_groups": look.mesh_groups,
+            "gloves": look.gloves,
+            "players": players,
+            "weapons": weapons.iter().map(|s| json!({
+                "model": s.look.model,
+                "mesh_groups": s.look.mesh_groups,
+                "instance": s.instance,
+            })).collect::<Vec<_>>(),
+        }));
         report.files.push(written.gltf);
         report.warnings.extend(written.warnings);
         report.players += players.len();
-        report.frames = frames_written;
+        report.weapons += weapons.len();
     }
+    std::fs::write(
+        &report.manifest,
+        serde_json::to_string_pretty(&json!({
+            "format": "ofast-agents",
+            "version": 1,
+            "demo": demo_name,
+            "round": track.round,
+            "fps": PLAYER_ANIMATION_FPS,
+            "agents": manifest,
+        }))
+        .expect("JSON serializes"),
+    )?;
     Ok(report)
+}
+
+/// Writes one look's glTF; returns the export report and the weapon slots it holds.
+fn export_look(
+    round: &Round<'_>,
+    look: &Look,
+    players: &[u32],
+    out_dir: &Path,
+    file_name: &str,
+) -> Result<(super::gltf::ExportReport, Vec<Slot>), ExportError> {
+    let content = round.content;
+    let track = round.track;
+    let agent = load_model(content, &look.agent)?;
+    let mut mesh_groups = shown_groups(&agent, look.mesh_groups);
+    let mounts = AgentMounts::of(&agent);
+    let retargeter = Retargeter::new(&agent.skeleton, &round.clip_skeleton);
+    let mut warnings = Vec::new();
+
+    // Bodies, and each carried weapon's slot and place, frame by frame.
+    let weapon_look = |w: &crate::demo::players::CarriedWeapon| {
+        Some(WeaponLook {
+            model: round.models.get(&w.model)?.clone(),
+            mesh_groups: w.mesh_groups,
+        })
+    };
+    let kind = |item: u32| {
+        let weapon = round.upper.as_ref()?.weapons.get(&item)?;
+        Some((weapon.weapon.as_str(), weapon.category.as_str()))
+    };
+    let mut bodies = Vec::new();
+    let mut places: Vec<Vec<Vec<(Slot, Place)>>> = Vec::new();
+    let mut slots: BTreeSet<Slot> = BTreeSet::new();
+    for &controller in players {
+        let poses = bake_player(
+            track,
+            controller,
+            &round.sets,
+            round.upper.as_ref(),
+            PLAYER_ANIMATION_FPS,
+        )?;
+        let carried: Vec<Vec<(Slot, Place)>> = round
+            .frames
+            .iter()
+            .zip(&poses)
+            .map(|(&(_, index), pose)| {
+                let player = track.samples[index]
+                    .players
+                    .iter()
+                    .find(|p| p.controller == controller && p.alive);
+                match (pose, player) {
+                    (Some(_), Some(p)) => carried_places(
+                        &p.weapons,
+                        p.rig.weapon.as_ref().map(|w| w.entity),
+                        weapon_look,
+                        kind,
+                    ),
+                    _ => Vec::new(),
+                }
+            })
+            .collect();
+        slots.extend(carried.iter().flatten().map(|(slot, _)| slot.clone()));
+        bodies.push(poses);
+        places.push(carried);
+    }
+
+    // The weapon models; a slot whose model cannot be read is left out.
+    let mut weapon_models: BTreeMap<String, (Model, WeaponFrames)> = BTreeMap::new();
+    for slot in &slots {
+        if weapon_models.contains_key(&slot.look.model) {
+            continue;
+        }
+        match load_model(content, &slot.look.model) {
+            Ok(model) => match WeaponFrames::of(&model) {
+                Some(frames) => {
+                    weapon_models.insert(slot.look.model.clone(), (model, frames));
+                }
+                None => warnings.push(format!("{}: no `weapon` bone: not shown", slot.look.model)),
+            },
+            Err(e) => warnings.push(format!("{}: {e}: not shown", slot.look.model)),
+        }
+    }
+    let slots: Vec<Slot> = slots
+        .into_iter()
+        .filter(|s| weapon_models.contains_key(&s.look.model))
+        .collect();
+
+    let skeleton = skeleton_with_slots(&agent, &mounts, slots.len());
+    let first_slot_bone = agent.skeleton.bones.len();
+    let bind = skeleton.world_transforms();
+    let mut merged = Vec::new();
+    for (n, slot) in slots.iter().enumerate() {
+        let (model, frames) = &weapon_models[&slot.look.model];
+        let bone = first_slot_bone + n;
+        merged.push(MergedModel {
+            label: format!("w{n}_{}", stem(&slot.look.model)),
+            model,
+            mesh_groups: shown_groups(model, slot.look.mesh_groups),
+            binding: Binding::Rigid {
+                bone,
+                placement: compose(&bind[bone], &invert_rigid(&frames.weapon_bone)),
+            },
+        });
+    }
+    let gloves = match &look.gloves {
+        Some(path) => match load_model(content, path) {
+            Ok(model) => Some(model),
+            Err(e) => {
+                warnings.push(format!("gloves {path}: {e}: the agent's own"));
+                None
+            }
+        },
+        None => None,
+    };
+    match &gloves {
+        Some(model) => merged.push(MergedModel {
+            label: "gloves".into(),
+            model,
+            mesh_groups: model.default_mesh_group_mask,
+            binding: Binding::ByName,
+        }),
+        // No glove skin to merge: the agent's own gloves, even if the pawn asked to hide them.
+        None => mesh_groups = with_own_gloves(&agent, mesh_groups),
+    }
+
+    // One animation per player: the agent's bones, then the weapon bones.
+    let mut animations = Vec::new();
+    for ((&controller, poses), carried) in players.iter().zip(bodies).zip(&places) {
+        let poses = hold_gaps(poses, &round.clip_skeleton.reference);
+        let worlds: Vec<Vec<Affine>> = poses.iter().map(|pose| retargeter.world(pose)).collect();
+        // Each weapon bone, frame by frame: where it is keyed (relative to the root) and whether it shows.
+        let slot_keys: Vec<Vec<(Affine, bool)>> = slots
+            .iter()
+            .map(|slot| {
+                let frames_of = &weapon_models[&slot.look.model].1;
+                let target = |k: usize, place: Place| {
+                    let world = &worlds[k];
+                    slot_target(world, &mounts, frames_of, place)
+                        .map(|t| compose(&invert_rigid(&world[0]), &t))
+                };
+                // A place the agent or weapon cannot show (no such attachment) counts as hidden.
+                let places: Vec<Place> = (0..worlds.len())
+                    .map(|k| {
+                        let place = place_of(carried.get(k), slot);
+                        if target(k, place).is_some() {
+                            place
+                        } else {
+                            Place::Hidden
+                        }
+                    })
+                    .collect();
+                key_places(&hide_changes(&places))
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, (place, shown))| {
+                        let local = target(k, place)
+                            .or_else(|| target(k, Place::Hand))
+                            .unwrap_or_else(|| {
+                                let b = &skeleton.bones[first_slot_bone];
+                                crate::model::affine(b.rotation, b.position)
+                            });
+                        (local, shown)
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut frames = Vec::with_capacity(poses.len());
+        let mut scales = Vec::with_capacity(poses.len());
+        for (k, world) in worlds.iter().enumerate() {
+            let mut locals = retargeter.locals_of(world);
+            let mut frame_scales = vec![1.0; skeleton.bones.len()];
+            for (n, keys) in slot_keys.iter().enumerate() {
+                let (local, shown) = keys[k];
+                if !shown {
+                    frame_scales[first_slot_bone + n] = 0.0;
+                }
+                locals.push((
+                    [local[0][3], local[1][3], local[2][3]],
+                    matrix_to_quat(&local),
+                ));
+            }
+            frames.push(locals);
+            scales.push(frame_scales);
+        }
+        animations.push(BoneAnimation {
+            name: format!("player_{controller}"),
+            frames,
+            fps: PLAYER_ANIMATION_FPS,
+            scales,
+        });
+    }
+
+    let mut written = export_character(
+        content,
+        &agent,
+        mesh_groups,
+        &skeleton,
+        &merged,
+        &animations,
+        out_dir,
+        file_name,
+    )?;
+    written.warnings.extend(warnings);
+    Ok((written, slots))
+}
+
+/// Where `slot`'s weapon is in one frame's list (hidden when the player does not carry it).
+fn place_of(carried: Option<&Vec<(Slot, Place)>>, slot: &Slot) -> Place {
+    carried
+        .and_then(|list| list.iter().find(|(s, _)| s == slot))
+        .map_or(Place::Hidden, |(_, place)| *place)
+}
+
+/// The mesh groups to show: `mask` as the entity sent it, or the model's default when it sent none (0) or all bits
+/// (knives and grenades send every bit).
+fn shown_groups(model: &Model, mask: u64) -> u64 {
+    if mask == 0 || mask == u64::MAX {
+        model.default_mesh_group_mask
+    } else {
+        mask
+    }
+}
+
+/// `mask` with every `…_hide_default_gloves` choice of the agent swapped for the `…_default` one of the same body
+/// group (`first_or_third_person_@1_#&thirdperson_hide_default_gloves` → `…_@0_#&thirdperson_default`).
+fn with_own_gloves(agent: &Model, mask: u64) -> u64 {
+    let mut out = mask;
+    for (i, group) in agent.mesh_groups.iter().enumerate() {
+        let Some(choice) = group.split("#&").nth(1) else {
+            continue;
+        };
+        if out & (1 << i) == 0 || !choice.ends_with("_hide_default_gloves") {
+            continue;
+        }
+        let own = choice.replace("_hide_default_gloves", "_default");
+        if let Some(j) = agent
+            .mesh_groups
+            .iter()
+            .position(|g| g.split("#&").nth(1) == Some(own.as_str()))
+        {
+            out = (out & !(1 << i)) | (1 << j);
+        }
+    }
+    out
+}
+
+/// A model path's file name without its extension (`agents/models/ctm_sas/ctm_sas.vmdl` → `ctm_sas`).
+fn stem(path: &str) -> &str {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    file.split('.').next().unwrap_or(file)
 }
 
 /// The main graph of third-person animation.
@@ -149,12 +511,14 @@ const MAIN_GRAPH: &str = "animation/graphs/worldmodel/worldmodel.vnmgraph";
 /// CS2's item definitions.
 const ITEMS_GAME: &str = "scripts/items/items_game.txt";
 
-/// The upper-body layers' data for the weapons the round's players hold: names from `items_game.txt`, clips found
-/// in the graphs ([`WeaponClips`]), the `UpperBody` mask and the aim's bones. `None` (with a warning) when one of
-/// them cannot be read: the players then get the locomotion alone.
+/// The upper-body layers' data for every weapon the round's players hold or carry: names from `items_game.txt`,
+/// clips found in the graphs ([`WeaponClips`]; their category also picks a carried weapon's holster), the
+/// `UpperBody` mask and the aim's bones. `None` (with a warning) when one of them cannot be read: the players then
+/// get the locomotion alone, and their weapons show only in hand.
 fn load_upper_body(
     content: &Content,
     track: &RoundTrack,
+    items_text: Option<&str>,
     skeleton_data: &crate::kv3::Value,
     skeleton: &NmSkeleton,
     warnings: &mut Vec<String>,
@@ -167,16 +531,10 @@ fn load_upper_body(
             .push("clip skeleton without an UpperBody mask or aim bones: locomotion only".into());
         return Ok(None);
     };
-    let names = match content
-        .read(ITEMS_GAME)
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-    {
-        Ok(text) => item_names(&text),
-        Err(e) => {
-            warnings.push(format!("{ITEMS_GAME}: {e}: locomotion only"));
-            return Ok(None);
-        }
+    let Some(text) = items_text else {
+        return Ok(None);
     };
+    let names = item_names(text);
     let graph = |path: &str| -> Result<Graph, ExportError> {
         Ok(Graph::parse(&resource_data(content, path)?)?)
     };
@@ -202,11 +560,18 @@ fn load_upper_body(
             }
         })
     };
-    let items: std::collections::BTreeSet<u32> = track
+    let items: BTreeSet<u32> = track
         .samples
         .iter()
         .flat_map(|s| &s.players)
-        .filter_map(|p| p.rig.weapon.as_ref().map(|w| w.item))
+        .flat_map(|p| {
+            p.rig
+                .weapon
+                .as_ref()
+                .map(|w| w.item)
+                .into_iter()
+                .chain(p.weapons.iter().map(|w| w.item))
+        })
         .collect();
     let mut weapons = HashMap::new();
     for item in items {
@@ -284,5 +649,35 @@ mod tests {
         assert_eq!(xs, [1.0, 1.0, 1.0, 2.0, 2.0]);
         let never = hold_gaps(vec![None, None], &pose(9.0));
         assert_eq!(never[1][0].translation[0], 9.0);
+    }
+
+    #[test]
+    fn stems_and_shown_groups() {
+        assert_eq!(stem("agents/models/ctm_sas/ctm_sas.vmdl"), "ctm_sas");
+        assert_eq!(stem("weapon_rif_ak47.vmdl"), "weapon_rif_ak47");
+        // The SAS agent's groups: what a pawn wearing glove skins sends, and the agent's own gloves back.
+        let agent = Model {
+            meshes: Vec::new(),
+            mesh_groups: [
+                "defusekit_@0_#&defusekit_hidden",
+                "defusekit_@1_#&defusekit_visible",
+                "first_or_third_person_@0_#&thirdperson_default",
+                "first_or_third_person_@1_#&thirdperson_hide_default_gloves",
+            ]
+            .map(String::from)
+            .to_vec(),
+            mesh_group_masks: Vec::new(),
+            default_mesh_group_mask: 5,
+            lod_masks: Vec::new(),
+            external_meshes: Vec::new(),
+            skeleton: Default::default(),
+            remapping_table: Vec::new(),
+            remapping_starts: Vec::new(),
+        };
+        assert_eq!(with_own_gloves(&agent, 0b1001), 0b0101);
+        assert_eq!(with_own_gloves(&agent, 0b0110), 0b0110);
+        assert_eq!(shown_groups(&agent, 0), 5);
+        assert_eq!(shown_groups(&agent, u64::MAX), 5);
+        assert_eq!(shown_groups(&agent, 6), 6);
     }
 }

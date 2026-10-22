@@ -6,7 +6,8 @@
 //! graphs select by the name (`weapon_type` = `weapon_ak47`, `weapon_m4a1` for the M4A4, `weapon_knife` for the CT
 //! knife…).
 //!
-//! Only the item names are read; prefabs, paint kits and the rest are skipped.
+//! Only values written in an item's own block are read ([`item_values`]: names, glove models); prefabs, paint kits
+//! and the rest are skipped.
 
 use std::collections::HashMap;
 
@@ -79,6 +80,12 @@ fn tokens(text: &str) -> impl Iterator<Item = Token<'_>> {
 
 /// Item names by definition index, from the text of `items_game.txt`.
 pub fn item_names(text: &str) -> HashMap<u32, String> {
+    item_values(text, "name")
+}
+
+/// Every item's value of `key` written in its own block (not inherited from a prefab), by definition index: e.g.
+/// `model_world`, which glove items name directly (`5027` → `agents/models/shared/arms/glove_bloodhound/…vmdl`).
+pub fn item_values(text: &str, wanted: &str) -> HashMap<u32, String> {
     let mut names = HashMap::new();
     // Keys of the open blocks, outermost first.
     let mut path: Vec<&str> = Vec::new();
@@ -96,7 +103,7 @@ pub fn item_names(text: &str) -> HashMap<u32, String> {
                 None => key = Some(text),
                 Some(k) => {
                     // A key–value pair inside items_game/items/<index>.
-                    if k == "name"
+                    if k == wanted
                         && path.len() == 3
                         && path[0] == "items_game"
                         && path[1] == "items"
@@ -133,14 +140,18 @@ mod tests {
         }
         "42" { "name" "weapon_knife" "item_description" "a \"quoted\" word" }
         "507" { "name" "weapon_knife_karambit" [$WIN32] }
+        "5027" { "name" "studded_bloodhound_gloves" "model_world" "agents/models/shared/arms/glove_bloodhound/glove_bloodhound.vmdl" }
     }
     "prefabs" { "9" { "name" "not an item" } }
 }
 "#;
         let names = item_names(text);
-        assert_eq!(names.len(), 3);
+        assert_eq!(names.len(), 4);
         assert_eq!(names[&7], "weapon_ak47");
         assert_eq!(names[&42], "weapon_knife");
         assert_eq!(names[&507], "weapon_knife_karambit");
+        let models = item_values(text, "model_world");
+        assert_eq!(models.len(), 1);
+        assert!(models[&5027].ends_with("glove_bloodhound.vmdl"));
     }
 }
