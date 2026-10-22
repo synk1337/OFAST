@@ -18,7 +18,7 @@
 //! | `ladder_angle_yaw`, `_backwards` | the ladder's direction from the body ([`ladder_bearings`], [`ladder_angles`]) |
 //! | `flinch_body_type`, `flinch_head_type` | `player_hurt`'s hit group and the side the bullet came from (`bullet_damage`) ([`flinch_types`]) |
 //! | `flinch_is_on_fire` | fire damage ([`is_fire`]) within [`BURN_GAP`] |
-//! | `flashed_amount` | `player_blind`'s duration ([`flashed_amount`]) |
+//! | `flashed_amount` | the flash's duration, the pawn's `m_flFlashDuration` ([`flashed_amount`]) |
 //!
 //! The thresholds below are OFAST's choices (CS2's game code is not public); each is named and documented.
 
@@ -154,7 +154,7 @@ pub fn is_fire(weapon: &str) -> bool {
 /// a player standing in fire every 12 – 13 ticks, 0.2 s (Aurora vs FURIA, Nuke, rounds 2 – 3).
 pub const BURN_GAP: f32 = 0.5;
 
-/// How flashed a player is `elapsed` seconds into a blindness of `duration` seconds (`player_blind`), 0 – 1: fully
+/// How flashed a player is `elapsed` seconds into a blindness of `duration` seconds (`m_flFlashDuration`), 0 – 1: fully
 /// until the last 3 seconds, then fading with the square of the time left — CS:GO's flash overlay, assumed for
 /// CS2's `flashed_amount`, whose layer shows above 0.1 (a 0.76 s blindness never does).
 pub fn flashed_amount(elapsed: f32, duration: f32) -> f32 {

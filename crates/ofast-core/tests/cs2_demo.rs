@@ -415,7 +415,9 @@ fn players_export_one_animation_per_player() {
 /// The bake's decisions (M4.4c) follow the demo's own events in every round up to 5: each knife attack and grenade
 /// throw the demo records (a gameplay state 500 – 505 or 200 – 202 with a new timestamp) starts that action in the
 /// weapons layer on its tick; every jump that leaves the ground starts a jump; every ladder stretch is a ladder state;
-/// every C4 plant and defuse begins one; and the baked poses are finite.
+/// every C4 plant and defuse begins one; every hit flinches or burns and every flash (the pawn's
+/// `m_flFlashDuration` taking a new value, equal to `player_blind`'s duration on demos that have the event) shows;
+/// and the baked poses are finite.
 #[test]
 fn bake_decisions_follow_the_demo() {
     use ofast_core::anim::bake::{bake_player, timeline};
@@ -428,7 +430,7 @@ fn bake_decisions_follow_the_demo() {
     };
     let content = Content::game(&install).expect("archives open");
     let rounds = list_rounds(&data).expect("rounds");
-    let mut checked = [0usize; 6];
+    let mut checked = [0usize; 7];
     for round in rounds.iter().take(5) {
         let track = track_round(&data, round.round).expect("round");
         let rig = load_player_rig(&content, &track).expect("rig");
@@ -454,14 +456,31 @@ fn bake_decisions_follow_the_demo() {
             let mut was_ladder = false;
             let mut was_planting = false;
             let mut was_defusing = false;
+            let mut flash_seen: Option<f32> = None;
             for sample in &track.samples {
                 let Some(p) = sample
                     .players
                     .iter()
                     .find(|p| p.controller == controller && p.alive)
                 else {
+                    flash_seen = None;
                     continue;
                 };
+                // A flash is when the pawn's flash duration takes a new value above 0. A flash on the strongest of
+                // flashes that overlap (within 10 s).
+                let flash = p.rig.flash_duration;
+                if flash > 0.0 && flash_seen.is_some_and(|seen| seen != flash) {
+                    assert!(
+                        lines.iter().any(|(t, l)| *t <= sample.tick
+                            && t + 640 > sample.tick
+                            && l.contains("flashed")),
+                        "round {} player {controller}: flashed at {} for {flash} s",
+                        round.round,
+                        sample.tick
+                    );
+                    checked[6] += 1;
+                }
+                flash_seen = Some(flash);
                 if let Some(w) = &p.rig.weapon
                     && let Some(stamp) = w.state_tick
                     && seen.insert((w.anim_state, stamp))
@@ -510,11 +529,14 @@ fn bake_decisions_follow_the_demo() {
                 .count();
             // Every hit while alive flinches (fire burns, falls do nothing), every flash is seen.
             let alive_at = |tick: u32| {
-                track.samples.iter().any(|s| {
-                    s.tick == tick
-                        && s.players
-                            .iter()
-                            .any(|p| p.controller == controller && p.alive)
+                track.samples.iter().find_map(|s| {
+                    (s.tick == tick)
+                        .then(|| {
+                            s.players
+                                .iter()
+                                .find(|p| p.controller == controller && p.alive)
+                        })
+                        .flatten()
                 })
             };
             for e in track
@@ -522,9 +544,9 @@ fn bake_decisions_follow_the_demo() {
                 .iter()
                 .filter(|e| e.controller("userid") == Some(controller))
             {
-                if !alive_at(e.tick) {
+                let Some(victim) = alive_at(e.tick) else {
                     continue;
-                }
+                };
                 let weapon = e.string("weapon").unwrap_or("");
                 let expected = match e.name.as_str() {
                     "player_hurt" if ofast_core::anim::states::is_fire(weapon) => "burning",
@@ -532,7 +554,19 @@ fn bake_decisions_follow_the_demo() {
                         continue;
                     }
                     "player_hurt" => "flinch",
-                    "player_blind" => "flashed",
+                    "player_blind" => {
+                        // The bake reads flashes from the pawn: on the event's tick it holds the event's duration.
+                        let duration = match e.get("blind_duration") {
+                            Some(ofast_core::demo::events::EventValue::Float(d)) => *d,
+                            other => panic!("blind_duration {other:?}"),
+                        };
+                        assert_eq!(
+                            victim.rig.flash_duration, duration,
+                            "round {} player {controller}: player_blind at {}",
+                            round.round, e.tick
+                        );
+                        "flashed"
+                    }
                     _ => continue,
                 };
                 // A flinch starts on its hit's tick; a burn on its first fire hit, a flash on the strongest of
@@ -570,8 +604,8 @@ fn bake_decisions_follow_the_demo() {
         }
     }
     println!(
-        "attacks and throws {}, ladders {}, plants {}, defuses {}, jumps {}, hits and flashes {}",
-        checked[0], checked[1], checked[2], checked[3], checked[4], checked[5]
+        "attacks and throws {}, ladders {}, plants {}, defuses {}, jumps {}, hits and blind events {}, flashes {}",
+        checked[0], checked[1], checked[2], checked[3], checked[4], checked[5], checked[6]
     );
     assert!(
         checked[0] > 0 && checked[4] > 0,

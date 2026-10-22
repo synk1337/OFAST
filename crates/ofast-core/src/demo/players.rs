@@ -152,6 +152,10 @@ pub struct RigInputs {
     pub last_landing_tick: Option<u32>,
     /// The weapon in hand (`m_pWeaponServices.m_hActiveWeapon`), if any.
     pub weapon: Option<ActiveWeapon>,
+    /// How long the latest flash blinds the player, in seconds (`m_flFlashDuration`); 0 if never flashed.
+    pub flash_duration: f32,
+    /// How white the latest flash makes the screen at most, 0 – 255 (`m_flFlashMaxAlpha`).
+    pub flash_max_alpha: f32,
 }
 
 /// The weapon a player holds at one tick.
@@ -317,6 +321,8 @@ struct RigPaths {
     last_jump: Option<FieldPath>,
     last_landing: Option<FieldPath>,
     active_weapon: Option<FieldPath>,
+    flash_duration: Option<FieldPath>,
+    flash_max_alpha: Option<FieldPath>,
     /// Per weapon class id: every class with an item definition index (each weapon has its own serializer, so the
     /// same field sits at a different path in each).
     weapons: HashMap<u32, WeaponPaths>,
@@ -373,6 +379,8 @@ impl RigPaths {
             last_jump: path("m_pMovementServices.m_nLastJumpTick"),
             last_landing: path("m_pMovementServices.m_ModernJump.m_nLastLandedTick"),
             active_weapon: path("m_pWeaponServices.m_hActiveWeapon"),
+            flash_duration: path("m_flFlashDuration"),
+            flash_max_alpha: path("m_flFlashMaxAlpha"),
             weapons,
         }
     }
@@ -821,6 +829,12 @@ fn read_rig(parser: &DemoParser<'_>, paths: &RigPaths, pawn: &Entity) -> RigInpu
         last_jump_tick: demo_tick(&paths.last_jump),
         last_landing_tick: demo_tick(&paths.last_landing),
         weapon,
+        flash_duration: get(&paths.flash_duration)
+            .and_then(FieldValue::as_f32)
+            .unwrap_or(0.0),
+        flash_max_alpha: get(&paths.flash_max_alpha)
+            .and_then(FieldValue::as_f32)
+            .unwrap_or(0.0),
     }
 }
 

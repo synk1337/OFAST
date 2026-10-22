@@ -154,7 +154,8 @@ player and round.
   them (`Evaluator::leaves`), so a draw plays through the inspect state that follows it — CS2's raised knife at
   tick 26508 was the Huntsman's draw, now matched; ladders turn the legs back to the ladder (its direction from the
   approach, `ladder_angle_yaw`, the back clips); small turns on the spot (10 – 45°) besides the loop; body, head and
-  fire flinches from `player_hurt` (hit group and side from `bullet_damage`); the flashed pose from `player_blind`.
+  fire flinches from `player_hurt` (hit group and side from `bullet_damage`); the flashed pose from the pawn's
+  `m_flFlashDuration` (tournament demos have no `player_blind`); spectators (a major demo's observer) left out.
   [animation.md](formats/animation.md#evaluating-the-graphs-animeval-animstates).
 - [ ] M4.4e Foot IK on slopes and stairs; checks against CS2 of the ladder legs, flinches, flashes and the
   start / turn thresholds (more demos: a major's, with glove skins, flashes and molotovs).

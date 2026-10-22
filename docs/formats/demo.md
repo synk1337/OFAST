@@ -397,15 +397,26 @@ demoparser2's tick, victim, attacker, weapon and headshot flag (`tests/cs2_demo.
 `round_officially_ended`, `bomb_beginplant` / `planted` / `begindefuse` / `defused` / `exploded`, `bomb_pickup` /
 `dropped`, `weapon_reload`, `smokegrenade_expired`.
 
-The animation bake reads three more (`anim::bake`, [animation.md](animation.md#evaluating-the-graphs-animeval-animstates)):
+The animation bake reads two more (`anim::bake`, [animation.md](animation.md#evaluating-the-graphs-animeval-animstates)):
 
 | Event | Keys used | Round 5 |
 |---|---|---|
 | `player_hurt` | `userid` (victim), `attacker`, `weapon` (`inferno` for fire), `hitgroup` (0 generic, 1 head, 2 chest, 3 stomach, 4 / 5 left / right arm, 6 / 7 left / right leg) | 32 |
 | `bullet_damage` | `victim`, `damage_dir_x` / `_y` / `_z` (the bullet's direction, world), `distance`, `num_penetrations` | 31 |
-| `player_blind` | `userid`, `attacker`, `blind_duration` (seconds; 0.6 – 2.3 s seen in rounds 2 – 8) | 0 |
 
-Fall damage is a `player_hurt` without attacker or weapon and with hit group 0.
+Fall damage is a `player_hurt` without attacker or weapon and with hit group 0. Flashes come from the pawn
+(`m_flFlashDuration`, below), not from `player_blind` (`userid`, `attacker`, `blind_duration`): the field is set on
+the event's tick to exactly its `blind_duration` (round 3: 0.6042301 and 2.2956612 s at 14189), set again by each
+new flash even while the last one lasts, and back to 0 some time after the blindness (0.06 – 1.9 s later in the
+major demo's round 5) or on death. Durations up to 4.83 s were seen.
+
+Tournament demos have fewer events. Rounds 2 and 5 of an Aurora vs FURIA major demo (de_nuke) have no
+`player_blind`, `bullet_damage`, `player_footstep`, `item_equip`, `weapon_reload`, `weapon_zoom`,
+`bomb_beginplant`, `bomb_begindefuse` or `round_end` (the local match demo has them all), but they have
+`hltv_chase` / `hltv_fixed` (the observer's camera), `player_sound`, `grenade_thrown` and `entity_killed`. Hits
+then flinch from the attacker's side, flashes still come from the pawn, plants and defuses from the pawn and the
+weapon (`m_bIsDefusing`, gameplay state 300), and the replay's milestones lack the plant and defuse beginnings and
+the round end.
 
 ## Players and rounds
 
@@ -418,7 +429,8 @@ Fall damage is a `player_hurt` without attacker or weapon and with hit group 0.
   `m_vecViewOffset.m_vecX/Y/Z` = from the feet to the first-person camera (z = eye height, 63.97 standing, 45.97
   crouched, smoothed over steps; x and y 0 in practice; a component never sent keeps its default 0);
   `m_angEyeAngles` = (pitch, yaw, roll) in degrees (pitch negative = looking up; yaw −180..180, 0 = +x);
-  `m_lifeState` 0 = alive.
+  `m_lifeState` 0 = alive; `m_flFlashDuration` (seconds of blindness of the latest flash, set on the flash's tick,
+  back to 0 after it) and `m_flFlashMaxAlpha` (255 for every flash seen).
 - **Camera**: `PlayerSample::eye_position()` = position + view offset, aimed along pitch and yaw — what CS2 shows
   when spectating that player in first person (see [Checked in the game](#checked-in-the-game)).
 - **Game rules** (`CCSGameRulesProxy` → pointer `m_pGameRules`): `m_totalRoundsPlayed`, `m_bFreezePeriod`,

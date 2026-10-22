@@ -376,7 +376,9 @@ struct Step {
     flinch_head: Option<(u32, &'static str)>,
     /// Burning: the first and the latest tick of fire damage in a row.
     burning: Option<(u32, u32)>,
-    /// The latest flash: tick and blind duration, seconds.
+    /// The latest flash: tick and blind duration, seconds (the pawn's `m_flFlashDuration` when it takes a new value:
+    /// the server sets it on the tick of the `player_blind` event, to its `blind_duration`, and tournament demos,
+    /// which have no `player_blind`, still send it).
     blind: Option<(u32, f32)>,
 }
 
@@ -622,34 +624,29 @@ impl Baker<'_> {
         let mut additive: Option<(Additive, u32)> = None;
         let mut shot: Option<u32> = None;
         let mut last_state: Option<(u32, i64)> = None;
-        // This player's hits and flashes, oldest first, consumed as the ticks pass.
-        let mine = |name: &str| -> Vec<&GameEvent> {
-            track
-                .events
-                .iter()
-                .filter(|e| e.name == name && e.controller("userid") == Some(controller))
-                .collect()
-        };
-        let (hurts, blinds) = (mine("player_hurt"), mine("player_blind"));
-        let (mut next_hurt, mut next_blind) = (0usize, 0usize);
+        // This player's hits, oldest first, consumed as the ticks pass.
+        let hurts: Vec<&GameEvent> = track
+            .events
+            .iter()
+            .filter(|e| e.name == "player_hurt" && e.controller("userid") == Some(controller))
+            .collect();
+        let mut next_hurt = 0usize;
         let mut flinch_body: Option<(u32, &'static str)> = None;
         let mut flinch_head: Option<(u32, &'static str)> = None;
         let mut burning: Option<(u32, u32)> = None;
         let mut blind: Option<(u32, f32)> = None;
+        // `m_flFlashDuration` at the previous sample: a flash is when it changes to a value above 0. `None` after a
+        // gap, so that a value left over from before it (or from the previous round) starts nothing.
+        let mut flash_seen: Option<f32> = None;
         let mut steps = Vec::with_capacity(players.len());
         for (i, (sample, player)) in track.samples.iter().zip(&players).enumerate() {
             let Some(player) = player else {
-                // Dead or absent: a respawn starts afresh (nothing blends from before the gap, and the hits and
-                // flashes of this time are passed over).
+                // Dead or absent: a respawn starts afresh (nothing blends from before the gap, and the hits of this
+                // time are passed over).
                 while hurts.get(next_hurt).is_some_and(|e| e.tick <= sample.tick) {
                     next_hurt += 1;
                 }
-                while blinds
-                    .get(next_blind)
-                    .is_some_and(|e| e.tick <= sample.tick)
-                {
-                    next_blind += 1;
-                }
+                flash_seen = None;
                 previous = None;
                 history.clear();
                 movement = None;
@@ -986,18 +983,15 @@ impl Baker<'_> {
                     flinch_head = Some((hurt.tick, kind));
                 }
             }
-            while let Some(flash) = blinds.get(next_blind).filter(|e| e.tick <= tick) {
-                next_blind += 1;
-                let duration = match flash.get("blind_duration") {
-                    Some(crate::demo::events::EventValue::Float(d)) => *d,
-                    _ => 0.0,
-                };
+            let duration = rig.flash_duration;
+            if duration > 0.0 && flash_seen.is_some_and(|seen| seen != duration) {
                 // A weaker flash does not cut a stronger one short: the one that ends later counts.
                 let ends = |(start, d): (u32, f32)| start as f32 * dt + d;
-                if blind.is_none_or(|b| ends((flash.tick, duration)) >= ends(b)) {
-                    blind = Some((flash.tick, duration));
+                if blind.is_none_or(|b| ends((tick, duration)) >= ends(b)) {
+                    blind = Some((tick, duration));
                 }
             }
+            flash_seen = Some(duration);
             step.flinch_body = flinch_body;
             step.flinch_head = flinch_head;
             step.burning = burning;
