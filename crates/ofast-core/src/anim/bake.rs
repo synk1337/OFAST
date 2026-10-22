@@ -2,27 +2,42 @@
 //!
 //! The layers follow CS2's main graph (`worldmodel.vnmgraph`, `docs/formats/animation.md`), bottom to top:
 //!
-//! 1. **Locomotion** ([`Locomotion`]): the weapon's category picks one of the three sets (rifle, pistol, knife), the
-//!    velocity in the body's frame and the crouch amount pick the clips; one phase advances tick by tick.
-//! 2. **Weapon idle pose** (additive, upper body): the weapon's own `idle_<w>` / `idle_crouch_<w>` delta, blended by
+//! 1. **Locomotion** (full body): the weapon's category picks one of the three sets (rifle, pistol, knife). Moving
+//!    and standing use [`Locomotion`]'s 2D blends with one phase advancing tick by tick; the set's locomotion
+//!    graph's other states — starts, plants and turns, turning on the spot, jumps and air time, ladders — are
+//!    evaluated by [`super::eval`] from the state [`super::states`] decides, `time` seconds into it. A change of
+//!    state blends over CS2's own transition time.
+//! 2. **Planting** (full body): `SM0/Planting` while the C4 is planted (gameplay state 300).
+//! 3. **Weapon idle pose** (additive, upper body): the weapon's own `idle_<w>` / `idle_crouch_<w>` delta, blended by
 //!    the crouch amount — how this weapon is held over the set's generic carry.
-//! 3. **Weapon action** (model space, upper body): while the weapon is drawn (gameplay state 11) or reloaded
-//!    (800 / 801), its `draw_*` / `reload_*` clip from the state's first tick, fading in and out.
-//! 4. **Shot** (additive, upper body): `shoot_<w>` from each tick the weapon enters a shooting state (100 / 101).
-//! 5. **Aim** ([`super::aim`]): the upper body turned towards the view (eye yaw relative to the body yaw, eye pitch),
-//!    the weapon aligned, the hands on it.
+//! 4. **Weapons** (model space, `UpperBody`, `UpperBody_Ladder` on ladders): the weapon's own graph
+//!    (`worldmodel_gun.vnmgraph+ak47`, `worldmodel_knife.vnmgraph+tactical`, `worldmodel_grenade.vnmgraph+he`…, or
+//!    the main graph's equipment states) for the action its gameplay state stands for: drawing (from the holster:
+//!    the draw clips start with the hand there), reloading, knife attacks, grenade charges and throws, the
+//!    silencer, the Healthshot. Actions hand over to each other and fade out over the graphs' transition times.
+//! 5. **Defuse** (model space, `Defuse` mask): `Defuse/Defuse` while defusing, its enter clip then its loop.
+//! 6. **Body additives** (additive): the jump start from take-off, the landing until its clip ends, breathing
+//!    while standing idle (`Breathing` mask).
+//! 7. **Shot** (additive, upper body): `shoot_<w>` from each tick the weapon enters a shooting state (100 / 101).
+//! 8. **Aim** ([`super::aim`]): the upper body turned towards the view (eye yaw relative to the body yaw, eye pitch),
+//!    the weapon aligned, the hands on it — released during actions until the clip's `WPN_IK_ACTION_ENDING` event.
 //!
 //! Poses are sampled at a fixed frame rate from the round's first tick, ready to key on a model's skeleton (after
-//! [`super::Retargeter`]). Not baked yet: knife attacks, grenade throws, planting and defusing, jumps, ladders,
-//! flinches, ragdolls.
+//! [`super::Retargeter`]). Not baked yet: flinches, the flashed layer, foot IK, ragdolls.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use super::aim::{AimBones, AimInputs, aim};
+use super::eval::{Evaluator, Library, Params, StateId};
 use super::layers::{BoneMask, add_layer, model_space_layer};
 use super::locomotion::{LocomotionBlend, blend_poses};
+use super::states::{
+    GroundAction, GroundInputs, LADDER_CYCLE_HEIGHT, MIN_AIR_TICKS, Movement, PLANT_STATE,
+    REVERSAL_SPEED, REVERSAL_WINDOW, STANDING_SPEED, air_runs, ground_action, reversal,
+    weapon_action,
+};
 use super::{AnimError, Clip, Locomotion, Transform};
-use crate::demo::players::RoundTrack;
+use crate::demo::players::{PlayerSample, RoundTrack};
 
 /// Which of CS2's three locomotion sets a weapon uses (`worldmodel_locomotion.vnmgraph+<set>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -75,6 +90,15 @@ impl WeaponSet {
             Self::Knife => "knife",
         }
     }
+
+    /// The set's position in [`WeaponSet::ALL`].
+    pub fn index(self) -> usize {
+        match self {
+            Self::Rifle => 0,
+            Self::Pistol => 1,
+            Self::Knife => 2,
+        }
+    }
 }
 
 /// The three locomotion sets, read from CS2's graphs.
@@ -99,6 +123,15 @@ impl LocomotionSets {
     }
 }
 
+/// Where a weapon's weapons-layer actions are evaluated: a graph of [`GraphRig::library`] and its node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionGraph {
+    /// The graph's resource path (the weapon's own graph, or the main graph for equipment).
+    pub graph: String,
+    /// The node (the weapon graph's root, or the equipment's state in the main graph).
+    pub node: usize,
+}
+
 /// One weapon's decoded clips (from [`super::weapon::WeaponClips`]).
 #[derive(Debug, Clone)]
 pub struct WeaponAnimation {
@@ -110,10 +143,8 @@ pub struct WeaponAnimation {
     pub idle: Option<[Clip; 2]>,
     /// Additive shot.
     pub shoot: Option<Clip>,
-    /// Draw: standing, crouched.
-    pub draw: Option<[Clip; 2]>,
-    /// Reload: standing, crouched.
-    pub reload: Option<[Clip; 2]>,
+    /// The weapons layer's graph (draws, reloads, attacks, throws…), when [`GraphRig`] has it.
+    pub actions: Option<ActionGraph>,
 }
 
 /// What the upper-body layers need: the weapons by item definition index, CS2's `UpperBody` mask, the aim's bones.
@@ -123,35 +154,192 @@ pub struct UpperBody {
     pub weapons: HashMap<u32, WeaponAnimation>,
     /// The `UpperBody` bone mask of the clip skeleton.
     pub mask: BoneMask,
+    /// `UpperBody_Ladder`, the weapons layer's mask on ladders.
+    pub ladder_mask: Option<BoneMask>,
     /// Bones for the aim.
     pub aim: AimBones,
     /// Clip skeleton parents (for model-space layers).
     pub parents: Vec<Option<usize>>,
 }
 
-/// Blend-in time of a weapon action layer, seconds.
-const ACTION_FADE_IN: f32 = 0.15;
-/// Blend-out time after a weapon action, seconds.
-const ACTION_FADE_OUT: f32 = 0.25;
+/// CS2's graphs for the layers [`super::eval`] evaluates, loaded into one library.
+#[derive(Debug, Default)]
+pub struct GraphRig {
+    /// The graphs and their clips.
+    pub library: Library,
+    /// Each set's locomotion graph, in [`WeaponSet::ALL`] order.
+    pub locomotion: [String; 3],
+    /// The main graph (`worldmodel.vnmgraph`).
+    pub main: String,
+    /// `SM0/Planting`.
+    pub planting: Option<usize>,
+    /// `Defuse/Defuse`.
+    pub defuse: Option<usize>,
+    /// `BodyAdditives/JumpAdditiveStart`.
+    pub jump_start: Option<usize>,
+    /// `BodyAdditives/JumpAdditiveLand`.
+    pub jump_land: Option<usize>,
+    /// `BodyAdditives/Breathing`.
+    pub breathing: Option<usize>,
+    /// Masks of the defuse layer (`Defuse`, `Defuse_Grenade` with a grenade in hand) and of breathing.
+    pub defuse_mask: Option<BoneMask>,
+    /// `Defuse_Grenade`.
+    pub defuse_grenade_mask: Option<BoneMask>,
+    /// `Breathing`.
+    pub breathing_mask: Option<BoneMask>,
+}
+
 /// The aim's action blend (`m_flActionBlendTimeSeconds`), seconds.
 const AIM_ACTION_BLEND: f32 = 0.4;
 /// The aim's hand IK blend-in (`m_flHandIKBlendInTimeSeconds`), seconds.
 const HAND_IK_BLEND_IN: f32 = 0.3;
+/// Blend time when the graphs give none (a new action of another weapon's graph, a state without a transition).
+const DEFAULT_BLEND: f32 = 0.1;
+/// Fade-out of an action when the graph gives none.
+const DEFAULT_FADE_OUT: f32 = 0.2;
+/// `Defuse`: Off → Defuse and back (the main graph's `Defuse` state machine).
+const DEFUSE_BLEND_IN: f32 = 0.2;
+const DEFUSE_BLEND_OUT: f32 = 0.4;
+/// `SM0`: Locomotion ↔ Planting.
+const PLANT_BLEND: f32 = 0.1;
+/// `BodyAdditives`: into the jump start; breathing fades this long (CS2 cuts it in at once).
+const ADDITIVE_BLEND: f32 = 0.2;
+/// A gameplay state's timestamp older than this (seconds) at the tick it is first seen is not its start.
+const STATE_TIMESTAMP_SLACK: f32 = 1.0;
 
-/// A weapon action in progress or just finished.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActionKind {
-    Draw,
-    Reload,
+/// A state from a tick on, and the state it blends from.
+#[derive(Debug, Clone, Copy)]
+struct MovementSegment {
+    state: Movement,
+    start: u32,
+    /// Length of a start or plant (its clip), seconds.
+    length: f32,
+    previous: Option<PreviousMovement>,
+    blend: f32,
 }
 
-/// An action: what, on which weapon, from which tick, until which tick (`None` while it lasts).
+/// The state a movement segment blends from, with its own blend still running when a new state comes quickly
+/// (a counter-strafe: move, plant and turn, move): the pose blends from that blend instead of snapping.
 #[derive(Debug, Clone, Copy)]
-struct Action {
-    kind: ActionKind,
+struct PreviousMovement {
+    state: Movement,
+    start: u32,
+    from: Option<(Movement, u32)>,
+    blend: f32,
+}
+
+/// A weapons-layer action from a tick on.
+#[derive(Debug, Clone, Copy)]
+struct ActionSegment {
     item: u32,
+    action: &'static str,
+    attack: &'static str,
+    /// The gameplay state and its timestamp tick that began it.
+    state: i64,
+    stamp: Option<u32>,
+    start: u32,
+    /// The tick it stopped (fading out, or handed over to the next action).
+    end: Option<u32>,
+    blend_in: f32,
+    blend_out: f32,
+    /// A knife swing that follows a swing still in its `KnifeSwingBack` window (the graph's B variants).
+    swing_back: bool,
+    strength: f32,
+    /// Rounds in the magazine when it began (`weapon_ammo`: a reload from 0 plays `reload_empty`).
+    ammo: f32,
+    /// `deploy_variation`, 0 – 1: a draw's variant by the graph's weights (a knife's `draw2` 8 times in 9).
+    variation: f32,
+    /// The layer's weight when it began (the action it took over, still blending in or fading out), and the aim's
+    /// action fade then: both carry on instead of restarting at 0.
+    inherited: f32,
+    aim_from: f32,
+}
+
+impl ActionSegment {
+    /// The layer's weight at demo tick `tick` (fractional; `interval` seconds per tick): from `inherited` up to 1
+    /// over `blend_in`, down to 0 over `blend_out` after it ended.
+    fn layer_weight(&self, tick: f32, interval: f32) -> f32 {
+        let since = |t: u32| (tick - t as f32).max(0.0) * interval;
+        let rise = if self.blend_in > 0.0 {
+            self.inherited + (1.0 - self.inherited) * (since(self.start) / self.blend_in).min(1.0)
+        } else {
+            1.0
+        };
+        match self.end.filter(|&end| tick >= end as f32) {
+            Some(end) => rise * (1.0 - (since(end) / self.blend_out.max(1e-3)).min(1.0)),
+            None => rise,
+        }
+    }
+
+    /// The aim's action fade at `tick` (before easing): from `aim_from` up to 1 over [`AIM_ACTION_BLEND`], back to
+    /// 0 over it after the end, from where it had got to.
+    fn aim_fade(&self, tick: f32, interval: f32) -> f32 {
+        let since = |t: u32| (tick - t as f32).max(0.0) * interval;
+        let rise = |at: f32| (self.aim_from + at / AIM_ACTION_BLEND).min(1.0);
+        match self.end.filter(|&end| tick >= end as f32) {
+            Some(end) => {
+                let reached = rise(end.saturating_sub(self.start) as f32 * interval);
+                reached * (1.0 - (since(end) / AIM_ACTION_BLEND).min(1.0))
+            }
+            None => rise(since(self.start)),
+        }
+    }
+}
+
+/// A repeatable value in 0 – 1 for a player's action at a tick (CS2 draws `deploy_variation` at random; OFAST
+/// needs the same pick on every export).
+fn variation(controller: u32, tick: u32) -> f32 {
+    let mut x = (u64::from(controller) << 32 | u64::from(tick)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    x ^= x >> 29;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 32;
+    (x >> 40) as f32 / (1u64 << 24) as f32
+}
+
+/// A layer on from a tick, and off from another.
+#[derive(Debug, Clone, Copy)]
+struct Span {
     start: u32,
     end: Option<u32>,
+}
+
+/// The body additive playing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Additive {
+    JumpStart,
+    JumpLand,
+}
+
+/// The state of one living tick.
+struct Step {
+    tick: u32,
+    set: WeaponSet,
+    blend: LocomotionBlend,
+    /// Phase reached at this tick (0 – 1).
+    phase: f32,
+    item: Option<u32>,
+    crouch: f32,
+    walking: bool,
+    defusing: bool,
+    /// Velocity in the body's frame, its length, and the fastest speed of the last [`REVERSAL_WINDOW`].
+    body: [f32; 2],
+    speed: f32,
+    speed_previous: f32,
+    turn_rate: f32,
+    air_height: f32,
+    ladder_cycle: f32,
+    /// View yaw relative to the body (positive left) and pitch (positive down).
+    aim_yaw: f32,
+    aim_pitch: f32,
+    movement: MovementSegment,
+    action: Option<ActionSegment>,
+    /// The action `action` took over from, while they blend.
+    handover: Option<ActionSegment>,
+    plant: Option<Span>,
+    defuse: Option<Span>,
+    additive: Option<(Additive, u32)>,
+    /// Tick of the latest shot with the weapon in hand.
+    shot: Option<u32>,
 }
 
 /// A world velocity (Source axes, units/s) in the body's frame: `(forward, left)` for a body facing `yaw` degrees.
@@ -168,130 +356,95 @@ fn normalize_angle(degrees: f32) -> f32 {
     (degrees + 180.0).rem_euclid(360.0) - 180.0
 }
 
-/// The state of one living tick.
-struct Step {
-    tick: u32,
-    set: WeaponSet,
-    blend: LocomotionBlend,
-    /// Phase reached at this tick (0 – 1).
-    phase: f32,
-    item: Option<u32>,
-    crouch: f32,
-    /// View yaw relative to the body (positive left) and pitch (positive down).
-    aim_yaw: f32,
-    aim_pitch: f32,
-    /// The current or most recent weapon action.
-    action: Option<Action>,
-    /// Tick of the latest shot with the weapon in hand.
-    shot: Option<u32>,
-}
-
 /// One player's poses (clip-skeleton bones) at `fps` frames per second from the round's first tick to its last:
-/// `None` while the player has no living pawn. Without `upper`, the locomotion alone.
+/// `None` while the player has no living pawn. Without `upper`, the locomotion alone; without `graphs`, no
+/// graph-evaluated states (moving and standing only, no actions).
 pub fn bake_player(
     track: &RoundTrack,
     controller: u32,
     sets: &LocomotionSets,
     upper: Option<&UpperBody>,
+    graphs: Option<&GraphRig>,
     fps: f32,
 ) -> Result<Vec<Option<Vec<Transform>>>, AnimError> {
-    // The phase runs on through deaths and absences; it only has to be continuous while the player moves.
-    let mut phase = 0.0f32;
-    let mut previous: Option<u32> = None;
-    let mut action: Option<Action> = None;
-    let mut shot: Option<u32> = None;
-    let mut last_state: Option<(u32, i64)> = None;
-    let steps: Vec<Option<Step>> = track
-        .samples
-        .iter()
-        .map(|sample| {
-            let player = sample
-                .players
-                .iter()
-                .find(|p| p.controller == controller && p.alive)?;
-            let rig = &player.rig;
-            let item = rig.weapon.as_ref().map(|w| w.item);
-            let weapon = item.and_then(|i| upper?.weapons.get(&i));
-            let set = weapon.map_or(WeaponSet::for_item(item), |w| {
-                WeaponSet::for_category(&w.category)
-            });
-            let blend = sets
-                .get(set)
-                .blend(body_relative(rig.velocity, rig.body_yaw), rig.duck_amount);
-            let dt = previous.map_or(0.0, |t| {
-                sample.tick.saturating_sub(t) as f32 * track.tick_interval
-            });
-            phase = (phase + dt / blend.duration).rem_euclid(1.0);
-            previous = Some(sample.tick);
-
-            // Weapon actions and shots, from the weapon's gameplay animation state.
-            let state = rig.weapon.as_ref().map(|w| (w.item, w.anim_state));
-            let kind = match state.map(|(_, s)| s) {
-                Some(11) => Some(ActionKind::Draw),
-                Some(800 | 801) => Some(ActionKind::Reload),
-                _ => None,
-            };
-            match (kind, item) {
-                (Some(kind), Some(item)) => {
-                    let continuing =
-                        action.is_some_and(|a| a.kind == kind && a.item == item && a.end.is_none());
-                    if !continuing {
-                        action = Some(Action {
-                            kind,
-                            item,
-                            start: sample.tick,
-                            end: None,
-                        });
-                    }
-                }
-                _ => {
-                    if let Some(a) = action.as_mut()
-                        && a.end.is_none()
-                    {
-                        a.end = Some(sample.tick);
-                    }
-                }
-            }
-            // A shot starts whenever the state enters 100 or 101 (they alternate shot by shot).
-            if let Some((_, s)) = state
-                && matches!(s, 100 | 101)
-                && last_state != state
-            {
-                shot = Some(sample.tick);
-            }
-            last_state = state;
-
-            Some(Step {
-                tick: sample.tick,
-                set,
-                blend,
-                phase,
-                item,
-                crouch: rig.duck_amount,
-                aim_yaw: normalize_angle(player.yaw - rig.body_yaw),
-                aim_pitch: player.pitch,
-                action,
-                shot,
-            })
-        })
-        .collect();
-
+    let baker = Baker {
+        track,
+        sets,
+        upper,
+        graphs,
+        eval: graphs.map(|g| Evaluator::new(&g.library)),
+    };
+    let steps = baker.steps(controller)?;
     let frames = frame_samples(track, fps);
     let mut out = Vec::with_capacity(frames.len());
     for (tick, index) in frames {
-        let pose = match steps.get(index).and_then(Option::as_ref) {
-            Some(step) => {
-                let extra = (tick - step.tick as f32).max(0.0) * track.tick_interval;
-                let phase = step.phase + extra / step.blend.duration;
-                let mut pose = sets.get(step.set).sample(&step.blend, phase)?;
-                if let Some(upper) = upper {
-                    layer_upper_body(&mut pose, upper, step, tick, track.tick_interval)?;
-                }
-                Some(pose)
-            }
+        out.push(match steps.get(index).and_then(Option::as_ref) {
+            Some(step) => Some(baker.render(step, tick)?),
             None => None,
-        };
-        out.push(pose);
+        });
+    }
+    Ok(out)
+}
+
+/// What [`bake_player`] decides for a player, as readable changes: `(tick, what began)` for every new movement
+/// state (`movement Ground(Start("NW")) after 0.1 s`), weapons-layer action (`action action_attack
+/// attack_knife_heavymiss`), plant, defuse and body additive. For checking the decisions against a demo.
+pub fn timeline(
+    track: &RoundTrack,
+    controller: u32,
+    sets: &LocomotionSets,
+    upper: Option<&UpperBody>,
+    graphs: Option<&GraphRig>,
+) -> Result<Vec<(u32, String)>, AnimError> {
+    let baker = Baker {
+        track,
+        sets,
+        upper,
+        graphs,
+        eval: graphs.map(|g| Evaluator::new(&g.library)),
+    };
+    let mut out = Vec::new();
+    let mut last: Option<&Step> = None;
+    let steps = baker.steps(controller)?;
+    for step in steps.iter().flatten() {
+        let m = &step.movement;
+        if last.is_none_or(|l| l.movement.start != m.start || l.movement.state != m.state) {
+            out.push((
+                m.start,
+                format!("movement {:?} after {:.2} s", m.state, m.blend),
+            ));
+        }
+        if let Some(a) = step.action
+            && last.is_none_or(|l| {
+                l.action
+                    .is_none_or(|b| b.start != a.start || b.action != a.action || b.item != a.item)
+            })
+        {
+            let back = if a.swing_back { " (swing back)" } else { "" };
+            out.push((
+                a.start,
+                format!(
+                    "action {} {}{back} on item {} in {:.2} s",
+                    a.action, a.attack, a.item, a.blend_in
+                ),
+            ));
+        }
+        for (name, now, before) in [
+            ("plant", step.plant, last.and_then(|l| l.plant)),
+            ("defuse", step.defuse, last.and_then(|l| l.defuse)),
+        ] {
+            if let Some(s) = now
+                && before.is_none_or(|b| b.start != s.start)
+            {
+                out.push((s.start, format!("{name} begins")));
+            }
+        }
+        if let Some((kind, start)) = step.additive
+            && last.is_none_or(|l| l.additive != step.additive)
+        {
+            out.push((start, format!("additive {kind:?}")));
+        }
+        last = Some(step);
     }
     Ok(out)
 }
@@ -324,91 +477,910 @@ fn crouch_blend(pair: &[Clip; 2], time: f32, crouch: f32) -> Result<Vec<Transfor
     Ok(blend_poses(&[(stand, 1.0 - crouch), (crouched, crouch)]))
 }
 
-/// Layers 2 – 5 of the module docs over a locomotion pose, at demo tick `tick` (fractional).
-fn layer_upper_body(
-    pose: &mut [Transform],
-    upper: &UpperBody,
-    step: &Step,
-    tick: f32,
-    interval: f32,
-) -> Result<(), AnimError> {
-    let since = |t: u32| (tick - t as f32).max(0.0) * interval;
-    let weapon = step.item.and_then(|i| upper.weapons.get(&i));
-    if let Some(idle) = weapon.and_then(|w| w.idle.as_ref()) {
-        add_layer(
-            pose,
-            &crouch_blend(idle, 0.0, step.crouch)?,
-            1.0,
-            Some(&upper.mask),
-        );
+/// `a` towards `b` by `w` (0 – 1), bone by bone.
+fn mix(a: Vec<Transform>, b: Vec<Transform>, w: f32) -> Vec<Transform> {
+    if w >= 1.0 {
+        return b;
+    }
+    if w <= 0.0 {
+        return a;
+    }
+    blend_poses(&[(a, 1.0 - w), (b, w)])
+}
+
+/// In-out quadratic easing (the aim node's action blend).
+fn ease(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    if t < 0.5 {
+        2.0 * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(2) / 2.0
+    }
+}
+
+/// The round, the data and the graphs one player is baked with.
+struct Baker<'a> {
+    track: &'a RoundTrack,
+    sets: &'a LocomotionSets,
+    upper: Option<&'a UpperBody>,
+    graphs: Option<&'a GraphRig>,
+    eval: Option<Evaluator<'a>>,
+}
+
+impl Baker<'_> {
+    fn seconds(&self, ticks: f32) -> f32 {
+        ticks.max(0.0) * self.track.tick_interval
     }
 
-    // The action layer, its weight and the aim's action weight.
-    let mut action_weight = 0.0f32;
-    let mut hand_ik = 1.0f32;
-    if let Some(action) = step.action {
-        let clips = upper
-            .weapons
-            .get(&action.item)
-            .and_then(|w| match action.kind {
-                ActionKind::Draw => w.draw.as_ref(),
-                ActionKind::Reload => w.reload.as_ref(),
-            });
-        let elapsed = since(action.start);
-        let (fade, aim_fade, ik) = match action.end {
-            None => (
-                (elapsed / ACTION_FADE_IN).min(1.0),
-                (elapsed / AIM_ACTION_BLEND).min(1.0),
-                0.0,
-            ),
-            Some(end) => {
-                let after = since(end);
-                (
-                    1.0 - (after / ACTION_FADE_OUT).min(1.0),
-                    1.0 - (after / AIM_ACTION_BLEND).min(1.0),
-                    (after / HAND_IK_BLEND_IN).min(1.0),
-                )
+    fn weapon(&self, item: Option<u32>) -> Option<&WeaponAnimation> {
+        self.upper?.weapons.get(&item?)
+    }
+
+    /// The step of every sample: decided in order, each from the one before.
+    fn steps(&self, controller: u32) -> Result<Vec<Option<Step>>, AnimError> {
+        let track = self.track;
+        let dt = track.tick_interval;
+        let players: Vec<Option<&PlayerSample>> = track
+            .samples
+            .iter()
+            .map(|s| {
+                s.players
+                    .iter()
+                    .find(|p| p.controller == controller && p.alive)
+            })
+            .collect();
+        let ground: Vec<Option<(bool, f32)>> = players
+            .iter()
+            .map(|p| {
+                p.filter(|p| !p.rig.on_ladder)
+                    .map(|p| (p.rig.on_ground, p.position[2]))
+            })
+            .collect();
+        let runs = air_runs(&ground);
+        let mut run_of = vec![None; players.len()];
+        for run in &runs {
+            for slot in &mut run_of[run.start..=run.end] {
+                *slot = Some(*run);
             }
+        }
+
+        // The phase runs on through deaths and absences; it only has to be continuous while the player moves.
+        let mut phase = 0.0f32;
+        let mut previous: Option<(u32, f32, f32, Movement)> = None; // tick, body yaw, speed, movement
+        let mut turn_rate = 0.0f32;
+        let mut history: VecDeque<(u32, [f32; 2])> = VecDeque::new();
+        let mut movement: Option<MovementSegment> = None;
+        let mut action: Option<ActionSegment> = None;
+        let mut handover: Option<ActionSegment> = None;
+        let mut plant: Option<Span> = None;
+        let mut defuse: Option<Span> = None;
+        let mut additive: Option<(Additive, u32)> = None;
+        let mut shot: Option<u32> = None;
+        let mut last_state: Option<(u32, i64)> = None;
+        let mut steps = Vec::with_capacity(players.len());
+        for (i, (sample, player)) in track.samples.iter().zip(&players).enumerate() {
+            let Some(player) = player else {
+                // Dead or absent: a respawn starts afresh (nothing blends from before the gap).
+                previous = None;
+                history.clear();
+                movement = None;
+                action = None;
+                handover = None;
+                plant = None;
+                defuse = None;
+                additive = None;
+                shot = None;
+                last_state = None;
+                steps.push(None);
+                continue;
+            };
+            let tick = sample.tick;
+            let rig = &player.rig;
+            let item = rig.weapon.as_ref().map(|w| w.item);
+            let weapon = self.weapon(item);
+            let set = weapon.map_or(WeaponSet::for_item(item), |w| {
+                WeaponSet::for_category(&w.category)
+            });
+            let body = body_relative(rig.velocity, rig.body_yaw);
+            let speed = rig.velocity[0].hypot(rig.velocity[1]);
+            let blend = self.sets.get(set).blend(body, rig.duck_amount);
+            let elapsed_ticks = previous.map_or(0, |(t, ..)| tick.saturating_sub(t));
+            let step_dt = elapsed_ticks as f32 * dt;
+            phase = (phase + step_dt / blend.duration).rem_euclid(1.0);
+
+            // The body's turn rate, smoothed over about a tenth of a second.
+            if let Some((_, yaw, ..)) = previous
+                && step_dt > 0.0
+            {
+                let raw = normalize_angle(rig.body_yaw - yaw) / step_dt;
+                turn_rate += (raw - turn_rate) * (step_dt / 0.1).min(1.0);
+            } else {
+                turn_rate = 0.0;
+            }
+            while history
+                .front()
+                .is_some_and(|&(t, _)| (tick - t) as f32 * dt > REVERSAL_WINDOW)
+            {
+                history.pop_front();
+            }
+            let recent: Vec<[f32; 2]> = history.iter().map(|&(_, v)| v).collect();
+            let speed_previous = recent
+                .iter()
+                .map(|v| v[0].hypot(v[1]))
+                .fold(speed, f32::max);
+            let world = [rig.velocity[0], rig.velocity[1]];
+
+            // Movement: ladder, air or one of the ground actions.
+            let run = run_of[i];
+            let jumped = run.is_some_and(|r| {
+                let takeoff = track.samples[r.start].tick;
+                rig.last_jump_tick
+                    .is_some_and(|j| j + 2 >= takeoff && j <= tick)
+            });
+            let airborne = run.is_some_and(|r| r.end - r.start + 1 >= MIN_AIR_TICKS || jumped);
+            let current = movement.map(|m| m.state);
+            let desired = if rig.on_ladder {
+                Movement::Ladder
+            } else if airborne {
+                Movement::Air { jumped }
+            } else if self.graphs.is_some() {
+                let (now, elapsed, length) = match movement {
+                    Some(MovementSegment {
+                        state: Movement::Ground(g),
+                        start,
+                        length,
+                        ..
+                    }) => (g, self.seconds((tick - start) as f32), length),
+                    _ => (GroundAction::Move, 0.0, 0.0),
+                };
+                // Standing: slow at the last tick and not just passing through zero (a counter-strafe crosses
+                // it within a tick or two, from a run).
+                let recently_fast = recent.iter().any(|v| v[0].hypot(v[1]) >= REVERSAL_SPEED);
+                let inputs = GroundInputs {
+                    speed,
+                    body,
+                    walking: rig.walking,
+                    turn_rate,
+                    was_standing: !recently_fast
+                        && previous.is_some_and(|(_, _, s, _)| s < STANDING_SPEED),
+                    reversal: reversal(&recent, world, body),
+                };
+                let before = matches!(current, Some(Movement::Ground(_)));
+                Movement::Ground(ground_action(now, elapsed, length, before, &inputs))
+            } else {
+                Movement::Ground(GroundAction::Move)
+            };
+            history.push_back((tick, world));
+
+            let air_height = run.map_or(0.0, |r| r.height(player.position[2], rig.velocity[2]));
+            let mut step = Step {
+                tick,
+                set,
+                blend,
+                phase,
+                item,
+                crouch: rig.duck_amount,
+                walking: rig.walking,
+                defusing: rig.defusing,
+                body,
+                speed,
+                speed_previous,
+                turn_rate,
+                air_height,
+                ladder_cycle: (player.position[2] / LADDER_CYCLE_HEIGHT).rem_euclid(1.0),
+                aim_yaw: normalize_angle(player.yaw - rig.body_yaw),
+                aim_pitch: player.pitch,
+                movement: MovementSegment {
+                    state: desired,
+                    start: tick,
+                    length: 0.0,
+                    previous: None,
+                    blend: 0.0,
+                },
+                action: None,
+                handover: None,
+                plant: None,
+                defuse: None,
+                additive: None,
+                shot: None,
+            };
+            movement = Some(match movement {
+                Some(m) if m.state == desired => m,
+                old => {
+                    let mut next = step.movement;
+                    if let Some(old) = old {
+                        next.previous = Some(PreviousMovement {
+                            state: old.state,
+                            start: old.start,
+                            from: old.previous.map(|p| (p.state, p.start)),
+                            blend: old.blend,
+                        });
+                        next.blend = self
+                            .movement_transition(&step, old.state, desired)
+                            .unwrap_or(DEFAULT_BLEND);
+                    }
+                    if matches!(
+                        desired,
+                        Movement::Ground(GroundAction::Start(_) | GroundAction::PlantAndTurn(..))
+                    ) {
+                        next.length = self.movement_length(&step, desired);
+                    }
+                    next
+                }
+            });
+            step.movement = movement.expect("set above");
+
+            // Weapons layer actions.
+            let wanted = rig.weapon.as_ref().and_then(|w| {
+                let anim = self.weapon(Some(w.item))?;
+                anim.actions.as_ref()?;
+                let (name, attack) = weapon_action(w.anim_state, &anim.category)?;
+                Some((w, name, attack))
+            });
+            match wanted {
+                Some((w, name, attack)) => {
+                    // The same action goes on while its state and timestamp stay (a second swing restarts the
+                    // same state value with a new timestamp); a reload's outro (801) goes on with the reload.
+                    let same = action.is_some_and(|a| {
+                        a.end.is_none()
+                            && a.item == w.item
+                            && a.action == name
+                            && a.attack == attack
+                            && ((a.state == w.anim_state && a.stamp == w.state_tick)
+                                || (a.state == 800 && w.anim_state == 801))
+                    });
+                    if !same {
+                        // The state's own start when it is recent, else this tick.
+                        let start = w
+                            .state_tick
+                            .filter(|&s| {
+                                s <= tick && self.seconds((tick - s) as f32) < STATE_TIMESTAMP_SLACK
+                            })
+                            .unwrap_or(tick);
+                        let mut next = ActionSegment {
+                            item: w.item,
+                            action: name,
+                            attack,
+                            state: w.anim_state,
+                            stamp: w.state_tick,
+                            start,
+                            end: None,
+                            blend_in: DEFAULT_BLEND,
+                            blend_out: DEFAULT_FADE_OUT,
+                            swing_back: false,
+                            strength: w.throw_strength,
+                            ammo: w.clip.map_or(1.0, |c| c as f32),
+                            variation: variation(player.controller, start),
+                            inherited: 0.0,
+                            aim_from: 0.0,
+                        };
+                        // The action it takes over: still playing, or fading out.
+                        let at = start as f32;
+                        let old = action.filter(|a| a.layer_weight(at, dt) > 0.0);
+                        let playing = old.filter(|a| a.end.is_none_or(|end| end >= start));
+                        next.swing_back = attack.starts_with("attack_knife")
+                            && playing.is_some_and(|o| self.in_swing_back(&step, &o, start));
+                        next.blend_in = self
+                            .action_transition(&step, playing.as_ref(), &next)
+                            .unwrap_or(DEFAULT_BLEND);
+                        next.blend_out = self
+                            .action_fade_out(&step, &next)
+                            .unwrap_or(DEFAULT_FADE_OUT);
+                        next.inherited = old.map_or(0.0, |o| o.layer_weight(at, dt));
+                        next.aim_from = action.map_or(0.0, |o| o.aim_fade(at, dt));
+                        handover = old.map(|mut o| {
+                            o.end = Some(o.end.map_or(start, |end| end.min(start)));
+                            o
+                        });
+                        action = Some(next);
+                    }
+                }
+                None => {
+                    if let Some(a) = action.as_mut()
+                        && a.end.is_none()
+                    {
+                        a.end = Some(tick);
+                    }
+                }
+            }
+            step.action = action;
+            step.handover = handover.filter(|_| {
+                action.is_some_and(|a| self.seconds(tick as f32 - a.start as f32) < a.blend_in)
+            });
+
+            // Planting (the C4's state 300) and defusing.
+            let planting = rig
+                .weapon
+                .as_ref()
+                .is_some_and(|w| w.anim_state == PLANT_STATE);
+            span(&mut plant, planting, tick);
+            span(&mut defuse, rig.defusing, tick);
+            step.plant = plant;
+            step.defuse = defuse;
+
+            // Body additives: the jump start while in the air, the landing after it (on the ground: CS2's
+            // `air_action_land`; catching a ladder ends the jump start without one).
+            let was_air = matches!(current, Some(Movement::Air { .. }));
+            additive = match (desired, additive) {
+                (Movement::Air { .. }, Some((Additive::JumpStart, since))) => {
+                    Some((Additive::JumpStart, since))
+                }
+                (Movement::Air { .. }, _) => Some((Additive::JumpStart, tick)),
+                (Movement::Ground(_), _) if was_air => Some((Additive::JumpLand, tick)),
+                (_, Some((Additive::JumpLand, since))) => {
+                    let length = self.additive_length(&step, Additive::JumpLand);
+                    (self.seconds((tick - since) as f32) < length)
+                        .then_some((Additive::JumpLand, since))
+                }
+                _ => None,
+            };
+            step.additive = additive;
+
+            // A shot starts whenever the state enters 100 or 101 (they alternate shot by shot).
+            let state = rig.weapon.as_ref().map(|w| (w.item, w.anim_state));
+            if let Some((_, s)) = state
+                && matches!(s, 100 | 101)
+                && last_state != state
+            {
+                shot = Some(tick);
+            }
+            last_state = state;
+            step.shot = shot;
+
+            previous = Some((tick, rig.body_yaw, speed, desired));
+            steps.push(Some(step));
+        }
+        Ok(steps)
+    }
+
+    /// The locomotion graph's parameters at a step, for a movement state.
+    fn locomotion_params(&self, step: &Step, state: Movement) -> Params {
+        let mut params = Params::default()
+            .float("move_speed_x", step.body[0])
+            .float("move_speed_y", step.body[1])
+            .float("move_speed_horizontal", step.speed)
+            .float("move_speed_horizontal_previous", step.speed_previous)
+            .float("move_crouch_amount", step.crouch)
+            .float("move_crouch_amount_eased", step.crouch)
+            .float("ground_turn_angle_or_velocity", step.turn_rate)
+            .float("air_height_above_ground", step.air_height)
+            .float("ladder_cycle", step.ladder_cycle)
+            .float("ladder_angle_yaw", 0.0)
+            .flag("move_is_walking", step.walking)
+            .id("move_type", state.move_type());
+        match state {
+            Movement::Ground(ground) => {
+                params = params.id("ground_action", ground.id());
+                match ground {
+                    GroundAction::Start(direction) => {
+                        params = params.id("ground_action_direction_id", direction);
+                    }
+                    GroundAction::PlantAndTurn(direction, before) => {
+                        params = params
+                            .id("ground_action_direction_id", direction)
+                            .float("move_speed_horizontal_previous", before);
+                    }
+                    _ => {}
+                }
+            }
+            Movement::Air { jumped } => {
+                params = params.id(
+                    "air_action",
+                    if jumped {
+                        "air_action_jump"
+                    } else {
+                        "air_action_start_fall"
+                    },
+                );
+            }
+            Movement::Ladder => {}
+        }
+        params
+    }
+
+    /// The locomotion graph of a step's set and its root node.
+    fn locomotion_graph(&self, step: &Step) -> Option<(&str, usize)> {
+        let graph = &self.graphs?.locomotion[step.set.index()];
+        Some((graph.as_str(), self.eval?.root(graph)?))
+    }
+
+    fn movement_transition(&self, step: &Step, from: Movement, to: Movement) -> Option<f32> {
+        let eval = self.eval?;
+        let (graph, root) = self.locomotion_graph(step)?;
+        let states = |m: Movement| {
+            eval.states(graph, root, &self.locomotion_params(step, m), 0.0)
+                .ok()
         };
-        hand_ik = ik;
-        // In-out quadratic easing, as the aim node's action blend.
-        action_weight = if aim_fade < 0.5 {
-            2.0 * aim_fade * aim_fade
-        } else {
-            1.0 - (-2.0 * aim_fade + 2.0).powi(2) / 2.0
+        eval.transition_time(
+            &states(from)?,
+            &states(to)?,
+            &self.locomotion_params(step, to),
+        )
+    }
+
+    fn movement_length(&self, step: &Step, state: Movement) -> f32 {
+        let (Some(eval), Some((graph, root))) = (self.eval, self.locomotion_graph(step)) else {
+            return 0.0;
         };
-        if let Some(clips) = clips
-            && fade > 0.0
-            && step.item == Some(action.item)
+        eval.duration(graph, root, &self.locomotion_params(step, state))
+            .unwrap_or(0.0)
+    }
+
+    /// The weapon graph's parameters for an action.
+    fn action_params(&self, step: &Step, segment: &ActionSegment) -> Params {
+        let mut params = Params::default()
+            .id("action", segment.action)
+            .id("attack_type", segment.attack)
+            .float("attack_throw_strength", segment.strength)
+            .float("weapon_ammo", segment.ammo)
+            .float("deploy_variation", segment.variation)
+            .float("move_crouch_amount", step.crouch)
+            .float("move_crouch_amount_eased", step.crouch)
+            .float("weapon_action_speedscale", 1.0)
+            .flag("is_defusing", step.defusing);
+        if let Some(weapon) = self.weapon(Some(segment.item)) {
+            params = params
+                .id("weapon_type", &weapon.weapon)
+                .id("weapon_category", &weapon.category);
+        }
+        if segment.swing_back {
+            params = params.event("KnifeSwingBack");
+        }
+        params
+    }
+
+    /// The weapon graph's states for an action, or for the layer at rest (`action_idle`).
+    fn action_states(
+        &self,
+        step: &Step,
+        segment: &ActionSegment,
+        idle: bool,
+    ) -> Option<Vec<StateId>> {
+        let eval = self.eval?;
+        let graph = self.weapon(Some(segment.item))?.actions.as_ref()?;
+        let mut params = self.action_params(step, segment);
+        if idle {
+            params = params.id("action", "action_idle").id("attack_type", "");
+        }
+        eval.states(&graph.graph, graph.node, &params, 0.0).ok()
+    }
+
+    /// Blend time into `next`: from the action it takes over (same weapon), else from the layer at rest.
+    fn action_transition(
+        &self,
+        step: &Step,
+        old: Option<&ActionSegment>,
+        next: &ActionSegment,
+    ) -> Option<f32> {
+        let eval = self.eval?;
+        let to = self.action_states(step, next, false)?;
+        let from = match old {
+            Some(o) if o.item == next.item => self.action_states(step, o, false)?,
+            _ => self.action_states(step, next, true)?,
+        };
+        // The same states again (a second swing): CS2 alternates two copies of the attack states to restart.
+        if from == to {
+            return Some(DEFAULT_BLEND);
+        }
+        eval.transition_time(&from, &to, &self.action_params(step, next))
+    }
+
+    fn action_fade_out(&self, step: &Step, segment: &ActionSegment) -> Option<f32> {
+        let eval = self.eval?;
+        let from = self.action_states(step, segment, false)?;
+        let to = self.action_states(step, segment, true)?;
+        let mut idle = self.action_params(step, segment);
+        idle = idle.id("action", "action_idle");
+        eval.transition_time(&from, &to, &idle)
+    }
+
+    /// Whether a new attack at `start` comes while `old`'s clip is in its `KnifeSwingBack` event.
+    fn in_swing_back(&self, step: &Step, old: &ActionSegment, start: u32) -> bool {
+        if old.action != "action_attack" || !old.attack.starts_with("attack_knife") {
+            return false;
+        }
+        let (Some(eval), Some(graph)) = (
+            self.eval,
+            self.weapon(Some(old.item)).and_then(|w| w.actions.as_ref()),
+        ) else {
+            return false;
+        };
+        let time = self.seconds(start as f32 - old.start as f32);
+        let Ok(Some((clip, t))) = eval.dominant_clip(
+            &graph.graph,
+            graph.node,
+            &self.action_params(step, old),
+            time,
+        ) else {
+            return false;
+        };
+        clip.event_span("KnifeSwingBack")
+            .is_some_and(|(s, e)| t >= s && t <= e)
+    }
+
+    fn additive_params(&self, step: &Step) -> Params {
+        let mut params = Params::default()
+            .float("move_crouch_amount", step.crouch)
+            .float("move_speed_horizontal", step.speed)
+            .flag("is_defusing", step.defusing)
+            .id("action", "action_idle");
+        if let Some(weapon) = self.weapon(step.item) {
+            params = params
+                .id("weapon_type", &weapon.weapon)
+                .id("weapon_category", &weapon.category);
+        }
+        params
+    }
+
+    fn additive_node(&self, additive: Additive) -> Option<usize> {
+        let graphs = self.graphs?;
+        match additive {
+            Additive::JumpStart => graphs.jump_start,
+            Additive::JumpLand => graphs.jump_land,
+        }
+    }
+
+    fn additive_length(&self, step: &Step, additive: Additive) -> f32 {
+        let (Some(eval), Some(graphs), Some(node)) =
+            (self.eval, self.graphs, self.additive_node(additive))
+        else {
+            return 0.0;
+        };
+        eval.duration(&graphs.main, node, &self.additive_params(step))
+            .unwrap_or(0.0)
+    }
+
+    /// The pose at demo tick `tick` (fractional) of a step: every layer of the module docs.
+    fn render(&self, step: &Step, tick: f32) -> Result<Vec<Transform>, AnimError> {
+        let since = |t: u32| self.seconds(tick - t as f32);
+        let movement = &step.movement;
+        let mut pose = self.movement_pose(step, movement.state, movement.start, tick)?;
+        if let Some(previous) = movement.previous
+            && movement.blend > 0.0
         {
-            let layer = crouch_blend(clips, elapsed, step.crouch)?;
-            model_space_layer(pose, &layer, fade, &upper.mask, &upper.parents);
+            let w = since(movement.start) / movement.blend;
+            if w < 1.0 {
+                // The previous state, itself still blending from the one before when it began recently.
+                let mut old = self.movement_pose(step, previous.state, previous.start, tick)?;
+                if let Some((from, from_start)) = previous.from
+                    && previous.blend > 0.0
+                {
+                    let v = since(previous.start) / previous.blend;
+                    if v < 1.0 {
+                        old = mix(self.movement_pose(step, from, from_start, tick)?, old, v);
+                    }
+                }
+                pose = mix(old, pose, w);
+            }
+        }
+        let (Some(eval), Some(graphs)) = (self.eval, self.graphs) else {
+            if let Some(upper) = self.upper {
+                self.upper_body(&mut pose, upper, step, tick, None)?;
+            }
+            return Ok(pose);
+        };
+
+        // Planting replaces the whole body.
+        if let (Some(plant), Some(node)) = (step.plant, graphs.planting) {
+            let w = fade(
+                since(plant.start),
+                plant.end.map(since),
+                PLANT_BLEND,
+                PLANT_BLEND,
+            );
+            if w > 0.0
+                && let Some(planting) = eval.pose(
+                    &graphs.main,
+                    node,
+                    &self.additive_params(step),
+                    since(plant.start),
+                )?
+            {
+                pose = mix(pose, planting, w);
+            }
+        }
+        if let Some(upper) = self.upper {
+            self.upper_body(&mut pose, upper, step, tick, Some((eval, graphs)))?;
+        }
+        Ok(pose)
+    }
+
+    /// The pose of a movement state that began at `start`.
+    fn movement_pose(
+        &self,
+        step: &Step,
+        state: Movement,
+        start: u32,
+        tick: f32,
+    ) -> Result<Vec<Transform>, AnimError> {
+        let locomotion = self.sets.get(step.set);
+        let moving = |_: ()| {
+            let extra = self.seconds(tick - step.tick as f32);
+            locomotion.sample(&step.blend, step.phase + extra / step.blend.duration)
+        };
+        if state.is_move() {
+            return moving(());
+        }
+        let (Some(eval), Some((graph, root))) = (self.eval, self.locomotion_graph(step)) else {
+            return moving(());
+        };
+        let time = self.seconds(tick - start as f32);
+        match eval.pose(graph, root, &self.locomotion_params(step, state), time)? {
+            Some(pose) => Ok(pose),
+            None => moving(()),
         }
     }
 
-    if let (Some(shot), Some(shoot)) = (step.shot, weapon.and_then(|w| w.shoot.as_ref())) {
-        let elapsed = since(shot);
-        if elapsed < shoot.duration {
-            add_layer(pose, &shoot.sample(elapsed, false)?, 1.0, Some(&upper.mask));
+    /// The weapons layer's pose for an action at `tick`.
+    fn action_pose(
+        &self,
+        eval: Evaluator<'_>,
+        step: &Step,
+        segment: &ActionSegment,
+        tick: f32,
+    ) -> Result<Option<Vec<Transform>>, AnimError> {
+        let Some(graph) = self
+            .weapon(Some(segment.item))
+            .and_then(|w| w.actions.as_ref())
+        else {
+            return Ok(None);
+        };
+        let time = self.seconds(tick - segment.start as f32);
+        eval.pose(
+            &graph.graph,
+            graph.node,
+            &self.action_params(step, segment),
+            time,
+        )
+    }
+
+    /// How far the hands are back on the weapon during an action `time` seconds in: 0 until the clip's
+    /// `WPN_IK_ACTION_ENDING` event, rising to 1 over it (0 throughout without the event).
+    fn hand_ik_during(
+        &self,
+        eval: Evaluator<'_>,
+        step: &Step,
+        segment: &ActionSegment,
+        time: f32,
+    ) -> f32 {
+        let Some(graph) = self
+            .weapon(Some(segment.item))
+            .and_then(|w| w.actions.as_ref())
+        else {
+            return 0.0;
+        };
+        let Ok(Some((clip, t))) = eval.dominant_clip(
+            &graph.graph,
+            graph.node,
+            &self.action_params(step, segment),
+            time,
+        ) else {
+            return 0.0;
+        };
+        match clip.event_span("WPN_IK_ACTION_ENDING") {
+            Some((s, e)) if e > s => ((t - s) / (e - s)).clamp(0.0, 1.0),
+            Some((s, _)) => f32::from(t >= s),
+            None => 0.0,
         }
     }
 
-    if let Some(weapon) = weapon {
-        aim(
-            pose,
-            &upper.aim,
-            &AimInputs {
-                yaw: step.aim_yaw,
-                pitch: step.aim_pitch,
-                crouch: step.crouch,
-                action_weight,
-                hand_ik_weight: hand_ik,
-                category: weapon.category.clone(),
-                weapon: weapon.weapon.clone(),
-            },
-        );
+    /// Layers 3 – 8 of the module docs over the body pose.
+    fn upper_body(
+        &self,
+        pose: &mut [Transform],
+        upper: &UpperBody,
+        step: &Step,
+        tick: f32,
+        graphs: Option<(Evaluator<'_>, &GraphRig)>,
+    ) -> Result<(), AnimError> {
+        let since = |t: u32| self.seconds(tick - t as f32);
+        let weapon = self.weapon(step.item);
+        if let Some(idle) = weapon.and_then(|w| w.idle.as_ref()) {
+            add_layer(
+                pose,
+                &crouch_blend(idle, 0.0, step.crouch)?,
+                1.0,
+                Some(&upper.mask),
+            );
+        }
+
+        // The weapons layer, the aim's action weight and the hands.
+        let mut action_weight = 0.0f32;
+        let mut hand_ik = 1.0f32;
+        // An action long over (faded out, the aim and hands back) needs no evaluation.
+        let settled = |a: &ActionSegment| {
+            a.end.is_some_and(|end| {
+                tick >= end as f32
+                    && since(end) >= a.blend_out.max(AIM_ACTION_BLEND).max(HAND_IK_BLEND_IN)
+            })
+        };
+        if let (Some((eval, _)), Some(action)) = (graphs, step.action.filter(|a| !settled(a))) {
+            let interval = self.track.tick_interval;
+            let ended = action.end.filter(|&end| tick >= end as f32);
+            let blend_in = if action.blend_in > 0.0 {
+                (since(action.start) / action.blend_in).min(1.0)
+            } else {
+                1.0
+            };
+            let mask = match (step.movement.state, &upper.ladder_mask) {
+                (Movement::Ladder, Some(ladder)) => ladder,
+                _ => &upper.mask,
+            };
+            let current = self.action_pose(eval, step, &action, tick)?;
+            let old = match step.handover {
+                Some(h) if blend_in < 1.0 => self.action_pose(eval, step, &h, tick)?,
+                _ => None,
+            };
+            // The new action's pose blends in over the old one's, from the weight the layer had then.
+            let weight = action.layer_weight(tick, interval);
+            let layer = match (old, current) {
+                (Some(old), Some(current)) => Some((mix(old, current, blend_in), weight)),
+                (Some(old), None) => Some((old, action.inherited * (1.0 - blend_in))),
+                (None, Some(current)) => Some((current, weight)),
+                (None, None) => None,
+            };
+            if let Some((layer, weight)) = layer {
+                model_space_layer(pose, &layer, weight, mask, &upper.parents);
+            }
+            // The aim pulls towards level and lets go of the hands while an action plays.
+            action_weight = ease(action.aim_fade(tick, interval));
+            hand_ik = match ended {
+                None => self.hand_ik_during(eval, step, &action, since(action.start)),
+                Some(end) => {
+                    let at_end = self.hand_ik_during(
+                        eval,
+                        step,
+                        &action,
+                        self.seconds(end.saturating_sub(action.start) as f32),
+                    );
+                    at_end + (1.0 - at_end) * (since(end) / HAND_IK_BLEND_IN).min(1.0)
+                }
+            };
+        }
+
+        if let Some((eval, rig)) = graphs {
+            self.defuse_and_additives(
+                pose,
+                eval,
+                rig,
+                step,
+                tick,
+                &mut action_weight,
+                &mut hand_ik,
+            )?;
+        }
+
+        if let (Some(shot), Some(shoot)) = (step.shot, weapon.and_then(|w| w.shoot.as_ref())) {
+            let elapsed = since(shot);
+            if elapsed < shoot.duration {
+                add_layer(pose, &shoot.sample(elapsed, false)?, 1.0, Some(&upper.mask));
+            }
+        }
+
+        if let Some(weapon) = weapon {
+            aim(
+                pose,
+                &upper.aim,
+                &AimInputs {
+                    yaw: step.aim_yaw,
+                    pitch: step.aim_pitch,
+                    crouch: step.crouch,
+                    action_weight,
+                    hand_ik_weight: hand_ik,
+                    category: weapon.category.clone(),
+                    weapon: weapon.weapon.clone(),
+                },
+            );
+        }
+        Ok(())
     }
-    Ok(())
+
+    /// Layers 5 and 6: defusing, the jump additives and breathing. Defusing and planting also level the aim and
+    /// free the hands.
+    #[allow(clippy::too_many_arguments)]
+    fn defuse_and_additives(
+        &self,
+        pose: &mut [Transform],
+        eval: Evaluator<'_>,
+        rig: &GraphRig,
+        step: &Step,
+        tick: f32,
+        action_weight: &mut f32,
+        hand_ik: &mut f32,
+    ) -> Result<(), AnimError> {
+        let since = |t: u32| self.seconds(tick - t as f32);
+        let params = self.additive_params(step);
+        if let (Some(defuse), Some(node)) = (step.defuse, rig.defuse) {
+            let w = fade(
+                since(defuse.start),
+                defuse.end.map(since),
+                DEFUSE_BLEND_IN,
+                DEFUSE_BLEND_OUT,
+            );
+            let grenade = self
+                .weapon(step.item)
+                .is_some_and(|w| w.category == "weapon_category_grenade");
+            let mask = if grenade {
+                rig.defuse_grenade_mask.as_ref()
+            } else {
+                rig.defuse_mask.as_ref()
+            };
+            // The defuse pose goes on while it fades out.
+            let defusing = params.clone().flag("is_defusing", true);
+            if w > 0.0
+                && let Some(mask) = mask
+                && let Some(layer) = eval.pose(&rig.main, node, &defusing, since(defuse.start))?
+            {
+                let parents = self.upper.map(|u| u.parents.as_slice()).unwrap_or_default();
+                model_space_layer(pose, &layer, w, mask, parents);
+                *action_weight = action_weight.max(ease(w));
+                *hand_ik *= 1.0 - w;
+            }
+        }
+        if let Some(plant) = step.plant {
+            let w = fade(
+                since(plant.start),
+                plant.end.map(since),
+                PLANT_BLEND,
+                PLANT_BLEND,
+            );
+            *action_weight = action_weight.max(ease(w));
+            *hand_ik *= 1.0 - w;
+        }
+        if let Some((additive, start)) = step.additive
+            && let Some(node) = self.additive_node(additive)
+        {
+            let w = match additive {
+                Additive::JumpStart => (since(start) / ADDITIVE_BLEND).min(1.0),
+                Additive::JumpLand => 1.0,
+            };
+            if let Some(delta) = eval.pose(&rig.main, node, &params, since(start))? {
+                add_layer(pose, &delta, w, None);
+            }
+        }
+        // Breathing: standing still on the ground with nothing else going on.
+        let idle = step.speed <= 5.0
+            && step.movement.state == Movement::Ground(GroundAction::Move)
+            && step.defuse.is_none_or(|d| d.end.is_some())
+            && step.action.is_none_or(|a| a.end.is_some());
+        if idle && let (Some(node), Some(mask)) = (rig.breathing, rig.breathing_mask.as_ref()) {
+            let still = since(step.movement.start)
+                .min(step.action.and_then(|a| a.end).map_or(f32::MAX, since));
+            let w = (still / ADDITIVE_BLEND).min(1.0);
+            let time = self.seconds(tick - self.track.start_tick as f32);
+            if let Some(delta) = eval.pose(&rig.main, node, &params, time)? {
+                add_layer(pose, &delta, w, Some(mask));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A layer's weight `on` seconds after it began (rising over `blend_in`), and `off` seconds after it ended (falling
+/// over `blend_out`).
+fn fade(on: f32, off: Option<f32>, blend_in: f32, blend_out: f32) -> f32 {
+    let rise = if blend_in > 0.0 {
+        (on / blend_in).min(1.0)
+    } else {
+        1.0
+    };
+    let fall = off.map_or(1.0, |off| 1.0 - (off / blend_out.max(1e-3)).min(1.0));
+    rise * fall
+}
+
+/// Opens a span when `on` starts, closes it when `on` stops, keeps it closed afterwards (until the next start).
+fn span(span: &mut Option<Span>, on: bool, tick: u32) {
+    match (on, span.as_mut()) {
+        (true, Some(s)) if s.end.is_none() => {}
+        (true, _) => {
+            *span = Some(Span {
+                start: tick,
+                end: None,
+            })
+        }
+        (false, Some(s)) if s.end.is_none() => s.end = Some(tick),
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -448,6 +1420,9 @@ mod tests {
             WeaponSet::for_category("weapon_category_pistol"),
             WeaponSet::Pistol
         );
+        for (i, set) in WeaponSet::ALL.into_iter().enumerate() {
+            assert_eq!(set.index(), i);
+        }
     }
 
     #[test]
@@ -455,5 +1430,75 @@ mod tests {
         assert_eq!(normalize_angle(190.0), -170.0);
         assert_eq!(normalize_angle(-200.0), 160.0);
         assert_eq!(normalize_angle(45.0), 45.0);
+    }
+
+    #[test]
+    fn actions_carry_on_from_the_one_they_take_over() {
+        let interval = 1.0 / 64.0;
+        let mut action = ActionSegment {
+            item: 7,
+            action: "action_attack",
+            attack: "attack_grenade_throw",
+            state: 202,
+            stamp: Some(100),
+            start: 100,
+            end: None,
+            blend_in: 0.1,
+            blend_out: 0.2,
+            swing_back: false,
+            strength: 1.0,
+            ammo: 1.0,
+            variation: 0.5,
+            inherited: 0.6,
+            aim_from: 0.75,
+        };
+        // The layer starts where the old one was (0.6) and reaches 1 after the blend (6.4 ticks).
+        assert!((action.layer_weight(100.0, interval) - 0.6).abs() < 1e-6);
+        assert!((action.layer_weight(103.2, interval) - 0.8).abs() < 1e-4);
+        assert_eq!(action.layer_weight(110.0, interval), 1.0);
+        // The aim's fade goes on from 0.75: full 0.1 s later.
+        assert!((action.aim_fade(100.0, interval) - 0.75).abs() < 1e-6);
+        assert_eq!(action.aim_fade(106.4, interval), 1.0);
+        // Ended at 106.4 (fade reached 1): half way down 0.2 s later, gone after 0.4 s.
+        action.end = Some(110);
+        assert!((action.layer_weight(116.4, interval) - 0.5).abs() < 1e-4);
+        assert!((action.aim_fade(122.8, interval) - 0.5).abs() < 1e-4);
+        assert_eq!(action.aim_fade(140.0, interval), 0.0);
+        // Variations are repeatable and spread over 0 – 1.
+        assert_eq!(variation(3, 25164), variation(3, 25164));
+        let picks: Vec<f32> = (0..1000).map(|t| variation(5, 25000 + t)).collect();
+        assert!(picks.iter().all(|v| (0.0..1.0).contains(v)));
+        let low = picks.iter().filter(|&&v| v < 0.5).count();
+        assert!((400..600).contains(&low), "{low}");
+    }
+
+    #[test]
+    fn layers_fade_in_and_out() {
+        assert_eq!(fade(0.05, None, 0.1, 0.2), 0.5);
+        assert_eq!(fade(1.0, None, 0.1, 0.2), 1.0);
+        assert_eq!(fade(1.0, Some(0.1), 0.1, 0.2), 0.5);
+        assert_eq!(fade(1.0, Some(0.3), 0.1, 0.2), 0.0);
+        assert_eq!(fade(0.0, None, 0.0, 0.2), 1.0);
+        let mut s = None;
+        span(&mut s, true, 5);
+        span(&mut s, true, 6);
+        span(&mut s, false, 9);
+        span(&mut s, false, 10);
+        assert!(matches!(
+            s,
+            Some(Span {
+                start: 5,
+                end: Some(9)
+            })
+        ));
+        span(&mut s, true, 12);
+        assert!(matches!(
+            s,
+            Some(Span {
+                start: 12,
+                end: None
+            })
+        ));
+        assert!((ease(0.25) - 0.125).abs() < 1e-6 && ease(1.0) == 1.0);
     }
 }

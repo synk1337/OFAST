@@ -11,7 +11,8 @@
 //! | `m_compressedPoseOffsets` | where each frame starts in that stream, in `u16` units |
 //! | `m_bIsAdditive` | the poses are deltas over another clip (per-weapon idles, shoot, flinch) |
 //! | `m_secondaryAnimations` | nested clips for other skeletons (a weapon's magazine and bolt during reload) |
-//! | `m_events`, `m_syncTrack`, `m_rootMotion` | events (`RinFront`, IK hints), foot sync markers, root motion (none on player clips) |
+//! | `m_events` | `CNmIDEvent`s: `m_ID` (`WPN_IK_ACTION_ENDING`, `KnifeSwingBack`…) over `m_flStartTime` + `m_flDuration`, both **fractions of the clip** (`{ m_flValue }`; `reload_ak`'s IK event runs 0.849 + 0.151 of its 2.43 s) |
+//! | `m_syncTrack`, `m_rootMotion` | foot sync markers, root motion (the pose's `root_motion` bone stays at the origin) |
 //!
 //! # Decoding a frame
 //!
@@ -63,6 +64,19 @@ pub struct Clip {
     pub offsets: Vec<usize>,
     /// Nested clips for other skeletons (weapon parts).
     pub secondary: Vec<Clip>,
+    /// ID events (`m_events`), in their stored order.
+    pub events: Vec<ClipEvent>,
+}
+
+/// An ID event of a clip: `id` is on from `start` to `start + duration`, as fractions of the clip's length.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClipEvent {
+    /// The event's ID (`WPN_IK_ACTION_ENDING`).
+    pub id: String,
+    /// Start, as a fraction of the clip (0 – 1).
+    pub start: f32,
+    /// Length, as a fraction of the clip.
+    pub duration: f32,
 }
 
 impl Clip {
@@ -100,6 +114,26 @@ impl Clip {
             .iter()
             .map(Clip::parse)
             .collect::<Result<_, _>>()?;
+        let events = root
+            .get("m_events")
+            .and_then(Value::as_array)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|event| {
+                let fraction = |key: &str| {
+                    event
+                        .get(key)
+                        .and_then(|v| v.get("m_flValue").or(Some(v)))
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0) as f32
+                };
+                Some(ClipEvent {
+                    id: event.get("m_ID")?.as_str()?.to_owned(),
+                    start: fraction("m_flStartTime"),
+                    duration: fraction("m_flDuration"),
+                })
+            })
+            .collect();
         Ok(Self {
             skeleton: root
                 .get("m_skeleton")
@@ -116,6 +150,17 @@ impl Clip {
             data,
             offsets,
             secondary,
+            events,
+        })
+    }
+
+    /// The span of event `id` in seconds of the clip, `(start, end)`, if the clip has it.
+    pub fn event_span(&self, id: &str) -> Option<(f32, f32)> {
+        self.events.iter().find(|e| e.id == id).map(|e| {
+            (
+                e.start * self.duration,
+                (e.start + e.duration) * self.duration,
+            )
         })
     }
 
@@ -337,6 +382,11 @@ mod tests {
             data,
             offsets: vec![0, 7],
             secondary: Vec::new(),
+            events: vec![ClipEvent {
+                id: "WPN_IK_ACTION_ENDING".into(),
+                start: 0.5,
+                duration: 0.5,
+            }],
         }
     }
 
@@ -344,6 +394,10 @@ mod tests {
     fn frames_decode_static_and_dynamic_tracks() {
         let clip = sample_clip();
         assert!((clip.fps() - 30.0).abs() < 1e-3);
+        // Event fractions turn into seconds of the clip.
+        let (start, end) = clip.event_span("WPN_IK_ACTION_ENDING").unwrap();
+        assert!((start - 0.5 / 30.0).abs() < 1e-6 && (end - 1.0 / 30.0).abs() < 1e-6);
+        assert!(clip.event_span("KnifeSwingBack").is_none());
         let f0 = clip.decode_frame(0).unwrap();
         assert_eq!(f0[0], Transform::IDENTITY);
         assert!(

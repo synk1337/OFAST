@@ -2,8 +2,9 @@
 
 - **Date:** 2026-10-18
 - **Status:** accepted (M4.1 – M4.5 done: skinned agents, clip decoder, rig inputs, baked locomotion read from
-  CS2's own locomotion graph, weapon layers and aim, per-player agents with their weapons baked as bones; the rest
-  of the graph and ragdolls to come)
+  CS2's own locomotion graph, weapon layers and aim, per-player agents with their weapons baked as bones; M4.4c:
+  CS2's graphs evaluated state by state for starts, turns, jumps, ladders, weapon actions, planting and defusing;
+  flinches and ragdolls to come)
 
 ## Context
 
@@ -70,6 +71,14 @@ M4 replaces the proxies with CS2's own agents, animated. Four research passes (2
 - Glove skins need bone-merging onto the agent skeleton; Unreal must see one root bone per skin. Done in M4.5 by
   merging the glove meshes into the agent's own skin by bone name (on all 80 agent models their bind poses agree to
   0.003 inch and 0.8°).
+- The rest of the graph (M4.4c, 2026-10-22) is neither hand-coded per state nor run as CS2 runs it: OFAST decides
+  from the demo which state each layer is in and since when (`anim::states`: gameplay state and its timestamp,
+  ground and air time, velocity reversals, the body's turn rate), and evaluates that state's tree of CS2's own nodes
+  at the time since it began (`anim::eval`: clips, blends, selectors, scales, state machines by entry condition,
+  default state and "state completed"), blending between states over the graph's own transition times. The
+  graph data picks the clips (a knife's swing-back variant, a throw by its strength, a jump's direction), so new
+  weapons and knives need no code; what the demo cannot tell (a ladder's facing, CS2's exact thresholds for starts
+  and turns) is chosen and documented in `anim::states`.
 - Weapons follow the same design (M4.5): instead of weapon actors attached to sockets in Unreal, each weapon a
   look's players carry is a bone of the agent with the weapon rigidly on it, placed per frame in Rust (hand,
   holster, or scaled to 0). No conversion of attachment frames into Unreal's bone axes is needed, scrubbing stays

@@ -7,11 +7,14 @@
 //! | `m_controlParameterIDs` | the graph's inputs; control parameter `i` is node `i` |
 //! | `m_resources` | data slots: clips and referenced graphs |
 //! | `m_referencedGraphSlots` | which data slot each `CNmReferencedGraphNode` plays (`m_nNodeIdx`, `m_dataSlotIdx`) |
+//! | `m_nRootNodeIdx` | the node the graph's pose comes from |
 //!
-//! OFAST does not run graphs. It walks them to find which clips CS2 plays for a weapon: a state machine's states
-//! carry entry conditions (`m_stateDefinitions[].m_nEntryConditionNodeIdx`) built from ID comparisons on control
-//! parameters (`weapon_category in [weapon_category_rifle]`, `weapon_type in [weapon_ak47]`) and `and` / `or` /
-//! `not` nodes, which [`Graph::condition`] evaluates for given parameter values.
+//! OFAST does not run graphs as a whole. This module walks them to find which clips CS2 plays for a weapon: a state
+//! machine's states carry entry conditions (`m_stateDefinitions[].m_nEntryConditionNodeIdx`) built from ID
+//! comparisons on control parameters (`weapon_category in [weapon_category_rifle]`, `weapon_type in [weapon_ak47]`)
+//! and `and` / `or` / `not` nodes, which [`Graph::condition`] evaluates for given parameter values; and its
+//! transitions (`m_transitionDefinitions`: target, condition, blend time) and default state, which
+//! [`super::eval`] uses to evaluate one state's pose.
 
 use super::AnimError;
 use crate::kv3::Value;
@@ -29,6 +32,19 @@ pub struct Graph {
     pub resources: Vec<String>,
     /// `(referenced graph node, data slot)`.
     pub referenced_graphs: Vec<(usize, usize)>,
+    /// The node the graph's output comes from (`m_nRootNodeIdx`).
+    pub root: Option<usize>,
+}
+
+/// One transition out of a state (`m_transitionDefinitions`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Transition {
+    /// Index of the target state in the machine's states.
+    pub target: usize,
+    /// Its condition node.
+    pub condition: Option<usize>,
+    /// Blend time, seconds (the transition node's `m_flDuration`).
+    pub duration: f32,
 }
 
 fn strings(root: &Value, key: &'static str) -> Vec<String> {
@@ -70,7 +86,41 @@ impl Graph {
             parameters: strings(root, "m_controlParameterIDs"),
             resources: strings(root, "m_resources"),
             referenced_graphs,
+            root: index(root.get("m_nRootNodeIdx")),
         })
+    }
+
+    /// A state machine's default state (`m_nDefaultStateIndex`), as an index into [`Graph::states`].
+    pub fn default_state(&self, machine: usize) -> usize {
+        index(
+            self.nodes
+                .get(machine)
+                .and_then(|n| n.get("m_nDefaultStateIndex")),
+        )
+        .unwrap_or(0)
+    }
+
+    /// The transitions out of state `state` (an index into [`Graph::states`]) of a state machine.
+    pub fn transitions(&self, machine: usize, state: usize) -> Vec<Transition> {
+        self.nodes
+            .get(machine)
+            .and_then(|n| n.get("m_stateDefinitions"))
+            .and_then(Value::as_array)
+            .and_then(|states| states.get(state))
+            .and_then(|s| s.get("m_transitionDefinitions"))
+            .and_then(Value::as_array)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|t| {
+                Some(Transition {
+                    target: index(t.get("m_nTargetStateIdx"))?,
+                    condition: index(t.get("m_nConditionNodeIdx")),
+                    duration: index(t.get("m_nTransitionNodeIdx"))
+                        .and_then(|n| self.number(n, "m_flDuration"))
+                        .unwrap_or(0.0) as f32,
+                })
+            })
+            .collect()
     }
 
     /// A node's class without the `::CDefinition` suffix (`CNmClipNode`), empty if out of range.

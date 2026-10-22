@@ -436,7 +436,10 @@ renames one, it reads as its default and positions keep working.
 | weapon in hand | `m_pWeaponServices` → `m_hActiveWeapon` → the weapon entity | its class (`CAK47`, `CWeaponM4A1`, `CKnife`…) and the fields below; each weapon class has its own serializer, so paths are looked up per class |
 | weapon id | weapon `m_AttributeManager.m_Item.m_iItemDefinitionIndex` | 1 Desert Eagle, 4 Glock-18, 7 AK-47, 16 M4A4, 36 P250, 42 CT knife, 43 flashbang, 44 HE, 45 smoke, 48 incendiary, 49 C4, 59 T knife, 61 USP-S, 500+ knife skins (509, 514 seen) |
 | weapon animation state | weapon `m_iWeaponGameplayAnimState` | see below |
+| its start | weapon `m_flWeaponGameplayAnimStateTimestamp` (`GameTime_t`, seconds) | game seconds ÷ tick interval = game tick, converted to a demo tick (below): the tick the state began, also when it begins again with the same value (two knife misses in a row are 503 twice, 26 ticks apart) |
 | reloading | weapon `m_bInReload` | |
+| magazine | weapon `m_iClip1` (Ammo encoder: varint − 1) | rounds in the magazine, −1 without one (knives, grenades); a reload begun at 0 plays the graphs' `reload_empty` clip |
+| throw strength | grenade `m_flThrowStrength` | 0 – 1: 1 for a left-click throw, 0 for a right-click lob, 0.5 for both; the graphs throw underhand at ≤ 0.33. Round 5: 1 on all four throws |
 
 **Weapon animation states** seen in round 5 of the match demo, by the weapons holding them: 11 = draw (after every
 switch, every weapon), 50 = idle, 100 = shooting (rifles and pistols), 200 / 202 = grenade (pin, throw), 300 = C4

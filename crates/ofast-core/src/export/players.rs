@@ -33,7 +33,8 @@ use super::loadout::{
 };
 use crate::anim::aim::AimBones;
 use crate::anim::bake::{
-    LocomotionSets, UpperBody, WeaponAnimation, WeaponSet, bake_player, frame_samples,
+    ActionGraph, GraphRig, LocomotionSets, UpperBody, WeaponAnimation, WeaponSet, bake_player,
+    frame_samples,
 };
 use crate::anim::graph::Graph;
 use crate::anim::layers::BoneMask;
@@ -75,16 +76,18 @@ pub struct PlayersReport {
     pub warnings: Vec<String>,
 }
 
+/// A set's locomotion graph (`worldmodel_locomotion.vnmgraph+rifle`…).
+fn locomotion_graph(set: WeaponSet) -> String {
+    format!(
+        "animation/graphs/worldmodel/worldmodel_locomotion.vnmgraph+{}.vnmgraph",
+        set.name()
+    )
+}
+
 /// Reads CS2's three locomotion graphs and their clips.
 pub fn load_locomotion(content: &Content) -> Result<LocomotionSets, ExportError> {
     let load = |set: WeaponSet| -> Result<Locomotion, ExportError> {
-        let graph = resource_data(
-            content,
-            &format!(
-                "animation/graphs/worldmodel/worldmodel_locomotion.vnmgraph+{}.vnmgraph",
-                set.name()
-            ),
-        )?;
+        let graph = resource_data(content, &locomotion_graph(set))?;
         Locomotion::from_graph(&graph, |path: &str| -> Result<Clip, ExportError> {
             Clip::parse(&resource_data(content, path)?).map_err(|source| ExportError::Clip {
                 path: path.to_owned(),
@@ -117,6 +120,8 @@ struct Round<'a> {
     sets: LocomotionSets,
     clip_skeleton: NmSkeleton,
     upper: Option<UpperBody>,
+    /// CS2's graphs for the graph-evaluated layers (starts, jumps, actions, planting, defusing…).
+    graphs: Option<GraphRig>,
     /// Model resource id → path.
     models: HashMap<u64, String>,
     /// Key rate of the animations.
@@ -125,14 +130,25 @@ struct Round<'a> {
     frames: Vec<(f32, usize)>,
 }
 
-/// Writes the round's players as animated agents into `out_dir` (see the module docs). `demo_name` names the files
-/// like the replay file (`<demo>_r<round>_…`).
-pub fn export_players(
-    content: &Content,
-    track: &RoundTrack,
-    demo_name: &str,
-    out_dir: &Path,
-) -> Result<PlayersReport, ExportError> {
+/// Everything the bake reads from CS2 for a round's players ([`load_player_rig`]).
+pub struct PlayerRig {
+    /// The three locomotion sets.
+    pub sets: LocomotionSets,
+    /// The clip skeleton (`worldmodel.vnmskel`).
+    pub clip_skeleton: NmSkeleton,
+    /// The upper-body layers' data, when readable.
+    pub upper: Option<UpperBody>,
+    /// The graphs of the graph-evaluated layers, when readable.
+    pub graphs: Option<GraphRig>,
+    /// `items_game.txt`, when readable.
+    pub items_text: Option<String>,
+    /// Problems that leave layers out.
+    pub warnings: Vec<String>,
+}
+
+/// Reads what [`bake_player`] needs for a round's players: the locomotion sets, the upper-body data for the weapons
+/// they hold, and the graphs ([`GraphRig`]). A missing part leaves its layers out, with a warning.
+pub fn load_player_rig(content: &Content, track: &RoundTrack) -> Result<PlayerRig, ExportError> {
     let sets = load_locomotion(content)?;
     let skeleton_path = sets.rifle.clips[0].1.skeleton.clone();
     let skeleton_data = resource_data(content, &skeleton_path)?;
@@ -147,14 +163,58 @@ pub fn export_players(
             None
         }
     };
-    let upper = load_upper_body(
+    let (mut upper, sources) = match load_upper_body(
         content,
         track,
         items_text.as_deref(),
         &skeleton_data,
         &clip_skeleton,
         &mut warnings,
-    )?;
+    )? {
+        Some((upper, sources)) => (Some(upper), sources),
+        None => (None, HashMap::new()),
+    };
+    let graphs = match load_graph_rig(
+        content,
+        upper.as_mut(),
+        &sources,
+        &skeleton_data,
+        &clip_skeleton,
+    ) {
+        Ok(rig) => Some(rig),
+        Err(e) => {
+            warnings.push(format!(
+                "animation graphs: {e}: no starts, turns, jumps, ladders, actions, planting or defusing"
+            ));
+            None
+        }
+    };
+    Ok(PlayerRig {
+        sets,
+        clip_skeleton,
+        upper,
+        graphs,
+        items_text,
+        warnings,
+    })
+}
+
+/// Writes the round's players as animated agents into `out_dir` (see the module docs). `demo_name` names the files
+/// like the replay file (`<demo>_r<round>_…`).
+pub fn export_players(
+    content: &Content,
+    track: &RoundTrack,
+    demo_name: &str,
+    out_dir: &Path,
+) -> Result<PlayersReport, ExportError> {
+    let PlayerRig {
+        sets,
+        clip_skeleton,
+        upper,
+        graphs,
+        items_text,
+        mut warnings,
+    } = load_player_rig(content, track)?;
     let glove_models = items_text
         .as_deref()
         .map(|text| item_values(text, "model_world"))
@@ -165,6 +225,7 @@ pub fn export_players(
         sets,
         clip_skeleton,
         upper,
+        graphs,
         models: content.resource_paths("vmdl"),
         fps: animation_fps(track),
         frames: frame_samples(track, animation_fps(track)),
@@ -303,13 +364,14 @@ fn export_look(
             controller,
             &round.sets,
             round.upper.as_ref(),
+            round.graphs.as_ref(),
             round.fps,
         )?;
         let carried: Vec<Vec<(Slot, Place)>> = round
             .frames
             .iter()
             .zip(&poses)
-            .map(|(&(_, index), pose)| {
+            .map(|(&(tick, index), pose)| {
                 let player = track.samples[index]
                     .players
                     .iter()
@@ -317,7 +379,7 @@ fn export_look(
                 match (pose, player) {
                     (Some(_), Some(p)) => carried_places(
                         &p.weapons,
-                        p.rig.weapon.as_ref().map(|w| w.entity),
+                        in_hand(p, tick, track.tick_interval),
                         weapon_look,
                         kind,
                     ),
@@ -510,6 +572,22 @@ fn with_own_gloves(agent: &Model, mask: u64) -> u64 {
     out
 }
 
+/// How long a weapon being drawn stays in its holster, seconds: the weapons layer's blend into `Deploy` (0.1 s in
+/// every weapon graph), after which the draw clip holds the hand at the holster (`draw_ak` starts with `wpn` on the
+/// back) and takes the weapon from there. CS2 too shows a rifle still slung on the tick its draw begins.
+const DRAW_FROM_HOLSTER: f32 = 0.1;
+
+/// The entity of the weapon in a player's hand at demo tick `tick` (fractional): the active weapon, except during
+/// the first [`DRAW_FROM_HOLSTER`] of its draw (gameplay state 11, from its timestamp), when nothing is in hand yet.
+fn in_hand(player: &PlayerSample, tick: f32, interval: f32) -> Option<u32> {
+    let weapon = player.rig.weapon.as_ref()?;
+    let drawing = weapon.anim_state == 11
+        && weapon
+            .state_tick
+            .is_some_and(|start| (tick - start as f32) * interval < DRAW_FROM_HOLSTER);
+    (!drawing).then_some(weapon.entity)
+}
+
 /// A model path's file name without its extension (`agents/models/ctm_sas/ctm_sas.vmdl` → `ctm_sas`).
 fn stem(path: &str) -> &str {
     let file = path.rsplit('/').next().unwrap_or(path);
@@ -521,10 +599,15 @@ const MAIN_GRAPH: &str = "animation/graphs/worldmodel/worldmodel.vnmgraph";
 /// CS2's item definitions.
 const ITEMS_GAME: &str = "scripts/items/items_game.txt";
 
+/// Where each weapon's weapons-layer actions are, by item: its state in the main graph's `Weapons/State/Weapons`
+/// and the graph that state plays, if any ([`WeaponClips::action_state`], [`WeaponClips::action_graph`]).
+type ActionSources = HashMap<u32, (Option<usize>, Option<String>)>;
+
 /// The upper-body layers' data for every weapon the round's players hold or carry: names from `items_game.txt`,
 /// clips found in the graphs ([`WeaponClips`]; their category also picks a carried weapon's holster), the
-/// `UpperBody` mask and the aim's bones. `None` (with a warning) when one of them cannot be read: the players then
-/// get the locomotion alone, and their weapons show only in hand.
+/// `UpperBody` masks and the aim's bones, and where each weapon's actions are ([`load_graph_rig`] loads them).
+/// `None` (with a warning) when one of them cannot be read: the players then get the locomotion alone, and their
+/// weapons show only in hand.
 fn load_upper_body(
     content: &Content,
     track: &RoundTrack,
@@ -532,7 +615,7 @@ fn load_upper_body(
     skeleton_data: &crate::kv3::Value,
     skeleton: &NmSkeleton,
     warnings: &mut Vec<String>,
-) -> Result<Option<UpperBody>, ExportError> {
+) -> Result<Option<(UpperBody, ActionSources)>, ExportError> {
     let (Some(mask), Some(aim)) = (
         BoneMask::from_skeleton(skeleton_data, skeleton, "UpperBody"),
         AimBones::find(skeleton),
@@ -559,13 +642,10 @@ fn load_upper_body(
         Ok(match paths {
             [] => None,
             [only] => Some([clip(only)?, clip(only)?]),
-            // Standing first, crouched second; a plain reload before its crouched and empty-magazine variants.
+            // Standing first, crouched second.
             _ => {
                 let stand = &paths[0];
-                let crouch = paths
-                    .iter()
-                    .find(|p| p.contains("crouch") && !p.contains("empty"))
-                    .unwrap_or(stand);
+                let crouch = paths.iter().find(|p| p.contains("crouch")).unwrap_or(stand);
                 Some([clip(stand)?, clip(crouch)?])
             }
         })
@@ -584,6 +664,7 @@ fn load_upper_body(
         })
         .collect();
     let mut weapons = HashMap::new();
+    let mut sources = ActionSources::new();
     for item in items {
         let Some(name) = names.get(&item) else {
             warnings.push(format!("weapon item {item}: not in {ITEMS_GAME}"));
@@ -596,6 +677,7 @@ fn load_upper_body(
             warnings.push(format!("weapon {name}: not in the animation graph"));
             continue;
         };
+        sources.insert(item, (clips.action_state, clips.action_graph.clone()));
         weapons.insert(
             item,
             WeaponAnimation {
@@ -603,17 +685,99 @@ fn load_upper_body(
                 category,
                 idle: pair(&clips.idle)?,
                 shoot: clips.shoot.first().map(clip).transpose()?,
-                draw: pair(&clips.draw)?,
-                reload: pair(&clips.reload)?,
+                actions: None,
             },
         );
     }
-    Ok(Some(UpperBody {
+    let upper = UpperBody {
         weapons,
         mask,
+        ladder_mask: BoneMask::from_skeleton(skeleton_data, skeleton, "UpperBody_Ladder"),
         aim,
         parents: skeleton.parents.clone(),
-    }))
+    };
+    Ok(Some((upper, sources)))
+}
+
+/// CS2's graphs for the graph-evaluated layers ([`GraphRig`]): the three locomotion graphs whole, the main graph's
+/// planting, defuse and body-additive states, and each weapon's actions (its own graph, or its equipment state in
+/// the main graph), which this also sets on `upper`'s weapons. The masks come from the clip skeleton.
+fn load_graph_rig(
+    content: &Content,
+    upper: Option<&mut UpperBody>,
+    sources: &ActionSources,
+    skeleton_data: &crate::kv3::Value,
+    skeleton: &NmSkeleton,
+) -> Result<GraphRig, ExportError> {
+    let mut load_graph = |path: &str| -> Result<Graph, ExportError> {
+        Ok(Graph::parse(&resource_data(content, path)?)?)
+    };
+    let mut load_clip = |path: &str| -> Result<Clip, ExportError> {
+        Clip::parse(&resource_data(content, path)?).map_err(|source| ExportError::Clip {
+            path: path.to_owned(),
+            source,
+        })
+    };
+    let mask = |id: &str| BoneMask::from_skeleton(skeleton_data, skeleton, id);
+    let mut rig = GraphRig {
+        locomotion: WeaponSet::ALL.map(locomotion_graph),
+        main: MAIN_GRAPH.to_owned(),
+        defuse_mask: mask("Defuse"),
+        defuse_grenade_mask: mask("Defuse_Grenade"),
+        breathing_mask: mask("Breathing"),
+        ..GraphRig::default()
+    };
+    for path in rig.locomotion.clone() {
+        rig.library
+            .load(&path, None, &mut load_graph, &mut load_clip)?;
+    }
+    let main = rig.library.load_graph(MAIN_GRAPH, &mut load_graph)?;
+    let node = |path: &str| main.find(path);
+    rig.planting = node("SM0/Planting");
+    rig.defuse = node("Defuse/Defuse");
+    rig.jump_start = node("BodyAdditives/JumpAdditiveStart");
+    rig.jump_land = node("BodyAdditives/JumpAdditiveLand");
+    rig.breathing = node("BodyAdditives/Breathing");
+    for main_node in [
+        rig.planting,
+        rig.defuse,
+        rig.jump_start,
+        rig.jump_land,
+        rig.breathing,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        rig.library
+            .load(MAIN_GRAPH, Some(main_node), &mut load_graph, &mut load_clip)?;
+    }
+    if let Some(upper) = upper {
+        for (item, weapon) in &mut upper.weapons {
+            weapon.actions = match sources.get(item) {
+                Some((_, Some(graph))) => {
+                    rig.library
+                        .load(graph, None, &mut load_graph, &mut load_clip)?;
+                    rig.library
+                        .graph(graph)
+                        .and_then(|g| g.root)
+                        .map(|node| ActionGraph {
+                            graph: graph.clone(),
+                            node,
+                        })
+                }
+                Some((Some(state), None)) => {
+                    rig.library
+                        .load(MAIN_GRAPH, Some(*state), &mut load_graph, &mut load_clip)?;
+                    Some(ActionGraph {
+                        graph: MAIN_GRAPH.to_owned(),
+                        node: *state,
+                    })
+                }
+                _ => None,
+            };
+        }
+    }
+    Ok(rig)
 }
 
 /// Fills the frames without a pose (no living pawn) with the last pose before them — or, before the first, the

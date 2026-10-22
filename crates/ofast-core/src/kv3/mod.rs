@@ -250,6 +250,14 @@ impl Value {
         }
     }
 
+    /// The boolean, if this is one.
+    pub fn as_bool(&self) -> Option<bool> {
+        match *self.unflagged() {
+            Value::Bool(b) => Some(b),
+            _ => None,
+        }
+    }
+
     /// The number as `i64`, if this is an integer that fits.
     pub fn as_i64(&self) -> Option<i64> {
         match *self.unflagged() {

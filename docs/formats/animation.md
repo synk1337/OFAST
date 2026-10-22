@@ -122,8 +122,20 @@ their speeds (run 0.733 s, walk 1.0 s, crouch 0.8 s, idle 0.73 / 0.167 = 4.4 s, 
 stride at low speed). This is AnimGraph 2's synchronised blending (Esoterica's design) simplified to one phase; the
 clips' foot sync tracks are not read.
 
-**The other states** — starting, stopping and planted direction changes (`planted_*`), turning on the spot
-(`turn_*`), jumps and air (`jump_*`, `inair_*`, 2D blends on the eased crouch amount), ladders — are not rebuilt yet.
+**The other states** (`SM` → `Ground` / `Ladder` / `InAir`, by `move_type`) are evaluated by `anim::eval`
+([below](#evaluating-the-graphs-animeval-animstates)) from the state the bake decides:
+
+| State | Selected by | Plays |
+|---|---|---|
+| `Ground/Standing/Starts` | `ground_action_start`, `ground_action_direction_id` (`N`, `NE` … `NW`, an `IDToFloat` index into a selector) | `planted_start_<dir>` (0.53 s), crouched: `idle_crouch` |
+| `Ground/Standing/PlantAndTurn` (`…Walks` when walking) | `ground_action_plant_and_turn`, the new direction (`E2W`, `W2E`, `N2S`, `S2N`), `move_speed_horizontal_previous` ≥ 110 (60 walking) for the cross-legged variants | `planted_<e2w…>`, `planted_slow_*`, `planted_walk_*` |
+| `Ground/Standing/TurnOnSpot` → `Turn Loop` | `ground_action_turn_on_spot_loop`, `ground_turn_angle_or_velocity` in degrees/s (positive left; blend points ±7, ±75, ±150, ±450) | `turn_<left/right>_loop_<45/90/180>` |
+| `Ladder` | `ladder_angle_yaw` (front within ±125°), crouch | `ladder_facing_fast_<angle>` poses (`CNmAnimationPoseNode`) at `ladder_cycle` (0 – 1) |
+| `InAir/SM/Jump` → `landing_blend` | `air_action_jump`; once the jump clip (0.4 s) completes, the landing blend | `jump_<stand/n/e/s/w>` (2D on velocity, crouch); then `inair_*` poses at a curve of `air_height_above_ground` |
+
+Transitions: Ground → InAir and → Ladder at once, InAir → Ground 0.2 s (0.05 s with the clip event `MS_AIR_FINISHING`,
+not read), Idle / Move → Starts 0.1 s, Starts → Move 0.2 s, Move → PlantAndTurn 0.1 s, plants back to Move 0.2 –
+0.3 s. "Stopping" is the move blend running down to its idle point (CS2's `Move` → `Idle` is the same clips).
 
 The graph does not scale a clip's playback to the actual speed. `examples/locomotion_clips.rs` estimates each
 clip's own speed from its feet (a planted ankle slides back under the body): 130 – 205 units/s for the runs, 37 – 83
@@ -135,7 +147,7 @@ estimate (ankle within 1.5 inches of its lowest) is rough; not checked yet.
 The root of the main graph is a stack (`crates/ofast-core/src/anim/{graph,layers,weapon,aim}.rs`):
 
 ```text
-Snap Weapon                          wpn onto hand_R, left hand IK (not rebuilt)
+Snap Weapon                          wpn onto hand_R (rebuilt in anim::aim::snap_weapon)
 └ Layer Blend (model space)          + flashed (not rebuilt)
   └ Aim IK (CNmAimCSNode)            procedural aim, rebuilt in anim::aim
     └ Foot IK                        (not rebuilt)
@@ -174,17 +186,67 @@ pitch (positive down) bends the spine about each bone's local Z by 0.125 / 0.225
 (rifles −25.5 … 25°) and the neck / head by 0.35 / 0.65 of another (rifles −35 … 20°); the weapon pivot moves onto
 `spine_3`; knives pitch the pivot, rifles and pistols pitch the weapon, shift it at extreme pitches and turn the
 barrel onto the aim direction; rifles turn the head towards the muzzle; a two-bone IK puts the hands on the weapon's
-hand bones (not the left hand for knives and grenades). Draws and reloads pull the pitch towards level over 0.4 s and
-release the hands (CS2 releases them by clip events, not read here).
+hand bones (not the left hand for knives and grenades). Actions (draws, reloads, attacks, throws, defusing,
+planting) pull the pitch towards level over 0.4 s and release the hands until the action clip's
+`WPN_IK_ACTION_ENDING` event (`draw_ak`: 60 – 100 % of the clip; `reload_ak`: 85 – 100 %), over which they return;
+an action that follows another (a pin pull, then the throw) carries on from where the first had brought the pitch.
+Last, the **weapon snap** (`CNmSnapWeaponNode`, the graph's root; `aim::snap_weapon`): the weapon moves so that its
+`wpnHand_R` lands on `hand_R`, the inverse of the hand IK — nothing changes while the hands are on the weapon,
+and while an action lets go of them the weapon stays in the hand the layers moved. Without it, a draw's blend left
+the pistol floating at the belt, away from the hand (the arm and `wpn` blend separately in model space).
+
+## Evaluating the graphs (`anim::eval`, `anim::states`)
+
+CS2 runs its graphs every frame with memory (state machines, springs, events); a demo carries none of it. OFAST
+evaluates **one state's tree at a time**, `time` seconds after the state began, the way CS2's nodes compute their
+pose (`anim::eval`, unit-tested on synthetic graphs, and on CS2's own in `tests/cs2_anim.rs`
+`graph_states_play_their_clips`):
+
+- clips at `time × speed` (wrapping when `m_bAllowLooping`), still poses at a value node's time, 1D and 2D blends
+  with their sources in step (normalised time), selectors by condition, parameterised selectors by index or by
+  weighted share (`deploy_variation` over weights 1 / 8 / 1, options without a clip skipped), duration and speed
+  scales, layer blends, referenced graphs from their root (`m_nRootNodeIdx`);
+- a state machine picks the first state whose entry condition holds, else `m_nDefaultStateIndex`, and follows
+  "state completed" transitions once a state's length has passed — the jump into the landing blend, a defuse's
+  enter into its loop;
+- conditions on IDs, floats, ranges, bools and events given as present; springs and eases pass their input through.
+
+The bake (`anim::states`) decides each tick what the graph's inputs would be, from the demo:
+
+| Graph parameter | From the demo |
+|---|---|
+| `action`, `attack_type` | the weapon's gameplay state: 11 → `action_deploy`; 800 / 801 → `action_reload` (one action: the outro goes on with it); 600 / 601 → silencer; 200 / 201 / 202 (grenades) → `action_attack` + `attack_grenade_charge` / `_ready` / `_throw`; 500 – 505 (knives) → `attack_knife_lighthit`, `_lightmiss`, `_heavyhit`, `_heavymiss`, `_lightbackstab`, `_heavybackstab`; 400 → `action_healthshot_inject`; gun shots and inspects leave the layer off (CS2's gun graphs play nothing for them in third person) |
+| restarts | `m_flWeaponGameplayAnimStateTimestamp`: two right-click misses in a row are state 503 twice, with two timestamps |
+| `KnifeSwingBack` (event) | a knife attack that starts while the previous swing's clip is in its `KnifeSwingBack` event (`frontswing_knife`: 10 – 63 %) plays the `_b` swing |
+| `attack_throw_strength` | the grenade's `m_flThrowStrength` (≤ 0.33: underhand) |
+| `weapon_ammo` | the magazine (`m_iClip1`) when the action began: a reload from 0 plays `reload_empty_glock` and the other pistols' empty variants |
+| `deploy_variation` | a repeatable pick in 0 – 1 per player and draw (CS2 picks at random): the Butterfly draws with `draw2` 8 times in 9, as the graph's weights say |
+| `move_type`, `air_action` | ladder (`m_MoveType` 9); air when off the ground 3 ticks or more, or after a jump (`m_nLastJumpTick`); `air_action_jump` when the air time began with a jump, else `air_action_start_fall` |
+| `air_height_above_ground` | the feet over the take-off point while rising, over the landing point while falling |
+| `ground_action` | standing below 10 units/s; a start when leaving a standstill without walking; a plant and turn when the velocity points against one of the last 0.25 s that was ≥ 60 units/s (a counter-strafe); turning on the spot when standing and the body turns faster than 15°/s (the body yaw turns smoothly in demos, ≤ 20° a tick) |
+| `ladder_cycle` | the feet height over 40 units per cycle (the ladder clips repeat every 0.8 s with a foot travelling about 20 units per step: an estimate) |
+
+A change of state blends over the graph's own transition: the evaluator lists the states a pose comes from, and the
+transition between the first two that differ gives the time (`Evaluator::transition_time`). Draw: Off → Deploy
+0.1 s, back 0.2 s; knife attacks start at once; grenade Charge → Throw 0.1 s. Roots and their clips are loaded
+lazily per node (`eval::Library::load`): the three locomotion graphs, the weapons' graphs, and the main graph's
+planting, defuse and body-additive states. `examples/bake_timeline.rs` prints what the bake decides for a round.
 
 ## Each player's animation (`anim::bake`, `export::players`)
 
 For every tick a player is alive: the weapon in hand (item index → name → category, from `items_game.txt` and the
 main graph) picks the locomotion set, the velocity is turned into the body's frame by the body yaw, and the set's
-blend gives the clips, weights and cycle length; the phase advances by the tick. Over that: the weapon's additive
-idle pose (blended by crouch), its draw or reload clip in model space while the weapon's gameplay state is 11 or
-800 / 801 (from the state's first tick, fading in over 0.15 s and out over 0.25 s), its additive shot from each tick
-the state enters 100 or 101, and the aim from the eye angles and body yaw. Poses are keyed on every tick (64 per
+blend gives the clips, weights and cycle length; the phase advances by the tick. A start, plant and turn, turn on
+the spot, jump, fall or ladder replaces that move blend with the locomotion graph's state, blended over the graph's
+transition time. Then, bottom to top (`anim::bake`): planting (`SM0/Planting`: `planting` / `planting_crouch`, the
+whole body, 0.1 s in and out) while the C4's state is 300; the weapon's additive idle pose (blended by crouch); the
+weapons layer in model space (`UpperBody`, `UpperBody_Ladder` on ladders) from the weapon's own graph for its
+action, handing over from one action to the next and fading out over the graph's times; the defuse layer in model
+space (`Defuse` mask, `Defuse_Grenade` with a grenade in hand: the enter clip, then the loop; 0.2 s in, 0.4 s out);
+the body additives (`jump_additive_start` from take-off, `jump_additive_land` from landing to its end, `breathing`
+while standing idle); the weapon's additive shot from each tick the state enters 100 or 101; and the aim from the eye
+angles and body yaw. A drawn weapon stays in its holster for the draw's first 0.1 s (the blend into `Deploy`), then
+the draw clip, which begins with the hand at the holster, takes it from there. Poses are keyed on every tick (64 per
 second, `export::players::animation_fps`) from the round's first tick, retargeted onto the player's own agent (the
 pawn's `m_hModel`, [demo.md](demo.md#models)) and written as one glTF per look — agent, mesh groups, glove skin —
 with every weapon the look's players carry (below):
@@ -278,7 +340,8 @@ same weapons as playback.
   his M4A4 at the chest pointing down towards the viewer, as in CS2. Differences: vg switched to his rifle on that
   very tick and CS2 still shows it slung (CS2's draw takes the weapon from the holster partway through the clip,
   timed by clip events; OFAST puts it in hand at once); CS2's knife hand is raised (the knife pose, M4.4c); the
-  weapons render too metallic (CS2's weapon shader is not converted yet, like the agents' character shader).
+  weapons render too metallic (CS2's weapon shader is not converted yet, like the agents' character shader). (The
+  draw was fixed in M4.4c, below.)
 - **Skinned knives** (2026-10-22, close-ups from `import_demo.py`'s `-CloseShots`, `test-data/shots/replay_r5d`):
   the Bowie (Wajam, tick 26041) and the Huntsman (tick 26508) are in their owners' right hands, blade up, posed by
   their own `idle_bowie` / `idle_tactical` clips. They are hard to see from a distance: the blade renders near-black
@@ -286,6 +349,30 @@ same weapons as playback.
   weapon shader shows bright steel), seen edge-on it is a thin line, and CS2 holds the Huntsman raised by the head
   while OFAST holds it at the belly, behind the arm from a teammate's view (the knife pose, M4.4c). The paint of
   knife skins is not applied (M10).
+- **CS2's graphs evaluated** (2026-10-22, M4.4c): `tests/cs2_anim.rs` `graph_states_play_their_clips` — the
+  Huntsman's graph plays `frontswing_knife` for a light miss, `frontswing_b_knife` with the `KnifeSwingBack` event,
+  `backstab_overhead_knife` for a heavy backstab, the crouched swing when crouched, `draw_tactical` when deploying
+  and nothing when idle; the HE graph `pullpin_grenade`, `throw_overhand_grenade` at strength 1 and
+  `throw_underhand_grenade` at 0.2; the knife locomotion graph `jump_n_knife` 0.1 s into a forward jump and the
+  landing blend 0.6 s in, `planted_start_nw` / `_e` by direction (0.53 s long); the defuse layer
+  `defuse_enter_rifle` (1 s) then `defuse_loop_rifle`; transitions Off → Deploy 0.1 s, Deploy → Off 0.2 s, Off →
+  attack 0 s, Ground → InAir 0 s, InAir → Ground 0.2 s. `tests/cs2_demo.rs` `bake_decisions_follow_the_demo`: over
+  rounds 1 – 5 of the match demo, every knife attack and grenade throw the demo records starts its action on its
+  timestamp tick (180), and every ladder climb (13), C4 plant (3) and defuse (2) begins its state on its first
+  tick; 193 jumps; every baked pose finite.
+- **Against CS2** (2026-10-22, M4.4c), round 5 through players' eyes (Unreal `-PovShots`, CS2 demo playback and
+  Steam F12; side by side in `test-data/shots/agents/cs2_m44c/compare_m44c.png`): XANTARES's jump at 26580 (8
+  ticks after take-off) is at the same height with the same tucked knees and trailing foot; his heavy knife miss at
+  26690, seen from behind, is in the same stride with the left arm forward; the smoke pin pull at 26910 and the
+  throw's follow-through at 26935 match in stance and arm direction (CS2's throwing arm a little more extended);
+  the defuse loop at 29560 stands the same, slightly crouched with both hands at the waist. Differences: CS2 holds
+  the knife raised by the shoulder in the jump (the raised knife pose, still open); on the first ladder tick (P1,
+  26815) CS2 still tucks the legs from the jump onto the ladder where OFAST already climbs; CS2 shows the defuse
+  kit's cutter and the C4, which OFAST does not render. The draw from the holster
+  (`compare_draw_25824.png`): at tick 25824 vg is 5 ticks into drawing his M4A4 and CS2 still shows it slung — so
+  does OFAST now (M4.5 put it in his hand at once). In close-ups (`test-data/shots/replay_r5f`, `replay_r5g`):
+  a Glock drawn at the round start stays in its thigh holster for the first 0.1 s, then comes out in the hand; the
+  C4 plant kneels; before the weapon snap, a draw's blend left the pistol floating at the belt away from the hand.
 - `tests/cs2_anim.rs` `weapon_clips_found_in_the_graphs` finds every tested weapon's clips and category through the
   graphs; `item_names_read` reads 2059 item names from `items_game.txt`.
 - `tests/cs2_anim.rs` `locomotion_graphs_read`: the three locomotion graphs give the blends above (17 standing and
@@ -296,14 +383,15 @@ same weapons as playback.
 
 ## Not done yet
 
-- **Additive clips**: composing a delta onto a base pose (for the weapon idle, shoot and flinch layers).
 - **Secondary clips** (weapon parts) are decoded but not exported.
-- **Events and sync tracks** are not read (the locomotion blends share one phase instead).
-- **The rest of the graphs**: knife attacks, grenade throws, planting and defusing, the silencer, breathing,
-  flinches, the flashed layer, foot IK, the weapon snap; the locomotion graph's start, stop, turn, jump, air and
-  ladder states. The aim's weapon drop, C4-planting fade, and tilt and roll off to the side.
-- **Clip events** (`WPN_DISABLE_HAND_IK`, `WPN_IK_ACTION_ENDING`…) that time CS2's hand IK and action blends: OFAST
-  releases the hands for a whole draw or reload instead, and puts a drawn weapon in hand on the first tick instead
-  of taking it from the holster when the hand reaches it.
+- **Sync tracks** are not read (the locomotion blends share one phase instead); of the clip events only
+  `WPN_IK_ACTION_ENDING` and `KnifeSwingBack` are used (not `MS_AIR_FINISHING`, the reload's `WPN_RELOAD_OUTRO`, nor
+  the states' timed events such as `WPN_DISABLE_HAND_IK` in a deploy's first 0.3 s).
+- **The rest of the graphs**: flinches, the flashed layer, foot IK; small turns on the spot
+  (`Small Turn`: OFAST uses the turn loop only); bone masks inside layer blends (the layers OFAST evaluates take
+  the masks of the main graph's layers instead). The aim's weapon drop and tilt and roll off to the side.
+- **Ladder angle**: the demo has no ladder normal, so `ladder_angle_yaw` is 0 (facing the ladder) and the
+  `back` clips never play; the ladder cycle height is an estimate.
+- **Not checked against CS2 yet**: the thresholds of `anim::states` (starts, plants and turns, turns on the spot).
 - **Glove skins against CS2**: merged and tested on the export side, never seen in the game (no player of the local
   demo wears glove skins).

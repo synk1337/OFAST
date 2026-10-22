@@ -6,7 +6,8 @@
 //!
 //! Columns: `tick,steamid,name,team,alive,x,y,z,pitch,yaw,view_offset_x,view_offset_y,view_offset_z`, then the rig
 //! inputs (`velocity_x/y/z,on_ground,duck_amount,walking,scoped,defusing,on_ladder,last_jump_tick,
-//! last_landing_tick,weapon_item,weapon_class,weapon_anim_state,reloading,body_yaw`; empty when absent). x, y, z are
+//! last_landing_tick,weapon_item,weapon_class,weapon_anim_state,reloading,body_yaw,weapon_state_tick,throw_strength`;
+//! empty when absent). x, y, z are
 //! the feet;
 //! the first-person camera is at x + view_offset_x, y + view_offset_y, z + view_offset_z. Newer columns come last so
 //! that scripts written for the older ones keep working. Without a path, the newest demo
@@ -59,7 +60,7 @@ fn main() {
         out,
         "tick,steamid,name,team,alive,x,y,z,pitch,yaw,view_offset_x,view_offset_y,view_offset_z,\
          velocity_x,velocity_y,velocity_z,on_ground,duck_amount,walking,scoped,defusing,on_ladder,\
-         last_jump_tick,last_landing_tick,weapon_item,weapon_class,weapon_anim_state,reloading,body_yaw"
+         last_jump_tick,last_landing_tick,weapon_item,weapon_class,weapon_anim_state,reloading,body_yaw,weapon_state_tick,throw_strength"
     )
     .unwrap();
     // An absent value (no jump yet, no weapon) is an empty column.
@@ -70,7 +71,7 @@ fn main() {
             let weapon = rig.weapon.as_ref();
             writeln!(
                 out,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 sample.tick,
                 p.steam_id,
                 p.name.replace(',', " "),
@@ -100,6 +101,8 @@ fn main() {
                 text(weapon.map(|w| w.anim_state.to_string())),
                 text(weapon.map(|w| w.reloading.to_string())),
                 rig.body_yaw,
+                text(weapon.and_then(|w| w.state_tick).map(|t| t.to_string())),
+                text(weapon.map(|w| w.throw_strength.to_string())),
             )
             .unwrap();
         }

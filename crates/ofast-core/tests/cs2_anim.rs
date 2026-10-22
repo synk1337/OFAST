@@ -180,6 +180,225 @@ fn weapon_clips_found_in_the_graphs() {
     assert!(ak.reload.iter().any(|p| p.ends_with("/reload_ak.vnmclip")));
 }
 
+/// CS2's own graphs, evaluated by `anim::eval` for the states the bake decides (M4.4c): each plays the clip its
+/// states should — knife swings and their swing-back variants, grenade throws by strength, draws, jumps moving on
+/// to the landing blend, starts by direction, the defuse's enter then loop — and transitions take the graphs' times.
+#[test]
+fn graph_states_play_their_clips() {
+    use ofast_core::anim::AnimError;
+    use ofast_core::anim::eval::{Evaluator, Library, Params};
+    use ofast_core::anim::graph::Graph;
+    let install = Cs2Install::locate().expect("CS2 install found");
+    let vpk = Vpk::open(install.main_vpk()).expect("pak01_dir.vpk opens");
+    let data = |path: &str| {
+        let bytes = vpk
+            .read_path(&format!("{path}_c"))
+            .unwrap_or_else(|e| panic!("{path}: {e}"));
+        Resource::parse(&bytes)
+            .unwrap()
+            .kv3(BlockKind::DATA)
+            .unwrap()
+            .root
+    };
+    let knife = "animation/graphs/worldmodel/worldmodel_knife.vnmgraph+tactical.vnmgraph";
+    let grenade = "animation/graphs/worldmodel/worldmodel_grenade.vnmgraph+he.vnmgraph";
+    let locomotion = "animation/graphs/worldmodel/worldmodel_locomotion.vnmgraph+knife.vnmgraph";
+    let main = "animation/graphs/worldmodel/worldmodel.vnmgraph";
+    let glock = "animation/graphs/worldmodel/worldmodel_gun.vnmgraph+glock.vnmgraph";
+    let mut library = Library::new();
+    let mut load_graph = |p: &str| Graph::parse(&data(p));
+    let mut load_clip = |p: &str| -> Result<Clip, AnimError> { Clip::parse(&data(p)) };
+    for graph in [knife, grenade, locomotion, glock] {
+        library
+            .load(graph, None, &mut load_graph, &mut load_clip)
+            .expect(graph);
+    }
+    let defuse = library
+        .load_graph(main, &mut load_graph)
+        .unwrap()
+        .find("Defuse/Defuse")
+        .expect("defuse state");
+    library
+        .load(main, Some(defuse), &mut load_graph, &mut load_clip)
+        .expect("defuse clips");
+    let eval = Evaluator::new(&library);
+    // The clip a node plays `time` seconds in, by file name.
+    let playing = |graph: &str, params: &Params, time: f32| -> String {
+        let node = eval.root(graph).unwrap_or(defuse);
+        let node = if graph == main { defuse } else { node };
+        let (clip, _) = eval
+            .dominant_clip(graph, node, params, time)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{graph}: nothing plays"));
+        let path = library
+            .graph(graph)
+            .unwrap()
+            .resources
+            .iter()
+            .find(|p| library.clip(p).is_some_and(|c| std::ptr::eq(c, clip)))
+            .cloned()
+            .unwrap_or_default();
+        path.rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(".vnmclip")
+            .to_owned()
+    };
+
+    let attack = |kind: &str| {
+        Params::default()
+            .id("action", "action_attack")
+            .id("attack_type", kind)
+            .id("weapon_type", "weapon_knife_tactical")
+            .id("weapon_category", "weapon_category_knife")
+    };
+    assert_eq!(
+        playing(knife, &attack("attack_knife_lightmiss"), 0.1),
+        "frontswing_knife"
+    );
+    assert_eq!(
+        playing(
+            knife,
+            &attack("attack_knife_lightmiss").event("KnifeSwingBack"),
+            0.1
+        ),
+        "frontswing_b_knife"
+    );
+    assert_eq!(
+        playing(knife, &attack("attack_knife_heavybackstab"), 0.1),
+        "backstab_overhead_knife"
+    );
+    assert_eq!(
+        playing(
+            knife,
+            &attack("attack_knife_heavymiss").float("move_crouch_amount_eased", 1.0),
+            0.1
+        ),
+        "frontswing_crouching_knife"
+    );
+    let deploy = attack("").id("action", "action_deploy");
+    assert_eq!(playing(knife, &deploy, 0.1), "draw_tactical");
+    let idle = attack("").id("action", "action_idle");
+    assert!(
+        eval.pose(knife, eval.root(knife).unwrap(), &idle, 0.1)
+            .unwrap()
+            .is_none(),
+        "Off plays nothing"
+    );
+    // Off → Deploy blends in 0.1 s, Deploy → Off 0.2 s, Off → attack at once.
+    let states = |graph: &str, params: &Params| {
+        eval.states(graph, eval.root(graph).unwrap(), params, 0.0)
+            .unwrap()
+    };
+    assert_eq!(
+        eval.transition_time(&states(knife, &idle), &states(knife, &deploy), &deploy),
+        Some(0.1)
+    );
+    assert!(
+        (eval
+            .transition_time(&states(knife, &deploy), &states(knife, &idle), &idle)
+            .unwrap()
+            - 0.2)
+            .abs()
+            < 1e-6
+    );
+    let swing = attack("attack_knife_lightmiss");
+    assert_eq!(
+        eval.transition_time(&states(knife, &idle), &states(knife, &swing), &swing),
+        Some(0.0)
+    );
+
+    let throw = |kind: &str, strength: f32| {
+        Params::default()
+            .id("action", "action_attack")
+            .id("attack_type", kind)
+            .id("weapon_type", "weapon_hegrenade")
+            .id("weapon_category", "weapon_category_grenade")
+            .float("attack_throw_strength", strength)
+    };
+    assert_eq!(
+        playing(grenade, &throw("attack_grenade_charge", 1.0), 0.1),
+        "pullpin_grenade"
+    );
+    assert_eq!(
+        playing(grenade, &throw("attack_grenade_throw", 1.0), 0.1),
+        "throw_overhand_grenade"
+    );
+    assert_eq!(
+        playing(grenade, &throw("attack_grenade_throw", 0.2), 0.1),
+        "throw_underhand_grenade"
+    );
+
+    // A reload from an empty magazine plays the empty variant.
+    let reload = |ammo: f32| {
+        Params::default()
+            .id("action", "action_reload")
+            .id("weapon_type", "weapon_glock")
+            .id("weapon_category", "weapon_category_pistol")
+            .float("weapon_ammo", ammo)
+    };
+    assert_eq!(playing(glock, &reload(5.0), 0.5), "reload_glock");
+    assert_eq!(playing(glock, &reload(0.0), 0.5), "reload_empty_glock");
+
+    // A jump plays its clip (0.4 s), then the landing blend's in-air poses.
+    let air = Params::default()
+        .id("move_type", "move_type_air")
+        .id("air_action", "air_action_jump")
+        .float("move_speed_x", 225.0)
+        .float("air_height_above_ground", 30.0);
+    assert_eq!(playing(locomotion, &air, 0.1), "jump_n_knife");
+    let landing = eval
+        .states(locomotion, eval.root(locomotion).unwrap(), &air, 0.6)
+        .unwrap();
+    let paths: Vec<&str> = landing
+        .iter()
+        .map(|(g, n)| library.graph(g).unwrap().paths[*n].as_str())
+        .collect();
+    assert!(paths.contains(&"SM/InAir/SM/landing_blend"), "{paths:?}");
+    let ground = Params::default()
+        .id("move_type", "move_type_ground")
+        .id("ground_action", "ground_action_move");
+    let into_air = eval.transition_time(
+        &states(locomotion, &ground),
+        &states(locomotion, &air),
+        &air,
+    );
+    let onto_ground = eval.transition_time(
+        &states(locomotion, &air),
+        &states(locomotion, &ground),
+        &ground,
+    );
+    assert_eq!(into_air, Some(0.0));
+    assert!((onto_ground.unwrap() - 0.2).abs() < 1e-6, "{onto_ground:?}");
+    // Starts by direction.
+    let start = |direction: &str| {
+        Params::default()
+            .id("move_type", "move_type_ground")
+            .id("ground_action", "ground_action_start")
+            .id("ground_action_direction_id", direction)
+    };
+    assert_eq!(playing(locomotion, &start("NW"), 0.1), "planted_start_nw");
+    assert_eq!(playing(locomotion, &start("E"), 0.1), "planted_start_e");
+    assert!(
+        (eval
+            .duration(locomotion, eval.root(locomotion).unwrap(), &start("N"))
+            .unwrap()
+            - 0.533)
+            .abs()
+            < 0.01
+    );
+
+    // Defusing with a rifle: the enter clip, then the loop.
+    let defusing = Params::default()
+        .flag("is_defusing", true)
+        .id("weapon_category", "weapon_category_rifle")
+        .id("weapon_type", "weapon_ak47");
+    assert_eq!(playing(main, &defusing, 0.1), "defuse_enter_rifle");
+    let enter = eval.duration(main, defuse, &defusing).unwrap();
+    println!("defuse enter: {enter:.2} s");
+    assert_eq!(playing(main, &defusing, enter + 0.1), "defuse_loop_rifle");
+}
+
 /// `items_game.txt` names the weapons the demos report by index, with the names the animation graphs select on.
 #[test]
 fn item_names_read() {

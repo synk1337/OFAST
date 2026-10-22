@@ -36,14 +36,16 @@
 pub mod aim;
 pub mod bake;
 mod clip;
+pub mod eval;
 pub mod graph;
 pub mod layers;
 pub mod locomotion;
 mod retarget;
 mod skeleton;
+pub mod states;
 pub mod weapon;
 
-pub use clip::{Clip, TrackSettings};
+pub use clip::{Clip, ClipEvent, TrackSettings};
 pub use locomotion::Locomotion;
 pub use retarget::Retargeter;
 pub(crate) use retarget::matrix_to_quat;

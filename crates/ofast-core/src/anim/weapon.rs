@@ -44,6 +44,11 @@ pub struct WeaponClips {
     pub draw: Vec<String>,
     /// Reload, standing then crouched (and empty-magazine variants when the graph has them).
     pub reload: Vec<String>,
+    /// The weapon's state in the main graph's `Weapons/State/Weapons` (the weapons layer for this weapon).
+    pub action_state: Option<usize>,
+    /// The graph that state plays, when it references one (guns, knives, grenades; equipment has its states in the
+    /// main graph itself).
+    pub action_graph: Option<String>,
 }
 
 impl WeaponClips {
@@ -91,11 +96,14 @@ impl WeaponClips {
                     .map(|(p, _)| p)
                     .collect();
             }
-            if let Some(state) = main
+            let action_state = main
                 .find("Weapons/State/Weapons")
-                .and_then(|m| weapon_state(main, m, &ids))
+                .and_then(|m| weapon_state(main, m, &ids));
+            out.action_state = action_state;
+            if let Some(state) = action_state
                 && let Some(path) = referenced_graph_under(main, state)
             {
+                out.action_graph = Some(path.clone());
                 let graph = load_graph(&path)?;
                 for (state_path, clips) in
                     [("SM/Deploy", &mut out.draw), ("SM/Reload", &mut out.reload)]

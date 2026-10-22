@@ -147,7 +147,7 @@ pub struct RigInputs {
 }
 
 /// The weapon a player holds at one tick.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ActiveWeapon {
     /// The weapon's entity index (its entry in [`PlayerSample::weapons`]).
     pub entity: u32,
@@ -159,8 +159,16 @@ pub struct ActiveWeapon {
     /// What the weapon's animation is doing (`m_iWeaponGameplayAnimState`): idle, deploying, shooting, reloading…
     /// The values are listed in `docs/formats/demo.md`.
     pub anim_state: i64,
+    /// Demo tick at which `anim_state` last (re)started (`m_flWeaponGameplayAnimStateTimestamp`, game seconds): a
+    /// second knife swing restarts the state with the same value.
+    pub state_tick: Option<u32>,
     /// Reloading (`m_bInReload`).
     pub reloading: bool,
+    /// How hard a grenade is being thrown, 0 – 1 (`m_flThrowStrength`: 1 for a left-click throw, 0 for a right-click
+    /// lob, 0.5 for both); 0 for other weapons.
+    pub throw_strength: f32,
+    /// Rounds in the magazine (`m_iClip1`); `None` for weapons without one (knives, grenades read −1).
+    pub clip: Option<u32>,
 }
 
 /// `m_fFlags` bit: the pawn stands on something.
@@ -311,7 +319,10 @@ struct RigPaths {
 struct WeaponPaths {
     item: FieldPath,
     anim_state: Option<FieldPath>,
+    state_time: Option<FieldPath>,
     reloading: Option<FieldPath>,
+    throw_strength: Option<FieldPath>,
+    clip: Option<FieldPath>,
     model: Option<FieldPath>,
     mesh_groups: Option<FieldPath>,
 }
@@ -329,7 +340,10 @@ impl RigPaths {
                 let paths = WeaponPaths {
                     item: field("m_AttributeManager.m_Item.m_iItemDefinitionIndex")?,
                     anim_state: field("m_iWeaponGameplayAnimState"),
+                    state_time: field("m_flWeaponGameplayAnimStateTimestamp"),
                     reloading: field("m_bInReload"),
+                    throw_strength: field("m_flThrowStrength"),
+                    clip: field("m_iClip1"),
                     model: field(MODEL_FIELD),
                     mesh_groups: field(MESH_GROUPS_FIELD),
                 };
@@ -743,22 +757,31 @@ fn read_rig(parser: &DemoParser<'_>, paths: &RigPaths, pawn: &Entity) -> RigInpu
         .and_then(|i| entities.get(i))
         .and_then(|w| {
             let fields = paths.weapons.get(&w.class_id)?;
+            let value = |path: &Option<FieldPath>| path.as_ref().and_then(|p| w.get(p));
+            // Game seconds → game tick → demo tick (0 means never).
+            let state_tick = value(&fields.state_time)
+                .and_then(FieldValue::as_f32)
+                .filter(|&t| t > 0.0)
+                .zip(parser.tick_interval())
+                .and_then(|(t, interval)| u32::try_from((t / interval).round() as i64).ok())
+                .and_then(|t| parser.game_tick_to_demo(t));
             Some(ActiveWeapon {
                 entity: w.index,
                 item: w.get(&fields.item)?.as_u64()? as u32,
                 class: parser.class_name(w.class_id)?.to_owned(),
-                anim_state: fields
-                    .anim_state
-                    .as_ref()
-                    .and_then(|p| w.get(p))
+                anim_state: value(&fields.anim_state)
                     .and_then(FieldValue::as_i64)
                     .unwrap_or(0),
-                reloading: fields
-                    .reloading
-                    .as_ref()
-                    .and_then(|p| w.get(p))
+                state_tick,
+                reloading: value(&fields.reloading)
                     .and_then(FieldValue::as_bool)
                     .unwrap_or(false),
+                throw_strength: value(&fields.throw_strength)
+                    .and_then(FieldValue::as_f32)
+                    .unwrap_or(0.0),
+                clip: value(&fields.clip)
+                    .and_then(FieldValue::as_i64)
+                    .and_then(|c| u32::try_from(c).ok()),
             })
         });
     RigInputs {
@@ -1340,6 +1363,7 @@ mod tests {
                     class: "CAK47".into(),
                     anim_state: 50,
                     reloading: true,
+                    ..ActiveWeapon::default()
                 }),
                 ..RigInputs::default()
             }

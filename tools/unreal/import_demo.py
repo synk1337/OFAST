@@ -373,6 +373,20 @@ def visibility_changes(frames, alive, own_view):
     return changes
 
 
+def carve(ranges, frames):
+    """`ranges` of (start, end) frames without the single frames in `frames`."""
+    out = []
+    for start, end in ranges:
+        cuts = sorted(f for f in frames if start <= f < end)
+        for f in cuts:
+            if f > start:
+                out.append((start, f))
+            start = f + 1
+        if start < end:
+            out.append((start, end))
+    return out
+
+
 def camera_cut_plan(replay, controllers, end_frame, fps):
     """(start, end, controller) per cut: for each kill in turn, the killer's view from the previous cut until half a
     second after the kill (the last one runs to the end of the round)."""
@@ -436,6 +450,10 @@ def build(replay):
             keys += key_transform(binding, frames, centres, body_rotations, HULL_SCALE, end_frame)
         alive = [bool(a) and p is not None for a, p in zip(track["alive"], positions)]
         own_view = [(start, end) for start, end, who in cuts if who == player["controller"]]
+        # Frames other cameras screenshot (close-ups, other players' eyes) show this player even inside his own cut.
+        shown = [t - tick0 for t, _ in CLOSE_SHOTS] + \
+            [t - tick0 for t, who in POV_SHOTS if who != player["controller"]]
+        own_view = carve(own_view, shown)
         # Frames shown through this player's eyes by the POV screenshots: hide the body there too.
         own_view += [(t - tick0, t - tick0 + 1) for t, who in POV_SHOTS if who == player["controller"]]
         changes = visibility_changes(frames, alive, own_view)

@@ -412,6 +412,132 @@ fn players_export_one_animation_per_player() {
     std::fs::remove_dir_all(&out).ok();
 }
 
+/// The bake's decisions (M4.4c) follow the demo's own events in every round up to 5: each knife attack and grenade
+/// throw the demo records (a gameplay state 500 – 505 or 200 – 202 with a new timestamp) starts that action in the
+/// weapons layer on its tick; every jump that leaves the ground starts a jump; every ladder stretch is a ladder state;
+/// every C4 plant and defuse begins one; and the baked poses are finite.
+#[test]
+fn bake_decisions_follow_the_demo() {
+    use ofast_core::anim::bake::{bake_player, timeline};
+    use ofast_core::content::Content;
+    use ofast_core::export::players::load_player_rig;
+    let Some((_, data)) = load() else { return };
+    let Some(install) = Cs2Install::locate() else {
+        println!("SKIPPED: no CS2 install");
+        return;
+    };
+    let content = Content::game(&install).expect("archives open");
+    let rounds = list_rounds(&data).expect("rounds");
+    let mut checked = [0usize; 5];
+    for round in rounds.iter().take(5) {
+        let track = track_round(&data, round.round).expect("round");
+        let rig = load_player_rig(&content, &track).expect("rig");
+        assert!(rig.warnings.is_empty(), "{:?}", rig.warnings);
+        let controllers: HashSet<u32> = track
+            .samples
+            .iter()
+            .flat_map(|s| &s.players)
+            .map(|p| p.controller)
+            .collect();
+        for &controller in &controllers {
+            let lines = timeline(
+                &track,
+                controller,
+                &rig.sets,
+                rig.upper.as_ref(),
+                rig.graphs.as_ref(),
+            )
+            .expect("decisions");
+            let has =
+                |tick: u32, what: &str| lines.iter().any(|(t, l)| *t == tick && l.contains(what));
+            let mut seen = HashSet::new();
+            let mut was_ladder = false;
+            let mut was_planting = false;
+            let mut was_defusing = false;
+            for sample in &track.samples {
+                let Some(p) = sample
+                    .players
+                    .iter()
+                    .find(|p| p.controller == controller && p.alive)
+                else {
+                    continue;
+                };
+                if let Some(w) = &p.rig.weapon
+                    && let Some(stamp) = w.state_tick
+                    && seen.insert((w.anim_state, stamp))
+                {
+                    let action = match w.anim_state {
+                        500..=505 if w.class.contains("Knife") => Some("attack_knife"),
+                        200 | 202 if !w.class.contains("Knife") => Some("attack_grenade"),
+                        _ => None,
+                    };
+                    // The weapons layer starts on the state's timestamp (when it is recent).
+                    if let Some(action) = action
+                        && stamp + 64 > sample.tick
+                    {
+                        assert!(
+                            has(stamp, action),
+                            "round {} player {controller}: {action} at {stamp}",
+                            round.round
+                        );
+                        checked[0] += 1;
+                    }
+                }
+                if p.rig.on_ladder && !was_ladder {
+                    assert!(has(sample.tick, "Ladder"), "ladder at {}", sample.tick);
+                    checked[1] += 1;
+                }
+                was_ladder = p.rig.on_ladder;
+                let planting = p.rig.weapon.as_ref().is_some_and(|w| w.anim_state == 300);
+                if planting && !was_planting {
+                    assert!(has(sample.tick, "plant begins"), "plant at {}", sample.tick);
+                    checked[2] += 1;
+                }
+                was_planting = planting;
+                if p.rig.defusing && !was_defusing {
+                    assert!(
+                        has(sample.tick, "defuse begins"),
+                        "defuse at {}",
+                        sample.tick
+                    );
+                    checked[3] += 1;
+                }
+                was_defusing = p.rig.defusing;
+            }
+            checked[4] += lines
+                .iter()
+                .filter(|(_, l)| l.contains("Air { jumped: true }"))
+                .count();
+            let poses = bake_player(
+                &track,
+                controller,
+                &rig.sets,
+                rig.upper.as_ref(),
+                rig.graphs.as_ref(),
+                16.0,
+            )
+            .expect("bake");
+            assert!(
+                poses.iter().flatten().flatten().all(|t| t.scale.is_finite()
+                    && t.translation
+                        .iter()
+                        .chain(&t.rotation)
+                        .all(|v| v.is_finite())),
+                "round {} player {controller}: non-finite pose",
+                round.round
+            );
+        }
+    }
+    println!(
+        "attacks and throws {}, ladders {}, plants {}, defuses {}, jumps {}",
+        checked[0], checked[1], checked[2], checked[3], checked[4]
+    );
+    assert!(
+        checked[0] > 0 && checked[4] > 0,
+        "the demo has attacks and jumps to check"
+    );
+}
+
 /// Glove skins: round 1 with every player given the Bloodhound gloves (item 5027) and the agent's
 /// `thirdperson_hide_default_gloves` mesh group, as CS2 sends them for a player wearing glove skins (the local demo
 /// has none). Each look's file then holds the glove model's meshes, bone-merged onto the agent, and not the agent's

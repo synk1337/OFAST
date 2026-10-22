@@ -492,6 +492,19 @@ pub fn aim(pose: &mut [Transform], bones: &AimBones, input: &AimInputs) {
             two_bone_ik(pose, bones, side, target, w);
         }
     }
+
+    // 4. The weapon onto the right hand.
+    snap_weapon(pose, bones);
+}
+
+/// CS2's `CNmSnapWeaponNode`, the main graph's root (engine code; rebuilt from what it must do): the weapon moves so
+/// that its right-hand bone `wpnHand_R` lands on `hand_R`, the inverse of the hand IK. With the hands on the
+/// weapon it changes nothing; while an action lets go of the hands (a draw, a reload, a knife swing, a throw) it
+/// keeps the weapon in the hand that the layers moved, instead of where the separately blended `wpn` bone ends up.
+pub fn snap_weapon(pose: &mut [Transform], bones: &AimBones) {
+    let hand = bones.model(pose, bones.hand[1]);
+    let grip = Rigid::of(&pose[bones.weapon_hand[1]]);
+    bones.set_model(pose, bones.weapon, hand.then(grip.inverse()));
 }
 
 /// Shifts the weapon in its own axes when looking far up or down.
@@ -705,5 +718,25 @@ mod tests {
         let hand = bones.model(&pose, 18).t;
         let error = length(sub(hand, target.t));
         assert!(error < 1e-2, "hand at {hand:?}");
+
+        // The snap puts the weapon's right-hand bone onto the hand, whatever the weapon's pose was.
+        pose[8].translation = [3.0, -40.0, 7.0];
+        pose[8].rotation = axis_angle([0.0, 0.0, 1.0], 70.0);
+        pose[12].translation = [1.0, 2.0, 0.5];
+        pose[12].rotation = axis_angle([1.0, 0.0, 0.0], 30.0);
+        snap_weapon(&mut pose, &bones);
+        let (grip, hand) = (bones.model(&pose, 12), bones.model(&pose, 18));
+        assert!(
+            length(sub(grip.t, hand.t)) < 1e-3,
+            "grip {grip:?} hand {hand:?}"
+        );
+        assert!(
+            dot_q(grip.q, hand.q).abs() > 0.9999,
+            "grip {grip:?} hand {hand:?}"
+        );
+    }
+
+    fn dot_q(a: [f32; 4], b: [f32; 4]) -> f32 {
+        a.iter().zip(&b).map(|(x, y)| x * y).sum()
     }
 }

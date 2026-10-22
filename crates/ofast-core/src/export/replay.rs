@@ -309,6 +309,7 @@ mod tests {
                     class: "CAK47".into(),
                     anim_state: 50,
                     reloading: false,
+                    ..ActiveWeapon::default()
                 }),
                 ..RigInputs::default()
             }

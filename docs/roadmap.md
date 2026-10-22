@@ -141,9 +141,18 @@ player and round.
   over the locomotion; CS2's aim node rebuilt (spine yaw and pitch, weapon pitch and barrel alignment, two-bone hand
   IK). Checked through players' eyes against CS2: a rifle draw matches, a rifle firing stance is close (CS2's hands
   sit higher and its head drops to the sights). [animation.md](formats/animation.md#the-main-graphs-upper-body-worldmodelvnmgraph).
-- [ ] M4.4c The rest of the graph: knife attacks, grenade throws, planting and defusing, the locomotion graph's
-  starts, stops, turns on the spot, jumps and ladders, clip events (hand IK timing; a drawn weapon leaving its
-  holster when the hand reaches it), CS2's raised knife hand, and why CS2's knife run stands more upright.
+- [x] **M4.4c The rest of the graph**: CS2's graphs evaluated state by state (`anim::eval`: clips, blends,
+  selectors, scales, state machines by entry condition, default state and "state completed", the graphs' own
+  transition times) for the states decided from the demo (`anim::states`): knife attacks with their swing-back
+  variants, grenade pin pulls and throws by strength, the Healthshot and silencer, draws from the holster (the
+  weapon leaves it when the draw has blended in) with the hands returning at the clip's `WPN_IK_ACTION_ENDING`,
+  CS2's weapon snap onto the hand, C4 planting and defusing (enter, loop), starts, plants and turns on direction
+  reversals, turning on the spot, jumps, falls and landings with their body additives, ladders, breathing.
+  Checked against the demo's own events over five rounds and in Unreal close-ups.
+  [animation.md](formats/animation.md#evaluating-the-graphs-animeval-animstates).
+- [ ] M4.4d Left from M4.4c: CS2's raised knife hand and more upright knife run, the ladder's facing (no ladder
+  normal in demos), small turns on the spot, flinches, the flashed layer, foot IK; CS2's thresholds for starts and
+  turns.
 - [x] **M4.5 Weapons and each player's look**: models named by resource id (`m_hModel` = MurmurHash64B of the path,
   checked on every resource reference); each player's own agent, mesh groups (defuse kit) and glove skin, one glTF
   per look; every weapon carried (`m_hMyWeapons`, its own model: knife skins, CS:GO-era meshes) baked as a bone of
