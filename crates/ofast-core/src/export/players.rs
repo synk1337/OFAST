@@ -41,7 +41,7 @@ use crate::anim::layers::BoneMask;
 use crate::anim::weapon::WeaponClips;
 use crate::anim::{Clip, Locomotion, NmSkeleton, Retargeter, Transform, matrix_to_quat};
 use crate::content::Content;
-use crate::demo::players::{PlayerSample, RoundTrack};
+use crate::demo::players::{COUNTER_TERRORISTS, PlayerSample, RoundTrack};
 use crate::items::{item_names, item_values};
 use crate::model::{Affine, Model, compose, invert_rigid};
 
@@ -254,7 +254,11 @@ pub fn export_players(
                         p.appearance.model
                     ));
                 }
-                let agent = if p.team == 3 { CT_AGENT } else { T_AGENT };
+                let agent = if p.team == COUNTER_TERRORISTS {
+                    CT_AGENT
+                } else {
+                    T_AGENT
+                };
                 (agent.to_owned(), 0)
             }
         };
@@ -725,6 +729,7 @@ fn load_graph_rig(
         defuse_mask: mask("Defuse"),
         defuse_grenade_mask: mask("Defuse_Grenade"),
         breathing_mask: mask("Breathing"),
+        flashed_mask: mask("Flashed"),
         ..GraphRig::default()
     };
     for path in rig.locomotion.clone() {
@@ -738,12 +743,20 @@ fn load_graph_rig(
     rig.jump_start = node("BodyAdditives/JumpAdditiveStart");
     rig.jump_land = node("BodyAdditives/JumpAdditiveLand");
     rig.breathing = node("BodyAdditives/Breathing");
+    rig.body_flinch = node("BodyFlinch/Flinch_WPNs");
+    rig.head_flinch = node("HeadFlinch/Flinch_WPNs");
+    rig.fire_flinch = node("FireFlinch/OnFire_WPNs");
+    rig.flashed = node("flashed/flashed");
     for main_node in [
         rig.planting,
         rig.defuse,
         rig.jump_start,
         rig.jump_land,
         rig.breathing,
+        rig.body_flinch,
+        rig.head_flinch,
+        rig.fire_flinch,
+        rig.flashed,
     ]
     .into_iter()
     .flatten()

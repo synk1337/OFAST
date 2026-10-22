@@ -428,7 +428,7 @@ fn bake_decisions_follow_the_demo() {
     };
     let content = Content::game(&install).expect("archives open");
     let rounds = list_rounds(&data).expect("rounds");
-    let mut checked = [0usize; 5];
+    let mut checked = [0usize; 6];
     for round in rounds.iter().take(5) {
         let track = track_round(&data, round.round).expect("round");
         let rig = load_player_rig(&content, &track).expect("rig");
@@ -508,6 +508,47 @@ fn bake_decisions_follow_the_demo() {
                 .iter()
                 .filter(|(_, l)| l.contains("Air { jumped: true }"))
                 .count();
+            // Every hit while alive flinches (fire burns, falls do nothing), every flash is seen.
+            let alive_at = |tick: u32| {
+                track.samples.iter().any(|s| {
+                    s.tick == tick
+                        && s.players
+                            .iter()
+                            .any(|p| p.controller == controller && p.alive)
+                })
+            };
+            for e in track
+                .events
+                .iter()
+                .filter(|e| e.controller("userid") == Some(controller))
+            {
+                if !alive_at(e.tick) {
+                    continue;
+                }
+                let weapon = e.string("weapon").unwrap_or("");
+                let expected = match e.name.as_str() {
+                    "player_hurt" if ofast_core::anim::states::is_fire(weapon) => "burning",
+                    "player_hurt" if e.controller("attacker").is_none() && weapon.is_empty() => {
+                        continue;
+                    }
+                    "player_hurt" => "flinch",
+                    "player_blind" => "flashed",
+                    _ => continue,
+                };
+                // A flinch starts on its hit's tick; a burn on its first fire hit, a flash on the strongest of
+                // flashes that overlap (within 10 s).
+                let window = if expected == "flinch" { 64 } else { 640 };
+                assert!(
+                    lines
+                        .iter()
+                        .any(|(t, l)| *t <= e.tick && t + window > e.tick && l.contains(expected)),
+                    "round {} player {controller}: {} at {} without {expected}",
+                    round.round,
+                    e.name,
+                    e.tick
+                );
+                checked[5] += 1;
+            }
             let poses = bake_player(
                 &track,
                 controller,
@@ -529,8 +570,8 @@ fn bake_decisions_follow_the_demo() {
         }
     }
     println!(
-        "attacks and throws {}, ladders {}, plants {}, defuses {}, jumps {}",
-        checked[0], checked[1], checked[2], checked[3], checked[4]
+        "attacks and throws {}, ladders {}, plants {}, defuses {}, jumps {}, hits and flashes {}",
+        checked[0], checked[1], checked[2], checked[3], checked[4], checked[5]
     );
     assert!(
         checked[0] > 0 && checked[4] > 0,

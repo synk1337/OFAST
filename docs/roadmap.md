@@ -150,9 +150,14 @@ player and round.
   reversals, turning on the spot, jumps, falls and landings with their body additives, ladders, breathing.
   Checked against the demo's own events over five rounds and in Unreal close-ups.
   [animation.md](formats/animation.md#evaluating-the-graphs-animeval-animstates).
-- [ ] M4.4d Left from M4.4c: CS2's raised knife hand and more upright knife run, the ladder's facing (no ladder
-  normal in demos), small turns on the spot, flinches, the flashed layer, foot IK; CS2's thresholds for starts and
-  turns.
+- [x] **M4.4d Graph rules, ladders, small turns, flinches, flashes**: actions end when the weapon's graph leaves
+  them (`Evaluator::leaves`), so a draw plays through the inspect state that follows it — CS2's raised knife at
+  tick 26508 was the Huntsman's draw, now matched; ladders turn the legs back to the ladder (its direction from the
+  approach, `ladder_angle_yaw`, the back clips); small turns on the spot (10 – 45°) besides the loop; body, head and
+  fire flinches from `player_hurt` (hit group and side from `bullet_damage`); the flashed pose from `player_blind`.
+  [animation.md](formats/animation.md#evaluating-the-graphs-animeval-animstates).
+- [ ] M4.4e Foot IK on slopes and stairs; checks against CS2 of the ladder legs, flinches, flashes and the
+  start / turn thresholds (more demos: a major's, with glove skins, flashes and molotovs).
 - [x] **M4.5 Weapons and each player's look**: models named by resource id (`m_hModel` = MurmurHash64B of the path,
   checked on every resource reference); each player's own agent, mesh groups (defuse kit) and glove skin, one glTF
   per look; every weapon carried (`m_hMyWeapons`, its own model: knife skins, CS:GO-era meshes) baked as a bone of

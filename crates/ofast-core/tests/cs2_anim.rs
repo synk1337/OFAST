@@ -221,11 +221,22 @@ fn graph_states_play_their_clips() {
     library
         .load(main, Some(defuse), &mut load_graph, &mut load_clip)
         .expect("defuse clips");
+    let layers: Vec<usize> = [
+        "BodyFlinch/Flinch_WPNs",
+        "HeadFlinch/Flinch_WPNs",
+        "flashed/flashed",
+    ]
+    .iter()
+    .map(|path| library.graph(main).unwrap().find(path).expect(path))
+    .collect();
+    for &node in &layers {
+        library
+            .load(main, Some(node), &mut load_graph, &mut load_clip)
+            .expect("layer clips");
+    }
     let eval = Evaluator::new(&library);
     // The clip a node plays `time` seconds in, by file name.
-    let playing = |graph: &str, params: &Params, time: f32| -> String {
-        let node = eval.root(graph).unwrap_or(defuse);
-        let node = if graph == main { defuse } else { node };
+    let playing_node = |graph: &str, node: usize, params: &Params, time: f32| -> String {
         let (clip, _) = eval
             .dominant_clip(graph, node, params, time)
             .unwrap()
@@ -243,6 +254,12 @@ fn graph_states_play_their_clips() {
             .unwrap_or_default()
             .trim_end_matches(".vnmclip")
             .to_owned()
+    };
+    // The same for a graph's root, or for the defuse state in the main graph.
+    let playing = |graph: &str, params: &Params, time: f32| -> String {
+        let node = eval.root(graph).unwrap_or(defuse);
+        let node = if graph == main { defuse } else { node };
+        playing_node(graph, node, params, time)
     };
 
     let attack = |kind: &str| {
@@ -397,6 +414,57 @@ fn graph_states_play_their_clips() {
     let enter = eval.duration(main, defuse, &defusing).unwrap();
     println!("defuse enter: {enter:.2} s");
     assert_eq!(playing(main, &defusing, enter + 0.1), "defuse_loop_rifle");
+
+    // Flinches by hit and weapon, and the flashed pose.
+    let hit = |category: &str, key: &str, kind: &str| {
+        Params::default()
+            .id("weapon_category", category)
+            .id(key, kind)
+    };
+    assert_eq!(
+        playing_node(
+            main,
+            layers[0],
+            &hit(
+                "weapon_category_rifle",
+                "flinch_body_type",
+                "flinch_body_chest_south"
+            ),
+            0.1
+        ),
+        "flinch_chest_rear"
+    );
+    assert_eq!(
+        playing_node(
+            main,
+            layers[0],
+            &hit(
+                "weapon_category_pistol",
+                "flinch_body_type",
+                "flinch_body_leg_left"
+            ),
+            0.1
+        ),
+        "flinch_leg_left_pistol"
+    );
+    assert_eq!(
+        playing_node(
+            main,
+            layers[1],
+            &hit(
+                "weapon_category_knife",
+                "flinch_head_type",
+                "flinch_head_west"
+            ),
+            0.1
+        ),
+        "flinch_head_left_knife"
+    );
+    assert!(
+        eval.pose(main, layers[2], &Params::default(), 0.0)
+            .unwrap()
+            .is_some()
+    );
 }
 
 /// `items_game.txt` names the weapons the demos report by index, with the names the animation graphs select on.

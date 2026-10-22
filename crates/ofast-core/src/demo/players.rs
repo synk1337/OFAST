@@ -7,6 +7,9 @@
 //!   (`m_hPlayerPawn`);
 //! - a **pawn** (`CCSPlayerPawn`, the body in the world) with the position, the view offset and the eye angles.
 //!
+//! Only the Terrorists and Counter-Terrorists are sampled: tournament demos also list spectators (the observer and
+//! casters, team 1), whose pawn is never alive and stays at the world origin.
+//!
 //! The position is split into a coarse grid cell and an offset inside it, both on the pawn's `CBodyComponent`:
 //! `x = m_cellX × 512 − 16384 + m_vecX` (cells are 512 units wide and the world spans ±16384 units), same for y and
 //! z. That is the feet. The first-person camera sits `m_vecViewOffset` above them (63.96875 units standing,
@@ -37,6 +40,10 @@ use super::serializer::Serializers;
 pub const CELL_WIDTH: f32 = 512.0;
 /// Half the size of the world: cell coordinates are offset by this so they are never negative.
 pub const MAX_COORD: f32 = 16384.0;
+/// `m_iTeamNum` of the Terrorists.
+pub const TERRORISTS: u32 = 2;
+/// `m_iTeamNum` of the Counter-Terrorists.
+pub const COUNTER_TERRORISTS: u32 = 3;
 
 /// One player at one tick.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,7 +54,8 @@ pub struct PlayerSample {
     pub name: String,
     /// 64-bit Steam id (0 for bots).
     pub steam_id: u64,
-    /// Team number: 2 = Terrorists, 3 = Counter-Terrorists (1 = spectators).
+    /// Team number: 2 = Terrorists, 3 = Counter-Terrorists. Spectators (team 1) and unassigned players (0) are left
+    /// out of the samples.
     pub team: u32,
     /// World position of the pawn's origin (feet), in Source units (1 unit = 1 inch).
     pub position: [f32; 3],
@@ -626,6 +634,15 @@ fn read_players(parser: &DemoParser<'_>, paths: &Paths) -> Vec<PlayerSample> {
         if parser.class_name(controller.class_id) != Some(paths.controller_class.as_str()) {
             continue;
         }
+        // Only the two teams play. Tournament demos also carry spectators (team 1: the observer, casters): their
+        // controller points at a pawn that is never alive and sits at the world origin.
+        let team = controller
+            .get(&paths.team)
+            .and_then(FieldValue::as_u64)
+            .unwrap_or(0) as u32;
+        if !matches!(team, TERRORISTS | COUNTER_TERRORISTS) {
+            continue;
+        }
         let Some(pawn) = controller
             .get(&paths.pawn_handle)
             .and_then(FieldValue::as_u64)
@@ -658,10 +675,7 @@ fn read_players(parser: &DemoParser<'_>, paths: &Paths) -> Vec<PlayerSample> {
                 .get(&paths.steam_id)
                 .and_then(FieldValue::as_u64)
                 .unwrap_or(0),
-            team: controller
-                .get(&paths.team)
-                .and_then(FieldValue::as_u64)
-                .unwrap_or(0) as u32,
+            team,
             position,
             view_offset,
             pitch: angles[0],

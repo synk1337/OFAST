@@ -397,10 +397,22 @@ demoparser2's tick, victim, attacker, weapon and headshot flag (`tests/cs2_demo.
 `round_officially_ended`, `bomb_beginplant` / `planted` / `begindefuse` / `defused` / `exploded`, `bomb_pickup` /
 `dropped`, `weapon_reload`, `smokegrenade_expired`.
 
+The animation bake reads three more (`anim::bake`, [animation.md](animation.md#evaluating-the-graphs-animeval-animstates)):
+
+| Event | Keys used | Round 5 |
+|---|---|---|
+| `player_hurt` | `userid` (victim), `attacker`, `weapon` (`inferno` for fire), `hitgroup` (0 generic, 1 head, 2 chest, 3 stomach, 4 / 5 left / right arm, 6 / 7 left / right leg) | 32 |
+| `bullet_damage` | `victim`, `damage_dir_x` / `_y` / `_z` (the bullet's direction, world), `distance`, `num_penetrations` | 31 |
+| `player_blind` | `userid`, `attacker`, `blind_duration` (seconds; 0.6 – 2.3 s seen in rounds 2 – 8) | 0 |
+
+Fall damage is a `player_hurt` without attacker or weapon and with hit group 0.
+
 ## Players and rounds
 
 - **Controller** (`CCSPlayerController`, entity index = player slot + 1): `m_iszPlayerName`, `m_steamID`,
-  `m_iTeamNum` (2 = T, 3 = CT), `m_hPlayerPawn` (handle of the pawn).
+  `m_iTeamNum` (2 = T, 3 = CT), `m_hPlayerPawn` (handle of the pawn). Tournament demos also have spectator
+  controllers (team 1: the observer, casters) whose pawn is never alive and stays at (0, 0, 0); OFAST samples only
+  teams 2 and 3 (an Aurora vs FURIA major demo has one, `@reLazffs`, in every round).
 - **Pawn** (`CCSPlayerPawn`): position = `cell × 512 − 16384 + offset` per axis from `CBodyComponent` →
   `m_cellX/Y/Z` and `m_vecX/Y/Z` (world units: 1 unit = 1 inch; the world spans ±16384) — this is the feet;
   `m_vecViewOffset.m_vecX/Y/Z` = from the feet to the first-person camera (z = eye height, 63.97 standing, 45.97

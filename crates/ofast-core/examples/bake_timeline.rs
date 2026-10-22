@@ -44,6 +44,25 @@ fn main() {
         .map(|f| f.split(',').map(str::to_owned).collect())
         .unwrap_or_default();
     let track = track_round(&data, round).expect("round");
+    // `OFAST_EVENTS=1`: the round's game events by name, with the keys of the first of each.
+    if std::env::var_os("OFAST_EVENTS").is_some() {
+        let mut counts: std::collections::BTreeMap<&str, (usize, String)> = Default::default();
+        for e in &track.events {
+            let entry = counts
+                .entry(e.name.as_str())
+                .or_insert_with(|| (0, format!("{:?}", e.keys)));
+            entry.0 += 1;
+        }
+        for (name, (n, keys)) in counts {
+            println!("{n:5} {name}: {}", &keys[..keys.len().min(300)]);
+        }
+    }
+    // `OFAST_EVENT=<name>`: every event of that name, tick and keys.
+    if let Ok(name) = std::env::var("OFAST_EVENT") {
+        for e in track.events.iter().filter(|e| e.name == name) {
+            println!("{:6} {:?}", e.tick, e.keys);
+        }
+    }
     let install = Cs2Install::locate().expect("CS2 install found");
     let content = Content::game(&install).expect("archives open");
     let rig = load_player_rig(&content, &track).expect("rig");

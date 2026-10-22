@@ -14,29 +14,36 @@
 //!    (`worldmodel_gun.vnmgraph+ak47`, `worldmodel_knife.vnmgraph+tactical`, `worldmodel_grenade.vnmgraph+he`…, or
 //!    the main graph's equipment states) for the action its gameplay state stands for: drawing (from the holster:
 //!    the draw clips start with the hand there), reloading, knife attacks, grenade charges and throws, the
-//!    silencer, the Healthshot. Actions hand over to each other and fade out over the graphs' transition times.
+//!    silencer, the Healthshot. Actions hand over to each other, go on until the graph itself leaves them (a draw
+//!    plays to its end through the inspect state that follows it) and fade out over the graphs' transition times.
 //! 5. **Defuse** (model space, `Defuse` mask): `Defuse/Defuse` while defusing, its enter clip then its loop.
 //! 6. **Body additives** (additive): the jump start from take-off, the landing until its clip ends, breathing
 //!    while standing idle (`Breathing` mask).
 //! 7. **Shot** (additive, upper body): `shoot_<w>` from each tick the weapon enters a shooting state (100 / 101).
-//! 8. **Aim** ([`super::aim`]): the upper body turned towards the view (eye yaw relative to the body yaw, eye pitch),
-//!    the weapon aligned, the hands on it — released during actions until the clip's `WPN_IK_ACTION_ENDING` event.
+//! 8. **Flinches** (additive): `BodyFlinch` / `HeadFlinch` for each hit (`player_hurt`: hit group and side),
+//!    `FireFlinch` while burning.
+//! 9. **Aim** ([`super::aim`]): the upper body turned towards the view (eye yaw relative to the body yaw, eye pitch),
+//!    the weapon aligned, the hands on it — released during actions until the clip's `WPN_IK_ACTION_ENDING` event —
+//!    and the weapon snapped onto the hand.
+//! 10. **Flashed** (model space, `Flashed` mask, over the aim): the arms before the face while flashed.
 //!
 //! Poses are sampled at a fixed frame rate from the round's first tick, ready to key on a model's skeleton (after
-//! [`super::Retargeter`]). Not baked yet: flinches, the flashed layer, foot IK, ragdolls.
+//! [`super::Retargeter`]). Not baked yet: foot IK, ragdolls.
 
 use std::collections::{HashMap, VecDeque};
 
-use super::aim::{AimBones, AimInputs, aim};
-use super::eval::{Evaluator, Library, Params, StateId};
+use super::aim::{AimBones, AimInputs, aim, snap_weapon};
+use super::eval::{Evaluator, Leave, Library, Params, StateId};
 use super::layers::{BoneMask, add_layer, model_space_layer};
 use super::locomotion::{LocomotionBlend, blend_poses};
 use super::states::{
-    GroundAction, GroundInputs, LADDER_CYCLE_HEIGHT, MIN_AIR_TICKS, Movement, PLANT_STATE,
-    REVERSAL_SPEED, REVERSAL_WINDOW, STANDING_SPEED, air_runs, ground_action, reversal,
-    weapon_action,
+    BURN_GAP, GroundAction, GroundInputs, LADDER_CYCLE_HEIGHT, MIN_AIR_TICKS, Movement,
+    PLANT_STATE, REVERSAL_SPEED, REVERSAL_WINDOW, SMALL_TURN_MAX, SMALL_TURN_MIN, STANDING_SPEED,
+    air_runs, direction4, flashed_amount, flinch_types, ground_action, is_fire, ladder_angles,
+    ladder_bearings, passive_action, reversal, turn_extent, weapon_action,
 };
 use super::{AnimError, Clip, Locomotion, Transform};
+use crate::demo::events::GameEvent;
 use crate::demo::players::{PlayerSample, RoundTrack};
 
 /// Which of CS2's three locomotion sets a weapon uses (`worldmodel_locomotion.vnmgraph+<set>`).
@@ -187,6 +194,16 @@ pub struct GraphRig {
     pub defuse_grenade_mask: Option<BoneMask>,
     /// `Breathing`.
     pub breathing_mask: Option<BoneMask>,
+    /// `BodyFlinch/Flinch_WPNs`, `HeadFlinch/Flinch_WPNs`, `FireFlinch/OnFire_WPNs` (additive layers).
+    pub body_flinch: Option<usize>,
+    /// See [`GraphRig::body_flinch`].
+    pub head_flinch: Option<usize>,
+    /// See [`GraphRig::body_flinch`].
+    pub fire_flinch: Option<usize>,
+    /// `flashed/flashed` (model space, above the aim) and its `Flashed` mask.
+    pub flashed: Option<usize>,
+    /// See [`GraphRig::flashed`].
+    pub flashed_mask: Option<BoneMask>,
 }
 
 /// The aim's action blend (`m_flActionBlendTimeSeconds`), seconds.
@@ -204,6 +221,10 @@ const DEFUSE_BLEND_OUT: f32 = 0.4;
 const PLANT_BLEND: f32 = 0.1;
 /// `BodyAdditives`: into the jump start; breathing fades this long (CS2 cuts it in at once).
 const ADDITIVE_BLEND: f32 = 0.2;
+/// The fire flinch fades out over this long after [`BURN_GAP`] (`OnFire_WPNs0` → Off is 0.1 s).
+const FIRE_FADE: f32 = 0.1;
+/// A hit older than this (seconds) no longer flinches (CS2's flinch clips are shorter).
+const FLINCH_MAX: f32 = 2.0;
 /// A gameplay state's timestamp older than this (seconds) at the tick it is first seen is not its start.
 const STATE_TIMESTAMP_SLACK: f32 = 1.0;
 
@@ -238,8 +259,11 @@ struct ActionSegment {
     state: i64,
     stamp: Option<u32>,
     start: u32,
-    /// The tick it stopped (fading out, or handed over to the next action).
+    /// The tick the graph left it (it fades out from there), or it was handed over to the next action.
     end: Option<u32>,
+    /// The tick the gameplay state stopped calling for it: the aim lets go from there, while the graph may go on
+    /// playing it (a draw followed by state 1000 plays to its end).
+    released: Option<u32>,
     blend_in: f32,
     blend_out: f32,
     /// A knife swing that follows a swing still in its `KnifeSwingBack` window (the graph's B variants).
@@ -272,11 +296,15 @@ impl ActionSegment {
     }
 
     /// The aim's action fade at `tick` (before easing): from `aim_from` up to 1 over [`AIM_ACTION_BLEND`], back to
-    /// 0 over it after the end, from where it had got to.
+    /// 0 over it after the action is released (or ends), from where it had got to.
     fn aim_fade(&self, tick: f32, interval: f32) -> f32 {
         let since = |t: u32| (tick - t as f32).max(0.0) * interval;
         let rise = |at: f32| (self.aim_from + at / AIM_ACTION_BLEND).min(1.0);
-        match self.end.filter(|&end| tick >= end as f32) {
+        let stop = match (self.released, self.end) {
+            (Some(r), Some(e)) => Some(r.min(e)),
+            (r, e) => r.or(e),
+        };
+        match stop.filter(|&end| tick >= end as f32) {
             Some(end) => {
                 let reached = rise(end.saturating_sub(self.start) as f32 * interval);
                 reached * (1.0 - (since(end) / AIM_ACTION_BLEND).min(1.0))
@@ -328,6 +356,9 @@ struct Step {
     turn_rate: f32,
     air_height: f32,
     ladder_cycle: f32,
+    /// `ladder_angle_yaw` and `ladder_angle_yaw_backwards` ([`super::states::ladder_angles`]).
+    ladder_angle: f32,
+    ladder_back: f32,
     /// View yaw relative to the body (positive left) and pitch (positive down).
     aim_yaw: f32,
     aim_pitch: f32,
@@ -340,6 +371,13 @@ struct Step {
     additive: Option<(Additive, u32)>,
     /// Tick of the latest shot with the weapon in hand.
     shot: Option<u32>,
+    /// The latest hit to the body and to the head: tick and flinch type ([`flinch_types`]).
+    flinch_body: Option<(u32, &'static str)>,
+    flinch_head: Option<(u32, &'static str)>,
+    /// Burning: the first and the latest tick of fire damage in a row.
+    burning: Option<(u32, u32)>,
+    /// The latest flash: tick and blind duration, seconds.
+    blind: Option<(u32, f32)>,
 }
 
 /// A world velocity (Source axes, units/s) in the body's frame: `(forward, left)` for a body facing `yaw` degrees.
@@ -444,6 +482,26 @@ pub fn timeline(
         {
             out.push((start, format!("additive {kind:?}")));
         }
+        for (hit, before) in [
+            (step.flinch_body, last.and_then(|l| l.flinch_body)),
+            (step.flinch_head, last.and_then(|l| l.flinch_head)),
+        ] {
+            if let Some((start, kind)) = hit
+                && before != hit
+            {
+                out.push((start, format!("flinch {kind}")));
+            }
+        }
+        if let Some((start, _)) = step.burning
+            && last.and_then(|l| l.burning).is_none_or(|(s, _)| s != start)
+        {
+            out.push((start, "burning".into()));
+        }
+        if let Some((start, duration)) = step.blind
+            && last.and_then(|l| l.blind).is_none_or(|(s, _)| s != start)
+        {
+            out.push((start, format!("flashed for {duration:.2} s")));
+        }
         last = Some(step);
     }
     Ok(out)
@@ -537,6 +595,13 @@ impl Baker<'_> {
             })
             .collect();
         let runs = air_runs(&ground);
+        let bearings = ladder_bearings(
+            &players
+                .iter()
+                .map(|p| p.map(|p| (p.rig.on_ladder, p.rig.velocity, p.rig.body_yaw)))
+                .collect::<Vec<_>>(),
+        );
+        let yaws: Vec<Option<f32>> = players.iter().map(|p| p.map(|p| p.rig.body_yaw)).collect();
         let mut run_of = vec![None; players.len()];
         for run in &runs {
             for slot in &mut run_of[run.start..=run.end] {
@@ -557,10 +622,34 @@ impl Baker<'_> {
         let mut additive: Option<(Additive, u32)> = None;
         let mut shot: Option<u32> = None;
         let mut last_state: Option<(u32, i64)> = None;
+        // This player's hits and flashes, oldest first, consumed as the ticks pass.
+        let mine = |name: &str| -> Vec<&GameEvent> {
+            track
+                .events
+                .iter()
+                .filter(|e| e.name == name && e.controller("userid") == Some(controller))
+                .collect()
+        };
+        let (hurts, blinds) = (mine("player_hurt"), mine("player_blind"));
+        let (mut next_hurt, mut next_blind) = (0usize, 0usize);
+        let mut flinch_body: Option<(u32, &'static str)> = None;
+        let mut flinch_head: Option<(u32, &'static str)> = None;
+        let mut burning: Option<(u32, u32)> = None;
+        let mut blind: Option<(u32, f32)> = None;
         let mut steps = Vec::with_capacity(players.len());
         for (i, (sample, player)) in track.samples.iter().zip(&players).enumerate() {
             let Some(player) = player else {
-                // Dead or absent: a respawn starts afresh (nothing blends from before the gap).
+                // Dead or absent: a respawn starts afresh (nothing blends from before the gap, and the hits and
+                // flashes of this time are passed over).
+                while hurts.get(next_hurt).is_some_and(|e| e.tick <= sample.tick) {
+                    next_hurt += 1;
+                }
+                while blinds
+                    .get(next_blind)
+                    .is_some_and(|e| e.tick <= sample.tick)
+                {
+                    next_blind += 1;
+                }
                 previous = None;
                 history.clear();
                 movement = None;
@@ -571,6 +660,10 @@ impl Baker<'_> {
                 additive = None;
                 shot = None;
                 last_state = None;
+                flinch_body = None;
+                flinch_head = None;
+                burning = None;
+                blind = None;
                 steps.push(None);
                 continue;
             };
@@ -646,13 +739,29 @@ impl Baker<'_> {
                     reversal: reversal(&recent, world, body),
                 };
                 let before = matches!(current, Some(Movement::Ground(_)));
-                Movement::Ground(ground_action(now, elapsed, length, before, &inputs))
+                match ground_action(now, elapsed, length, before, &inputs) {
+                    // A new turn on the spot: one stepping turn when the body settles within ±45°, else the loop.
+                    GroundAction::Turn
+                        if !matches!(now, GroundAction::Turn | GroundAction::SmallTurn(_)) =>
+                    {
+                        let (angle, settled) = turn_extent(&yaws, i, dt);
+                        Movement::Ground(if settled && angle.abs() < SMALL_TURN_MIN {
+                            GroundAction::Move
+                        } else if settled && angle.abs() <= SMALL_TURN_MAX {
+                            GroundAction::SmallTurn(angle)
+                        } else {
+                            GroundAction::Turn
+                        })
+                    }
+                    action => Movement::Ground(action),
+                }
             } else {
                 Movement::Ground(GroundAction::Move)
             };
             history.push_back((tick, world));
 
             let air_height = run.map_or(0.0, |r| r.height(player.position[2], rig.velocity[2]));
+            let ladder = bearings[i].map_or((0.0, 180.0), |b| ladder_angles(b, rig.body_yaw));
             let mut step = Step {
                 tick,
                 set,
@@ -668,6 +777,8 @@ impl Baker<'_> {
                 turn_rate,
                 air_height,
                 ladder_cycle: (player.position[2] / LADDER_CYCLE_HEIGHT).rem_euclid(1.0),
+                ladder_angle: ladder.0,
+                ladder_back: ladder.1,
                 aim_yaw: normalize_angle(player.yaw - rig.body_yaw),
                 aim_pitch: player.pitch,
                 movement: MovementSegment {
@@ -683,6 +794,10 @@ impl Baker<'_> {
                 defuse: None,
                 additive: None,
                 shot: None,
+                flinch_body: None,
+                flinch_head: None,
+                burning: None,
+                blind: None,
             };
             movement = Some(match movement {
                 Some(m) if m.state == desired => m,
@@ -701,7 +816,11 @@ impl Baker<'_> {
                     }
                     if matches!(
                         desired,
-                        Movement::Ground(GroundAction::Start(_) | GroundAction::PlantAndTurn(..))
+                        Movement::Ground(
+                            GroundAction::Start(_)
+                                | GroundAction::PlantAndTurn(..)
+                                | GroundAction::SmallTurn(_)
+                        )
                     ) {
                         next.length = self.movement_length(&step, desired);
                     }
@@ -745,6 +864,7 @@ impl Baker<'_> {
                             stamp: w.state_tick,
                             start,
                             end: None,
+                            released: None,
                             blend_in: DEFAULT_BLEND,
                             blend_out: DEFAULT_FADE_OUT,
                             swing_back: false,
@@ -776,10 +896,22 @@ impl Baker<'_> {
                     }
                 }
                 None => {
+                    // No new action: the one in progress goes on until its graph leaves it for what the state now
+                    // says (idle, inspect, gun fire), as CS2 runs the graph; another weapon in hand ends it.
                     if let Some(a) = action.as_mut()
                         && a.end.is_none()
                     {
-                        a.end = Some(tick);
+                        a.released.get_or_insert(tick);
+                        let same_weapon = rig.weapon.as_ref().filter(|w| w.item == a.item);
+                        match same_weapon.map(|w| self.action_leaves(&step, a, w.anim_state, tick))
+                        {
+                            Some(Some(blend)) => {
+                                a.end = Some(tick);
+                                a.blend_out = blend;
+                            }
+                            Some(None) => {}
+                            None => a.end = Some(tick),
+                        }
                     }
                 }
             }
@@ -827,10 +959,108 @@ impl Baker<'_> {
             last_state = state;
             step.shot = shot;
 
+            // Hits (flinches, burning) and flashes up to this tick.
+            while let Some(hurt) = hurts.get(next_hurt).filter(|e| e.tick <= tick) {
+                next_hurt += 1;
+                if is_fire(hurt.string("weapon").unwrap_or("")) {
+                    let first = burning
+                        .filter(|&(_, last)| {
+                            self.seconds(hurt.tick.saturating_sub(last) as f32) < BURN_GAP
+                        })
+                        .map_or(hurt.tick, |(first, _)| first);
+                    burning = Some((first, hurt.tick));
+                    continue;
+                }
+                // Fall damage (no attacker, no weapon) makes no flinch.
+                if hurt.controller("attacker").is_none()
+                    && hurt.string("weapon").unwrap_or("").is_empty()
+                {
+                    continue;
+                }
+                let side = self.hit_side(hurt, sample, player, controller);
+                let (body, head) = flinch_types(hurt.int("hitgroup").unwrap_or(0), side);
+                if let Some(kind) = body {
+                    flinch_body = Some((hurt.tick, kind));
+                }
+                if let Some(kind) = head {
+                    flinch_head = Some((hurt.tick, kind));
+                }
+            }
+            while let Some(flash) = blinds.get(next_blind).filter(|e| e.tick <= tick) {
+                next_blind += 1;
+                let duration = match flash.get("blind_duration") {
+                    Some(crate::demo::events::EventValue::Float(d)) => *d,
+                    _ => 0.0,
+                };
+                // A weaker flash does not cut a stronger one short: the one that ends later counts.
+                let ends = |(start, d): (u32, f32)| start as f32 * dt + d;
+                if blind.is_none_or(|b| ends((flash.tick, duration)) >= ends(b)) {
+                    blind = Some((flash.tick, duration));
+                }
+            }
+            step.flinch_body = flinch_body;
+            step.flinch_head = flinch_head;
+            step.burning = burning;
+            step.blind = blind;
+
             previous = Some((tick, rig.body_yaw, speed, desired));
             steps.push(Some(step));
         }
         Ok(steps)
+    }
+
+    /// Where a hit came from in the victim's body frame ([`direction4`]: `N` ahead … `W` left): against the
+    /// bullet's direction (`bullet_damage` of the same tick, victim and attacker), towards the explosion for an HE
+    /// grenade (`hegrenade_detonate` within two ticks), else towards the attacker, else ahead.
+    fn hit_side(
+        &self,
+        hurt: &GameEvent,
+        sample: &crate::demo::players::TickSample,
+        victim: &PlayerSample,
+        controller: u32,
+    ) -> &'static str {
+        let attacker = hurt.controller("attacker");
+        let bullet = self.track.events.iter().find(|e| {
+            e.name == "bullet_damage"
+                && e.tick == hurt.tick
+                && e.controller("victim") == Some(controller)
+                && e.controller("attacker") == attacker
+        });
+        let float = |e: &GameEvent, key: &str| match e.get(key) {
+            Some(crate::demo::events::EventValue::Float(v)) => Some(*v),
+            _ => None,
+        };
+        let blast = (hurt.string("weapon") == Some("hegrenade"))
+            .then(|| {
+                self.track
+                    .events
+                    .iter()
+                    .find(|e| e.name == "hegrenade_detonate" && e.tick.abs_diff(hurt.tick) <= 2)
+            })
+            .flatten()
+            .and_then(|e| {
+                Some([
+                    float(e, "x")? - victim.position[0],
+                    float(e, "y")? - victim.position[1],
+                ])
+            });
+        let towards = bullet
+            .and_then(|b| Some([-float(b, "damage_dir_x")?, -float(b, "damage_dir_y")?]))
+            .or(blast)
+            .or_else(|| {
+                let attacker = hurt.controller("attacker")?;
+                let a = sample.players.iter().find(|p| p.controller == attacker)?;
+                Some([
+                    a.position[0] - victim.position[0],
+                    a.position[1] - victim.position[1],
+                ])
+            });
+        match towards {
+            Some(v) if v[0].hypot(v[1]) > 1e-3 => {
+                direction4(body_relative([v[0], v[1], 0.0], victim.rig.body_yaw))
+            }
+            _ => "N",
+        }
     }
 
     /// The locomotion graph's parameters at a step, for a movement state.
@@ -845,7 +1075,8 @@ impl Baker<'_> {
             .float("ground_turn_angle_or_velocity", step.turn_rate)
             .float("air_height_above_ground", step.air_height)
             .float("ladder_cycle", step.ladder_cycle)
-            .float("ladder_angle_yaw", 0.0)
+            .float("ladder_angle_yaw", step.ladder_angle)
+            .float("ladder_angle_yaw_backwards", step.ladder_back)
             .flag("move_is_walking", step.walking)
             .id("move_type", state.move_type());
         match state {
@@ -859,6 +1090,9 @@ impl Baker<'_> {
                         params = params
                             .id("ground_action_direction_id", direction)
                             .float("move_speed_horizontal_previous", before);
+                    }
+                    GroundAction::SmallTurn(angle) => {
+                        params = params.float("ground_turn_angle_or_velocity", angle);
                     }
                     _ => {}
                 }
@@ -972,6 +1206,34 @@ impl Baker<'_> {
         let mut idle = self.action_params(step, segment);
         idle = idle.id("action", "action_idle");
         eval.transition_time(&from, &to, &idle)
+    }
+
+    /// Whether the weapon's graph leaves `segment`'s state at `tick` now that the gameplay state (`state`) starts
+    /// no action ([`passive_action`]): `Some(blend)` when it does, `None` while the action goes on. When the graph
+    /// cannot tell ([`Leave::Unknown`], or an error), the action ends at once with [`DEFAULT_FADE_OUT`].
+    fn action_leaves(
+        &self,
+        step: &Step,
+        segment: &ActionSegment,
+        state: i64,
+        tick: u32,
+    ) -> Option<f32> {
+        let (Some(eval), Some(graph)) = (
+            self.eval,
+            self.weapon(Some(segment.item))
+                .and_then(|w| w.actions.as_ref()),
+        ) else {
+            return Some(DEFAULT_FADE_OUT);
+        };
+        let (name, attack) = passive_action(state);
+        let from = self.action_params(step, segment);
+        let now = from.clone().id("action", name).id("attack_type", attack);
+        let time = self.seconds(tick.saturating_sub(segment.start) as f32);
+        match eval.leaves(&graph.graph, graph.node, &from, time, &now) {
+            Ok(Leave::Leaves { blend, .. }) => Some(blend),
+            Ok(Leave::Stays) => None,
+            Ok(Leave::Unknown) | Err(_) => Some(DEFAULT_FADE_OUT),
+        }
     }
 
     /// Whether a new attack at `start` comes while `old`'s clip is in its `KnifeSwingBack` event.
@@ -1256,6 +1518,9 @@ impl Baker<'_> {
                 add_layer(pose, &shoot.sample(elapsed, false)?, 1.0, Some(&upper.mask));
             }
         }
+        if let Some((eval, rig)) = graphs {
+            self.flinches(pose, eval, rig, step, tick)?;
+        }
 
         if let Some(weapon) = weapon {
             aim(
@@ -1271,6 +1536,67 @@ impl Baker<'_> {
                     weapon: weapon.weapon.clone(),
                 },
             );
+        }
+
+        // Flashed: the arms up before the face, over the aim (the main graph's root layer), then the weapon snapped
+        // back onto the hand.
+        if let (Some((eval, rig)), Some((start, duration))) = (graphs, step.blind)
+            && let (Some(node), Some(mask)) = (rig.flashed, rig.flashed_mask.as_ref())
+        {
+            let amount = flashed_amount(since(start), duration);
+            // The state's layer weight: `flashed_amount` 0.1 – 1 onto 0 – 0.95.
+            let weight = ((amount - 0.1) / 0.9).clamp(0.0, 1.0) * 0.95;
+            if weight > 0.0
+                && let Some(layer) = eval.pose(&rig.main, node, &self.additive_params(step), 0.0)?
+            {
+                model_space_layer(pose, &layer, weight, mask, &upper.parents);
+                if weapon.is_some() {
+                    snap_weapon(pose, &upper.aim);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The additive flinch layers: the latest body and head hit's clip from its tick to its end, and the fire
+    /// flinch while burning (and [`BURN_GAP`] after the last burn).
+    fn flinches(
+        &self,
+        pose: &mut [Transform],
+        eval: Evaluator<'_>,
+        rig: &GraphRig,
+        step: &Step,
+        tick: f32,
+    ) -> Result<(), AnimError> {
+        let since = |t: u32| self.seconds(tick - t as f32);
+        for (node, hit, parameter) in [
+            (rig.body_flinch, step.flinch_body, "flinch_body_type"),
+            (rig.head_flinch, step.flinch_head, "flinch_head_type"),
+        ] {
+            let (Some(node), Some((start, kind))) = (node, hit) else {
+                continue;
+            };
+            let time = since(start);
+            // Flinch clips last well under this: no need to ask the graph about an old hit.
+            if time >= FLINCH_MAX {
+                continue;
+            }
+            let params = self.additive_params(step).id(parameter, kind);
+            if time < eval.duration(&rig.main, node, &params)?
+                && let Some(delta) = eval.pose(&rig.main, node, &params, time)?
+            {
+                add_layer(pose, &delta, 1.0, None);
+            }
+        }
+        if let (Some(node), Some((first, last))) = (rig.fire_flinch, step.burning) {
+            let after = since(last);
+            if after < BURN_GAP + FIRE_FADE {
+                let params = self.additive_params(step).flag("flinch_is_on_fire", true);
+                let weight = 1.0 - ((after - BURN_GAP) / FIRE_FADE).clamp(0.0, 1.0);
+                if let Some(delta) = eval.pose(&rig.main, node, &params, since(first))? {
+                    add_layer(pose, &delta, weight, None);
+                }
+            }
         }
         Ok(())
     }
@@ -1443,6 +1769,7 @@ mod tests {
             stamp: Some(100),
             start: 100,
             end: None,
+            released: None,
             blend_in: 0.1,
             blend_out: 0.2,
             swing_back: false,

@@ -221,6 +221,22 @@ fn layer_inputs(graph: &Graph, node: usize) -> Vec<(usize, bool)> {
 /// A state a pose comes from: `(graph path, state node)`.
 pub type StateId = (String, usize);
 
+/// What [`Evaluator::leaves`] finds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Leave {
+    /// The machine stays in its state.
+    Stays,
+    /// It leaves for `state` (a state node), blending over `blend` seconds.
+    Leaves {
+        /// The target state node.
+        state: usize,
+        /// The transition's blend time, seconds.
+        blend: f32,
+    },
+    /// No state machine or state was found to ask.
+    Unknown,
+}
+
 /// What a node plays next, `time` seconds into it.
 enum Next<'l> {
     /// A node with its own pose (clip, pose, zero pose) or none.
@@ -346,6 +362,73 @@ impl<'l> Evaluator<'l> {
             }
         }
         Ok(None)
+    }
+
+    /// Whether the state machine `node` plays (`node` itself, or the first machine under its states and referenced
+    /// graphs), in the state that `from` chose `time` seconds ago, leaves it for `params`: the first of that state's
+    /// transitions whose condition holds ([`Leave::Leaves`] with the target state node and the blend time), or a
+    /// "state completed" transition that has already taken it into a state that plays nothing (blend 0). This is
+    /// how CS2 runs a machine (entry conditions only choose the state on entry), so an action goes on until the
+    /// graph itself lets go of it. [`Leave::Unknown`] when no machine or state is found.
+    pub fn leaves(
+        &self,
+        graph: &str,
+        node: usize,
+        from: &Params,
+        time: f32,
+        params: &Params,
+    ) -> Result<Leave, AnimError> {
+        let (mut path, _) = self.graph(graph)?;
+        let mut machine = node;
+        for _ in 0..MAX_DEPTH {
+            let (_, g) = self.graph(path)?;
+            match g.class(machine) {
+                "CNmStateMachineNode" => break,
+                "CNmStateNode" => match g.child(machine, "m_nChildNodeIdx") {
+                    Some(child) => machine = child,
+                    None => return Ok(Leave::Unknown),
+                },
+                "CNmReferencedGraphNode" => {
+                    let Some((other, g)) = g
+                        .referenced_graph(machine)
+                        .and_then(|other| self.graph(other).ok())
+                    else {
+                        return Ok(Leave::Unknown);
+                    };
+                    let Some(root) = g.root else {
+                        return Ok(Leave::Unknown);
+                    };
+                    (path, machine) = (other, root);
+                }
+                _ => return Ok(Leave::Unknown),
+            }
+        }
+        let (_, g) = self.graph(path)?;
+        if g.class(machine) != "CNmStateMachineNode" {
+            return Ok(Leave::Unknown);
+        }
+        let (Some((entered, _)), Some((state, t))) = (
+            self.machine_state(path, machine, from, 0.0, 0)?,
+            self.machine_state(path, machine, from, time, 0)?,
+        ) else {
+            return Ok(Leave::Unknown);
+        };
+        // Completed into a state that plays nothing: the action is over.
+        if state != entered && self.pose_at(path, state, from, t, 0)?.is_none() {
+            return Ok(Leave::Leaves { state, blend: 0.0 });
+        }
+        let states = g.states(machine);
+        let Some(index) = states.iter().position(|&(s, _)| s == state) else {
+            return Ok(Leave::Unknown);
+        };
+        Ok(g.transitions(machine, index)
+            .into_iter()
+            .filter(|t| t.target < states.len())
+            .find(|t| t.condition.is_some_and(|c| self.condition(path, c, params)))
+            .map_or(Leave::Stays, |t| Leave::Leaves {
+                state: states[t.target].0,
+                blend: t.duration,
+            }))
     }
 
     /// CS2's blend time from the states `from` to the states `to` ([`Evaluator::states`]): the transition, in the
@@ -1331,6 +1414,27 @@ mod tests {
         let crouch = eval.states("g", 4, &crouched, 0.0).unwrap();
         assert_eq!(eval.transition_time(&stand, &crouch, &crouched), Some(0.0));
         assert_eq!(eval.transition_time(&crouch, &stand, &none), None);
+        // Run as CS2 runs it: standing leaves for crouched (state node 9), crouched never leaves.
+        assert_eq!(
+            eval.leaves("g", 4, &none, 0.3, &crouched).unwrap(),
+            Leave::Leaves {
+                state: 9,
+                blend: 0.0
+            }
+        );
+        assert_eq!(
+            eval.leaves("g", 4, &none, 0.3, &none).unwrap(),
+            Leave::Stays
+        );
+        assert_eq!(
+            eval.leaves("g", 4, &crouched, 0.3, &none).unwrap(),
+            Leave::Stays
+        );
+        // A clip node is no machine: nothing to ask.
+        assert_eq!(
+            eval.leaves("g", 7, &none, 0.3, &none).unwrap(),
+            Leave::Unknown
+        );
         assert_eq!(eval.transition_time(&stand, &stand, &none), None);
         // The dominant clip and its time: Enter's clip a, 0.25 s in.
         let (clip, t) = eval.dominant_clip("g", 17, &none, 0.25).unwrap().unwrap();
