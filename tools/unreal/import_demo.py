@@ -12,6 +12,9 @@ Inputs (environment variables):
                      OFAST_SHOT; the watcher's own body is hidden in that frame)
     OFAST_CLOSE_SHOTS optional close-ups of players, "tick:controller,…": from 1.3 m in front and to the right at
                      chest height, to inspect a pose and the weapons (into OFAST_SHOT)
+    OFAST_VIEW_SHOTS optional screenshots from a camera placed as CS2's `getpos` prints it while spectating the demo,
+                     "tick:x:y:z:pitch:yaw,…" (Source units and degrees; e.g. CS2's Chase Cam, to compare the same
+                     view), with CS2's field of view; every living player is shown (into OFAST_SHOT)
 
 The map must have been imported first (tools/unreal/import_map.py): the sequence is built in its level
 /Game/OFAST/Maps/<map>. What the script makes, all rebuilt on every run:
@@ -49,6 +52,8 @@ POV_SHOTS = [tuple(int(v) for v in item.split(":")) for item in os.environ.get("
              if ":" in item]
 CLOSE_SHOTS = [tuple(int(v) for v in item.split(":"))
                for item in os.environ.get("OFAST_CLOSE_SHOTS", "").split(",") if ":" in item]
+VIEW_SHOTS = [(int(item.split(":")[0]),) + tuple(float(v) for v in item.split(":")[1:6])
+              for item in os.environ.get("OFAST_VIEW_SHOTS", "").split(",") if item.count(":") == 5]
 WIDTH, HEIGHT = 1920, 1080
 TAG = unreal.Name("OFAST_replay")
 UNITS_TO_CM = 2.54
@@ -236,7 +241,8 @@ def import_agents(replay):
     """Imports the players' animated agents written next to the replay by `ofast export-demo --players`, if any: the
     files <demo>_r<round>.agents.json lists, one per agent look. Returns controller -> (skeletal mesh,
     AnimSequence); Interchange names each AnimSequence <file><animation>, so the controller is read from its
-    `player_<controller>` ending."""
+    `player_<controller>` ending (shortened in the middle when long, so only `_<controller>` is sure to remain) —
+    except in a file with a single animation, which it names <file>_Anim."""
     folder = os.path.dirname(REPLAY_PATH)
     base = "%s_r%d" % (replay["demo"], replay["round"])
     manifest_path = os.path.join(folder, base + ".agents.json")
@@ -266,10 +272,15 @@ def import_agents(replay):
         assets.save_directory(destination, only_if_is_dirty=True, recursive=True)
         meshes = [o for o in objects if isinstance(o, unreal.SkeletalMesh)]
         animations = {}
-        for o in objects:
-            match = re.search(r"player_(\d+)$", o.get_name()) if isinstance(o, unreal.AnimSequence) else None
+        sequences = [o for o in objects if isinstance(o, unreal.AnimSequence)]
+        for o in sequences:
+            # Interchange shortens long names in the middle ("aurora-_layer_10"): only the trailing number is safe.
+            match = re.search(r"_(\d+)$", o.get_name())
             if match:
                 animations[int(match.group(1))] = o
+        # A file with one animation gets it named <file>_Anim instead (a look worn by one player only).
+        if not animations and len(sequences) == 1 and len(entry["players"]) == 1:
+            animations[entry["players"][0]] = sequences[0]
         if not meshes:
             log("agents %s: no skeletal mesh in %s" % (look, path))
             continue
@@ -451,7 +462,7 @@ def build(replay):
         alive = [bool(a) and p is not None for a, p in zip(track["alive"], positions)]
         own_view = [(start, end) for start, end, who in cuts if who == player["controller"]]
         # Frames other cameras screenshot (close-ups, other players' eyes) show this player even inside his own cut.
-        shown = [t - tick0 for t, _ in CLOSE_SHOTS] + \
+        shown = [t - tick0 for t, _ in CLOSE_SHOTS] + [view[0] - tick0 for view in VIEW_SHOTS] + \
             [t - tick0 for t, who in POV_SHOTS if who != player["controller"]]
         own_view = carve(own_view, shown)
         # Frames shown through this player's eyes by the POV screenshots: hide the body there too.
@@ -557,6 +568,15 @@ def close_camera(replay, tick, controller):
     return camera
 
 
+def view_camera(tick, x, y, z, pitch, yaw):
+    """A camera where CS2's `getpos` says its view is (Source units, degrees), with CS2's field of view."""
+    camera = spawn_tagged(unreal.CameraActor, "view at %d" % tick)
+    camera.set_actor_location(unreal.Vector(*to_unreal((x, y, z))), False, False)
+    camera.set_actor_rotation(unreal.Rotator(roll=0.0, pitch=-pitch, yaw=-yaw), False)
+    camera.camera_component.set_editor_property("field_of_view", HFOV_16_9)
+    return camera
+
+
 def verification_shots(sequence, replay, cameras):
     """Screenshots from the killer's eye 8 ticks before the first three kills, to compare with CS2 (demo_gototick,
     spec_player in first person), and one from above the players at the first kill."""
@@ -586,6 +606,9 @@ def verification_shots(sequence, replay, cameras):
         if camera is not None:
             path = os.path.join(SHOT_DIR, "replay_%s_tick%d_close%d.png" % (prefix, tick, controller))
             shots.append((tick - tick0, camera, path))
+    for number, view in enumerate(VIEW_SHOTS):
+        path = os.path.join(SHOT_DIR, "replay_%s_tick%d_view%d.png" % (prefix, view[0], number))
+        shots.append((view[0] - tick0, view_camera(*view), path))
     if not shots:
         unreal.SystemLibrary.quit_editor()
         return

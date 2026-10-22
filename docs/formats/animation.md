@@ -396,6 +396,16 @@ same weapons as playback.
   `demo_step_tick 64` play into the tick, so that no pose is left stale by the seek (the user's advice: seeking while
   paused can leave things misplaced). The real-graph test also checks flinches (`flinch_chest_rear` for a rifle hit
   from behind, `flinch_leg_left_pistol`, `flinch_head_left_knife`) and the flashed pose.
+- **A major's demo against CS2** (2026-10-22; Aurora vs FURIA, de_nuke, round 5; side by side in
+  `test-data/shots/agents/cs2_nuke_r5/compare_nuke_r5_a.png` and `_b.png`): seven views through CS2's Chase Cam,
+  rendered in Unreal from the camera CS2's `getpos` printed (`import_demo.py -ViewShots`), so both show the same
+  frame (map, players and their places line up). Every player wears a glove skin (Specialist, Sporty), bone-merged onto the agent's hands as CS2 draws
+  them; their paint (purple-blue, red) is not applied (M10). KSCERATO's knife inspect at freeze time, Wicadia
+  holding his FAMAS in a molotov, FalleN flashed (right forearm across the face), MAJ3R flashed with an HE in hand
+  (the arm across the face, seen from behind) and XANTARES flashed while spraying crouched match CS2's poses;
+  XANTARES's second flash (2 s, 0.66 s in) shows little in either. Differences: no fire or flash effects (M6), the
+  hall's interior darker than CS2's, and seen from very close the SAS sleeve over a raised forearm is broad and flat
+  in both, CS2's thinner at the cuff (the twist bones, below).
 - `tests/cs2_anim.rs` `weapon_clips_found_in_the_graphs` finds every tested weapon's clips and category through the
   graphs; `item_names_read` reads 2059 item names from `items_game.txt`.
 - `tests/cs2_anim.rs` `locomotion_graphs_read`: the three locomotion graphs give the blends above (17 standing and
@@ -417,6 +427,12 @@ same weapons as playback.
   the flash fading (CS:GO's overlay curve), the fire flinch's end.
 - **Not checked against CS2 yet**: the thresholds of `anim::states` (starts, plants and turns, turns on the spot),
   the legs on ladders (CS2's chase camera shows only the torso), flinches (the round's hits are seen only from 16 m),
-  the flashed pose (no flash in round 5).
-- **Glove skins against CS2**: merged and tested on the export side, never seen in the game (no player of the local
-  demo wears glove skins).
+  the flash's fading curve.
+- **Procedural bones**: the agent's twist bones (`arm_lower_R_TWIST`, `leg_upper_L_TWIST1`…, flag `0x400000`), the
+  scapulas and the shoulder aim helpers follow their parents at bind pose. CS2 drives them from the model's
+  `BoneConstraintList` (the `.vmdl`'s DATA block): on `ctm_sas`, 13 `CTiltTwistConstraint` (a twist bone takes a
+  weighted share, 0.5, of its target's roll about an axis), one `CPointConstraint` (`head_0_TWIST` between `neck_0`
+  and `head_0`), two `CAimConstraint` and two `CBoneConstraintDotToMorph` (the eyes). Bones are named by
+  MurmurHash2 of the lowercased name, seed `0x31415926` (all 26 hashes of `ctm_sas` resolve). Without them a
+  forearm turned far, as in the flashed pose, twists its sleeve flat at the wrist.
+- **Glove paint**: glove skins' models are merged (checked against CS2 on a major's demo), their paint kits not.

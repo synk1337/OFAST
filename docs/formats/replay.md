@@ -73,14 +73,16 @@ verification screenshots).
 Verification screenshots (`-Shot`): the killer's view 8 ticks before each of the first three kills, a view from
 above the players at the first kill, and with `-PovShots "tick:controller,…"` the view through any player's eyes at
 given ticks (that player's own body hidden in that frame), and with `-CloseShots "tick:controller,…"` a close-up of a
-player from 1.3 m in front and to his right at chest height (to inspect the pose and the weapons). The frames these
-shots render show every other player, also one whose own camera cut is running then (the sequence otherwise hides
-the player the cut looks through). To compare with CS2: `demo_pause`, `demo_gototick <tick>`, spectate the player in
-first person (`spec_player_by_accountid <steam id − 76561197960265728>`, or the demo bar's player arrows), Steam's
-F12.
+player from 1.3 m in front and to his right at chest height (to inspect the pose and the weapons), and with
+`-ViewShots "tick:x:y:z:pitch:yaw,…"` the view of a camera placed where CS2's `getpos` says its own view is (for
+instance CS2's Chase Cam behind a spectated player), so both show the same frame. The frames these shots render show
+every other player, also one whose own camera cut is running then (the sequence otherwise hides the player the cut
+looks through). To compare with CS2: `demo_pause`, `demo_gototick <tick − 64>`, then `demo_step_tick 64` (seeking
+alone can leave poses stale), spectate the player (`spec_player "<name>"` for ASCII names, or the demo bar's player
+arrows; `spec_player_by_accountid` does nothing in demo playback), Steam's F12.
 
 ## Not yet
 
-Flinches, the flashed layer and foot IK of CS2's animation graph, weapon skins, ragdolls (M4.6), grenades
+Foot IK of CS2's animation graph, weapon skins, ragdolls (M4.6), grenades
 and their effects (M6), sounds, a name label above each player (Unreal's text render did not show in the
 screenshots; the names are the actors' labels in Sequencer), several rounds in one sequence.

@@ -157,8 +157,11 @@ player and round.
   fire flinches from `player_hurt` (hit group and side from `bullet_damage`); the flashed pose from the pawn's
   `m_flFlashDuration` (tournament demos have no `player_blind`); spectators (a major demo's observer) left out.
   [animation.md](formats/animation.md#evaluating-the-graphs-animeval-animstates).
-- [ ] M4.4e Foot IK on slopes and stairs; checks against CS2 of the ladder legs, flinches, flashes and the
-  start / turn thresholds (more demos: a major's, with glove skins, flashes and molotovs).
+- [ ] M4.4e The model's procedural bones (`BoneConstraintList`: twist, point and aim constraints); foot IK on
+  slopes and stairs; checks against CS2 of the ladder legs, flinches and the start / turn thresholds. A major's
+  demo (Aurora vs FURIA, de_nuke) already checked: glove skins merged as CS2 draws them, flashed poses, knife
+  inspect and sprays matching from CS2's own Chase Cam positions
+  ([animation.md](formats/animation.md#verified)).
 - [x] **M4.5 Weapons and each player's look**: models named by resource id (`m_hModel` = MurmurHash64B of the path,
   checked on every resource reference); each player's own agent, mesh groups (defuse kit) and glove skin, one glTF
   per look; every weapon carried (`m_hMyWeapons`, its own model: knife skins, CS:GO-era meshes) baked as a bone of

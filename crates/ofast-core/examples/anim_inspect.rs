@@ -77,6 +77,21 @@ fn main() {
         model.skeleton.bones.len(),
         retargeter.mapped_bones()
     );
+    // `OFAST_UNMAPPED=1`: the model bones the clip skeleton lacks (they follow their parent at bind pose), with
+    // their parent and flags (0x400000 = procedural).
+    if std::env::var_os("OFAST_UNMAPPED").is_some() {
+        for bone in &model.skeleton.bones {
+            if skeleton.find(&bone.name).is_none() {
+                let parent = bone
+                    .parent
+                    .map_or("-", |p| model.skeleton.bones[p].name.as_str());
+                println!(
+                    "  unmapped {:<28} parent {parent:<24} flags {:#x}",
+                    bone.name, bone.flags
+                );
+            }
+        }
+    }
     let world = retargeter.world(&skeleton.reference);
     let bind = model.skeleton.world_transforms();
     let mut rows: Vec<(f32, f32, &str)> = Vec::new();

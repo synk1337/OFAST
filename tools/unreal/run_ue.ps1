@@ -24,6 +24,8 @@ param(
     [string]$PovShots = "",
     # For import_demo.py: close-ups of players, "tick:controller,tick:controller".
     [string]$CloseShots = "",
+    # For import_demo.py: views from cameras placed as CS2's getpos prints them, "tick:x:y:z:pitch:yaw,...".
+    [string]$ViewShots = "",
     [string]$Engine = "C:\Program Files\Epic Games\UE_5.8"
 )
 
@@ -46,6 +48,7 @@ $env:OFAST_TRY = if ($Try.ToLower().EndsWith(".json")) { & $resolve $Try } else 
 $env:OFAST_REPLAY = if ($Replay) { & $resolve $Replay } else { "" }
 $env:OFAST_POV_SHOTS = $PovShots
 $env:OFAST_CLOSE_SHOTS = $CloseShots
+$env:OFAST_VIEW_SHOTS = $ViewShots
 if ($Shot) {
     # -Shot is either a .png file (single screenshot) or a folder (scripts that take several).
     if ($env:OFAST_SHOT.ToLower().EndsWith(".png")) {
