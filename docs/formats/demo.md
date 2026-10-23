@@ -505,6 +505,31 @@ ragdoll from is set on the pawn that tick and kept until the next death (`Player
 The dead pawn itself stays where it died (its position and body yaw no longer change). OFAST simulates the ragdoll
 from these and the agent's `PHYS` block ([animation.md](animation.md#deaths-exportdeaths-physicsragdoll)).
 
+## Dropped weapons
+
+Unlike the ragdolls, weapons nobody carries are simulated on the server, and the demo carries their motion
+(`TickSample::dropped`, `DroppedWeapon`). A weapon entity (any class with
+`m_AttributeManager.m_Item.m_iItemDefinitionIndex`) is lying in the world when its owner `m_hOwnerEntity` and its
+body component's `m_hParent` are both the invalid handle (0xFFFFFF). Then its `CBodyComponent` holds a world
+origin (`m_cellX/Y/Z` × 512 − 16384 + `m_vecX/Y/Z`, like a pawn's) and rotation (`m_angRotation`: pitch, yaw, roll,
+Source's `QAngle`), sent on every tick it moves and not while it rests; a carried weapon sends zeros there (it
+follows its owner's hand: OFAST skips a weapon exactly at the world origin). Its model and mesh groups stay what
+they were while carried. Grenades in flight are other entities (`C…Projectile` classes, without an item
+definition): not weapons lying in the world, and not read here (M6).
+
+Seen (`examples/weapon_probe.rs` prints every weapon's owner, parent, origin, rotation and model when they change):
+on the death tick the dead player's gun in hand and a grenade lose their owner at the hand's height and fly on with
+the body's momentum. KSCERATO's AK-47 (Aurora vs FURIA, de_nuke, round 5, tick 34415) went 4.5 m and lay on its
+side (roll −90°) 1.3 s later; weapons dropped for a teammate in freeze time lie a few ticks before they are picked
+up (the owner turns valid again); a dropped C4, smoke grenades, pistols and rifles left from earlier deaths lie to
+the end of the round.
+
+**Checked** (`the_dead_let_go_of_their_guns` in `tests/cs2_demo.rs`, 2026-10-23): over the first three rounds of
+both test demos, each of the 46 players who died carrying more than a knife let go of a weapon within two ticks and
+96 units of the body (124 stretches of weapons lying in the world in all). In Unreal (`import_demo.py`, round 5)
+KSCERATO's AK-47 lies flat on its side on the floor where the demo has it, 2 m past his body; a CS2 reference
+of the same frames is still to take.
+
 ## Models
 
 What each player looks like and carries, read per tick into `PlayerSample::appearance` and `PlayerSample::weapons`

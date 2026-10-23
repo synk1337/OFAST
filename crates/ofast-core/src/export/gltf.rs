@@ -203,6 +203,27 @@ pub fn export_model_animated(
     writer.finish(&name, roots)
 }
 
+/// Writes `model`'s meshes in mesh groups `mesh_groups` rigid, without a skin (each vertex where the bind pose has
+/// it), as `<file_name>.gltf`: a static mesh in Unreal, for a model shown without animation (a weapon lying on the
+/// ground). Skinned, Unreal also made a physics asset per weapon, and rendering the AWP's thumbnail crashed the GPU.
+pub fn export_model_static(
+    content: &Content,
+    model: &Model,
+    mesh_groups: u64,
+    out_dir: &Path,
+    file_name: &str,
+) -> Result<ExportReport, ExportError> {
+    let mut writer = GltfWriter::new(content, out_dir, ExportOptions::default())?;
+    let mut roots = Vec::new();
+    for mesh in model.meshes_in_groups(mesh_groups) {
+        let draws: Vec<&DrawCall> = mesh.draw_calls.iter().collect();
+        if let Some(gltf_mesh) = writer.mesh(&mesh.name, mesh, &draws, [1.0; 4], 0.0, None)? {
+            roots.push(writer.node(&mesh.name, Some(gltf_mesh), None));
+        }
+    }
+    writer.finish(file_name, roots)
+}
+
 /// A model merged into a character ([`export_character`]): gloves on an agent, a weapon in its hand.
 #[derive(Debug, Clone)]
 pub struct MergedModel<'m> {

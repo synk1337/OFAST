@@ -14,12 +14,15 @@
 //!   the demo's rig inputs ([`crate::anim::bake`]) and retargeted onto the agent, plus every weapon bone on the hand,
 //!   on its holster, or scaled to 0; from each death on, the body falling as the agent's ragdoll ([`super::deaths`]).
 //!
-//! `<demo>_r<round>.agents.json` lists the files, their looks, their players and the deaths baked as ragdolls
-//! (`docs/formats/replay.md`);
+//! The weapons lying in the world (a dead player's gun, a dropped one: the replay's `dropped_weapons`) get one glTF
+//! per look, the weapon model alone: `<demo>_r<round>_dropped_<model>_<mesh groups>.gltf`.
+//!
+//! `<demo>_r<round>.agents.json` lists the files, their looks, their players, the deaths baked as ragdolls and the
+//! dropped weapons' models (`docs/formats/replay.md`);
 //! `tools/unreal/import_demo.py` plays each animation on its player's actor, which the replay's positions and body
 //! yaw move.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
@@ -27,7 +30,8 @@ use serde_json::json;
 use super::ExportError;
 use super::deaths::bake_deaths;
 use super::gltf::{
-    Binding, BoneAnimation, MergedModel, export_character, load_model, resource_data,
+    Binding, BoneAnimation, MergedModel, export_character, export_model_static, load_model,
+    resource_data,
 };
 use super::loadout::{
     AgentMounts, Place, Slot, WeaponFrames, WeaponLook, carried_places, hide_changes, key_places,
@@ -77,6 +81,8 @@ pub struct PlayersReport {
     pub weapons: usize,
     /// Deaths baked as ragdolls ([`super::deaths`]).
     pub deaths: usize,
+    /// Weapon models written for the weapons lying in the world (`<demo>_r<round>_dropped_…`).
+    pub dropped: usize,
     /// One line per death: who, when, how far the body went and when it lay still.
     pub falls: Vec<String>,
     /// Key rate of the animations ([`animation_fps`]).
@@ -328,6 +334,7 @@ pub fn export_players(
         players: 0,
         weapons: 0,
         deaths: 0,
+        dropped: 0,
         falls: Vec::new(),
         fps: round.fps,
         frames: round.frames.len(),
@@ -397,6 +404,7 @@ pub fn export_players(
         report.players += players.len();
         report.weapons += weapons.len();
     }
+    let dropped = export_dropped(&round, demo_name, out_dir, &mut report);
     std::fs::write(
         &report.manifest,
         serde_json::to_string_pretty(&json!({
@@ -406,10 +414,85 @@ pub fn export_players(
             "round": track.round,
             "fps": round.fps,
             "agents": manifest,
+            "dropped_weapons": dropped,
         }))
         .expect("JSON serializes"),
     )?;
     Ok(report)
+}
+
+/// Writes one glTF per look of the weapons lying in the world during the round (the replay's `dropped_weapons`):
+/// `<demo>_r<round>_dropped_<model file stem>_<mesh groups shown>.gltf`, the weapon model alone in its mesh groups
+/// and rigid (a static mesh: it does not animate), so Unreal can place it where the demo has it. Returns the
+/// manifest entries: file, model path, model id, and every mesh-group mask the replay names that shows this file
+/// (grenades send every bit, which shows the model's default groups). A model that cannot be read is left out with
+/// a warning, like a carried weapon's.
+fn export_dropped(
+    round: &Round<'_>,
+    demo_name: &str,
+    out_dir: &Path,
+    report: &mut PlayersReport,
+) -> Vec<serde_json::Value> {
+    let mut looks: BTreeMap<u64, BTreeSet<u64>> = BTreeMap::new();
+    for w in round.track.samples.iter().flat_map(|s| &s.dropped) {
+        looks.entry(w.model).or_default().insert(w.mesh_groups);
+    }
+    let mut entries = Vec::new();
+    let mut names = HashSet::new();
+    for (id, masks) in looks {
+        let Some(path) = round.models.get(&id) else {
+            report.warnings.push(format!(
+                "dropped weapon model {id:016x} is not a known model: not shown"
+            ));
+            continue;
+        };
+        let model = match load_model(round.content, path) {
+            Ok(model) => model,
+            Err(e) => {
+                report
+                    .warnings
+                    .push(format!("dropped weapon {path}: {e}: not shown"));
+                continue;
+            }
+        };
+        // One file per set of groups shown, named by it: several masks can show the same.
+        let mut by_shown: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+        for mask in masks {
+            by_shown
+                .entry(shown_groups(&model, mask))
+                .or_default()
+                .push(mask);
+        }
+        for (shown, masks) in by_shown {
+            let mut name = format!(
+                "{demo_name}_r{}_dropped_{}_{shown}",
+                round.track.round,
+                stem(path)
+            );
+            // Another model with the same file stem: keep the files apart.
+            if !names.insert(name.clone()) {
+                name = format!("{name}_{id:016x}");
+                names.insert(name.clone());
+            }
+            match export_model_static(round.content, &model, shown, out_dir, &name) {
+                Ok(written) => {
+                    entries.push(json!({
+                        "file": format!("{name}.gltf"),
+                        "model": path,
+                        "model_id": format!("{id:016x}"),
+                        "mesh_groups": masks,
+                    }));
+                    report.files.push(written.gltf);
+                    report.warnings.extend(written.warnings);
+                    report.dropped += 1;
+                }
+                Err(e) => report
+                    .warnings
+                    .push(format!("dropped weapon {path}: {e}: not shown")),
+            }
+        }
+    }
+    entries
 }
 
 /// What [`export_look`] returns: the glTF export's report, the weapon slots it holds, and each death baked as a

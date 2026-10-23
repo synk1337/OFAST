@@ -26,6 +26,11 @@
 //! animation state, jumps and landings) comes from the pawn, its movement and weapon services, and the active
 //! weapon's entity. Those fields are looked up leniently: if a CS2 update renames one, it reads as its default and
 //! the positions keep working.
+//!
+//! Weapons nobody carries ([`DroppedWeapon`]: a dead player's gun, a weapon dropped or thrown down) have no owner
+//! (`m_hOwnerEntity` and the body component's `m_hParent` are the invalid handle). The server simulates them as
+//! physics objects and sends their origin (cell and offset, like a pawn's) and rotation (`m_angRotation`: pitch,
+//! yaw, roll) on every tick they move; carried weapons send zeros (they follow their owner's hand).
 
 use std::collections::HashMap;
 
@@ -134,6 +139,28 @@ pub struct CarriedWeapon {
     pub count: u32,
 }
 
+/// A weapon lying in the world at one tick, owned by nobody: dropped by a dying player (the gun in hand and a
+/// grenade), dropped or thrown down by a living one, or left from earlier in the round. The server moves it as a
+/// physics object; a player picking it up ends it (it is carried again).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DroppedWeapon {
+    /// The weapon's entity index.
+    pub entity: u32,
+    /// Item definition index (7 = AK-47, …).
+    pub item: u32,
+    /// The weapon entity's class (`CAK47`, `CHEGrenade`, `CC4`, …).
+    pub class: String,
+    /// The world model (resource id), as when it was carried.
+    pub model: u64,
+    /// The world model's mesh groups ([`CarriedWeapon::mesh_groups`]).
+    pub mesh_groups: u64,
+    /// The model's origin, world, inches.
+    pub position: [f32; 3],
+    /// The model's rotation, degrees: pitch, yaw, roll (Source's `QAngle`: roll about x first, then pitch about y,
+    /// then yaw about z).
+    pub angles: [f32; 3],
+}
+
 /// Index of the flashbangs in the pawn's ammo counts (`m_pWeaponServices.m_iAmmo`). Observed on the local match
 /// demo, from the grenades each player carried: 13 HE, 14 flashbangs (2 with one flashbang entity), 15 smoke,
 /// 16 molotov or incendiary.
@@ -228,6 +255,8 @@ pub struct TickSample {
     pub tick: u32,
     /// Players with a pawn, in controller order.
     pub players: Vec<PlayerSample>,
+    /// Weapons lying in the world, in entity order.
+    pub dropped: Vec<DroppedWeapon>,
 }
 
 /// The players of one round, tick by tick.
@@ -384,6 +413,13 @@ struct WeaponPaths {
     clip: Option<FieldPath>,
     model: Option<FieldPath>,
     mesh_groups: Option<FieldPath>,
+    /// Who carries it (`m_hOwnerEntity`) and what it is attached to (`CBodyComponent.m_hParent`).
+    owner: Option<FieldPath>,
+    parent: Option<FieldPath>,
+    /// Where it lies when nobody does: the body component's cell, offset and rotation.
+    cell: Option<[FieldPath; 3]>,
+    offset: Option<[FieldPath; 3]>,
+    rotation: Option<FieldPath>,
 }
 
 impl RigPaths {
@@ -396,6 +432,13 @@ impl RigPaths {
             .flatten()
             .filter_map(|class| {
                 let field = |name: &str| serializers.path_of(class.serializer, name);
+                let axes = |prefix: &str| -> Option<[FieldPath; 3]> {
+                    Some([
+                        field(&format!("{prefix}X"))?,
+                        field(&format!("{prefix}Y"))?,
+                        field(&format!("{prefix}Z"))?,
+                    ])
+                };
                 let paths = WeaponPaths {
                     item: field("m_AttributeManager.m_Item.m_iItemDefinitionIndex")?,
                     anim_state: field("m_iWeaponGameplayAnimState"),
@@ -405,6 +448,11 @@ impl RigPaths {
                     clip: field("m_iClip1"),
                     model: field(MODEL_FIELD),
                     mesh_groups: field(MESH_GROUPS_FIELD),
+                    owner: field("m_hOwnerEntity"),
+                    parent: field("CBodyComponent.m_hParent"),
+                    cell: axes("CBodyComponent.m_cell"),
+                    offset: axes("CBodyComponent.m_vec"),
+                    rotation: field("CBodyComponent.m_angRotation"),
                 };
                 Some((class.id, paths))
             })
@@ -645,6 +693,7 @@ pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
             let sample = TickSample {
                 tick,
                 players: read_players(parser, paths),
+                dropped: read_dropped(parser, paths),
             };
             // Several frames can share a tick; the last state of the tick wins.
             match track.samples.last_mut() {
@@ -829,6 +878,81 @@ fn read_weapons(parser: &DemoParser<'_>, paths: &Paths, pawn: &Entity) -> Vec<Ca
             })
         })
         .collect()
+}
+
+/// The weapons nobody carries: weapon entities whose owner and parent are both the invalid handle (or were never
+/// sent), with their origin and rotation. A class whose owner and parent fields both cannot be found (renamed by a
+/// CS2 update) is skipped: every weapon of it would otherwise count as dropped.
+fn read_dropped(parser: &DemoParser<'_>, paths: &Paths) -> Vec<DroppedWeapon> {
+    let mut out = Vec::new();
+    for weapon in parser.entities().iter() {
+        let Some(fields) = paths.rig.weapons.get(&weapon.class_id) else {
+            continue;
+        };
+        if fields.owner.is_none() && fields.parent.is_none() {
+            continue;
+        }
+        let handle = |path: &Option<FieldPath>| {
+            path.as_ref()
+                .and_then(|p| weapon.get(p))
+                .and_then(FieldValue::as_u64)
+                .and_then(handle_to_index)
+        };
+        if handle(&fields.owner).is_some() || handle(&fields.parent).is_some() {
+            continue;
+        }
+        let (Some(cell), Some(offset), Some(item)) = (
+            &fields.cell,
+            &fields.offset,
+            weapon.get(&fields.item).and_then(FieldValue::as_u64),
+        ) else {
+            continue;
+        };
+        // The cell must have been sent; an offset never sent is its default, 0.
+        let mut position = [0.0; 3];
+        let mut complete = true;
+        for (k, value) in position.iter_mut().enumerate() {
+            match weapon.get(&cell[k]).and_then(FieldValue::as_u64) {
+                Some(c) => {
+                    let o = weapon
+                        .get(&offset[k])
+                        .and_then(FieldValue::as_f32)
+                        .unwrap_or(0.0);
+                    *value = c as f32 * CELL_WIDTH - MAX_COORD + o;
+                }
+                None => complete = false,
+            }
+        }
+        // Exactly the world origin is what a carried weapon sends (it follows its owner's hand): one that lost its
+        // owner for a moment (a grenade being thrown, the C4 being planted) has not been placed yet.
+        if !complete || position == [0.0; 3] {
+            continue;
+        }
+        let number = |path: &Option<FieldPath>| {
+            path.as_ref()
+                .and_then(|p| weapon.get(p))
+                .and_then(FieldValue::as_u64)
+                .unwrap_or(0)
+        };
+        out.push(DroppedWeapon {
+            entity: weapon.index,
+            item: item as u32,
+            class: parser
+                .class_name(weapon.class_id)
+                .unwrap_or_default()
+                .to_owned(),
+            model: number(&fields.model),
+            mesh_groups: number(&fields.mesh_groups),
+            position,
+            angles: fields
+                .rotation
+                .as_ref()
+                .and_then(|p| weapon.get(p))
+                .and_then(FieldValue::as_vector3)
+                .unwrap_or_default(),
+        });
+    }
+    out
 }
 
 /// The rig inputs of one pawn (fields the server never sent read as their defaults: 0, false, none).

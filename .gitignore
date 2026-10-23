@@ -25,6 +25,9 @@ unreal/**/DerivedDataCache/
 # Sandbox content is imported from Valve files: never commit it.
 unreal/Sandbox/Content/
 
+# --- Python (tools/) ---
+__pycache__/
+
 # --- Editors / OS ---
 .vs/
 .vscode/

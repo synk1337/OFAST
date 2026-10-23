@@ -13,7 +13,9 @@
 //! - the round's jumps and landings (tick, player), and the weapons seen (item definition index → entity class);
 //! - kills (`player_death`): tick, victim, attacker, assister (controller indices; `null` = nobody, e.g. fall
 //!   damage), weapon, headshot and the other flags CS2's kill feed shows;
-//! - round milestones (`round_freeze_end`, bomb events, `round_end`), with their keys as sent.
+//! - round milestones (`round_freeze_end`, bomb events, `round_end`), with their keys as sent;
+//! - the weapons lying in the world (a dead player's gun, a dropped one): one entry per stretch an entity lay
+//!   unowned, with its look and its origin and rotation keyed on the ticks it moved.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -23,7 +25,7 @@ use serde_json::{Value as Json, json};
 
 use super::ExportError;
 use crate::demo::events::{EventValue, GameEvent};
-use crate::demo::players::{PlayerSample, RoundTrack, track_round};
+use crate::demo::players::{DroppedWeapon, PlayerSample, RoundTrack, track_round};
 
 /// Format version written into the file; bump on incompatible changes.
 pub const REPLAY_VERSION: u32 = 1;
@@ -223,7 +225,97 @@ pub fn replay_json(track: &RoundTrack, demo_name: &str) -> Json {
         "landings": tick_list(landings),
         "kills": kills,
         "events": milestones,
+        "dropped_weapons": dropped_json(track),
     })
+}
+
+/// The weapons lying in the world: one entry per stretch an entity lay unowned (a weapon picked up and dropped again
+/// has two), with `first_tick` and `last_tick` (the last tick it lay there), its look, and `keys` = `[tick, x, y, z,
+/// pitch, yaw, roll]` at its first tick and every tick it moved. Before a move that follows a rest, the resting
+/// transform is keyed again on the previous sampled tick, so a straight line between keys never drifts through the
+/// rest.
+fn dropped_json(track: &RoundTrack) -> Vec<Json> {
+    struct Stretch<'t> {
+        weapon: &'t DroppedWeapon,
+        first: u32,
+        last: u32,
+        /// Transform at the latest key, and its tick.
+        value: [f64; 6],
+        keyed: u32,
+        keys: Vec<Json>,
+    }
+    let transform = |w: &DroppedWeapon| -> [f64; 6] {
+        let [x, y, z] = w.position.map(|v| round(v, 100.0));
+        let [p, yaw, r] = w.angles.map(|v| round(v, 100.0));
+        [x, y, z, p, yaw, r]
+    };
+    let key = |tick: u32, v: &[f64; 6]| json!([tick, v[0], v[1], v[2], v[3], v[4], v[5]]);
+    let finish = |s: Stretch<'_>| {
+        json!({
+            "entity": s.weapon.entity,
+            "item": s.weapon.item,
+            "class": s.weapon.class,
+            // As text, like the Steam ids: a 64-bit resource id.
+            "model": format!("{:016x}", s.weapon.model),
+            "mesh_groups": s.weapon.mesh_groups,
+            "first_tick": s.first,
+            "last_tick": s.last,
+            "keys": s.keys,
+        })
+    };
+    let mut open: BTreeMap<u32, Stretch<'_>> = BTreeMap::new();
+    let mut done = Vec::new();
+    for sample in &track.samples {
+        let tick = sample.tick;
+        for w in &sample.dropped {
+            let value = transform(w);
+            match open.get_mut(&w.entity) {
+                // The same weapon still lying there (an index reused by another weapon starts a new stretch).
+                Some(s) if s.weapon.item == w.item && s.weapon.class == w.class => {
+                    if value != s.value {
+                        if s.keyed < s.last {
+                            let rest = s.value;
+                            s.keys.push(key(s.last, &rest));
+                        }
+                        s.keys.push(key(tick, &value));
+                        s.value = value;
+                        s.keyed = tick;
+                    }
+                    s.last = tick;
+                }
+                _ => {
+                    if let Some(old) = open.remove(&w.entity) {
+                        done.push(finish(old));
+                    }
+                    open.insert(
+                        w.entity,
+                        Stretch {
+                            weapon: w,
+                            first: tick,
+                            last: tick,
+                            value,
+                            keyed: tick,
+                            keys: vec![key(tick, &value)],
+                        },
+                    );
+                }
+            }
+        }
+        // Picked up (or removed) this tick.
+        let gone: Vec<u32> = open
+            .keys()
+            .copied()
+            .filter(|e| !sample.dropped.iter().any(|w| w.entity == *e))
+            .collect();
+        for entity in gone {
+            if let Some(s) = open.remove(&entity) {
+                done.push(finish(s));
+            }
+        }
+    }
+    done.extend(open.into_values().map(finish));
+    done.sort_by_key(|d| (d["first_tick"].as_u64(), d["entity"].as_u64()));
+    done
 }
 
 /// Names of the per-player arrays in `samples.players.<controller>`, in the order [`track_values`] fills them.
@@ -345,14 +437,19 @@ mod tests {
                 TickSample {
                     tick: 100,
                     players: vec![player(1, 0.0, true), player(2, 5.0, true)],
+                    dropped: vec![dropped(300, 7, 10.0), dropped(301, 44, 0.0)],
                 },
                 TickSample {
                     tick: 101,
                     players: vec![player(1, 1.0, true)], // player 2 has no pawn this tick
+                    // The HE grenade was picked up; the AK-47 lies still.
+                    dropped: vec![dropped(300, 7, 10.0)],
                 },
                 TickSample {
                     tick: 102,
                     players: vec![player(1, 2.0, true), player(2, 5.0, false)],
+                    // The AK-47 is pushed.
+                    dropped: vec![dropped(300, 7, 12.0)],
                 },
             ],
             events: vec![GameEvent {
@@ -396,5 +493,42 @@ mod tests {
         // The jump before the round (tick 50) is not one of its jumps.
         assert_eq!(replay["jumps"], json!([{ "tick": 101, "player": 1 }]));
         assert_eq!(replay["landings"], json!([]));
+
+        // Dropped weapons: the AK-47 lies from 100 to 102, keyed at 100, again at 101 (its rest, before the push)
+        // and at 102; the HE grenade lay one tick.
+        let dropped = replay["dropped_weapons"].as_array().unwrap();
+        assert_eq!(dropped.len(), 2);
+        let ak = dropped.iter().find(|d| d["item"] == json!(7)).unwrap();
+        assert_eq!(
+            (ak["first_tick"].clone(), ak["last_tick"].clone()),
+            (json!(100), json!(102))
+        );
+        assert_eq!(
+            ak["keys"],
+            json!([
+                [100, 10.0, 2.0, 3.0, 0.0, 90.0, -90.0],
+                [101, 10.0, 2.0, 3.0, 0.0, 90.0, -90.0],
+                [102, 12.0, 2.0, 3.0, 0.0, 90.0, -90.0]
+            ])
+        );
+        assert_eq!(ak["model"], json!("00000000000000aa"));
+        let he = dropped.iter().find(|d| d["item"] == json!(44)).unwrap();
+        assert_eq!(
+            (he["first_tick"].clone(), he["last_tick"].clone()),
+            (json!(100), json!(100))
+        );
+    }
+
+    /// A weapon lying at (x, 2, 3) on its side.
+    fn dropped(entity: u32, item: u32, x: f32) -> DroppedWeapon {
+        DroppedWeapon {
+            entity,
+            item,
+            class: if item == 7 { "CAK47" } else { "CHEGrenade" }.into(),
+            model: 0xaa,
+            mesh_groups: 1,
+            position: [x, 2.0, 3.0],
+            angles: [0.0, 90.0, -90.0],
+        }
     }
 }

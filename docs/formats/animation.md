@@ -367,7 +367,8 @@ ragdoll on the client and demos carry only what starts it ([demo.md](demo.md#dea
 - **Bones**: the parts' bones take the parts' frames; every other bone keeps its offset from its parent as in the
   last living pose (the root its own), then the model's constraints place the twist bones and shoulder blades. The
   pose is written relative to the actor Unreal places at the dead pawn (which no longer moves), so the glTF
-  animation holds the fall; weapons are hidden from the death on (dropped weapons are separate entities).
+  animation holds the fall; weapons are hidden from the death on: the gun the player let go of is a separate entity
+  the demo moves, placed by `import_demo.py` ([demo.md](demo.md#dropped-weapons)).
 - **Unreal**: the agents manifest lists each baked death's first and last tick under `ragdolls`
   ([replay.md](replay.md#agents-manifest-demo_rroundagentsjson)); `import_demo.py` keeps the body visible over those
   ticks.
@@ -391,7 +392,7 @@ references were lost to a smoke and to a crate in the way.
 
 Not yet: the force scale checked against more deaths (OFAST's AWP and headshot pushes are a first guess), joint
 friction, bodies colliding with each other and with props that move, doors in the state the demo has them (the map
-export places them closed: one hid a body in a comparison), dropped weapons on the ground.
+export places them closed: one hid a body in a comparison).
 
 ## Verified
 

@@ -31,6 +31,10 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
   stays);
 - per player: a first-person camera at the eye (feet + the networked eye height), aimed along pitch and yaw, with
   CS2's default field of view (90 degrees at 4:3);
+- per stretch a weapon lay in the world (the replay's `dropped_weapons`: a dead player's gun, a weapon dropped for
+  a teammate), its model (the agents manifest's `dropped_weapons` glTFs) moved as the demo has it, with its full
+  rotation (Rotator(roll=roll, pitch=-pitch, yaw=-yaw)), shown from the tick it was let go to the tick before it
+  was picked up or the round ended;
 - a camera cut track that follows the killer of each kill in turn (from the previous kill until half a second after
   this one), the way fragmovie editors cut a round;
 - marked frames: freeze time end, every kill ("attacker > victim (weapon, HS)") and bomb events.
@@ -95,6 +99,25 @@ def unwrap(angles):
         if out:
             a = out[-1] + ((a - out[-1] + 180.0) % 360.0 - 180.0)
         out.append(a)
+    return out
+
+
+def euler_filter(rotations):
+    """Unreal (roll, pitch, yaw) triples made continuous for linear keys. Each triple is turned to the nearest of its
+    two equivalent forms, (r, p, y) and (r + 180, 180 - p, y + 180), each angle unwrapped next to the previous key.
+    Unwrapping each angle on its own is not enough: CS2 keeps pitch within -90 ... 90, so a gun tumbling end over
+    end through the vertical jumps yaw and roll by 180 degrees at once, and when the two unwrap opposite ways the gun
+    spins a full turn between two ticks (seen in slow motion and sub-frame samples, not at whole ticks)."""
+    def near(a, b):
+        return b + ((a - b + 180.0) % 360.0 - 180.0)
+    out = []
+    for r, p, y in rotations:
+        if out:
+            pr, pp, py = out[-1]
+            same = (near(r, pr), near(p, pp), near(y, py))
+            flipped = (near(r + 180.0, pr), near(180.0 - p, pp), near(y + 180.0, py))
+            r, p, y = min(same, flipped, key=lambda c: abs(c[0] - pr) + abs(c[1] - pp) + abs(c[2] - py))
+        out.append((r, p, y))
     return out
 
 
@@ -221,6 +244,24 @@ def character_pipelines(fps):
             unreal.SoftObjectPath("/Interchange/Pipelines/DefaultGLTFPipeline.DefaultGLTFPipeline")]
 
 
+def static_pipelines():
+    """The Interchange pipelines the dropped weapons' files (rigid meshes, no skin) import with: the glTF defaults,
+    except that all meshes of a file combine into one static mesh (the default makes one per glTF mesh, and the actor
+    would show only one part of the weapon). Saved as /Game/OFAST/Pipelines/GLTFStaticCombined."""
+    path = "/Game/OFAST/Pipelines/GLTFStaticCombined"
+    pipeline = assets.load_asset(path) if assets.does_asset_exist(path) else None
+    if pipeline is None:
+        pipeline = assets.duplicate_loaded_asset(
+            assets.load_asset("/Interchange/Pipelines/DefaultGLTFAssetsPipeline"), path)
+    meshes = pipeline.get_editor_property("mesh_pipeline")
+    behaviour = unreal.InterchangeCombineStaticMeshesBehavior.ALL
+    if meshes.get_editor_property("combine_static_meshes_behavior") != behaviour:
+        meshes.set_editor_property("combine_static_meshes_behavior", behaviour)
+        assets.save_loaded_asset(pipeline)
+    return [unreal.SoftObjectPath(pipeline.get_path_name()),
+            unreal.SoftObjectPath("/Interchange/Pipelines/DefaultGLTFPipeline.DefaultGLTFPipeline")]
+
+
 def apply_specular_factors(gltf_path, objects):
     """Sets the glTF master's SpecularFactor on the imported material instances whose glTF material carries
     KHR_materials_specular (CS2's weapon materials: 0.5, a 2 % reflectance for non-metals). Interchange creates the
@@ -239,6 +280,93 @@ def apply_specular_factors(gltf_path, objects):
         log("  specular factor set on %d of %d weapon materials" % (count, len(factors)))
 
 
+def agents_manifest(replay):
+    """(folder, "<demo>_r<round>", manifest) of the agents manifest next to the replay, or None without one."""
+    folder = os.path.dirname(REPLAY_PATH)
+    base = "%s_r%d" % (replay["demo"], replay["round"])
+    manifest_path = os.path.join(folder, base + ".agents.json")
+    if not os.path.exists(manifest_path):
+        return None
+    with open(manifest_path, encoding="utf-8") as f:
+        return folder, base, json.load(f)
+
+
+def import_gltf(replay, path, look, pipelines):
+    """Imports one glTF of the players export into its own folder (named after `look`) and returns the objects."""
+    manager = unreal.InterchangeManager.get_interchange_manager_scripted()
+    params = unreal.ImportAssetParameters()
+    params.is_automated = True
+    params.replace_existing = True
+    params.override_pipelines = pipelines
+    # A short folder: asset file paths must stay under Windows' 260 characters.
+    destination = "/Game/OFAST/Replays/Agents/%s_r%d_%s" % (replay["demo"][-12:], replay["round"], look)
+    # Fresh every run: Interchange keeps existing material instances on a re-import (decision 006), so a changed
+    # material conversion would not show. The level's old replay actors are already gone.
+    if assets.does_directory_exist(destination):
+        assets.delete_directory(destination)
+    objects = manager.import_asset(destination, unreal.InterchangeManager.create_source_data(path), params)
+    apply_specular_factors(path, objects)
+    # Interchange leaves imported assets in memory only: saved, the level's actors keep them when reopened.
+    assets.save_directory(destination, only_if_is_dirty=True, recursive=True)
+    return objects
+
+
+def import_dropped_weapons(replay):
+    """Imports the models of the weapons lying in the world (the agents manifest's `dropped_weapons`, one glTF per
+    look). Returns (model id, mesh groups) -> mesh, as the replay's `dropped_weapons` name them."""
+    loaded = agents_manifest(replay)
+    if loaded is None:
+        return {}
+    folder, base, manifest = loaded
+    pipelines = static_pipelines()
+    meshes = {}
+    for entry in manifest.get("dropped_weapons", []):
+        path = os.path.join(folder, entry["file"])
+        look = entry["file"][len(base) + 1:-len(".gltf")]  # dropped_<model file stem>_<mesh groups shown>
+        objects = import_gltf(replay, path, look, pipelines)
+        mesh = next((o for o in objects if isinstance(o, unreal.StaticMesh)), None)
+        if mesh is None:
+            log("dropped weapon %s: no mesh in %s" % (entry["model"], path))
+            continue
+        # Every mesh-group mask the replay uses for this file (grenades send every bit).
+        for groups in entry["mesh_groups"]:
+            meshes[(entry["model_id"], groups)] = mesh
+    if meshes:
+        log("dropped weapons: %d models" % len(meshes))
+    return meshes
+
+
+def place_dropped_weapons(sequence, replay, meshes, end_frame):
+    """One actor per stretch a weapon lay in the world, keyed as the demo moves it and shown only then. Returns the
+    number of keys."""
+    tick0 = replay["start_tick"]
+    keys = 0
+    placed = 0
+    for stretch in replay.get("dropped_weapons", []):
+        mesh = meshes.get((stretch["model"], stretch["mesh_groups"]))
+        if mesh is None:
+            continue
+        first, last = stretch["first_tick"] - tick0, stretch["last_tick"] - tick0
+        actor = spawn_tagged(mesh, "dropped %s #%d at %d" % (stretch["class"], stretch["entity"],
+                                                             stretch["first_tick"]))
+        binding = sequence.add_possessable(actor)
+        points = stretch["keys"]
+        frames = [k[0] - tick0 for k in points]
+        locations = [to_unreal(k[1:4]) for k in points]
+        # Source (pitch, yaw, roll) -> Rotator(roll=roll, pitch=-pitch, yaw=-yaw), filtered so a tumble never spins
+        # the long way between two ticks.
+        rotations = euler_filter([(k[6], -k[4], -k[5]) for k in points])
+        keys += key_transform(binding, frames, locations, rotations, (1.0, 1.0, 1.0), end_frame)
+        changes = [(0, first <= 0), (max(first, 0), True)]
+        if last + 1 < end_frame:
+            changes.append((last + 1, False))
+        key_visibility(binding, changes, end_frame)
+        placed += 1
+    if placed:
+        log("dropped weapons: %d placed, %d keys" % (placed, keys))
+    return keys
+
+
 def import_agents(replay):
     """Imports the players' animated agents written next to the replay by `ofast export-demo --players`, if any: the
     files <demo>_r<round>.agents.json lists, one per agent look. Returns controller -> (skeletal mesh,
@@ -246,33 +374,16 @@ def import_agents(replay):
     there); Interchange names each AnimSequence <file><animation>, so the controller is read from its
     `player_<controller>` ending (shortened in the middle when long, so only `_<controller>` is sure to remain) —
     except in a file with a single animation, which it names <file>_Anim."""
-    folder = os.path.dirname(REPLAY_PATH)
-    base = "%s_r%d" % (replay["demo"], replay["round"])
-    manifest_path = os.path.join(folder, base + ".agents.json")
-    if not os.path.exists(manifest_path):
+    loaded = agents_manifest(replay)
+    if loaded is None:
         return {}
-    with open(manifest_path, encoding="utf-8") as f:
-        manifest = json.load(f)
-    manager = unreal.InterchangeManager.get_interchange_manager_scripted()
+    folder, base, manifest = loaded
     pipelines = character_pipelines(manifest.get("fps", 30))
     agents = {}
     for entry in manifest["agents"]:
         path = os.path.join(folder, entry["file"])
         look = entry["file"][len(base) + 1:-len(".gltf")]  # <agent>_<mesh groups>[_<gloves>]
-        params = unreal.ImportAssetParameters()
-        params.is_automated = True
-        params.replace_existing = True
-        params.override_pipelines = pipelines
-        # A short folder: asset file paths must stay under Windows' 260 characters.
-        destination = "/Game/OFAST/Replays/Agents/%s_r%d_%s" % (replay["demo"][-12:], replay["round"], look)
-        # Fresh every run: Interchange keeps existing material instances on a re-import (decision 006), so a
-        # changed material conversion would not show. The level's old replay actors are already gone.
-        if assets.does_directory_exist(destination):
-            assets.delete_directory(destination)
-        objects = manager.import_asset(destination, unreal.InterchangeManager.create_source_data(path), params)
-        apply_specular_factors(path, objects)
-        # Interchange leaves imported assets in memory only: saved, the level's actors keep them when reopened.
-        assets.save_directory(destination, only_if_is_dirty=True, recursive=True)
+        objects = import_gltf(replay, path, look, pipelines)
         meshes = [o for o in objects if isinstance(o, unreal.SkeletalMesh)]
         animations = {}
         sequences = [o for o in objects if isinstance(o, unreal.AnimSequence)]
@@ -336,8 +447,9 @@ def channels_by_name(section):
 
 
 def key_transform(binding, frames, locations, rotations, scale, end_frame):
-    """A transform track: location (cm) and rotation (pitch, yaw in Unreal degrees) keyed linearly, after dropping
-    keys a straight line already gives. `scale` is the constant scale (the track overrides the actor's)."""
+    """A transform track: location (cm) and rotation (Unreal degrees: (pitch, yaw), or (roll, pitch, yaw) for a full
+    rotation) keyed linearly, after dropping keys a straight line already gives. `scale` is the constant scale (the
+    track overrides the actor's)."""
     track = binding.add_track(unreal.MovieScene3DTransformTrack)
     section = track.add_section()
     section.set_range(0, end_frame)
@@ -351,8 +463,9 @@ def key_transform(binding, frames, locations, rotations, scale, end_frame):
                                     ("Rotation", rotations, ANGLE_TOLERANCE_DEG)):
         if values is None:
             continue
-        axes = ("X", "Y", "Z") if name == "Location" else ("Y", "Z")  # rotation: pitch (Y), yaw (Z)
         for run in runs(frames, values):
+            # Rotation channels: roll (X), pitch (Y), yaw (Z); players key pitch and yaw only.
+            axes = ("X", "Y", "Z") if name == "Location" or len(run[0][1]) == 3 else ("Y", "Z")
             for frame, value in reduce_keys([f for f, _ in run], [v for _, v in run], tolerance):
                 for axis, v in zip(axes, value):
                     channels["%s.%s" % (name, axis)].add_key(unreal.FrameNumber(frame), v, 0.0,
@@ -485,6 +598,7 @@ def build(replay):
         camera_binding = sequence.add_possessable(camera)
         keys += key_transform(camera_binding, frames, eyes, rotations, (1.0, 1.0, 1.0), end_frame)
         cameras[player["controller"]] = (camera, camera_binding)
+    keys += place_dropped_weapons(sequence, replay, import_dropped_weapons(replay), end_frame)
     log("sequence %s: %d players (%d animated agents), %d frames at %d fps, %d keys in %.0f s"
         % (path, len(replay["players"]), len(agents), end_frame, fps, keys,
            time.monotonic() - started))

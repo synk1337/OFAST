@@ -180,8 +180,11 @@ player and round.
   position) and the last living pose's motion, baked into the glTF animation; the body stays visible in Unreal.
   Checked: all 46 deaths of three rounds of two demos baked, bodies at rest on floors; against CS2, a running
   player's body lies where CS2's does to about 0.5 m, face down like CS2's (decision 015,
-  [animation.md](formats/animation.md#deaths-exportdeaths-physicsragdoll)). To do: the force scale against more
-  deaths, doors in their demo state, dropped weapons.
+  [animation.md](formats/animation.md#deaths-exportdeaths-physicsragdoll)). Dropped weapons: the guns the dead let
+  go of (and weapons dropped for teammates, a dropped C4) moved as the server simulated them, read from the demo
+  (owner-less weapon entities send their origin and rotation each tick) and placed in Unreal
+  ([demo.md](formats/demo.md#dropped-weapons)). To do: the force scale against more deaths, doors in their demo
+  state.
 - [x] **Character and weapon materials, first pass**: roughness read where each material keeps it (94 character
   materials, the SAS body among them, keep it in `g_tAnisoGloss`, not the normal map: they rendered mirror-smooth),
   weapons' 2 % dielectric specular. The SAS agents now read as dark cloth like CS2's.

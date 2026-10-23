@@ -329,6 +329,82 @@ fn rig_inputs_match_movement_and_demoparser2() {
     );
 }
 
+/// Weapons lying in the world: over the first rounds, every player who dies carrying more than a knife lets go of a
+/// weapon within two ticks of the death and within 96 units of where they died (CS2 drops the gun in hand, and a
+/// grenade); every stretch of the replay's `dropped_weapons` has its keys in tick order, inside its ticks and inside
+/// the world.
+#[test]
+fn the_dead_let_go_of_their_guns() {
+    use ofast_core::demo::players::PlayerSample;
+    let Some((_, data)) = load() else { return };
+    let rounds = list_rounds(&data).expect("rounds");
+    let knife = |item: u32| matches!(item, 41 | 42 | 59 | 74 | 500..=599);
+    let (mut deaths, mut stretches) = (0, 0);
+    for round in rounds.iter().take(3) {
+        let track = track_round(&data, round.round).expect("round");
+        let replay = replay_json(&track, "test");
+        let dropped = replay["dropped_weapons"]
+            .as_array()
+            .expect("dropped weapons");
+        for d in dropped {
+            let (first, last) = (
+                d["first_tick"].as_u64().unwrap(),
+                d["last_tick"].as_u64().unwrap(),
+            );
+            assert!(first <= last, "{d}");
+            let ticks: Vec<u64> = d["keys"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|k| k[0].as_u64().unwrap())
+                .collect();
+            assert_eq!(ticks[0], first, "{d}");
+            assert!(ticks.windows(2).all(|w| w[0] < w[1]) && ticks.last() <= Some(&last));
+            for k in d["keys"].as_array().unwrap() {
+                let xyz: Vec<f64> = (1..4).map(|i| k[i].as_f64().unwrap()).collect();
+                assert!(xyz.iter().all(|c| c.abs() < 16384.0), "{k}");
+                // Not the origin a carried weapon sends.
+                assert!(xyz.iter().map(|c| c * c).sum::<f64>() > 1.0, "{k}");
+            }
+        }
+        stretches += dropped.len();
+        let mut previous: HashMap<u32, &PlayerSample> = HashMap::new();
+        for sample in &track.samples {
+            for p in &sample.players {
+                if let Some(before) = previous.get(&p.controller)
+                    && before.alive
+                    && !p.alive
+                    && before.weapons.iter().any(|w| !knife(w.item))
+                {
+                    let near = dropped.iter().any(|d| {
+                        let first = d["first_tick"].as_u64().unwrap();
+                        let key = &d["keys"][0];
+                        let dx = key[1].as_f64().unwrap() - f64::from(before.position[0]);
+                        let dy = key[2].as_f64().unwrap() - f64::from(before.position[1]);
+                        (u64::from(sample.tick).saturating_sub(1)..=u64::from(sample.tick) + 2)
+                            .contains(&first)
+                            && (dx * dx + dy * dy).sqrt() < 96.0
+                    });
+                    assert!(
+                        near,
+                        "round {}: {} died at tick {} carrying {:?} and nothing was let go near the body",
+                        round.round,
+                        p.name,
+                        sample.tick,
+                        before.weapons.iter().map(|w| w.item).collect::<Vec<_>>()
+                    );
+                    deaths += 1;
+                }
+                previous.insert(p.controller, p);
+            }
+        }
+    }
+    println!(
+        "{deaths} deaths each let go of a weapon; {stretches} stretches of weapons lying in the world"
+    );
+    assert!(deaths > 0 && stretches >= deaths);
+}
+
 /// Deaths as ragdolls (M4.6): over the first rounds with deaths, with the map's collision open, every player who
 /// dies has the death baked; each body comes to rest on the floor near where the player died (not through it, not
 /// metres away), and the manifest lists each death's ticks under `ragdolls`, from the death to the round's end.
