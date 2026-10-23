@@ -1160,9 +1160,10 @@ mod tests {
         let light = |class: &str, extra: Vec<(&str, Value)>| {
             let mut pairs = vec![("classname", Value::String(class.into()))];
             pairs.extend(extra);
+            // No barn cookies: these lights have none.
             LocalLight::from_entity(&Entity::from_pairs(&pairs))
                 .expect("a light class")
-                .manifest()
+                .manifest(&BTreeMap::new())
         };
         // de_mirage's lights: baked, nothing in the cubemaps (light_rect / light_omni2 store a boolean).
         let rect = light(
