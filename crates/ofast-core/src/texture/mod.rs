@@ -193,6 +193,50 @@ pub struct Conversions {
     pub normalize_normals: bool,
 }
 
+/// One animated sequence of a sprite sheet (the `SHEET` extra data): CS2's particle textures pack several in one
+/// image (`materials/particle/fire_explosion_1`: a fireball's sequences side by side), and a particle system plays
+/// one of them by its id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetSequence {
+    /// The id the sequence was authored with (particle systems pick sequences by it).
+    pub id: u32,
+    /// Its name, as authored (often empty or a `CDme…` class name).
+    pub name: String,
+    /// Holds its last frame instead of starting over.
+    pub clamp: bool,
+    /// Its frames' alpha was cropped by the compiler.
+    pub alpha_crop: bool,
+    /// Its colour is unused (an alpha-only sequence).
+    pub no_color: bool,
+    /// Its alpha is unused.
+    pub no_alpha: bool,
+    /// Length of one play-through, seconds (0 or less: 1 s).
+    pub total_time: f32,
+    /// Named float parameters authored with the sequence.
+    pub params: Vec<(String, f32)>,
+    /// The frames in order.
+    pub frames: Vec<SheetFrame>,
+}
+
+/// One frame of a [`SheetSequence`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct SheetFrame {
+    /// How long it shows, seconds (its share of the sequence's time).
+    pub display_time: f32,
+    /// Its images (one per layer; usually one).
+    pub images: Vec<SheetImage>,
+}
+
+/// Where a frame's image sits in the texture, in UV (0 – 1 of the texture's size; the corners sit inside the texels
+/// they cover, a quarter texel in on the sheets seen).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SheetImage {
+    /// The image as stored, cropped to its content: `[min, max]` corners, each `[u, v]`.
+    pub cropped: [[f32; 2]; 2],
+    /// The image's full frame before cropping: `[min, max]`.
+    pub uncropped: [[f32; 2]; 2],
+}
+
 /// Header of a compiled texture.
 #[derive(Debug, Clone)]
 pub struct Texture {
@@ -213,6 +257,8 @@ pub struct Texture {
     pub flags: Flags,
     /// Channel conversions recorded by the compiler.
     pub conversions: Conversions,
+    /// Sprite-sheet sequences (`SHEET` extra data), empty for a plain texture or a sheet that does not read.
+    pub sheet: Vec<SheetSequence>,
     /// Visible size, when the stored image was padded (e.g. to a power of two).
     display: Option<(u16, u16)>,
     /// Mip compression: 0 none, 1 LZ4, 2 ZSTD.
@@ -224,6 +270,7 @@ pub struct Texture {
 }
 
 /// Extra-data record types.
+const EXTRA_SHEET: u32 = 2;
 const EXTRA_METADATA: u32 = 3;
 const EXTRA_COMPRESSED_MIP_SIZE: u32 = 4;
 
@@ -264,6 +311,7 @@ impl Texture {
             mip_count: mip_count.max(1),
             flags,
             conversions: read_conversions(resource),
+            sheet: Vec::new(),
             display: None,
             compression: 0,
             compressed_sizes: Vec::new(),
@@ -301,6 +349,8 @@ impl Texture {
                             .push(payload.i32("texture mip size")?.max(0) as usize);
                     }
                 }
+                // A sheet that does not read leaves the texture itself readable.
+                EXTRA_SHEET => texture.sheet = read_sheet(&payload).unwrap_or_default(),
                 _ => {}
             }
             r.seek(resume, "texture extra data")?;
@@ -786,9 +836,158 @@ fn read_conversions(resource: &Resource<'_>) -> Conversions {
     conversions
 }
 
+/// Reads a string through a self-relative `i32` offset (NUL-terminated UTF-8), leaving `r` after the offset.
+fn read_offset_string(r: &mut ByteReader<'_>) -> Result<String, UnexpectedEof> {
+    let field = r.position();
+    let offset = r.i32("sheet string offset")?;
+    let mut at = r.clone();
+    at.seek((field as i64 + i64::from(offset)) as usize, "sheet string")?;
+    Ok(String::from_utf8_lossy(at.cstr("sheet string")?).into_owned())
+}
+
+/// Reads a `SHEET` extra-data blob starting at `blob` (`docs/formats/vtex.md`, "Sprite sheets"): `i32` offset of the
+/// sequence table (from the blob's start), `u32` count; per sequence 32 bytes: `u32` id, four flag bytes (clamp,
+/// alpha crop, no colour, no alpha), `i32` frames offset and `u32` count, `f32` total time, name (string offset),
+/// `i32` float-parameter offset and `u32` count; per frame `f32` display time, `i32` image offset, `u32` count; per
+/// image 8 `f32`: cropped min, max, uncropped min, max (UV). Offsets other than the first are relative to their own
+/// field. Layout from ValveResourceFormat (MIT).
+fn read_sheet(blob: &ByteReader<'_>) -> Result<Vec<SheetSequence>, UnexpectedEof> {
+    let start = blob.position();
+    let mut r = blob.clone();
+    let table = r.i32("sheet sequence offset")?;
+    let count = r.u32("sheet sequence count")?;
+    r.seek(
+        (start as i64 + i64::from(table)) as usize,
+        "sheet sequences",
+    )?;
+    // Self-relative offset: where the table it points to starts.
+    let target = |r: &mut ByteReader<'_>, what| -> Result<usize, UnexpectedEof> {
+        let field = r.position();
+        Ok((field as i64 + i64::from(r.i32(what)?)) as usize)
+    };
+    let mut out = Vec::new();
+    for _ in 0..count.min(4096) {
+        let id = r.u32("sheet sequence id")?;
+        let [clamp, alpha_crop, no_color, no_alpha] = r.array::<4>("sheet sequence flags")?;
+        let frames_at = target(&mut r, "sheet frames offset")?;
+        let frame_count = r.u32("sheet frame count")?;
+        let total_time = r.f32("sheet total time")?;
+        let name = read_offset_string(&mut r)?;
+        let params_at = target(&mut r, "sheet parameters offset")?;
+        let param_count = r.u32("sheet parameter count")?;
+        let mut params = Vec::new();
+        let mut p = r.clone();
+        p.seek(params_at, "sheet parameters")?;
+        for _ in 0..param_count.min(4096) {
+            let name = read_offset_string(&mut p)?;
+            params.push((name, p.f32("sheet parameter")?));
+        }
+        let mut frames = Vec::new();
+        let mut f = r.clone();
+        f.seek(frames_at, "sheet frames")?;
+        for _ in 0..frame_count.min(65536) {
+            let display_time = f.f32("sheet frame time")?;
+            let images_at = target(&mut f, "sheet images offset")?;
+            let image_count = f.u32("sheet image count")?;
+            let mut i = f.clone();
+            i.seek(images_at, "sheet images")?;
+            let mut images = Vec::new();
+            for _ in 0..image_count.min(64) {
+                let mut v = [0.0f32; 8];
+                for x in &mut v {
+                    *x = i.f32("sheet image coordinate")?;
+                }
+                images.push(SheetImage {
+                    cropped: [[v[0], v[1]], [v[2], v[3]]],
+                    uncropped: [[v[4], v[5]], [v[6], v[7]]],
+                });
+            }
+            frames.push(SheetFrame {
+                display_time,
+                images,
+            });
+        }
+        out.push(SheetSequence {
+            id,
+            name,
+            clamp: clamp != 0,
+            alpha_crop: alpha_crop != 0,
+            no_color: no_color != 0,
+            no_alpha: no_alpha != 0,
+            total_time,
+            params,
+            frames,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sheets_read_sequences_frames_and_images() {
+        // A blob with one sequence of two frames, one image each, laid out as the compiler does: header, sequence
+        // table, frame table, images, strings.
+        let mut b: Vec<u8> = Vec::new();
+        b.extend(8i32.to_le_bytes()); // sequences at 8 from the blob's start
+        b.extend(1u32.to_le_bytes());
+        // Sequence (at 8): id 3, clamp, frames, time 0.5, name, no parameters.
+        b.extend(3u32.to_le_bytes());
+        b.extend([1u8, 0, 0, 0]);
+        let frames_field = b.len();
+        b.extend(0i32.to_le_bytes()); // patched below
+        b.extend(2u32.to_le_bytes());
+        b.extend(0.5f32.to_le_bytes());
+        let name_field = b.len();
+        b.extend(0i32.to_le_bytes()); // patched below
+        b.extend(0i32.to_le_bytes());
+        b.extend(0u32.to_le_bytes());
+        let frames_at = b.len();
+        let mut image_fields = Vec::new();
+        for time in [0.25f32, 0.25] {
+            b.extend(time.to_le_bytes());
+            image_fields.push(b.len());
+            b.extend(0i32.to_le_bytes()); // patched below
+            b.extend(1u32.to_le_bytes());
+        }
+        let mut images_at = Vec::new();
+        for k in 0..2 {
+            images_at.push(b.len());
+            let u = 0.5 * k as f32;
+            for v in [u, 0.0, u + 0.5, 1.0, u, 0.0, u + 0.5, 1.0] {
+                b.extend(v.to_le_bytes());
+            }
+        }
+        let name_at = b.len();
+        b.extend(b"fire\0");
+        let patch = |b: &mut Vec<u8>, field: usize, target: usize| {
+            b[field..field + 4].copy_from_slice(&((target as i32 - field as i32).to_le_bytes()));
+        };
+        patch(&mut b, frames_field, frames_at);
+        patch(&mut b, name_field, name_at);
+        for (field, at) in image_fields.into_iter().zip(images_at) {
+            patch(&mut b, field, at);
+        }
+        // The blob somewhere inside a larger block.
+        let mut block = vec![0xEEu8; 5];
+        block.extend(&b);
+        let mut r = ByteReader::new(&block);
+        r.seek(5, "blob").unwrap();
+        let sheet = read_sheet(&r).unwrap();
+        assert_eq!(sheet.len(), 1);
+        let s = &sheet[0];
+        assert_eq!(
+            (s.id, s.name.as_str(), s.clamp, s.alpha_crop),
+            (3, "fire", true, false)
+        );
+        assert_eq!(s.total_time, 0.5);
+        assert_eq!(s.frames.len(), 2);
+        assert_eq!(s.frames[1].display_time, 0.25);
+        assert_eq!(s.frames[1].images[0].cropped, [[0.5, 0.0], [1.0, 1.0]]);
+        assert_eq!(s.frames[0].images[0].uncropped, [[0.0, 0.0], [0.5, 1.0]]);
+    }
 
     #[test]
     fn cube_lookup_picks_the_face_and_side_the_d3d_table_says() {

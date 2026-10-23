@@ -41,6 +41,10 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
   was picked up or the round ended;
 - the map's rotating doors (the replay's `doors`), each the level's own door actor (found at its hinge) swung as the
   demo has it;
+- per thrown grenade (the replay's `grenades`), its model (the agents manifest's models) flying from the throw to its
+  detonation, expiry or landing, keyed like the dropped weapons;
+- per smoke whose cloud the export simulated, a Heterogeneous Volume drawing it from its atlas, its frame picked by
+  the demo tick keyed in /Game/OFAST/Replays/MPC_Replay (smoke_volumes.py);
 - a camera cut track that follows the killer of each kill in turn (from the previous kill until half a second after
   this one), the way fragmovie editors cut a round;
 - marked frames: freeze time end, every kill ("attacker > victim (weapon, HS)") and bomb events.
@@ -62,6 +66,7 @@ import unreal
 # Unreal runs this file without its folder on sys.path; the shared modules sit next to it.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gltf_specular  # noqa: E402
+import smoke_volumes  # noqa: E402
 
 REPLAY_PATH = os.environ["OFAST_REPLAY"]
 SHOT_DIR = os.environ.get("OFAST_SHOT", "")
@@ -90,6 +95,7 @@ DOOR_MATCH_CM = 2.0
 CUT_AFTER_KILL_S = 0.5
 WARM_UP_TICKS = 300
 SHOT_DELAY_S = 6.0  # as import_map.SHOT_DELAY_S: lets Lumen settle after each cut
+SHOT_TIMEOUT_TICKS = 3000  # editor ticks a screenshot may take before it is given up
 # SpecularFactor of CS2's character materials (csgo_character): Interchange's 1, F0 0.08, not glTF's 0.04. CS2 adds a
 # cloth sheen and a rim light to its agents that OFAST does not convert yet; without them the agents read darker than
 # CS2's, more so at F0 0.04 (an SAS agent in the shade 0.60 of CS2 at 0.08, 0.48 at 0.04; docs/formats/material.md,
@@ -376,16 +382,40 @@ def import_dropped_weapons(replay):
 def place_dropped_weapons(sequence, replay, meshes, end_frame):
     """One actor per stretch a weapon lay in the world, keyed as the demo moves it and shown only then. Returns the
     number of keys."""
+    keys, placed = place_keyed_models(
+        sequence, replay, end_frame, replay.get("dropped_weapons", []),
+        lambda s: meshes.get((s["model"], s["mesh_groups"])),
+        lambda s: "dropped %s #%d at %d" % (s["class"], s["entity"], s["first_tick"]))
+    if placed:
+        log("dropped weapons: %d placed, %d keys" % (placed, keys))
+    return keys
+
+
+def place_grenades(sequence, replay, meshes, end_frame):
+    """One actor per thrown grenade (the replay's `grenades`): its model (the agents manifest's models, mesh groups
+    0) flying along its keys from the throw to its last tick — an HE grenade's and a flashbang's detonation, a smoke's
+    expiry, a molotov's landing. Returns the number of keys."""
+    keys, placed = place_keyed_models(
+        sequence, replay, end_frame, replay.get("grenades", []),
+        lambda g: meshes.get((g["model"], 0)),
+        lambda g: "grenade %s #%d at %d" % (g["kind"], g["entity"], g["first_tick"]))
+    if placed:
+        log("grenades: %d placed, %d keys" % (placed, keys))
+    return keys
+
+
+def place_keyed_models(sequence, replay, end_frame, stretches, mesh_of, label_of):
+    """One static mesh actor per stretch (`first_tick`, `last_tick`, `keys` = [tick, x, y, z, pitch, yaw, roll]), keyed
+    as the demo moves it and shown from its first tick to its last. Returns (keys, actors placed)."""
     tick0 = replay["start_tick"]
     keys = 0
     placed = 0
-    for stretch in replay.get("dropped_weapons", []):
-        mesh = meshes.get((stretch["model"], stretch["mesh_groups"]))
+    for stretch in stretches:
+        mesh = mesh_of(stretch)
         if mesh is None:
             continue
         first, last = stretch["first_tick"] - tick0, stretch["last_tick"] - tick0
-        actor = spawn_tagged(mesh, "dropped %s #%d at %d" % (stretch["class"], stretch["entity"],
-                                                             stretch["first_tick"]))
+        actor = spawn_tagged(mesh, label_of(stretch))
         binding = sequence.add_possessable(actor)
         points = stretch["keys"]
         frames = [k[0] - tick0 for k in points]
@@ -399,9 +429,7 @@ def place_dropped_weapons(sequence, replay, meshes, end_frame):
             changes.append((last + 1, False))
         key_visibility(binding, changes, end_frame)
         placed += 1
-    if placed:
-        log("dropped weapons: %d placed, %d keys" % (placed, keys))
-    return keys
+    return keys, placed
 
 
 def animate_doors(sequence, replay, end_frame):
@@ -790,7 +818,10 @@ def build(replay):
             key_viewmodel_hand(vm_binding, frames, track.get("left_handed", []), offset, end_frame)
             living = [bool(a) and p is not None for a, p in zip(track["alive"], positions)]
             key_visibility(vm_binding, visibility_changes(frames, living, own_view, first_person=True), end_frame)
-    keys += place_dropped_weapons(sequence, replay, import_dropped_weapons(replay), end_frame)
+    world_models = import_dropped_weapons(replay)
+    keys += place_dropped_weapons(sequence, replay, world_models, end_frame)
+    keys += place_grenades(sequence, replay, world_models, end_frame)
+    smoke_volumes.place_smokes(sequence, replay, REPLAY_PATH, end_frame, spawn_tagged)
     keys += animate_doors(sequence, replay, end_frame)
     log("sequence %s: %d players (%d animated agents, %d viewmodels), %d frames at %d fps, %d keys in %.0f s"
         % (path, len(replay["players"]), len(agents), len(viewmodels), end_frame, fps, keys,
@@ -930,18 +961,29 @@ def verification_shots(sequence, replay, cameras):
         return
     unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(sequence)
     unreal.SystemLibrary.execute_console_command(None, "r.HighResScreenshotDelay 16")
-    state = {"ticks": 0, "index": 0, "task": None}
+    smoke_volumes.apply_cvars()
+    for _, _, path in shots:
+        if os.path.exists(path):
+            os.remove(path)
+    # The screenshot call can return no task, or a task already done, while a capture is still pending (seen
+    # 2026-10-23: shots after the first came out missing), so each shot waits for its file to exist; one that never
+    # comes is given up after SHOT_TIMEOUT_TICKS.
+    state = {"ticks": 0, "index": 0, "requested_at": None}
 
     def tick(_delta):
         state["ticks"] += 1
         if state["ticks"] < WARM_UP_TICKS:
             return
-        task = state["task"]
-        if task is not None and not task.is_task_done():
-            return
-        if task is not None:
-            log("screenshot written: " + shots[state["index"]][2])
+        if state["requested_at"] is not None:
+            path = shots[state["index"]][2]
+            if os.path.exists(path):
+                log("screenshot written: " + path)
+            elif state["ticks"] - state["requested_at"] < SHOT_TIMEOUT_TICKS:
+                return
+            else:
+                log("screenshot FAILED (none written): " + path)
             state["index"] += 1
+            state["requested_at"] = None
         if state["index"] >= len(shots):
             unreal.unregister_slate_post_tick_callback(handle)
             unreal.LevelSequenceEditorBlueprintLibrary.close_level_sequence()
@@ -950,8 +992,8 @@ def verification_shots(sequence, replay, cameras):
         frame, camera, path = shots[state["index"]]
         unreal.LevelSequenceEditorBlueprintLibrary.set_current_time(frame)
         unreal.LevelSequenceEditorBlueprintLibrary.force_update()
-        state["task"] = unreal.AutomationLibrary.take_high_res_screenshot(WIDTH, HEIGHT, path, camera=camera,
-                                                                           delay=SHOT_DELAY_S)
+        unreal.AutomationLibrary.take_high_res_screenshot(WIDTH, HEIGHT, path, camera=camera, delay=SHOT_DELAY_S)
+        state["requested_at"] = state["ticks"]
 
     handle = unreal.register_slate_post_tick_callback(tick)
 

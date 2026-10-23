@@ -217,6 +217,26 @@ player and round.
 - [ ] Sway behind turns, bob while running, landing dip (CS2's client code); view punch on the camera; ironsights;
   shotguns' staged reloads; `FirstPersonScale` against walls; grenade throws and knife swings checked against CS2.
 
+## M6 progress
+
+- [x] **Design** ([decision 017](decisions/017-grenades-and-effects.md)): CS2's grenade data read and baked in the
+  core, effects built from scriptable pieces in Unreal (Heterogeneous Volumes, sprites, lights), no particle
+  converter yet.
+- [x] **Demo**: grenade projectiles per tick (model, thrower, bounces), detonations, smokes' clouds and voxel logs,
+  fires and their flames ([demo.md](formats/demo.md#grenades)); checked against the grenade events on two demos.
+- [x] **Replay**: grenade flights keyed like the dropped weapons, detonations, smokes, fires
+  ([replay.md](formats/replay.md)); in Unreal each grenade's model flies from the throw to its detonation.
+- [x] **Smokes**: the voxel log decoded ([demo.md](formats/demo.md#smoke-voxels)), OFAST's own simulation fitted
+  to the bricks CS2's server sent (39 – 46 % within 2 frames, 7 – 14 % missed, on four demos of three maps), each
+  cloud an atlas texture next to the replay.
+- [x] **Smokes in Unreal**: a Heterogeneous Volume per smoke, its frame from the keyed demo tick, puffy surface,
+  team tint, lit by the room; checked against CS2 through a player's eyes (a T smoke in a de_nuke corridor: same
+  place, size, height and colour; two CT smokes through doorways; gone before the expiry as in CS2).
+- [x] **Effects groundwork**: CS2's sprite sheets read (`Texture::sheet`) and the molotov's flames written as
+  regular flipbooks with `--players` (not drawn yet).
+- [ ] HE holes in smokes; fires (CS2's fire sprite sheets, flickering lights); HE and flash bursts, the flashed POV.
+- [ ] Shots: muzzle flashes, tracers, impacts.
+
 ## Hard problems we know about
 
 - **Player animation.** Demos contain no skeleton poses; CS2 computes them while playing the demo. Plan: a "replay

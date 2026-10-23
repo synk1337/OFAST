@@ -2493,28 +2493,48 @@ pub(crate) fn srgb_to_linear(c: f32) -> f32 {
 /// spread over all cores. Decoded BC textures are noisy, so a colour texture stays near 60 % of its raw size: the big
 /// savings come from writing each image once (see "Texture files" in the module docs).
 pub fn write_png(path: &Path, image: &Image) -> Result<(), ExportError> {
-    let file = fs::File::create(path)?;
-    let mut encoder = png::Encoder::new(
-        BufWriter::new(file),
-        image.width as u32,
-        image.height as u32,
-    );
     let opaque = image.rgba.as_chunks::<4>().0.iter().all(|px| px[3] == 255);
-    let rgb: Vec<u8>;
-    let data = if opaque {
-        rgb = image
+    if opaque {
+        let rgb: Vec<u8> = image
             .rgba
             .as_chunks::<4>()
             .0
             .iter()
             .flat_map(|px| [px[0], px[1], px[2]])
             .collect();
-        encoder.set_color(png::ColorType::Rgb);
-        &rgb
+        encode_png(path, image.width, image.height, png::ColorType::Rgb, &rgb)
     } else {
-        encoder.set_color(png::ColorType::Rgba);
-        &image.rgba
-    };
+        encode_png(
+            path,
+            image.width,
+            image.height,
+            png::ColorType::Rgba,
+            &image.rgba,
+        )
+    }
+}
+
+/// Writes an 8-bit grayscale image (`width × height` bytes, row-major) as PNG, like [`write_png`].
+pub fn write_gray_png(
+    path: &Path,
+    width: usize,
+    height: usize,
+    texels: &[u8],
+) -> Result<(), ExportError> {
+    encode_png(path, width, height, png::ColorType::Grayscale, texels)
+}
+
+/// The PNG writer of [`write_png`] and [`write_gray_png`]: 8 bits per channel, zlib's default level, adaptive filters.
+fn encode_png(
+    path: &Path,
+    width: usize,
+    height: usize,
+    color: png::ColorType,
+    data: &[u8],
+) -> Result<(), ExportError> {
+    let file = fs::File::create(path)?;
+    let mut encoder = png::Encoder::new(BufWriter::new(file), width as u32, height as u32);
+    encoder.set_color(color);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_compression(png::Compression::Default);
     encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);

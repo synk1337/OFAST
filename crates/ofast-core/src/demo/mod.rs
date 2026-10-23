@@ -16,6 +16,8 @@
 //! | entities | [`entity`] | create / update / delete entities from `svc_PacketEntities` |
 //! | events | [`events`] | game events (deaths, round ends, bomb…) with named keys |
 //! | players | [`players`] | per-tick player positions and eye angles for one round |
+//! | grenades | [`grenades`] | thrown grenades and the fires they light, per tick |
+//! | smokes | [`smoke`] | a smoke's voxel log decoded, and its cloud simulated |
 //!
 //! The full format description, with sources, is in `docs/formats/demo.md`.
 //!
@@ -43,10 +45,12 @@ pub mod entity;
 pub mod events;
 pub mod fieldpath;
 pub mod frame;
+pub mod grenades;
 pub mod parser;
 pub mod players;
 pub mod proto;
 pub mod serializer;
+pub mod smoke;
 pub mod stringtable;
 
 pub use parser::{DemoError, DemoParser, FrameInfo, read_header};

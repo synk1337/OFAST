@@ -376,6 +376,235 @@ fn doors_swing_open_and_shut() {
     assert!(closed > 0 && open > 0);
 }
 
+/// Grenades (M6) over the first three rounds: every `grenade_thrown` has a projectile of that kind thrown by that
+/// player appearing within 8 ticks; every HE, flashbang and smoke detonation event has its projectile entity (same
+/// index, same kind) on that tick within 8 units of the event's position; every `inferno_startburn` has its fire,
+/// burning, within 2 ticks; and in the replay every grenade's flight ends on a key at its last tick, which is the
+/// detonation for an HE grenade and a flashbang.
+#[test]
+fn grenades_fly_and_go_off() {
+    use ofast_core::demo::grenades::GrenadeKind;
+    let Some((_, data)) = load() else { return };
+    let (mut thrown, mut detonations, mut fires) = (0, 0, 0);
+    for round in 1..=3 {
+        let track = track_round(&data, round).expect("round");
+        for e in &track.events {
+            let kind_of_weapon = |w: &str| match w {
+                "hegrenade" => Some(GrenadeKind::HighExplosive),
+                "flashbang" => Some(GrenadeKind::Flashbang),
+                "smokegrenade" => Some(GrenadeKind::Smoke),
+                "molotov" | "incgrenade" => Some(GrenadeKind::Molotov),
+                "decoy" => Some(GrenadeKind::Decoy),
+                _ => None,
+            };
+            match e.name.as_str() {
+                "grenade_thrown" => {
+                    let Some(kind) = e.string("weapon").and_then(kind_of_weapon) else {
+                        continue;
+                    };
+                    let thrower = e.controller("userid");
+                    let found = track
+                        .samples
+                        .iter()
+                        .filter(|s| (e.tick..=e.tick + 8).contains(&s.tick))
+                        .any(|s| {
+                            s.grenades
+                                .iter()
+                                .any(|g| g.kind == kind && g.thrower == thrower)
+                        });
+                    assert!(
+                        found,
+                        "round {round} tick {}: no {kind:?} thrown by {thrower:?}",
+                        e.tick
+                    );
+                    thrown += 1;
+                }
+                "hegrenade_detonate" | "flashbang_detonate" | "smokegrenade_detonate" => {
+                    let kind = match e.name.as_str() {
+                        "hegrenade_detonate" => GrenadeKind::HighExplosive,
+                        "flashbang_detonate" => GrenadeKind::Flashbang,
+                        _ => GrenadeKind::Smoke,
+                    };
+                    let entity = e.int("entityid").expect("entityid") as u32;
+                    let float = |key: &str| match e.get(key) {
+                        Some(ofast_core::demo::events::EventValue::Float(v)) => *v,
+                        _ => f32::NAN,
+                    };
+                    let position = [float("x"), float("y"), float("z")];
+                    // On the event's tick, or the one before: local demos remove a flashbang's entity on the tick
+                    // before its event, tournament demos keep it for seconds.
+                    let g = track
+                        .samples
+                        .iter()
+                        .filter(|s| s.tick + 1 >= e.tick && s.tick <= e.tick)
+                        .flat_map(|s| s.grenades.iter())
+                        .find(|g| g.entity == entity)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "round {round} tick {}: {} #{entity} missing",
+                                e.tick, e.name
+                            )
+                        });
+                    assert_eq!(g.kind, kind, "round {round} tick {}", e.tick);
+                    let d = distance(g.position, position);
+                    assert!(
+                        d < 8.0,
+                        "round {round} tick {}: {} #{entity} {d} units away",
+                        e.tick,
+                        e.name
+                    );
+                    detonations += 1;
+                }
+                "inferno_startburn" => {
+                    let entity = e.int("entityid").expect("entityid") as u32;
+                    let found = track
+                        .samples
+                        .iter()
+                        .filter(|s| (e.tick..=e.tick + 2).contains(&s.tick))
+                        .any(|s| {
+                            s.fires
+                                .iter()
+                                .any(|f| f.entity == entity && f.flames.iter().any(|fl| fl.burning))
+                        });
+                    assert!(
+                        found,
+                        "round {round} tick {}: fire #{entity} not burning",
+                        e.tick
+                    );
+                    fires += 1;
+                }
+                _ => {}
+            }
+        }
+        let replay = replay_json(&track, "test");
+        for g in replay["grenades"].as_array().expect("grenades") {
+            let last = g["last_tick"].as_u64().expect("last tick");
+            let keys = g["keys"].as_array().expect("keys");
+            let label = format!("{} #{}", g["kind"], g["entity"]);
+            assert_eq!(
+                keys.last().and_then(|k| k[0].as_u64()),
+                Some(last),
+                "{label}"
+            );
+            // The detonation on the last tick shown, or the tick after when the entity left before its event.
+            if matches!(g["kind"].as_str(), Some("he" | "flashbang")) {
+                let tick = g["detonation"]["tick"].as_u64().expect("detonation");
+                assert!(
+                    tick == last || tick == last + 1,
+                    "{label}: detonation {tick}, last {last}"
+                );
+            }
+        }
+    }
+    println!("{thrown} throws, {detonations} detonations, {fires} fires matched");
+    // Not every demo has `grenade_thrown` (the local match demo has none; tournament demos do).
+    assert!(detonations > 0);
+}
+
+/// Smokes' voxel logs: over the first rounds, every snapshot of every smoke's log reads to its end by the documented
+/// layout, the frames count up from 0 with their ticks inside the cloud's life, frame 0 brings the emitters; the
+/// replay's `volume` lists every frame. OFAST's simulation (`demo::smoke`) needs at least 30 % of the bricks the
+/// server sent after frame 0 within 2 frames of CS2, and misses at most 20 % (measured 2026-10-23 on the Aurora vs
+/// FURIA de_nuke demo: 39 – 40 % and 11 – 14 % over rounds 2 – 8).
+#[test]
+fn smoke_logs_decode_and_the_simulation_follows_cs2() {
+    use ofast_core::demo::smoke::{self, Simulation, SmokeSettings};
+    let Some((_, data)) = load() else { return };
+    let (mut smokes, mut frames_seen, mut sent, mut near, mut missed) = (0, 0, 0, 0, 0);
+    for round in 1..=3 {
+        let track = track_round(&data, round).expect("round");
+        let replay = replay_json(&track, "test");
+        for log in &track.smoke_logs {
+            let label = format!("round {round} smoke #{}", log.entity);
+            for (tick, bytes) in &log.snapshots {
+                if let Err(e) = smoke::decode_log(bytes) {
+                    panic!("{label} tick {tick}: {e}");
+                }
+            }
+            let frames = smoke::frames(log);
+            assert!(!frames.is_empty(), "{label}: no frames");
+            assert!(
+                !frames[0].emitters.is_empty(),
+                "{label}: frame 0 brings no emitters"
+            );
+            for (k, f) in frames.iter().enumerate() {
+                assert_eq!(f.number as usize, k, "{label}: frames count up from 0");
+            }
+            assert!(
+                frames.windows(2).all(|w| w[0].tick <= w[1].tick),
+                "{label}: ticks go back"
+            );
+            let grenade = replay["grenades"]
+                .as_array()
+                .expect("grenades")
+                .iter()
+                .find(|g| {
+                    g["smoke"]["volume"]["texture"].as_str().is_some_and(|t| {
+                        t.ends_with(&format!("_smoke{}-{}.png", log.entity, log.serial))
+                    })
+                })
+                .unwrap_or_else(|| panic!("{label}: no volume in the replay"));
+            let smoke = &grenade["smoke"];
+            let (start, end) = (
+                smoke["start_tick"].as_u64().unwrap(),
+                smoke["end_tick"].as_u64().unwrap(),
+            );
+            for f in &frames {
+                assert!(
+                    (start..=end).contains(&u64::from(f.tick)),
+                    "{label}: frame {} at tick {} outside the cloud's {start} – {end}",
+                    f.number,
+                    f.tick
+                );
+            }
+            let ticks = smoke["volume"]["frame_ticks"]
+                .as_array()
+                .expect("frame ticks");
+            assert_eq!(
+                ticks.len(),
+                frames.len(),
+                "{label}: the volume lists every frame"
+            );
+
+            // The bricks CS2's simulation needed against OFAST's.
+            let mut sim = Simulation::new(SmokeSettings::default());
+            let mut sent_at = vec![None; 512];
+            for f in &frames {
+                for b in &f.bricks {
+                    sent_at[b.index as usize] = Some(f.number);
+                }
+                sim.step(f);
+            }
+            for (cs2, ours) in sent_at.iter().zip(sim.needed()) {
+                match (cs2, ours) {
+                    (Some(0), _) | (None, _) => {}
+                    (Some(s), Some(o)) => {
+                        sent += 1;
+                        near += (s.abs_diff(*o) <= 2) as usize;
+                    }
+                    (Some(_), None) => {
+                        sent += 1;
+                        missed += 1;
+                    }
+                }
+            }
+            smokes += 1;
+            frames_seen += frames.len();
+        }
+    }
+    println!(
+        "{smokes} smokes, {frames_seen} frames; of {sent} bricks sent after frame 0, OFAST needed {near} within 2 \
+         frames and missed {missed}"
+    );
+    if sent > 0 {
+        assert!(
+            near * 10 >= sent * 3,
+            "only {near} of {sent} bricks within 2 frames"
+        );
+        assert!(missed * 5 <= sent, "{missed} of {sent} bricks missed");
+    }
+}
+
 /// Weapons lying in the world: over the first rounds, every player who dies carrying more than a knife lets go of a
 /// weapon within two ticks of the death and within 96 units of where they died (CS2 drops the gun in hand, and a
 /// grenade); every stretch of the replay's `dropped_weapons` has its keys in tick order, inside its ticks and inside

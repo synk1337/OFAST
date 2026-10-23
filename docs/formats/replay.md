@@ -14,8 +14,8 @@ The map must be imported first (`import_map.py`): the sequence is built in its l
 ## Contents (version 1)
 
 The rig inputs, `weapons`, `jumps` and `landings` were added in M4.3 (2026-10-18), `dropped_weapons` and `doors`
-in M4.6 (2026-10-23), the players' `viewmodel` settings and the `left_handed` track in M5 (2026-10-23), without
-changing the version: they are new keys, so readers of older files keep working; check for them before use. Everything is in CS2's own
+in M4.6 (2026-10-23), the players' `viewmodel` settings and the `left_handed` track in M5 (2026-10-23), `grenades`
+and `fires` in M6 (2026-10-23), without changing the version: they are new keys, so readers of older files keep working; check for them before use. Everything is in CS2's own
 units and axes: Source units (1 unit = 1 inch), x/y/z as in the game, angles in
 degrees (pitch positive = looking down, yaw counter-clockwise from +x, −180..180).
 
@@ -35,10 +35,34 @@ degrees (pitch positive = looking down, yaw counter-clockwise from +x, −180..1
 | `events` | round milestones with their raw keys: `round_freeze_end`, `bomb_beginplant`, `bomb_planted`, `bomb_begindefuse`, `bomb_defused`, `bomb_exploded`, `round_end` |
 | `doors` | the map's rotating doors ([demo.md](demo.md#doors)), one entry per door entity of the round: `entity`, `model`, `closed_position` and `closed_angles` (the map entity's origin and angles), `first_tick`, `last_tick`, `keys` as `dropped_weapons`' (on the ticks it swung) |
 | `dropped_weapons` | weapons lying in the world ([demo.md](demo.md#dropped-weapons)), one entry per stretch an entity lay unowned: `entity`, `item`, `class`, `model` (resource id as 16 hex digits), `mesh_groups`, `first_tick`, `last_tick` (the last tick it lay there: picked up on the next, or the round ended), `keys` = `[tick, x, y, z, pitch, yaw, roll]` at its first tick, on every tick it moved and at its last tick (after a rest, the resting transform is keyed again on the tick before the move, so straight lines between keys stay right) |
+| `grenades` | thrown grenades ([demo.md](demo.md#grenades)), one entry per projectile entity (a slot reused by a later grenade starts another): `entity`, `kind` (`smoke`, `flashbang`, `he`, `molotov`, `decoy`), `model` (resource id, 16 hex digits), `thrower` (controller), `first_tick`, `last_tick` (the last tick its model shows: an HE grenade's and a flashbang's detonation, a smoke's expiry, a molotov's landing), `keys` as `dropped_weapons`' (ending on a key at `last_tick`), `detonation` (`tick`, `position` of the detonation event, or `null`), `smoke` (a smoke's cloud: `start_tick`, `end_tick` (`smokegrenade_expired`), `position` (the detonation point), `color` (0 – 255, `m_vSmokeColor`), `volume` (below)) |
+| `fires` | molotov and incendiary fires: `entity`, `incendiary`, `start_tick`, `end_tick` (`inferno_expire`: a smoke can put a fire out early), `lifetime` (seconds), `flames` in the order they appeared: `position`, `normal`, `first_tick` and `last_tick` it burned |
 
 A 111-second round of de_nuke: 10 players, 7,086 ticks, 9 kills, 64 jumps, about 8 MB (4 MB before the rig
 inputs), written in 0.8 s. `import_demo.py` reads only the keys it needs, so the rig inputs change nothing there yet;
 the animation bake (M4.4) uses them.
+
+### Smoke volumes
+
+Each smoke's cloud, simulated by OFAST from the smoke's voxel log ([demo.md](demo.md#smoke-voxels),
+`demo::smoke`), is written next to the replay as an 8-bit grayscale PNG atlas, `<demo>_r<round>_smoke<entity>-<serial>.png`
+(`export::smoke`), 110 – 150 KB for a 22-second smoke. The smoke's `volume` describes it:
+
+| Key | What |
+|---|---|
+| `texture` | the atlas's file name |
+| `frames`, `columns`, `width`, `height` | frames (simulation steps) in the atlas, frames per row, size in texels (196 frames: 10 per row, 2560 × 2560) |
+| `frame_ticks` | per frame, the tick the server sent its step (7 or 8 ticks apart): frame k's cloud shows at that tick, blending into frame k + 1 until the next |
+| `fading_frame` | the first frame with the fading flag, or `null` |
+| `grid_origin`, `grid_size` | the grid's lowest corner (the detonation point − 320, world inches) and its edge (640) |
+
+Layout: a frame is a tile of 8 × 4 slices (256 × 128 texels), slice z (0 at the bottom of the grid) at column z % 8,
+row z / 8; a slice is 32 × 32 texels, texel column = grid x, texel row = grid y (CS2's axes); frames run left to
+right, then top to bottom. A texel holds `sqrt(density / full)` × 255, `full` being the emitters' cap: the square root
+keeps more steps for the thin edges.
+
+A smoke whose voxel log stops reading partway (a record OFAST does not know yet) is simulated from the frames before
+that point, and `ofast export-demo` prints a warning naming it.
 
 ## Agents manifest (`<demo>_r<round>.agents.json`)
 
@@ -56,6 +80,7 @@ one glTF per look (agent model, mesh groups, glove skin), each with an animation
 | `agents[].weapons` | the weapon bones in order (`ofast_weapon_0`, `_1`, …): `model`, `mesh_groups`, `instance` (a second copy carried at once) |
 | `agents[].ragdolls` | controller (as text) → `[first tick, last tick]` of each of that player's deaths the animation holds as a ragdoll (from the death to the respawn or the round's end) |
 | `dropped_weapons` | one glTF per look of the weapons lying in the world: `file` (`<demo>_r<round>_dropped_<model file stem>_<mesh groups shown>.gltf`, the weapon model alone and rigid: a static mesh in Unreal), `model` (path), `model_id` as the replay names it, and `mesh_groups`: every mask the replay uses that shows this file (grenades send every bit, meaning the model's default groups) |
+| `effects` | CS2's sprite sheets for the grenades' effects (`export::effects`), each written as `fx_<texture stem>.png`, repacked as a regular grid of frames: `role` (`fire`: the molotov's flames, `fire_small_sim_b`; `glow`: their glow), `texture` (CS2 path), `file`, `width`, `height`, `cell` (a frame's size in pixels: the sheet's largest frame), `columns` (frames per row, 8), `sequences` (`id`, `first_cell`, `frames`, `clamp`; each sequence starts a new row). The sheet's frames are cropped rectangles of their own sizes (the texture's `SHEET` data, [vtex.md](vtex.md#sprite-sheets)); in the grid each frame's cropped image sits where it was in its full frame |
 | `viewmodels` | the players' first-person views ([animation.md](animation.md#first-person-view-animviewmodel-exportviewmodel)), one glTF per agent and glove skin: `file` (`<demo>_r<round>_viewmodel_<agent>[_<gloves>].gltf`), `model` (the agent), `gloves` (the glove model or `null`), `players` (animations `viewmodel_<controller>`), `weapons` (`model`, `mesh_groups` of each weapon in it, in the order of their bones `w0_…`, `w1_…`) |
 
 Checked: the kills of all 20 rounds of a real match equal demoparser2's (`kills_match_demoparser2`); positions and
@@ -75,6 +100,8 @@ verification screenshots).
 | Viewmodels | with the agents manifest's `viewmodels`: per player a skeletal mesh actor (`VM <name>`) attached to their first-person camera, playing `viewmodel_<controller>`, its transform track keyed at the player's offsets (relative location (forward, right, up) × 2.54 cm) and mirrored (scale y −1, the sideways offset negated) from every tick `left_handed` turns on; `FirstPersonPrimitiveType` First Person and no shadows, the camera's `FirstPersonFieldOfView` = the player's `viewmodel_fov` at 16:9 (2·atan(tan(fov/2)·(16/9)/(4/3)): 60 → 75.18°, 68 → 83.93°); shown only while the camera cuts look through that player's eyes and they are alive |
 | Doors | each door of the replay's `doors` that is not closed all round: the level's own door actor (a static mesh actor whose origin is within 2 cm of the door's closed position and whose rotation is its closed rotation; none: logged, not swung) keyed with the door's rotation, Euler-filtered as the weapons; every entry with the same closed position drives the same actor, which keeps its last rotation when the entity leaves the demo (a broken door stays). The sequence binds the level's actors: re-importing the map (`import_map.py`) makes new ones, so run `import_demo.py` again after it |
 | Dropped weapons | with the agents manifest's `dropped_weapons`: one static mesh actor per stretch of the replay's `dropped_weapons`, keyed on the stretch's keys (Rotator(roll = roll, pitch = −pitch, yaw = −yaw); each triple turned to the nearer of its two equivalent Euler forms, so a gun tumbling through the vertical never spins a full turn between two ticks in slow motion), shown from its first tick to its last |
+| Grenades | with the agents manifest's models: one static mesh actor per entry of the replay's `grenades`, keyed on its keys like the dropped weapons, shown from its first tick to its last (the detonation of an HE grenade and a flashbang, a smoke's expiry, a molotov's landing) |
+| Smokes | `smoke_volumes.py`: per smoke with a `volume`, a Heterogeneous Volume covering its 640-unit grid (placed at the grid's corner with CS2's highest y, Unreal's lowest; 64 cells per axis, scale 25.4) drawn by an instance of `/Game/OFAST/Replays/M_Smoke` holding its atlas (imported linear, uncompressed grayscale, no mipmaps), grid corner, frame timing, fading and tint. The material's Custom node samples two slices of two frames at the demo tick, which the sequence keys once for all smokes in the parameter collection `/Game/OFAST/Replays/MPC_Replay` (`ReplayTick`, two linear keys); density below 5 % of full shows nothing, 15 % above it is opaque (extinction 0.1 per cm, given per local unit: the volume ray-marches in its own space, a cell is 25.4 cm), and a fractal noise moves that threshold to break the surface into puffs; from the fading frame the threshold rises to 1, 48 ticks before the expiry. Albedo: light grey half way to the team colour (`color`). Smokes need `r.HeterogeneousVolumes.IndirectLighting 1` and `.Mode 2` (light from Lumen's translucency volume; without it a smoke in the shade is black): the importer sets them for its screenshots, but console variables end with the editor session, so set them in the project (`DefaultEngine.ini`, `[ConsoleVariables]`) or the Movie Render Queue job |
 | Camera cuts | each kill in turn: the killer's camera from the previous cut until 0.5 s after the kill (the last one to the end of the round) |
 | Markers | marked frames at freeze time end, every kill (`attacker > victim (weapon, HS)`), bomb events and round end |
 | Keys | linear; keys a straight line through their neighbours reproduces within 0.2 cm / 0.1° are dropped (128,825 keys for that round, written in 3 s); yaw is unwrapped so it never spins the long way round |
@@ -98,6 +125,6 @@ the death's ticks: the body falls and lies there to the end of the round
 
 ## Not yet
 
-Foot IK of CS2's animation graph, weapon skins, grenades
-and their effects (M6), sounds, a name label above each player (Unreal's text render did not show in the
+Foot IK of CS2's animation graph, weapon skins, the grenades' effects other than smokes (fires, HE and flash
+bursts, holes in smokes: M6), shots (muzzle flashes, tracers, impacts), sounds, a name label above each player (Unreal's text render did not show in the
 screenshots; the names are the actors' labels in Sequencer), several rounds in one sequence.

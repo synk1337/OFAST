@@ -20,8 +20,10 @@
 //! The players' first-person views (their arms and the weapon in hand, as CS2 draws them in a POV shot) get one
 //! glTF per agent and glove skin: `<demo>_r<round>_viewmodel_<agent>[_<gloves>].gltf` ([`super::viewmodel`]).
 //!
+//! CS2's sprite sheets for the grenades' effects are written next to them too ([`super::effects`]).
+//!
 //! `<demo>_r<round>.agents.json` lists the files, their looks, their players, the deaths baked as ragdolls, the
-//! dropped weapons' models and the viewmodels (`docs/formats/replay.md`);
+//! dropped weapons' models, the viewmodels and the effect textures (`docs/formats/replay.md`);
 //! `tools/unreal/import_demo.py` plays each animation on its player's actor, which the replay's positions and body
 //! yaw move.
 
@@ -32,6 +34,7 @@ use serde_json::json;
 
 use super::ExportError;
 use super::deaths::bake_deaths;
+use super::effects::export_effect_textures;
 use super::gltf::{
     Binding, BoneAnimation, MergedModel, export_character, export_model_static, load_model,
     resource_data,
@@ -414,6 +417,7 @@ pub fn export_players(
     }
     let dropped = export_dropped(&round, demo_name, out_dir, &mut report);
     let viewmodels = export_viewmodels(&round, &groups, demo_name, out_dir, &mut report);
+    let effects = export_effect_textures(content, out_dir, &mut report.warnings);
     std::fs::write(
         &report.manifest,
         serde_json::to_string_pretty(&json!({
@@ -425,6 +429,7 @@ pub fn export_players(
             "agents": manifest,
             "dropped_weapons": dropped,
             "viewmodels": viewmodels,
+            "effects": effects,
         }))
         .expect("JSON serializes"),
     )?;
@@ -527,7 +532,8 @@ fn export_viewmodels(
     entries
 }
 
-/// Writes one glTF per look of the weapons lying in the world during the round (the replay's `dropped_weapons`):
+/// Writes one glTF per look of the weapons lying in the world during the round (the replay's `dropped_weapons`) and
+/// of the thrown grenades in flight (its `grenades`, mesh-group mask 0: the model's default groups):
 /// `<demo>_r<round>_dropped_<model file stem>_<mesh groups shown>.gltf`, the weapon model alone in its mesh groups
 /// and rigid (a static mesh: it does not animate), so Unreal can place it where the demo has it. Returns the
 /// manifest entries: file, model path, model id, and every mesh-group mask the replay names that shows this file
@@ -542,6 +548,16 @@ fn export_dropped(
     let mut looks: BTreeMap<u64, BTreeSet<u64>> = BTreeMap::new();
     for w in round.track.samples.iter().flat_map(|s| &s.dropped) {
         looks.entry(w.model).or_default().insert(w.mesh_groups);
+    }
+    // Thrown grenades fly as their own model in its default mesh groups (mask 0).
+    for g in round
+        .track
+        .samples
+        .iter()
+        .flat_map(|s| &s.grenades)
+        .filter(|g| g.model != 0)
+    {
+        looks.entry(g.model).or_default().insert(0);
     }
     let mut entries = Vec::new();
     let mut names = HashSet::new();

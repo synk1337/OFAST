@@ -582,6 +582,83 @@ graphs' empty pose, slide back, is for a gun out of everything). The pawn also s
 decays itself; OFAST does not read them yet. The inspect fields (`m_bInspectPending`, `m_bInspectShouldLoop`,
 `m_flInspectCancelCompleteTime`) stay at their defaults in this demo: inspects show only in the animation state.
 
+## Grenades
+
+A thrown grenade is an entity of its own (`demo::grenades`, `TickSample::grenades`, `GrenadeSample`), one class per
+kind:
+
+| Class | Kind | Seen (Aurora vs FURIA, de_nuke, round 5) |
+|---|---|---|
+| `CSmokeGrenadeProjectile` | smoke | 9; the cloud began 11 – 487 ticks after the throw (once it rests), `smokegrenade_detonate` on that tick, `smokegrenade_expired` 22.06 s later |
+| `CFlashbangProjectile` | flashbang | 10; `flashbang_detonate` 104 ticks (1.6 s) after the throw |
+| `CHEGrenadeProjectile` | HE | 7; `hegrenade_detonate` 104 ticks after the throw |
+| `CMolotovProjectile` | molotov and incendiary | 7; the entity ends on the tick its fire starts (`inferno_startburn`) |
+| `CDecoyProjectile` | decoy | — |
+
+Each sends, on every tick it moves, its origin (the body component's cell and offset, like a pawn's) and rotation
+(`m_angRotation`; it spins about 22° a tick in the air), and once: its model (`m_hModel`: the grenade's world model,
+`weapons/models/grenade/<kind>/weapon_<kind>.vmdl`), its thrower (`m_hThrower`, a pawn handle), the throw
+(`m_vInitialPosition`, `m_vInitialVelocity`), `m_flGravityScale` (0.4), `m_flElasticity` (0.4375), and the set
+detonation time (`m_flDetonateTime`, game seconds; 0 for a smoke, which pops once it rests); `m_nBounces` counts the
+bounces. **A flashbang's and an HE grenade's entity stays in the demo for seconds after it went off** (an HE grenade
+6.6 s after its throw, unseen in CS2), and a later grenade can reuse the slot (`Entity::serial` tells them apart):
+the detonation events (with `entityid` and the position) say when the grenade is gone.
+
+A smoke adds `m_nSmokeEffectTickBegin` (a game tick: when its cloud began), `m_bDidSmokeEffect`,
+`m_vSmokeDetonationPos`, `m_vSmokeColor` (the cloud's tint: (75, 127, 155) for the CTs' smokes in this round,
+(180, 129, 50) for the Ts') and the cloud's voxels: `m_VoxelFrameData` (an array of bytes, `m_nVoxelFrameDataSize` of
+them, 1746 in one sample) and `m_nVoxelUpdate`, a counter of the voxel frames sent (about 200 over a cloud's 22 s,
+one every 7 ticks).
+
+### Smoke voxels
+
+The cloud itself is not in the demo. `m_VoxelFrameData` is an append-only log of the **inputs** of a deterministic
+simulation that the server and every client run alike, one frame per simulation step (`demo::smoke`):
+
+```text
+frame    u16 LE number, u16 LE payload length, payload
+payload  u8 fading, u8 flags,
+         if flags & 1: u8 n, n × emitter { u8 x, y, z, level; f32 hold }
+         if flags & 2: u16 n, n × brick  { u16 index; u64 solid mask }
+         u8 n, n × 20-byte hole record
+```
+
+The simulation runs on a 32³ grid of 20-unit voxels whose lowest corner is `m_vSmokeDetonationPos` − 320 on each
+axis, split into 8³ bricks of 4³ voxels. A brick's index and its mask's bits are Morton codes (x, y, z bits
+interleaved, x lowest). **Emitters** are where smoke comes out; a **brick** is world geometry, sent the first time the
+simulation needs it; a set mask bit is a voxel that touches a surface (the floor shows as one full layer, walls as
+planes, the space under the floor stays clear). The fading flag stops the cloud's growth. The layout comes from public
+reverse engineering (5stackgg/demo-parser, AGPL-3.0: facts only, no code; cross-checked by CS2-insight-agent and
+memorin.app); a CS2 step and the layout's numbers were checked in our demos:
+
+| What | Seen |
+|---|---|
+| layout | every snapshot of every smoke's log over rounds 1 – 3 of four demos (de_nuke, de_inferno, de_anubis, a local match) reads to its exact end, frames numbered 0, 1, 2… (`smoke_logs_decode_and_the_simulation_follows_cs2` in `tests/cs2_demo.rs`) |
+| frames | 196 – 202 per smoke (the cloud's 22 s), a new one every 7 ticks (0.11 s; the reverse engineering says 0.1 s); fading from frame 169 – 174 |
+| emitters | 40 – 44, all in frame 0, level 5, hold 0: a 5 × 5 × 2 lattice 2 voxels apart around the detonation point (points inside geometry left out) plus a few in the middle; the lowest at z 16, the first voxel above the floor |
+| bricks | frame 0: exactly the bricks the emitters' bounding box grown by one voxel touches (48 in round 5's first smoke); then one or two at a time as the cloud reaches new space, some even while it fades; 62 – 98 per smoke |
+| axis order | with x, y, z as above only 2 of 387 emitters sit in a solid voxel; any other order of the axes puts 38 – 88 there |
+| holes | none in round 5 of the de_nuke demo; the 20-byte records are not decoded |
+
+CS2's simulation itself is not known. OFAST runs its own ([`demo::smoke::Simulation`], decision 017): each voxel
+takes smoke from its six neighbours, more from the one above than from the one below (so the cloud sinks), with
+weights adding up to 1, so only a constant loss per voxel takes it away and the cloud grows until that loss matches
+what the emitters feed; smoke never flows into solid voxels nor into bricks not sent yet. Voxels update in place in
+Morton order, as CS2's are reported to: smoke reaches further towards +x, +y and +z in a step than towards −. The bricks are its check: a smoke voxel needs to know whether its neighbours are solid, so OFAST
+notes when its simulation first needs each brick and compares with the frame the server sent it. Fitted on round 5
+(`examples/smoke_fit.rs`), it needs 39 – 46 % of the bricks sent after frame 0 within 2 frames of CS2 and misses
+7 – 14 % (the cloud's thinnest reaches) on the four demos. Its steady cloud has about 766 voxels above 5 % of full
+in the open, a hemisphere of 143 units' radius: CS:GO's smoke radius was 144.
+
+A molotov's or an incendiary's fire is a `CInferno` (`TickSample::fires`, `FireSample`): `m_fireCount` flames of 64
+slots, each with its world position (`m_firePositions`), the flame it spread from (`m_fireParentPositions`), the
+surface normal (`m_BurnNormal`) and `m_bFireIsBurning`; `m_nFireEffectTickBegin` (a game tick), `m_nFireLifetime`
+(7 s for a molotov, 5.5 s for an incendiary) and `m_nInfernoType` (0 molotov, 1 incendiary). The flames spread a few
+ticks apart over the first 2 s (16 at most in this round); `inferno_expire` ends the fire — after its lifetime, or
+early when a smoke puts it out (one burned 1.4 s) — although its entity stays longer. Round 5 has 33 grenades and 7
+fires; `examples/grenade_timeline.rs` lists them next to the grenade events. Tournament demos carry no
+`bullet_impact`: shots are only `weapon_fire` (tick, player, weapon, silenced).
+
 ## Models
 
 What each player looks like and carries, read per tick into `PlayerSample::appearance` and `PlayerSample::weapons`

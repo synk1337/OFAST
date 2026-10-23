@@ -38,6 +38,7 @@ use super::decoder::FieldValue;
 use super::entity::{Entity, ServerClass, handle_to_index};
 use super::events::GameEvent;
 use super::fieldpath::FieldPath;
+use super::grenades::{FireSample, GrenadePaths, GrenadeSample, SmokeLog, origin};
 use super::parser::{DemoError, DemoParser};
 use super::serializer::Serializers;
 
@@ -312,6 +313,10 @@ pub struct TickSample {
     pub dropped: Vec<DroppedWeapon>,
     /// The map's rotating doors, in entity order.
     pub doors: Vec<DoorSample>,
+    /// Thrown grenades (in flight, resting, or a smoke's cloud), in entity order ([`super::grenades`]).
+    pub grenades: Vec<GrenadeSample>,
+    /// Fires of molotovs and incendiary grenades, in entity order.
+    pub fires: Vec<FireSample>,
 }
 
 /// The players of one round, tick by tick.
@@ -332,6 +337,8 @@ pub struct RoundTrack {
     /// The game events of the round (`player_death`, `round_freeze_end`, `round_end`, `bomb_planted`, …), oldest
     /// first. See [`super::events`].
     pub events: Vec<GameEvent>,
+    /// Each smoke's voxel log, a snapshot each time it changed, in order of the smokes' first snapshot.
+    pub smoke_logs: Vec<SmokeLog>,
 }
 
 /// Where one round is in the demo.
@@ -382,6 +389,7 @@ struct Paths {
     death: DeathPaths,
     viewmodel: ViewmodelPaths,
     doors: Option<DoorPaths>,
+    grenades: GrenadePaths,
 }
 
 /// Field paths of a pawn's viewmodel settings. Each is optional (older demos may lack them).
@@ -665,6 +673,7 @@ impl Paths {
             death: DeathPaths::find(serializers),
             viewmodel: ViewmodelPaths::find(serializers),
             doors: DoorPaths::find(serializers),
+            grenades: GrenadePaths::find(serializers, classes),
         })
     }
 }
@@ -798,6 +807,8 @@ pub fn list_rounds(data: &[u8]) -> Result<Vec<RoundInfo>, TrackError> {
 /// tick of it, and the round's game events.
 pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
     let mut track: Option<RoundTrack> = None;
+    // Each smoke's voxel update counter when its log was last read.
+    let mut read_at: HashMap<(u32, u32), i64> = HashMap::new();
     walk_rounds(data, |view| {
         let TickView {
             parser,
@@ -828,6 +839,7 @@ pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
                 map_name: parser.header().map_name().to_owned(),
                 samples: Vec::new(),
                 events: Vec::new(),
+                smoke_logs: Vec::new(),
             });
             let start = track.start_tick;
             track
@@ -838,7 +850,41 @@ pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
                 players: read_players(parser, paths),
                 dropped: read_dropped(parser, paths),
                 doors: read_doors(parser, paths),
+                grenades: paths
+                    .grenades
+                    .grenades(parser, &pawn_controllers(parser, paths)),
+                fires: paths.grenades.fires(parser),
             };
+            // A smoke's log, read again only when its update counter moved and kept when its bytes changed.
+            for g in &sample.grenades {
+                let Some(cloud) = g.smoke else { continue };
+                let index = match track
+                    .smoke_logs
+                    .iter()
+                    .position(|l| l.entity == g.entity && l.serial == g.serial)
+                {
+                    Some(i) => i,
+                    None => {
+                        track.smoke_logs.push(SmokeLog {
+                            entity: g.entity,
+                            serial: g.serial,
+                            snapshots: Vec::new(),
+                        });
+                        track.smoke_logs.len() - 1
+                    }
+                };
+                let log = &mut track.smoke_logs[index];
+                if read_at.insert((g.entity, g.serial), cloud.voxel_update)
+                    == Some(cloud.voxel_update)
+                {
+                    continue;
+                }
+                if let Some(bytes) = paths.grenades.voxel_log(parser, g.entity)
+                    && log.snapshots.last().is_none_or(|(_, b)| *b != bytes)
+                {
+                    log.snapshots.push((tick, bytes));
+                }
+            }
             // Several frames can share a tick; the last state of the tick wins.
             match track.samples.last_mut() {
                 Some(last) if last.tick == tick => *last = sample,
@@ -1053,26 +1099,12 @@ fn read_dropped(parser: &DemoParser<'_>, paths: &Paths) -> Vec<DroppedWeapon> {
         ) else {
             continue;
         };
-        // The cell must have been sent; an offset never sent is its default, 0.
-        let mut position = [0.0; 3];
-        let mut complete = true;
-        for (k, value) in position.iter_mut().enumerate() {
-            match weapon.get(&cell[k]).and_then(FieldValue::as_u64) {
-                Some(c) => {
-                    let o = weapon
-                        .get(&offset[k])
-                        .and_then(FieldValue::as_f32)
-                        .unwrap_or(0.0);
-                    *value = c as f32 * CELL_WIDTH - MAX_COORD + o;
-                }
-                None => complete = false,
-            }
-        }
-        // Exactly the world origin is what a carried weapon sends (it follows its owner's hand): one that lost its
-        // owner for a moment (a grenade being thrown, the C4 being planted) has not been placed yet.
-        if !complete || position == [0.0; 3] {
+        // The cell must have been sent; an offset never sent is its default, 0. Exactly the world origin is what a
+        // carried weapon sends (it follows its owner's hand): one that lost its owner for a moment (a grenade being
+        // thrown, the C4 being planted) has not been placed yet.
+        let Some(position) = origin(weapon, cell, offset).filter(|p| *p != [0.0; 3]) else {
             continue;
-        }
+        };
         let number = |path: &Option<FieldPath>| {
             path.as_ref()
                 .and_then(|p| weapon.get(p))
@@ -1100,6 +1132,22 @@ fn read_dropped(parser: &DemoParser<'_>, paths: &Paths) -> Vec<DroppedWeapon> {
     out
 }
 
+/// Each pawn's controller: pawn entity index → controller entity index (`m_hPlayerPawn`).
+fn pawn_controllers(parser: &DemoParser<'_>, paths: &Paths) -> HashMap<u32, u32> {
+    parser
+        .entities()
+        .iter()
+        .filter(|c| parser.class_name(c.class_id) == Some(paths.controller_class.as_str()))
+        .filter_map(|c| {
+            let pawn = c
+                .get(&paths.pawn_handle)
+                .and_then(FieldValue::as_u64)
+                .and_then(handle_to_index)?;
+            Some((pawn, c.index))
+        })
+        .collect()
+}
+
 /// The rotating doors (fields never sent read as their defaults: 0; a door without its origin cell is skipped).
 fn read_doors(parser: &DemoParser<'_>, paths: &Paths) -> Vec<DoorSample> {
     let Some(fields) = &paths.doors else {
@@ -1115,23 +1163,9 @@ fn read_doors(parser: &DemoParser<'_>, paths: &Paths) -> Vec<DoorSample> {
                 .and_then(FieldValue::as_vector3)
                 .unwrap_or_default()
         };
-        let mut position = [0.0; 3];
-        let mut complete = true;
-        for (k, value) in position.iter_mut().enumerate() {
-            match door.get(&fields.cell[k]).and_then(FieldValue::as_u64) {
-                Some(c) => {
-                    let o = door
-                        .get(&fields.offset[k])
-                        .and_then(FieldValue::as_f32)
-                        .unwrap_or(0.0);
-                    *value = c as f32 * CELL_WIDTH - MAX_COORD + o;
-                }
-                None => complete = false,
-            }
-        }
-        if !complete {
+        let Some(position) = origin(door, &fields.cell, &fields.offset) else {
             continue;
-        }
+        };
         out.push(DoorSample {
             entity: door.index,
             model: door

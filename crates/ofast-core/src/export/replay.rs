@@ -17,7 +17,10 @@
 //! - the weapons lying in the world (a dead player's gun, a dropped one): one entry per stretch an entity lay
 //!   unowned, with its look and its origin and rotation keyed on the ticks it moved;
 //! - the map's rotating doors, with their closed position (which names them in the map) and their rotation keyed on
-//!   the ticks they swung.
+//!   the ticks they swung;
+//! - the thrown grenades (flights keyed like the dropped weapons, detonations) and the fires they lit; each smoke's
+//!   cloud is simulated ([`crate::demo::smoke`]) and written next to the file as an atlas texture
+//!   ([`super::smoke`]), which its `volume` names.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -26,10 +29,13 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value as Json, json};
 
 use super::ExportError;
+use super::smoke::{atlas_layout, smoke_atlas, write_smoke_atlas};
 use crate::demo::events::{EventValue, GameEvent};
+use crate::demo::grenades::{FireSample, GrenadeKind, GrenadeSample, SmokeLog};
 use crate::demo::players::{
     DoorSample, DroppedWeapon, PlayerSample, RoundTrack, TickSample, track_round,
 };
+use crate::demo::smoke::{self, SmokeSettings};
 
 /// Format version written into the file; bump on incompatible changes.
 pub const REPLAY_VERSION: u32 = 1;
@@ -71,6 +77,9 @@ pub struct ReplayReport {
     pub kills: usize,
     /// Round length in seconds.
     pub seconds: f32,
+    /// What could not be written as it should, e.g. a smoke whose voxel log stops reading partway (its cloud then
+    /// stays as it was at the last frame read).
+    pub warnings: Vec<String>,
 }
 
 /// Reads round `round` of a demo and writes its replay file into `out_dir`. `demo_name` names the file.
@@ -98,6 +107,23 @@ pub fn write_replay(
         &path,
         serde_json::to_string(&replay).expect("JSON serializes"),
     )?;
+    // Each smoke's cloud, simulated, as the texture its `volume` names.
+    let prefix = format!("{demo_name}_r{round}");
+    let mut warnings = Vec::new();
+    for log in &track.smoke_logs {
+        let frames = smoke::frames(log);
+        if let Some(error) = smoke::log_error(log) {
+            warnings.push(format!(
+                "smoke #{}: {error}; its cloud is simulated from the {} frames before",
+                log.entity,
+                frames.len()
+            ));
+        }
+        if !frames.is_empty() {
+            let atlas = smoke_atlas(&frames, SmokeSettings::default());
+            write_smoke_atlas(&out_dir.join(smoke_texture_name(log, &prefix)), &atlas)?;
+        }
+    }
     Ok(ReplayReport {
         path,
         map: track.map_name.clone(),
@@ -105,6 +131,7 @@ pub fn write_replay(
         ticks: track.samples.len(),
         kills: replay["kills"].as_array().map_or(0, Vec::len),
         seconds: (track.end_tick - track.start_tick) as f32 * track.tick_interval,
+        warnings,
     })
 }
 
@@ -237,7 +264,218 @@ pub fn replay_json(track: &RoundTrack, demo_name: &str) -> Json {
         "events": milestones,
         "dropped_weapons": dropped_json(track),
         "doors": doors_json(track),
+        "grenades": grenades_json(track, &format!("{demo_name}_r{}", track.round)),
+        "fires": fires_json(track),
     })
+}
+
+/// The tick and position of the round's game event `name` (`hegrenade_detonate`…) whose `entityid` is `entity`,
+/// between `first` and `last` (a slot reused later has events of its own).
+fn entity_event(
+    track: &RoundTrack,
+    name: &str,
+    entity: u32,
+    first: u32,
+    last: u32,
+) -> Option<(u32, [f64; 3])> {
+    let event = track.events.iter().find(|e| {
+        e.name == name
+            && e.int("entityid") == Some(i64::from(entity))
+            && (first..=last + 1).contains(&e.tick)
+    })?;
+    let float = |key: &str| match event.get(key) {
+        Some(EventValue::Float(v)) => round(*v, 100.0),
+        _ => 0.0,
+    };
+    Some((event.tick, [float("x"), float("y"), float("z")]))
+}
+
+/// The thrown grenades: one entry per projectile entity (an index reused by a later grenade starts another), with
+/// its kind, model, thrower (controller), `first_tick`, and its flight keyed like the dropped weapons
+/// ([`keyed_stretches`]) up to `last_tick`, the last tick its model shows — an HE grenade's and a flashbang's
+/// detonation (`hegrenade_detonate`, `flashbang_detonate`: the entity stays in the demo for seconds after, unseen),
+/// a smoke's expiry (`smokegrenade_expired`), else the entity's last tick (a molotov's landing, where its fire
+/// starts). `detonation` is the detonation event's tick and position; `smoke` a smoke's cloud: `start_tick`,
+/// `end_tick`, `position`, `color` (0 – 255) and its `volume` ([`smoke_volume_json`]). `file_prefix` starts the
+/// smoke textures' names.
+fn grenades_json(track: &RoundTrack, file_prefix: &str) -> Vec<Json> {
+    keyed_stretches(
+        track,
+        |sample| {
+            sample
+                .grenades
+                .iter()
+                .map(|g| (g.entity, g, g.position, g.angles))
+                .collect()
+        },
+        |a: &GrenadeSample, b: &GrenadeSample| a.serial == b.serial && a.kind == b.kind,
+    )
+    .into_iter()
+    .map(|s| {
+        let g = s.item;
+        let detonate = match g.kind {
+            GrenadeKind::HighExplosive => Some("hegrenade_detonate"),
+            GrenadeKind::Flashbang => Some("flashbang_detonate"),
+            GrenadeKind::Smoke => Some("smokegrenade_detonate"),
+            GrenadeKind::Decoy => Some("decoy_detonate"),
+            GrenadeKind::Molotov => None,
+        };
+        let detonation =
+            detonate.and_then(|name| entity_event(track, name, s.entity, s.first, s.last));
+        let expired = (g.kind == GrenadeKind::Smoke)
+            .then(|| entity_event(track, "smokegrenade_expired", s.entity, s.first, s.last))
+            .flatten();
+        // The last tick the model shows.
+        let last = match (g.kind, detonation, expired) {
+            (GrenadeKind::HighExplosive | GrenadeKind::Flashbang, Some((tick, _)), _) => {
+                tick.min(s.last)
+            }
+            (GrenadeKind::Smoke, _, Some((tick, _))) => tick.min(s.last),
+            _ => s.last,
+        };
+        let mut keys: Vec<Json> = s
+            .keys
+            .iter()
+            .filter(|k| k[0].as_u64().is_some_and(|t| t <= u64::from(last)))
+            .cloned()
+            .collect();
+        // End on a key at the last tick (the transform of the latest key before it).
+        if let Some(latest) = keys.last().cloned()
+            && latest[0].as_u64() != Some(u64::from(last))
+        {
+            let mut end = latest;
+            end[0] = json!(last);
+            keys.push(end);
+        }
+        // The cloud as sent on the stretch's last sample that had one.
+        let smoke = track
+            .samples
+            .iter()
+            .filter(|t| (s.first..=s.last).contains(&t.tick))
+            .filter_map(|t| {
+                t.grenades
+                    .iter()
+                    .find(|o| o.entity == s.entity && o.serial == g.serial)
+            })
+            .filter_map(|o| o.smoke)
+            .next_back();
+        json!({
+            "entity": s.entity,
+            "kind": g.kind.name(),
+            "model": format!("{:016x}", g.model),
+            "thrower": g.thrower,
+            "first_tick": s.first,
+            "last_tick": last,
+            "keys": keys,
+            "detonation": detonation.map(|(tick, position)| json!({ "tick": tick, "position": position })),
+            "smoke": smoke.map(|c| json!({
+                "start_tick": c.start_tick,
+                "end_tick": expired.map_or(s.last, |(tick, _)| tick),
+                "position": c.position.map(|v| round(v, 100.0)),
+                "color": c.color,
+                "volume": track
+                    .smoke_logs
+                    .iter()
+                    .find(|l| l.entity == s.entity && l.serial == g.serial)
+                    .and_then(|log| smoke_volume_json(log, c.position, file_prefix)),
+            })),
+        })
+    })
+    .collect()
+}
+
+/// A smoke's texture file name: `<file_prefix>_smoke<entity>-<serial>.png`.
+fn smoke_texture_name(log: &SmokeLog, file_prefix: &str) -> String {
+    format!("{file_prefix}_smoke{}-{}.png", log.entity, log.serial)
+}
+
+/// A smoke's simulated cloud ([`super::smoke`]), for the volume Unreal draws: `texture` (the atlas next to the
+/// replay file, written by [`write_replay`]), `frames`, `columns`, `width`, `height` (the layout), `frame_ticks` (the
+/// tick each frame's step was sent: the cloud of frame k shows from then), `fading_frame` (the first frame with the
+/// fading flag, if any), `grid_origin` (the grid's lowest corner, world inches: the detonation point − 320) and
+/// `grid_size` (640). `None` for a log with no frames.
+fn smoke_volume_json(log: &SmokeLog, position: [f32; 3], file_prefix: &str) -> Option<Json> {
+    let frames = smoke::frames(log);
+    if frames.is_empty() {
+        return None;
+    }
+    let (columns, width, height) = atlas_layout(frames.len());
+    let half = (smoke::GRID as f32 * smoke::VOXEL_SIZE) / 2.0;
+    Some(json!({
+        "texture": smoke_texture_name(log, file_prefix),
+        "frames": frames.len(),
+        "columns": columns,
+        "width": width,
+        "height": height,
+        "frame_ticks": frames.iter().map(|f| f.tick).collect::<Vec<_>>(),
+        "fading_frame": frames.iter().position(|f| f.fading),
+        "grid_origin": position.map(|v| round(v - half, 100.0)),
+        "grid_size": 2.0 * half,
+    }))
+}
+
+/// The fires of molotovs and incendiary grenades: one entry per fire entity, with `incendiary`, `start_tick` (when
+/// it lit), `end_tick` (`inferno_expire`: a smoke can put it out early; else the entity's last tick), `lifetime`
+/// (seconds), and its flames in the order they appeared: `position`, `normal`, and the first and last tick each
+/// burned.
+fn fires_json(track: &RoundTrack) -> Vec<Json> {
+    // (entity, serial) → (first sample, first tick, last tick, flames: position, normal, first, last burning)
+    type Flames = Vec<([f32; 3], [f32; 3], Option<(u32, u32)>)>;
+    let mut fires: BTreeMap<(u32, u32), (&FireSample, u32, u32, Flames)> = BTreeMap::new();
+    for sample in &track.samples {
+        for f in &sample.fires {
+            let entry = fires.entry((f.entity, f.serial)).or_insert((
+                f,
+                sample.tick,
+                sample.tick,
+                Vec::new(),
+            ));
+            entry.2 = sample.tick;
+            for (k, flame) in f.flames.iter().enumerate() {
+                if entry.3.len() <= k {
+                    entry.3.push((flame.position, flame.normal, None));
+                }
+                if flame.burning {
+                    let span = &mut entry.3[k].2;
+                    *span =
+                        Some(span.map_or((sample.tick, sample.tick), |(a, _)| (a, sample.tick)));
+                }
+            }
+        }
+    }
+    let mut out: Vec<(u32, Json)> = fires
+        .into_iter()
+        .map(|((entity, _), (f, first, last, flames))| {
+            let start = f.start_tick.unwrap_or(first);
+            let end = entity_event(track, "inferno_expire", entity, first, last)
+                .map_or(last, |(tick, _)| tick.min(last));
+            let flames: Vec<Json> = flames
+                .into_iter()
+                .filter_map(|(position, normal, span)| {
+                    let (a, b) = span?;
+                    Some(json!({
+                        "position": position.map(|v| round(v, 100.0)),
+                        "normal": normal.map(|v| round(v, 1000.0)),
+                        "first_tick": a,
+                        "last_tick": b.min(end),
+                    }))
+                })
+                .collect();
+            (
+                start,
+                json!({
+                    "entity": entity,
+                    "incendiary": f.incendiary,
+                    "start_tick": start,
+                    "end_tick": end,
+                    "lifetime": f.lifetime,
+                    "flames": flames,
+                }),
+            )
+        })
+        .collect();
+    out.sort_by_key(|(start, _)| *start);
+    out.into_iter().map(|(_, j)| j).collect()
 }
 
 /// The weapons lying in the world: one entry per stretch an entity lay unowned (a weapon picked up and dropped again
@@ -519,6 +757,8 @@ mod tests {
                     players: vec![player(1, 0.0, true), player(2, 5.0, true)],
                     dropped: vec![dropped(300, 7, 10.0), dropped(301, 44, 0.0)],
                     doors: vec![door(0.0)],
+                    grenades: vec![grenade(0.0)],
+                    fires: Vec::new(),
                 },
                 TickSample {
                     tick: 101,
@@ -526,6 +766,9 @@ mod tests {
                     // The HE grenade was picked up; the AK-47 lies still.
                     dropped: vec![dropped(300, 7, 10.0)],
                     doors: vec![door(0.0)],
+                    // The HE grenade goes off here; a fire lights with one flame.
+                    grenades: vec![grenade(10.0)],
+                    fires: vec![fire(&[true])],
                 },
                 TickSample {
                     tick: 102,
@@ -533,19 +776,41 @@ mod tests {
                     // The AK-47 is pushed; the door starts to open.
                     dropped: vec![dropped(300, 7, 12.0)],
                     doors: vec![door(6.5)],
+                    // The HE grenade's entity lingers after going off; the fire's first flame went out, a second
+                    // burns, and the fire is put out on this tick.
+                    grenades: vec![grenade(10.0)],
+                    fires: vec![fire(&[false, true])],
                 },
             ],
-            events: vec![GameEvent {
-                tick: 102,
-                name: "player_death".into(),
-                keys: vec![
-                    ("userid".into(), EventValue::Int(1)),
-                    ("attacker".into(), EventValue::Int(0)),
-                    ("assister".into(), EventValue::Int(65535)),
-                    ("weapon".into(), EventValue::String("ak47".into())),
-                    ("headshot".into(), EventValue::Bool(true)),
-                ],
-            }],
+            events: vec![
+                GameEvent {
+                    tick: 102,
+                    name: "player_death".into(),
+                    keys: vec![
+                        ("userid".into(), EventValue::Int(1)),
+                        ("attacker".into(), EventValue::Int(0)),
+                        ("assister".into(), EventValue::Int(65535)),
+                        ("weapon".into(), EventValue::String("ak47".into())),
+                        ("headshot".into(), EventValue::Bool(true)),
+                    ],
+                },
+                GameEvent {
+                    tick: 101,
+                    name: "hegrenade_detonate".into(),
+                    keys: vec![
+                        ("entityid".into(), EventValue::Int(400)),
+                        ("x".into(), EventValue::Float(10.0)),
+                        ("y".into(), EventValue::Float(0.0)),
+                        ("z".into(), EventValue::Float(5.0)),
+                    ],
+                },
+                GameEvent {
+                    tick: 102,
+                    name: "inferno_expire".into(),
+                    keys: vec![("entityid".into(), EventValue::Int(500))],
+                },
+            ],
+            smoke_logs: Vec::new(),
         };
         let replay = replay_json(&track, "demo");
         assert_eq!(replay["samples"]["ticks"], json!([100, 101, 102]));
@@ -617,6 +882,86 @@ mod tests {
                 [102, 257.0, -1310.0, -416.0, 0.0, 6.5, 0.0]
             ])
         );
+
+        // The HE grenade: flies from x 0 to 10, gone at its detonation (101) although its entity stays a tick.
+        let he = &replay["grenades"][0];
+        assert_eq!(he["kind"], json!("he"));
+        assert_eq!(he["thrower"], json!(1));
+        assert_eq!(
+            (he["first_tick"].clone(), he["last_tick"].clone()),
+            (json!(100), json!(101))
+        );
+        assert_eq!(
+            he["keys"],
+            json!([
+                [100, 0.0, 0.0, 5.0, 0.0, 0.0, 0.0],
+                [101, 10.0, 0.0, 5.0, 0.0, 0.0, 0.0]
+            ])
+        );
+        assert_eq!(
+            he["detonation"],
+            json!({ "tick": 101, "position": [10.0, 0.0, 5.0] })
+        );
+        assert_eq!(he["smoke"], Json::Null);
+
+        // The fire: lit at 101, put out at 102; its first flame burned at 101 only, the second at 102.
+        let fire = &replay["fires"][0];
+        assert_eq!(
+            (fire["start_tick"].clone(), fire["end_tick"].clone()),
+            (json!(101), json!(102))
+        );
+        let flames = fire["flames"].as_array().unwrap();
+        assert_eq!(flames.len(), 2);
+        assert_eq!(
+            (
+                flames[0]["first_tick"].clone(),
+                flames[0]["last_tick"].clone()
+            ),
+            (json!(101), json!(101))
+        );
+        assert_eq!(
+            (
+                flames[1]["first_tick"].clone(),
+                flames[1]["last_tick"].clone()
+            ),
+            (json!(102), json!(102))
+        );
+        assert_eq!(flames[1]["position"], json!([50.0, 0.0, 0.0]));
+    }
+
+    /// An HE grenade (entity 400, thrown by player 1) at `x`.
+    fn grenade(x: f32) -> GrenadeSample {
+        GrenadeSample {
+            entity: 400,
+            serial: 7,
+            kind: GrenadeKind::HighExplosive,
+            model: 0xcc,
+            thrower: Some(1),
+            position: [x, 0.0, 5.0],
+            angles: [0.0; 3],
+            bounces: 0,
+            smoke: None,
+        }
+    }
+
+    /// A molotov's fire (entity 500, lit at tick 101) whose flames burn or not, 50 units apart.
+    fn fire(burning: &[bool]) -> FireSample {
+        FireSample {
+            entity: 500,
+            serial: 3,
+            incendiary: false,
+            start_tick: Some(101),
+            lifetime: 7.0,
+            flames: burning
+                .iter()
+                .enumerate()
+                .map(|(k, &burning)| crate::demo::grenades::Flame {
+                    position: [50.0 * k as f32, 0.0, 0.0],
+                    normal: [0.0, 0.0, 1.0],
+                    burning,
+                })
+                .collect(),
+        }
     }
 
     /// de_nuke's door by A site, swung `yaw` degrees from closed.

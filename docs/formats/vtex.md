@@ -26,6 +26,25 @@ Extra-data records are 12 bytes: `u32 type`, `u32 offset` (relative to its own f
 | 4 | COMPRESSED_MIP_SIZE | `u32 method` (0 none, 1 LZ4, 2 ZSTD), `u32 offset` (self-relative), `u32 count`, then `i32` compressed size per mip (index 0 = largest) |
 | 5 | CUBEMAP_RADIANCE_SH | 27 floats: 9 real spherical-harmonics coefficients per channel (planar R, G, B), Z up |
 
+## Sprite sheets
+
+The `SHEET` payload (`Texture::sheet`, read like ValveResourceFormat, MIT) lists animated sequences packed in the
+texture. Offsets are relative to their own field, except the first, which counts from the payload's start:
+
+| Part | Layout |
+|---|---|
+| header | `i32` sequence table offset (from the payload's start), `u32` sequence count |
+| sequence (32 bytes) | `u32` id, four flag bytes (clamp, alpha crop, no colour, no alpha), `i32` frame table offset, `u32` frame count, `f32` total time (s), `i32` name offset (NUL-terminated UTF-8), `i32` float-parameter offset, `u32` count |
+| float parameter | `i32` name offset, `f32` value |
+| frame (12 bytes) | `f32` display time, `i32` image table offset, `u32` image count |
+| image (32 bytes) | 8 `f32`, UV (0 – 1 of the texture's size): cropped min, cropped max, uncropped min, uncropped max; the corners sit inside the texels they cover, not on their edges (a quarter texel in on `fire_small_sim_b`) |
+
+A frame's image is its cropped rectangle (the compiler trims the empty border); the uncropped rectangle is where the
+full frame was. A rectangle whose max is not above its min is an empty frame. In pixels the end is the max texel + 1.
+Seen: `materials/particle/fire_explosion_1` (4096 × 2048, DXT5) holds 2 sequences of 50 frames, `fire_small_sim_b`
+(the molotov's flames) 4 of 32 – 33, `fire_gas_batch_a_v2` 7 of 16 – 19 whose first frames are empty; all clamped,
+named `CDmeSheetSequence`, each frame's display time 1 (the particle system sets the playback rate).
+
 ## Pixel data
 
 - Starts right after the `DATA` block (= the header's file size).

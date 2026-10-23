@@ -190,6 +190,9 @@ fn run(cli: Cli) -> Result<(), String> {
                 report.kills,
                 started.elapsed().as_secs_f32()
             );
+            for warning in &report.warnings {
+                println!("warning: {warning}");
+            }
             if *players {
                 let install = match &cli.cs2 {
                     Some(root) => Cs2Install::from_root(root),
