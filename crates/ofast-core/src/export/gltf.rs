@@ -54,7 +54,7 @@ use serde_json::{Value as Json, json};
 
 use super::{ExportError, ExportOptions};
 use super::{environment, tint};
-use crate::anim::{Clip, NmSkeleton, Retargeter};
+use crate::anim::{BoneConstraints, Clip, NmSkeleton, Retargeter};
 use crate::content::Content;
 use crate::coords;
 use crate::kv3::Value;
@@ -365,6 +365,15 @@ fn clip_animations(
 ) -> Result<Vec<BoneAnimation>, ExportError> {
     let mut skeletons: HashMap<String, NmSkeleton> = HashMap::new();
     let mut animations = Vec::new();
+    // The model's twist bones and shoulder blades, placed after each pose as CS2 does.
+    let constraints = BoneConstraints::of(model);
+    warnings.extend(
+        constraints
+            .skipped
+            .iter()
+            .filter(|s| !s.contains("CBoneConstraintDotToMorph"))
+            .map(|s| format!("constraint {s}: not applied")),
+    );
     for clip_path in clip_paths {
         let clip_name = Path::new(clip_path)
             .file_stem()
@@ -394,8 +403,11 @@ fn clip_animations(
         let keys = (clip.duration * ANIMATION_FPS).round().max(0.0) as usize + 1;
         let frames = (0..keys)
             .map(|k| {
-                clip.sample(k as f32 / ANIMATION_FPS, false)
-                    .map(|pose| retargeter.locals(&pose))
+                clip.sample(k as f32 / ANIMATION_FPS, false).map(|pose| {
+                    let mut world = retargeter.world(&pose);
+                    constraints.apply(&mut world);
+                    retargeter.locals_of(&world)
+                })
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(|source| ExportError::Clip {

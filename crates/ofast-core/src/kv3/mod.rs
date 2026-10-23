@@ -4,7 +4,8 @@
 //! encodings that describe the same tree of values:
 //!
 //! - **binary**, inside compiled resource blocks (`DATA`, `RED2`, …) — read by [`binary::decode`];
-//! - **text**, human-readable, used by source files and by OFAST's debug output — written by [`text::to_string`].
+//! - **text**, human-readable, used by source files, by OFAST's debug output and inside some compiled resources (a
+//!   model's `m_keyValueText`) — written by [`text::to_string`], read by [`text::parse`].
 //!
 //! The data model is [`Value`]: null, bool, integers, floats, strings, binary blobs, arrays and objects (ordered
 //! key → value maps). Any value can carry a [`Flag`] such as `resource:` that tells tools how to interpret it
@@ -60,6 +61,18 @@ impl Guid {
         bytes[6] = text[7];
         bytes[7] = text[6];
         Guid(bytes)
+    }
+
+    /// Parses the canonical `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` form; `None` when malformed.
+    pub fn parse(s: &str) -> Option<Guid> {
+        let bytes = s.as_bytes();
+        let valid = bytes.len() == 36
+            && bytes.iter().enumerate().all(|(i, &c)| match i {
+                8 | 13 | 18 | 23 => c == b'-',
+                _ => c.is_ascii_hexdigit(),
+            });
+        // Validated, so the const parser cannot panic.
+        valid.then(|| Guid::from_str_const(s))
     }
 }
 

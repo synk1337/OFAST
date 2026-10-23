@@ -163,7 +163,13 @@ string
 - Flags prefix a value: `resource:"…"`.
 - Comments: `// line` and `/* block */`.
 
-OFAST currently **writes** text (debug output); a text parser comes later.
+OFAST writes text (debug output) and **reads** it (`kv3::text::parse`): compiled resources carry KV3 text inside
+them, as a model's `m_modelInfo.m_keyValueText` (its procedural-bone constraints, physics markup and ambient
+occlusion capsules). Valve's compiler writes `key = ` with an object or array on the next line, inline arrays
+`[ 0.0, 0.0, 1.0 ]` and a trailing comma after each element; members of an object are separated by whitespace only.
+Of CS2's 13105 models, 1333 carry such a text (3.3 MB in all, formats `vmdlkeys4` `9f5c1002-…` on 419 and
+`141d1e66-…` on 914): every one parses, and written back and read again gives the same tree
+(`tests/cs2_kv3.rs` `every_model_keyvalues_text_parses`). The reader does not take `'…'` strings (none seen).
 
 ## Unknowns
 

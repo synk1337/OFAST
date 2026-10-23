@@ -28,6 +28,7 @@
 //! | [`layers`] | bone masks, additive and model-space layers |
 //! | [`aim`] | CS2's aim node, rebuilt: spine, weapon, hand IK |
 //! | [`bake`] | each player's pose over a round from the demo's rig inputs |
+//! | [`constraints`] | the model's procedural bones (twist bones, shoulder blades) from its `BoneConstraintList` |
 //!
 //! Knowledge from ValveResourceFormat (MIT; `ModelAnimation2/AnimationClip.cs`, `SkeletonRetargeter.cs`, the
 //! AnimGraph runtime and `Gameplay/AimCS.cs`), checked on local CS2 files; independent implementation. Details:
@@ -36,6 +37,7 @@
 pub mod aim;
 pub mod bake;
 mod clip;
+pub mod constraints;
 pub mod eval;
 pub mod graph;
 pub mod layers;
@@ -46,6 +48,7 @@ pub mod states;
 pub mod weapon;
 
 pub use clip::{Clip, ClipEvent, TrackSettings};
+pub use constraints::BoneConstraints;
 pub use locomotion::Locomotion;
 pub use retarget::Retargeter;
 pub(crate) use retarget::matrix_to_quat;

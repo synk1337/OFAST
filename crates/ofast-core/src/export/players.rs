@@ -39,7 +39,9 @@ use crate::anim::bake::{
 use crate::anim::graph::Graph;
 use crate::anim::layers::BoneMask;
 use crate::anim::weapon::WeaponClips;
-use crate::anim::{Clip, Locomotion, NmSkeleton, Retargeter, Transform, matrix_to_quat};
+use crate::anim::{
+    BoneConstraints, Clip, Locomotion, NmSkeleton, Retargeter, Transform, matrix_to_quat,
+};
 use crate::content::Content;
 use crate::demo::players::{COUNTER_TERRORISTS, PlayerSample, RoundTrack};
 use crate::items::{item_names, item_values};
@@ -346,7 +348,15 @@ fn export_look(
     let mut mesh_groups = shown_groups(&agent, look.mesh_groups);
     let mounts = AgentMounts::of(&agent);
     let retargeter = Retargeter::new(&agent.skeleton, &round.clip_skeleton);
-    let mut warnings = Vec::new();
+    // The agent's twist bones and shoulder blades, placed after each pose as CS2 does. Its glove skin, merged by
+    // bone name, follows them.
+    let constraints = BoneConstraints::of(&agent);
+    let mut warnings: Vec<String> = constraints
+        .skipped
+        .iter()
+        .filter(|s| !s.contains("CBoneConstraintDotToMorph"))
+        .map(|s| format!("{}: constraint {s}: not applied", look.agent))
+        .collect();
 
     // Bodies, and each carried weapon's slot and place, frame by frame.
     let weapon_look = |w: &crate::demo::players::CarriedWeapon| {
@@ -459,7 +469,14 @@ fn export_look(
     let mut animations = Vec::new();
     for ((&controller, poses), carried) in players.iter().zip(bodies).zip(&places) {
         let poses = hold_gaps(poses, &round.clip_skeleton.reference);
-        let worlds: Vec<Vec<Affine>> = poses.iter().map(|pose| retargeter.world(pose)).collect();
+        let worlds: Vec<Vec<Affine>> = poses
+            .iter()
+            .map(|pose| {
+                let mut world = retargeter.world(pose);
+                constraints.apply(&mut world);
+                world
+            })
+            .collect();
         // Each weapon bone, frame by frame: where it is keyed (relative to the root) and whether it shows.
         let slot_keys: Vec<Vec<(Affine, bool)>> = slots
             .iter()
@@ -860,6 +877,7 @@ mod tests {
             skeleton: Default::default(),
             remapping_table: Vec::new(),
             remapping_starts: Vec::new(),
+            key_values_text: String::new(),
         };
         assert_eq!(with_own_gloves(&agent, 0b1001), 0b0101);
         assert_eq!(with_own_gloves(&agent, 0b0110), 0b0110);

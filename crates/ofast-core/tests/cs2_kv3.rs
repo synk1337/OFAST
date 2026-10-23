@@ -162,3 +162,51 @@ fn resource_ids_match_references() {
     assert!(refs > 1000, "{refs} references");
     assert!(wrong.is_empty());
 }
+
+/// The KV3 text reader on the text CS2's compiled models carry: every model's `m_modelInfo.m_keyValueText`
+/// parses, and written back as text and read again it gives the same tree.
+#[test]
+fn every_model_keyvalues_text_parses() {
+    use ofast_core::kv3::{Value, text};
+    let install = Cs2Install::locate().expect("CS2 install found");
+    let vpk = Vpk::open(install.main_vpk()).expect("pak01_dir.vpk opens");
+    let (mut models, mut texts, mut bytes) = (0usize, 0usize, 0usize);
+    let mut formats: BTreeMap<String, usize> = BTreeMap::new();
+    for entry in vpk
+        .entries()
+        .iter()
+        .filter(|e| e.path().ends_with(".vmdl_c"))
+    {
+        models += 1;
+        let data = vpk.read(entry).expect("CRC-checked read");
+        let Ok(resource) = Resource::parse(&data) else {
+            continue;
+        };
+        let Ok(kv3) = resource.kv3(BlockKind::DATA) else {
+            continue;
+        };
+        let Some(keyvalues) = kv3
+            .root
+            .get("m_modelInfo")
+            .and_then(|info| info.get("m_keyValueText"))
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+        else {
+            continue;
+        };
+        let file = text::parse(keyvalues).unwrap_or_else(|e| panic!("{}: {e}", entry.path()));
+        assert_eq!(
+            text::parse(&text::to_string(&file)).expect("written text parses"),
+            file,
+            "{}",
+            entry.path()
+        );
+        texts += 1;
+        bytes += keyvalues.len();
+        *formats.entry(file.format.to_string()).or_default() += 1;
+    }
+    println!(
+        "{models} models, {texts} keyvalues texts ({bytes} bytes) parsed; formats {formats:?}"
+    );
+    assert!(texts > 1000, "{texts} texts");
+}

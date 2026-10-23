@@ -114,6 +114,11 @@ procedural twist bones). Parents come before children in all 93 agent and glove 
 `W = W_parent · T(position) · R(rotation)`. Agents have 86 – 94 bones from `root_motion`, whose rotation (0.5, 0.5,
 0.5, 0.5) turns the A-pose to face +X: pelvis at (−2.85, 0, 42.82), head at 70.8 inches.
 
+**Procedural bones**: `DATA → m_modelInfo.m_keyValueText` is a KV3 text document (`format:vmdlkeys4`) whose
+`BoneConstraintList` places the twist bones, `head_0_TWIST` and the shoulder blades after each pose (tilt-twist,
+point and aim constraints; the eyes' dot-to-morph ones drive morphs). Read and applied by `anim::constraints`
+([animation.md](animation.md#procedural-bones-animconstraints)).
+
 **Remapping**: `DATA m_remappingTable` holds one slice per mesh, starting at `m_remappingTableStarts[mesh index]` and
 ending at the next start. A vertex's bone index `i` is skeleton bone `table[start + i]`. A slice begins with the
 mesh's own render bones (`MDAT m_skeleton.m_bones`, same order, each with an `m_invBindPose`) and on agents ends with

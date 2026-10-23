@@ -296,6 +296,9 @@ pub struct Model {
     pub remapping_table: Vec<u32>,
     /// `m_remappingTableStarts`: where each mesh's slice of the remapping table begins, by mesh index.
     pub remapping_starts: Vec<usize>,
+    /// `m_modelInfo.m_keyValueText`: the model's keyvalues as KV3 text (`format:vmdlkeys4`), empty when it has
+    /// none. Agents keep their procedural-bone constraints there ([`crate::anim::BoneConstraints`]).
+    pub key_values_text: String,
 }
 
 impl Model {
@@ -328,6 +331,12 @@ impl Model {
                 .into_iter()
                 .map(|v| v as usize)
                 .collect(),
+            key_values_text: data
+                .get("m_modelInfo")
+                .and_then(|info| info.get("m_keyValueText"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
         };
 
         let embedded = ctrl

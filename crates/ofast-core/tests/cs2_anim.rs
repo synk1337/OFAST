@@ -498,6 +498,110 @@ fn item_names_read() {
     }
 }
 
+/// Every agent and glove model's procedural-bone constraints (`m_keyValueText` → `BoneConstraintList`): all of
+/// them read, every bone hash resolves, only the eyes' morph constraints are left out, and applied to the bind pose
+/// they change nothing — which pins down every offset and axis convention at once. Then, on `ctm_sas`, rolling the
+/// right hand about its forearm turns the forearm's twist bones by their share of the roll.
+#[test]
+fn procedural_bones_keep_the_bind_pose() {
+    use ofast_core::anim::BoneConstraints;
+    use ofast_core::model::{Model, affine, compose, invert_rigid};
+
+    let install = Cs2Install::locate().expect("CS2 install found");
+    let vpk = Vpk::open(install.main_vpk()).expect("pak01_dir.vpk opens");
+    let paths: Vec<String> = vpk
+        .entries()
+        .iter()
+        .map(|e| e.path().to_owned())
+        .filter(|p| p.starts_with("agents/models/") && p.ends_with(".vmdl_c"))
+        .collect();
+    let load = |path: &str| {
+        let bytes = vpk.read_path(path).unwrap();
+        Model::parse(&Resource::parse(&bytes).unwrap()).unwrap_or_else(|e| panic!("{path}: {e}"))
+    };
+    let (mut models, mut applied, mut worst) = (0usize, 0usize, (0.0f32, String::new()));
+    for path in &paths {
+        let model = load(path);
+        let constraints = BoneConstraints::of(&model);
+        // Glove models carry their agent's list over an arm-only skeleton: the head's constraints find no bone, the
+        // upper arms' twists no parent to measure against.
+        let gloves = path.contains("/arms/");
+        for skipped in &constraints.skipped {
+            assert!(
+                skipped.contains("CBoneConstraintDotToMorph")
+                    || gloves && (skipped.contains("no bone") || skipped.contains("no parent")),
+                "{path}: {skipped}"
+            );
+        }
+        if constraints.is_empty() {
+            continue;
+        }
+        models += 1;
+        applied += constraints.len();
+        let bind = model.skeleton.world_transforms();
+        let mut world = bind.clone();
+        constraints.apply(&mut world);
+        for (bone, (after, before)) in world.iter().zip(&bind).enumerate() {
+            // Positions in inches, rotation matrix entries.
+            let difference = (0..3)
+                .flat_map(|i| (0..4).map(move |j| (i, j)))
+                .map(|(i, j)| (after[i][j] - before[i][j]).abs())
+                .fold(0.0f32, f32::max);
+            let name = &model.skeleton.bones[bone].name;
+            // Every agent shares one list, authored on a skeleton whose hands sat 6.6° from theirs (almost all of
+            // it tilt, which the twist ignores): the twist left over turns the forearms' twist bones by up to
+            // 0.66° at bind pose, in CS2 too. Nothing else may move.
+            if !name.contains("TWIST") {
+                assert!(difference < 2e-3, "{path} {name} moved by {difference}");
+            }
+            if difference > worst.0 {
+                worst = (difference, format!("{path} {name}"));
+            }
+        }
+    }
+    println!(
+        "{models} models with constraints, {applied} applied; largest change of the bind pose {:.2e} ({})",
+        worst.0, worst.1
+    );
+    assert!(models >= 80, "CS2's agents and gloves carry constraints");
+    assert!(worst.0 < 0.02, "the bind pose is kept: {worst:?}");
+
+    // The right hand rolled 60° about its own x (the forearm's axis): the forearm's twist bones take their share.
+    let sas = load("agents/models/ctm_sas/ctm_sas.vmdl_c");
+    let constraints = BoneConstraints::of(&sas);
+    let bones = &sas.skeleton.bones;
+    let find = |name: &str| sas.skeleton.find(name).unwrap_or_else(|| panic!("{name}"));
+    let mut world = sas.skeleton.world_transforms();
+    let hand = find("hand_R");
+    let roll = affine(
+        [
+            (30f32).to_radians().sin(),
+            0.0,
+            0.0,
+            (30f32).to_radians().cos(),
+        ],
+        [0.0; 3],
+    );
+    world[hand] = compose(&world[hand], &roll);
+    constraints.apply(&mut world);
+    let bind = sas.skeleton.world_transforms();
+    // How far a twist bone turned about its own x (signed, degrees), against its bind pose.
+    let turned = |name: &str| {
+        let bone = find(name);
+        let parent = bones[bone].parent.expect("parent");
+        let before = compose(&invert_rigid(&bind[parent]), &bind[bone]);
+        let after = compose(&invert_rigid(&world[parent]), &world[bone]);
+        // `before`ᵀ · `after`: the turn between the two local rotations.
+        let delta = |i: usize, j: usize| (0..3).map(|k| before[k][i] * after[k][j]).sum::<f32>();
+        delta(2, 1).atan2(delta(1, 1)).to_degrees()
+    };
+    let (twist, twist1) = (turned("arm_lower_R_TWIST"), turned("arm_lower_R_TWIST1"));
+    println!("hand_R rolled 60°: arm_lower_R_TWIST {twist:.1}°, arm_lower_R_TWIST1 {twist1:.1}°");
+    // Weights 0.5 and 1, the same way round as the hand (within the bind pose's 0.66°).
+    assert!((twist - 30.0).abs() < 1.5, "{twist}");
+    assert!((twist1 - 60.0).abs() < 1.5, "{twist1}");
+}
+
 #[test]
 fn every_clip_decodes() {
     let install = Cs2Install::locate().expect("CS2 install found");

@@ -78,6 +78,37 @@ bind-pose offset from its parent; each bone's local transform is then taken back
 world poses makes the result independent of how each skeleton splits a transform between a bone and its parent (the
 agent puts the A-pose's turn on `root_motion`, the clip skeleton on `pelvis`).
 
+## Procedural bones (`anim::constraints`)
+
+Of the agent bones no clip drives, the twist bones (`arm_upper_L_TWIST`, `arm_lower_R_TWIST1`, `leg_upper_L_TWIST`…,
+flag `0x400000`), `head_0_TWIST` and the shoulder blades are placed by CS2 after each pose, from constraints in the
+model's keyvalues (`DATA → m_modelInfo.m_keyValueText`, KV3 text, `BoneConstraintList`), applied in list order in
+model space. OFAST applies them to every exported frame, after retargeting (`export::players`, and
+`export_model_with_clips`); glove skins, merged onto the agent's bones by name, follow. The other unmapped bones
+(jiggle bones, eyes) stay at their bind offset from their parent.
+
+| Class | On `ctm_sas` | What it does |
+|---|---|---|
+| `CTiltTwistConstraint` | 13: head, upper and lower arms, thighs | the target's rotation relative to its parent, with the target's `m_qOffset` taken off, is split into a tilt of axis `m_nTargetAxis` and a twist about it; the slave's local rotation becomes that twist × the slave's weight about its axis `m_nSlaveAxis` (`arm_lower_R_TWIST` takes 0.5 of the hand's roll, `arm_lower_R_TWIST1` all of it) |
+| `CPointConstraint` | 1: `head_0_TWIST` | the slave moves to the weighted mean of the targets (`neck_0` and `head_0`, 0.5 each) |
+| `CAimConstraint` | 2: `scapula_L` / `_R` | the slave's +Y turns towards the weighted mean of the targets but the last (`scap_L_AIMAT` on the spine), its +Z towards the last target (`m_nUpType` 2: `scap_AIMUP`; 0, 1 and 3 take `m_vUpVector` in that target's, the model's or the parent's frame), then by `m_qAimOffset` |
+| `CBoneConstraintDotToMorph` | 2: the eyes | a morph from the dot product of two bones' directions: not applied (no morphs exported) |
+
+Slaves and targets name bones by MurmurHash2 of the lower-cased name, seed `0x31415926`, unless `m_sName` is set;
+a target can be an attachment (`m_bIsAttachment`, never on CS2's agents: such a constraint is left out). 91 of the
+92 agent and glove models carry constraints, 1183 tilt-twists, 182 aims, 91 points and 160 dot-to-morphs in all;
+the 11 glove models carry an agent's list over an arm-only skeleton, where the head's constraints find no bone and
+the upper arms' twists no parent to measure against (left out; the export applies the agent's list anyway). A slave
+carries its children along; none of the 15 slaves of any agent has any. Each frame stands alone: at the weight 0.5
+a twist bone covers ±90°, so a hand rolled past ±180° flips its half-twist bone by 180° (Source 2 Viewer's unwrap
+from frame to frame changes no rotation either).
+
+Checked (`tests/cs2_anim.rs` `procedural_bones_keep_the_bind_pose`): on all 91 models with constraints, applied to
+the bind pose they move no bone but the forearms' twist bones, by at most 0.66° — every agent shares one list,
+authored on hands 6.6° from theirs (almost all tilt, which the twist ignores). On `ctm_sas`, the right hand rolled
++60° about its own x turns `arm_lower_R_TWIST` +30.0° and `arm_lower_R_TWIST1` +60.0°. Knowledge from Source 2
+Viewer (MIT; `BoneConstraintSolver.cs`, compared line by line in review); independent implementation.
+
 ## glTF export
 
 `ofast export-model <agent> --clip <clip> [--clip …]` (`export_model_with_clips`) adds one glTF animation per clip,
@@ -405,7 +436,10 @@ same weapons as playback.
   (the arm across the face, seen from behind) and XANTARES flashed while spraying crouched match CS2's poses;
   XANTARES's second flash (2 s, 0.66 s in) shows little in either. Differences: no fire or flash effects (M6), the
   hall's interior darker than CS2's, and seen from very close the SAS sleeve over a raised forearm is broad and flat
-  in both, CS2's thinner at the cuff (the twist bones, below).
+  in both, CS2's thinner at the cuff. With the procedural bones (above; `twist_before_after.png`,
+  `twist_vs_cs2.png`) XANTARES's forearm twist bones turn 8 – 35° and his right scapula 30° at 34480, yet the
+  sleeves barely change: their breadth is the sleeve's own. In MAJ3R's view CS2's arm reaches further out to the
+  side than OFAST's (an HE drawn while flashed); FalleN's flashed arm matches.
 - `tests/cs2_anim.rs` `weapon_clips_found_in_the_graphs` finds every tested weapon's clips and category through the
   graphs; `item_names_read` reads 2059 item names from `items_game.txt`.
 - `tests/cs2_anim.rs` `locomotion_graphs_read`: the three locomotion graphs give the blends above (17 standing and
@@ -428,11 +462,6 @@ same weapons as playback.
 - **Not checked against CS2 yet**: the thresholds of `anim::states` (starts, plants and turns, turns on the spot),
   the legs on ladders (CS2's chase camera shows only the torso), flinches (the round's hits are seen only from 16 m),
   the flash's fading curve.
-- **Procedural bones**: the agent's twist bones (`arm_lower_R_TWIST`, `leg_upper_L_TWIST1`…, flag `0x400000`), the
-  scapulas and the shoulder aim helpers follow their parents at bind pose. CS2 drives them from the model's
-  `BoneConstraintList` (the `.vmdl`'s DATA block): on `ctm_sas`, 13 `CTiltTwistConstraint` (a twist bone takes a
-  weighted share, 0.5, of its target's roll about an axis), one `CPointConstraint` (`head_0_TWIST` between `neck_0`
-  and `head_0`), two `CAimConstraint` and two `CBoneConstraintDotToMorph` (the eyes). Bones are named by
-  MurmurHash2 of the lowercased name, seed `0x31415926` (all 26 hashes of `ctm_sas` resolve). Without them a
-  forearm turned far, as in the flashed pose, twists its sleeve flat at the wrist.
+- **Eye morphs**: the `CBoneConstraintDotToMorph` constraints turn the eyes' look morphs from the eyeballs' aim at
+  `eye_target`; OFAST exports no morphs.
 - **Glove paint**: glove skins' models are merged (checked against CS2 on a major's demo), their paint kits not.

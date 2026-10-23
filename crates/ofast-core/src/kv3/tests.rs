@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use super::binary::{DecodeReport, decode_with_report};
+use super::binary::{DecodeReport, Kv3Error, decode_with_report};
 use super::{Flag, Guid, Kv3File, Object, Value, text};
 
 const NONE: u32 = 0;
@@ -605,4 +605,128 @@ fn text_output_is_readable() {
                     \t\"has space\" = true\n\
                     }\n";
     assert_eq!(text, expected);
+}
+
+/// Every kind of value the text encoding tells apart, written and read back unchanged.
+#[test]
+fn text_round_trips() {
+    let mut inner = Object::new();
+    inner.push(
+        "m_name",
+        Value::String("two\nlines \"quoted\" \\ tab\t".into()),
+    );
+    inner.push("m_block", Value::String("first line\nsecond line".into()));
+    inner.push(
+        "m_edges",
+        Value::String("\nstarts and ends with a line break\n".into()),
+    );
+    inner.push("m_crlf", Value::String("windows\r\nline end\r".into()));
+    inner.push("m_empty", Value::Array(Vec::new()));
+    inner.push("m_none", Value::Object(Object::new()));
+    let mut root = Object::new();
+    root.push("m_int", Value::Int(-42));
+    root.push("m_big", Value::UInt(u64::MAX));
+    root.push("m_float", Value::Float(0.15107809007167816));
+    root.push("m_whole", Value::Float(-3.0));
+    root.push("m_tiny", Value::Float(1.2e-38));
+    root.push("m_inf", Value::Float(f64::NEG_INFINITY));
+    root.push(
+        "m_bools",
+        Value::Array(vec![Value::Bool(true), Value::Bool(false), Value::Null]),
+    );
+    root.push("m_blob", Value::Blob(vec![0x00, 0x0A, 0xFF]));
+    root.push(
+        "m_sound",
+        Value::Flagged(
+            Flag::SoundEvent,
+            Box::new(Value::String("Weapon.Fire".into())),
+        ),
+    );
+    root.push("m_inner", Value::Array(vec![Value::Object(inner)]));
+    root.push("dotted.key", Value::Int(1));
+    root.push("needs quotes", Value::Int(2));
+    let file = Kv3File {
+        format: Guid::FORMAT_GENERIC,
+        root: Value::Object(root),
+    };
+    assert_eq!(text::parse(&text::to_string(&file)).expect("parses"), file);
+}
+
+/// The style Valve's compiler writes into a model's `m_keyValueText`: a `vmdlkeys4` header, `key = ` with the block
+/// on the next line, inline arrays with spaces, trailing commas, and comments in hand-written files.
+#[test]
+fn text_reads_valve_style() {
+    let text = "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} \
+                format:vmdlkeys4:version{9f5c1002-f19f-470c-bd42-c3c26c063d33} -->\n\
+                {\n\
+                \tBoneConstraintList = \n\
+                \t[\n\
+                \t\t{\n\
+                \t\t\t_class = \"CTiltTwistConstraint\" // a comment\n\
+                \t\t\tm_vUpVector = [ 0.0, 0.0, -1.0 ]\n\
+                \t\t\tm_nBoneHash = 2957772116\n\
+                \t\t\t/* a block\n comment */ m_bIsAttachment = false\n\
+                \t\t},\n\
+                \t]\n\
+                }\n";
+    let file = text::parse(text).expect("parses");
+    assert_eq!(
+        file.format.to_string(),
+        "9f5c1002-f19f-470c-bd42-c3c26c063d33"
+    );
+    let constraint = &file
+        .root
+        .get("BoneConstraintList")
+        .and_then(Value::as_array)
+        .expect("list")[0];
+    assert_eq!(
+        constraint.get("_class").and_then(Value::as_str),
+        Some("CTiltTwistConstraint")
+    );
+    assert_eq!(
+        constraint.get("m_nBoneHash").and_then(Value::as_i64),
+        Some(2957772116)
+    );
+    assert_eq!(
+        constraint.get("m_bIsAttachment").and_then(Value::as_bool),
+        Some(false)
+    );
+    let up: Vec<f64> = constraint
+        .get("m_vUpVector")
+        .and_then(Value::as_array)
+        .expect("up")
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect();
+    assert_eq!(up, [0.0, 0.0, -1.0]);
+    // No header: the generic format.
+    assert_eq!(
+        text::parse("{ a = 1 }").expect("parses").format,
+        Guid::FORMAT_GENERIC
+    );
+}
+
+#[test]
+fn text_errors_name_the_line() {
+    for (bad, line) in [
+        ("{\n a = 1\n b 2\n}", 3),
+        ("{ a = [ 1 2 ] }", 1),
+        ("{\n a = \"open\n}", 3),
+        ("{ a = #[ 0G ] }", 1),
+        ("{ a = #[ +F ] }", 1),
+        ("{ a = 1 } extra", 1),
+        ("{\n a = wrong\n}", 2),
+    ] {
+        match text::parse(bad) {
+            Err(Kv3Error::Text { line: found, .. }) => assert_eq!(found, line, "{bad:?}"),
+            other => panic!("{bad:?}: {other:?}"),
+        }
+    }
+    let deep = "[".repeat(600) + &"]".repeat(600);
+    assert!(matches!(text::parse(&deep), Err(Kv3Error::TooDeep)));
+    // A chain of flags nests too: an error, not a stack overflow.
+    let flags = "a:".repeat(200_000) + "1";
+    assert!(matches!(text::parse(&flags), Err(Kv3Error::TooDeep)));
+    // `-nan` reads (Rust writes NaN without a sign, other tools with one).
+    assert!(matches!(text::parse("-nan").map(|f| f.root), Ok(Value::Float(f)) if f.is_nan()));
 }

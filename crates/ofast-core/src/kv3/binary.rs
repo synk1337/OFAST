@@ -97,6 +97,14 @@ pub enum Kv3Error {
     /// Arrays nested deeper than [`MAX_DEPTH`] (protects against malicious files).
     #[error("KV3 values are nested too deeply")]
     TooDeep,
+    /// The text encoding is malformed ([`super::text::parse`]).
+    #[error("KV3 text, line {line}: {message}")]
+    Text {
+        /// 1-based line of the problem.
+        line: usize,
+        /// What was expected or found.
+        message: String,
+    },
 }
 
 /// Maximum nesting depth accepted (real files stay far below this).
