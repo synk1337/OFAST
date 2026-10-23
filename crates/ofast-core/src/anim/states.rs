@@ -72,8 +72,9 @@ pub fn weapon_action(state: i64, category: &str) -> Option<(&'static str, &'stat
 }
 
 /// The `(action, attack_type)` IDs of a gameplay state that starts no weapons-layer action ([`weapon_action`] gives
-/// `None`): `action_inspect` (1000, 1001: the state that follows every draw, one or two ticks into it, until the
-/// next action), `action_attack` + `attack_gun_primaryfire` / `_secondaryfire` / `_charge` (guns firing: 100 – 103),
+/// `None`): `action_inspect` (1000, 1001: the inspect and its last part — the inspect key is often pressed during a
+/// draw, so 1000 comes one to 28 ticks into many draws; CS2's first-person view shows the inspect then),
+/// `action_attack` + `attack_gun_primaryfire` / `_secondaryfire` / `_charge` (guns firing: 100 – 103),
 /// `action_c4_plant` (300), else `action_idle`. An action in progress ends only when its graph would leave it for
 /// these: a knife's `Deploy` leaves only for `action_idle` (or another action), so a draw followed by state 1000
 /// plays to its end — CS2 shows the Huntsman raised by the face 23 ticks after its draw began, in state 1000.

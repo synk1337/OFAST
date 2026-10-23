@@ -28,6 +28,7 @@
 //! | [`layers`] | bone masks, additive and model-space layers |
 //! | [`aim`] | CS2's aim node, rebuilt: spine, weapon, hand IK |
 //! | [`bake`] | each player's pose over a round from the demo's rig inputs |
+//! | [`viewmodel`] | each player's first-person arms and weapon over a round, from the demo's weapon states |
 //! | [`constraints`] | the model's procedural bones (twist bones, shoulder blades) from its `BoneConstraintList` |
 //!
 //! Knowledge from ValveResourceFormat (MIT; `ModelAnimation2/AnimationClip.cs`, `SkeletonRetargeter.cs`, the
@@ -45,6 +46,7 @@ pub mod locomotion;
 mod retarget;
 mod skeleton;
 pub mod states;
+pub mod viewmodel;
 pub mod weapon;
 
 pub use clip::{Clip, ClipEvent, TrackSettings};

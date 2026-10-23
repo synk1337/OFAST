@@ -236,11 +236,17 @@ pose (`anim::eval`, unit-tested on synthetic graphs, and on CS2's own in `tests/
 - clips at `time × speed` (wrapping when `m_bAllowLooping`), still poses at a value node's time, 1D and 2D blends
   with their sources in step (normalised time), selectors by condition, parameterised selectors by index or by
   weighted share (`deploy_variation` over weights 1 / 8 / 1, options without a clip skipped), duration and speed
-  scales, layer blends, referenced graphs from their root (`m_nRootNodeIdx`);
+  scales, layer blends (additive and overlay layers by their weight and bone mask, or a state machine layer's
+  current state's: `m_nLayerWeightNodeIdx`, `m_nLayerBoneMaskNodeIdx`; masks the library was given), scale nodes
+  (the masked bones' scales times the mask while the enable condition holds: the viewmodels hide the silencer this
+  way), referenced graphs from their root (`m_nRootNodeIdx`);
 - a state machine picks the first state whose entry condition holds, else `m_nDefaultStateIndex`, and follows
   "state completed" transitions once a state's length has passed — the jump into the landing blend, a defuse's
   enter into its loop;
-- conditions on IDs, floats, ranges, bools and events given as present; springs and eases pass their input through.
+- conditions on IDs, floats, ranges, bools and events given as present; float maths, constant and switched IDs;
+  springs and eases pass their input through; a state's current sync event ID has no value (no running state);
+- the same tree for a secondary skeleton (`Evaluator::secondary`): each clip's `m_secondaryAnimations` entry on that
+  skeleton (a viewmodel weapon's bolt and magazine), blended the same way, with the masks' weights for it.
 
 The bake (`anim::states`) decides each tick what the graph's inputs would be, from the demo:
 
@@ -266,7 +272,8 @@ transition between the first two that differ gives the time (`Evaluator::transit
 0.1 s, back 0.2 s; knife attacks start at once; grenade Charge → Throw 0.1 s. **An action ends when its graph
 leaves it** (`Evaluator::leaves`: the state's transitions, as CS2 runs them, for the IDs of what the gameplay state
 now says — `action_inspect` for 1000 / 1001, `action_attack` for gun fire, `action_idle`…), not when the gameplay
-state changes: a draw is followed one or two ticks later by state 1000, for which the knife graph's `Deploy` has no
+state changes: a draw is often followed a few ticks later by state 1000 (the inspect key pressed during the draw:
+[demo.md](demo.md#rig-inputs)), for which the knife graph's `Deploy` has no
 transition (it leaves only for `action_idle` or another action), so the draw plays to its end — CS2 shows the
 Huntsman raised by the face 23 ticks into its draw, and so does OFAST since (before, the draw faded out after two
 ticks). The aim lets go when the gameplay state does. Roots and their clips are loaded lazily per node
@@ -394,6 +401,102 @@ Not yet: the force scale checked against more deaths (OFAST's AWP and headshot p
 friction, bodies colliding with each other and with props that move, doors in the state the demo has them (the map
 export places them closed: one hid a body in a comparison).
 
+## First-person view (`anim::viewmodel`, `export::viewmodel`)
+
+What CS2 draws in front of the camera in a POV shot: the **viewmodel** (decision 016). Demos carry no viewmodel
+pose, only what drives it ([demo.md](demo.md#first-person-view)), so OFAST bakes it like the body.
+
+**CS2's data.** The clip skeleton `animation/skeletons/characters/viewmodel.vnmskel` (56 bones: `root_motion`,
+`wpn`, `wpnEnd`, `wpnTip`, `wpnHand_L` / `_R`, the arms and fingers) is a subset of the arms model
+`weapons/models/shared/arms/weapon_arms.vmdl` (82 bones, its other ones twist bones and a body nobody sees; its one
+mesh is never drawn), whose bind pose is the agents' to 0.003 inch. The clips (`animation/anims/viewmodel/<set>/
+<weapon>/`: `draw_ak`, `idle_ak`, `shoot1_ak`, `reload_ak`, `lookat01_ak`…) are authored in the camera's frame:
+`root_motion` stays at the origin and the AK-47's idle holds `wpn` at (14.76, −5.18, −2.48) inches (x forward, y
+left, z up), both hands exactly on their weapon targets. Each clip also animates the weapon's own skeleton
+(`animation/skeletons/weapons/ak47.vnmskel`: `weapon`, `weapon_offset`, `bolt`, `clip`, `cliprelease`, `econ`,
+`muzzle`, `trigger`), attached under `wpn` (`m_secondarySkeletons`), its root on `wpn`. The weapon's world model has
+the same bones (the AK-47's lacks `econ` and `muzzle`): CS2 draws the same model in first and third person. The
+agent model carries the first-person meshes: mesh groups `first_or_third_person_@2_#&firstperson_default` (arms and
+default gloves, `firstperson_default_gloves_arms`, plus `firstperson_sleeves`) and `…_@3_#&firstperson_hide_default_
+gloves` (the sleeves alone); glove skins have a `firstperson_default` group (mesh `viewmodel`).
+
+`animation/graphs/viewmodel/viewmodel.vnmgraph`: a speed scale (`weapon_action_speedscale`), `RightHandIK`
+(`hand_R` onto `wpnHand_R`), `LeftHandIK` (`hand_L` onto `wpnHand_L`, off while `WPN_DISABLE_LEFT_HAND_IK`, 0.2 s
+blend), and the `WPN` state machine: by `weapon_category` (Pistols, Knives, Rifles, SMG, Shotguns, MG, Grenades,
+SniperRifles, Equipment), then by `weapon_type`, a referenced graph per weapon (`viewmodel_gun.vnmgraph+ak47`,
+`viewmodel_knife.vnmgraph+m9`, `viewmodel_knife_karambit`, `viewmodel_grenade.vnmgraph+he`…: 65, which reference 61
+more, the inspects among them) — the C4
+and the Healthshot have their states in the main graph. `weapon_is_gun` is a virtual parameter: the category is not
+knife, grenade or equipment. A gun's graph (`viewmodel_gun.vnmgraph+ak47`): the root scales the `silencer` mask
+(the weapon's `silencer` bone to 0) for the M4A1-S and USP-S unless `weapon_is_silenced` or a clip's
+`WPN_SHOW_SILENCER`; a layer blend of the `actions` machine with the M249's, Negev's and XM1014's bullet layers;
+`actions`: `Attack` (twins `ATK0` / `ATK2`: `shoot1_ak`; on `action_reset` they hand over to each other in 0 s, which
+restarts a shot) and `Actions` (`SilencerOff`, `Inspect` → `viewmodel_inspects.vnmgraph+ak47`, `Reload` (partial or
+empty by `weapon_ammo`), `Idle`, `Deploying` (twins `Deploy0` / `Deploy2`), `SilencerOn`; overlay layer `EmptyPose`
+masked by `GunEmpty`, the slide back when the gun and its reserve are empty). Transitions: anything → `Deploying`
+0 s, → `Idle` 0.2 s, → `Inspect` 0.4 s from a fully blended-in `Idle` (whose state sends `WPN_STATE_IDLE`), else
+0.65 s (a duration override; from `Deploying` 0.2 s with the draw's `WPN_INSPECT_USE_DRAW_VERSION` /
+`_FIXUP_VERSION` events, when the inspect starts from the draw's own version `lookat01_draw_ak`), `Attack` →
+`Actions` 0 s into a draw, else 0.2 s (an override of its 0.1 s). Transition nodes carry such overrides
+(`m_nDurationOverrideNodeIdx`, a float value node); the evaluator applies them — in the third-person graphs the only
+one is the locomotion's way into the air: 0.3 s for a fall, 0.1 s for a jump (its stored duration is 0, which the
+body bake used until 2026-10-23). Viewmodel graphs use node types the third-person ones
+do not (parameterized selectors, float maths — `Mod` for the belts' odd and even rounds —, constant and switched
+IDs, scale nodes, bone masks on layer states, two-bone IK with bone targets, current sync event IDs); all but the
+last two are evaluated (above). The Dual Berettas keep `wpn` at the camera: `elite.vnmskel` carries each pistol on
+its own bone at a hand (`weapon_hand_l` / `_r`).
+
+**The bake** (`anim::viewmodel::bake_viewmodel`). For each tick a player is alive with a weapon the graphs know,
+the weapon's gameplay state is a **segment**: `action` and `attack_type` from the state (`weapon_action` and
+`passive_action`, as for the body: 11 draw, 50 idle, 100 / 101 shots, 800 + 801 a reload, 1000 + 1001 an inspect,
+knife attacks, grenade charges and throws, the silencer), from the tick its timestamp names. A new state or a new
+timestamp starts a new segment (each shot, each swing); idle goes on whatever the state number, 801 goes on with
+800 and 1001 with 1000. Its pose is the weapon graph evaluated that long after it began, for the arms and for the
+weapon's own bones (`Evaluator::secondary`), with `weapon_ammo` and `weapon_ammo_reserve` (when it began),
+`weapon_ammo_max` (the demo has no magazine size: the most rounds the weapon had in the round), `weapon_is_silenced`
+(read every tick: the silencer goes on in the middle of the attach clip) with the playing clip's
+`WPN_SHOW_SILENCER` (the silencer shows while screwed on or off), `weapon_is_legacy_model` (mesh group bit 1, the
+CS:GO-era model), `attack_throw_strength` and a repeatable variation. Other events of the playing clip are not
+passed: the evaluator reads entry conditions again at every time, as if the state were entered anew. It blends in
+from the segment before over the graph's transition between their states, or over the twins' when the same states
+start over (a shot after a shot: 0 s), with the events on in the old segment's clip when it began
+(`WPN_INSPECT_USE_DRAW_VERSION`) and, when the old segment had fully blended in, its states' events
+(`WPN_STATE_IDLE`). A new weapon in hand starts afresh (CS2 swaps the weapon). Then the hand IK: the right hand onto
+`wpnHand_R`, the left onto `wpnHand_L` except while the clip says `WPN_DISABLE_LEFT_HAND_IK` (easing over 0.2 s); the
+IK nodes name only the hand, so the chain is the hand's parent and grandparent (`armUpperShoulder_L` →
+`arm_lower_L` → `hand_L`; `arm_upper_L` is a helper bone under the forearm — the first version bent that and tore the
+elbow, which the review caught). Round 5 (FalleN): draws blend in over 0 s and idles over 0.2 s as the graphs say,
+grenade charge → throw at once, after the IK both hands on their targets to 0.01 inch.
+
+**Checked** (`viewmodels_follow_the_weapon_in_hand` in `tests/cs2_demo.rs`, round 1 of the local match demo): 39,331
+frames with a viewmodel, exactly while the player is alive with a weapon in hand, of that weapon; finite poses; the
+right hand on the weapon within 0.1 inch and the arms' bones at their lengths within 0.05 inch; 17,367 idle gun
+frames with `wpn` ahead of the eye, low and to the right, and the weapon's own bones; all 96 shots start a shot on
+their tick. Against CS2 (Aurora vs FURIA, de_nuke, round 5, first-person spectating, `test-data/shots/
+replay_nuke_r5_vm/`): at four kills (XANTARES's M4A1-S at FOV 60, yuurih's left-handed AK at 68, FalleN's
+left-handed Galil at 60, MAJ3R's AK at 65 with offsets 2, 2, −2) the weapon has CS2's size (muzzle to rear sight 241
+px in CS2, 247 px in OFAST at 1280 wide), angle and place, the hands on it alike; mid-reload (MAJ3R's AK 0.7 s in,
+XANTARES's M4A1-S 1 s in) and mid-inspect (woxic's karambit 2 s in, KSCERATO's inspect begun during the draw) the
+poses match too. CS2 shows the skins and the glove paint (M10), muzzle flashes and the molotov's fire (M6).
+
+**The export** (`export::viewmodel`): one glTF per agent and glove skin, `<demo>_r<round>_viewmodel_<agent>
+[_<gloves>].gltf` — the arms model's skeleton, the agent's first-person groups (`firstperson_default`, or with a glove
+skin `firstperson_hide_default_gloves` plus the gloves' `firstperson_default`) skinned by bone name, and each weapon
+the look's players hold on its own copy of its model's bones (`w<n>_<bone>`, the roots under `wpn` so that the
+model's `weapon` bone is on it, `gltf::Binding::Offset`); per player `viewmodel_<controller>` keyed on every tick:
+the arms retargeted onto the arms model with its twist constraints, the weapon in hand's bones from its secondary
+pose (scales included: the silencer), the other weapons scaled to 0, and the whole rig scaled to 0 while the player
+has no viewmodel. Round 5 of the Aurora vs FURIA demo: 3 files (13 – 16 weapons each). `examples/viewmodel_timeline.rs`
+prints the segments of a round and where the hands and `wpn` are at chosen ticks; `examples/viewmodel_probe.rs`
+prints CS2's data above.
+
+In Unreal ([replay.md](replay.md#in-unreal-import_demopy)) each viewmodel is attached to its player's camera at the
+player's offsets and hand, with Unreal's first-person rendering at the player's viewmodel FOV.
+
+Not yet: the viewmodel's sway behind fast turns, bob while running and dip on landing (CS2's client code, no
+networked state); the view punch on the camera; ironsights (AUG, SG 553: `weapon_ironsight_amount`); the staged
+reloads of the shotguns (`reload_stage`, `CNmCurrentSyncEventIDNode`); weapon skins.
+
 ## Verified
 
 - `crates/ofast-core/tests/cs2_anim.rs` (2026-10-18): **all 2735 clip files, 4309 clips with the nested ones, decode;
@@ -505,7 +608,7 @@ export places them closed: one hid a body in a comparison).
 
 ## Not done yet
 
-- **Secondary clips** (weapon parts) are decoded but not exported.
+- **Secondary clips** (weapon parts) are decoded and exported for the viewmodels, not for third-person weapons.
 - **Sync tracks** are not read (the locomotion blends share one phase instead); of the clip events only
   `WPN_IK_ACTION_ENDING` and `KnifeSwingBack` are used (not `MS_AIR_FINISHING`, the reload's `WPN_RELOAD_OUTRO`, nor
   the states' timed events such as `WPN_DISABLE_HAND_IK` in a deploy's first 0.3 s).

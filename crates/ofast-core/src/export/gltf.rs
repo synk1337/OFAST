@@ -251,6 +251,15 @@ pub enum Binding {
         /// The merged model's space → the character's model space at bind pose.
         placement: Affine,
     },
+    /// Skinned onto its own copy of its bones: its bone `b` is the character's bone `first + b` (the model's
+    /// skeleton appended to the character's, as a viewmodel carries each weapon), its vertices moved by `placement`
+    /// from the model's space to the character's model space at bind pose.
+    Offset {
+        /// The character bone of the model's bone 0.
+        first: usize,
+        /// The merged model's space → the character's model space at bind pose.
+        placement: Affine,
+    },
 }
 
 /// Writes a character as `<file_name>.gltf`: `skeleton` (the base model's bones, possibly followed by added ones),
@@ -341,6 +350,22 @@ pub fn export_character(
                         Some(&placement),
                     )?;
                 }
+                Binding::Offset { first, placement } => {
+                    let remap: Vec<u32> = part
+                        .model
+                        .bone_remap(mesh.mesh_index)
+                        .iter()
+                        .map(|&b| first as u32 + b)
+                        .collect();
+                    // A mesh without bone indices is rigid on the model's first bone (its root).
+                    add(
+                        &mut writer,
+                        name,
+                        mesh,
+                        MeshSkin::RemapOr(&remap, first as u16),
+                        Some(&placement),
+                    )?;
+                }
             }
         }
     }
@@ -375,6 +400,9 @@ pub(crate) enum MeshSkin<'a> {
     Remap(&'a [u32]),
     /// Every vertex fully on one joint.
     Bone(u16),
+    /// [`MeshSkin::Remap`] for a mesh with bone indices, else every vertex on the joint (a weapon part drawn
+    /// rigid on the model's root).
+    RemapOr(&'a [u32], u16),
 }
 
 /// CS2 clips as animations on `model`'s skeleton (see [`export_model_with_clips`]).
@@ -1288,10 +1316,12 @@ impl<'c> GltfWriter<'c> {
                 );
             }
             let skinning = match skin {
-                Some(MeshSkin::Remap(remap)) if g.joints.len() == g.positions.len() => {
+                Some(MeshSkin::Remap(remap) | MeshSkin::RemapOr(remap, _))
+                    if g.joints.len() == g.positions.len() =>
+                {
                     Some(skin_attributes(&g.joints, &g.weights, remap))
                 }
-                Some(MeshSkin::Bone(joint)) => Some((
+                Some(MeshSkin::Bone(joint) | MeshSkin::RemapOr(_, joint)) => Some((
                     vec![[joint, 0, 0, 0]; g.positions.len()],
                     vec![[255, 0, 0, 0]; g.positions.len()],
                 )),

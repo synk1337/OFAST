@@ -72,6 +72,10 @@ fn main() {
         let clip = graph.clip(i).map_or(String::new(), |(c, speed)| {
             format!("  -> {c} (speed {speed})")
         });
+        let clip = match graph.referenced_graph(i) {
+            Some(other) => format!("{clip}  => {other}"),
+            None => clip,
+        };
         println!("{i:5} {class:42} {path}{clip}");
     }
     println!("parameters: {:?}", graph.parameters);

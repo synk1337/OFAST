@@ -11,6 +11,7 @@
 //!   per agent look).
 //! - [`loadout`]: where each weapon a player carries sits on the agent, frame by frame.
 //! - [`deaths`]: each death as CS2's ragdoll of the agent, simulated and written onto its bones.
+//! - [`viewmodel`]: the players' first-person arms and weapons (one glTF per agent and glove skin).
 
 pub mod deaths;
 mod environment;
@@ -22,6 +23,7 @@ pub mod players;
 pub mod replay;
 pub mod sky;
 mod tint;
+pub mod viewmodel;
 
 use crate::model::ModelError;
 use crate::resource::ResourceError;

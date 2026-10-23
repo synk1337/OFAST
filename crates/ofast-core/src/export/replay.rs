@@ -122,6 +122,12 @@ pub fn replay_json(track: &RoundTrack, demo_name: &str) -> Json {
                     // As text: 64-bit ids do not survive JavaScript's or Python's float JSON readers everywhere.
                     "steam_id": p.steam_id.to_string(),
                     "team": p.team,
+                    // The player's own first-person view: FOV (horizontal at 4:3) and offsets (inches: right,
+                    // forward, up), as last known; the hand changes during rounds (`samples`' `left_handed`).
+                    "viewmodel": {
+                        "fov": p.viewmodel.fov,
+                        "offset": p.viewmodel.offset,
+                    },
                 }),
             );
         }
@@ -389,7 +395,7 @@ fn keyed_stretches<'t, T>(
 }
 
 /// Names of the per-player arrays in `samples.players.<controller>`, in the order [`track_values`] fills them.
-const TRACK_KEYS: [&str; 15] = [
+const TRACK_KEYS: [&str; 16] = [
     "position",
     "eye_height",
     "angles",
@@ -405,10 +411,12 @@ const TRACK_KEYS: [&str; 15] = [
     "weapon",
     "weapon_state",
     "reloading",
+    "left_handed",
 ];
 
 /// One player's values at one tick, in [`TRACK_KEYS`] order. Without a weapon in hand the three weapon values are
-/// `null`.
+/// `null`. `left_handed` is the viewmodel's hand, which players switch with a key in the middle of a round (one pro
+/// of the checked match did so 31 times in a round).
 fn track_values(p: &PlayerSample) -> [Json; TRACK_KEYS.len()] {
     let rig = &p.rig;
     let weapon = rig.weapon.as_ref();
@@ -428,6 +436,7 @@ fn track_values(p: &PlayerSample) -> [Json; TRACK_KEYS.len()] {
         weapon.map_or(Json::Null, |w| json!(w.item)),
         weapon.map_or(Json::Null, |w| json!(w.anim_state)),
         weapon.map_or(Json::Null, |w| json!(w.reloading)),
+        json!(p.viewmodel.left_handed),
     ]
 }
 
@@ -492,6 +501,7 @@ mod tests {
             appearance: Default::default(),
             weapons: Vec::new(),
             death: None,
+            viewmodel: Default::default(),
         }
     }
 
@@ -552,6 +562,10 @@ mod tests {
         assert_eq!(kill["assister"], Json::Null);
         assert_eq!(kill["headshot"], json!(true));
         assert_eq!(replay["players"][1]["steam_id"], json!("76561198000000002"));
+        assert_eq!(
+            replay["players"][1]["viewmodel"],
+            json!({ "fov": 60.0, "offset": [1.0, 1.0, -1.0] })
+        );
 
         // Rig inputs: arrays aligned with the ticks like the positions.
         let p1 = &replay["samples"]["players"]["1"];
@@ -562,6 +576,7 @@ mod tests {
         assert_eq!(p1["weapon_state"][2], json!(50));
         assert_eq!(p2["weapon"], json!([null, null, null]));
         assert_eq!(p2["reloading"][1], Json::Null);
+        assert_eq!(p1["left_handed"], json!([false, false, false]));
         assert_eq!(replay["weapons"], json!({ "7": "CAK47" }));
         // The jump before the round (tick 50) is not one of its jumps.
         assert_eq!(replay["jumps"], json!([{ "tick": 101, "player": 1 }]));

@@ -125,8 +125,9 @@ impl WeaponClips {
     }
 }
 
-/// Category state → its inner state machine → the weapon's state, under a top-level state machine.
-fn weapon_state(
+/// Category state → its inner state machine → the weapon's state, under a top-level state machine (the main graph's,
+/// or the viewmodel graph's `WPN`).
+pub(crate) fn weapon_state(
     graph: &Graph,
     machine: usize,
     ids: &dyn Fn(&str) -> Option<String>,
@@ -150,7 +151,7 @@ fn first_state_machine(graph: &Graph, node: usize, depth: usize) -> Option<usize
 }
 
 /// The graph a referenced-graph node at or under `node` plays.
-fn referenced_graph_under(graph: &Graph, node: usize) -> Option<String> {
+pub(crate) fn referenced_graph_under(graph: &Graph, node: usize) -> Option<String> {
     let mut current = node;
     for _ in 0..6 {
         if let Some(path) = graph.referenced_graph(current) {

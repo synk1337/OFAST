@@ -6,7 +6,9 @@
 //!
 //! - **Bone mask** (`.vnmskel` `m_maskDefinitions`): listed bones get their weight; every other bone takes the weight
 //!   of its nearest listed ancestor, or 0 without one. CS2's `UpperBody` lists `spine_0` and the weapon bones, so
-//!   the spine, arms, head and weapon get 1 and the pelvis and legs 0.
+//!   the spine, arms, head and weapon get 1 and the pelvis and legs 0. A mask also lists weights for the skeleton's
+//!   secondary skeletons (`m_secondaryWeightLists`): the viewmodel's `silencer` mask has every arm bone at 1 and the
+//!   weapons' `silencer` bones at 0.
 //! - **Additive layer**: a pose of deltas, applied with weight `w` (times the bone's mask weight): rotation
 //!   `base × slerp(identity, delta, w)` (the delta turns the bone in its own frame), translation and scale
 //!   `base + w × delta` (an additive pose's scales are deltas from 0). Checked on CS2's data: the additive
@@ -29,12 +31,46 @@ pub struct BoneMask(pub Vec<f32>);
 impl BoneMask {
     /// The mask named `id` in a `.vnmskel`'s `DATA` (`m_maskDefinitions[].m_ID`), resolved over its bones.
     pub fn from_skeleton(data: &Value, skeleton: &NmSkeleton, id: &str) -> Option<Self> {
-        let definition = data
-            .get("m_maskDefinitions")
+        let list = Self::definition(data, id)?.get("m_primaryWeightList")?;
+        Self::from_list(list, skeleton)
+    }
+
+    /// The mask named `id` for one of the skeleton's secondary skeletons (`skeleton_path`, a weapon's bones under a
+    /// viewmodel's `wpn`): its `m_secondaryWeightLists` entry for that skeleton, resolved over `skeleton`'s bones.
+    /// `None` when the mask has no weights for it.
+    pub fn from_secondary(
+        data: &Value,
+        id: &str,
+        skeleton_path: &str,
+        skeleton: &NmSkeleton,
+    ) -> Option<Self> {
+        let list = Self::definition(data, id)?
+            .get("m_secondaryWeightLists")
             .and_then(Value::as_array)?
             .iter()
-            .find(|d| d.get("m_ID").and_then(Value::as_str) == Some(id))?;
-        let list = definition.get("m_primaryWeightList")?;
+            .find(|l| l.get("m_skeletonName").and_then(Value::as_str) == Some(skeleton_path))?;
+        Self::from_list(list, skeleton)
+    }
+
+    /// The IDs of every mask a `.vnmskel` defines.
+    pub fn ids(data: &Value) -> Vec<String> {
+        data.get("m_maskDefinitions")
+            .and_then(Value::as_array)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|d| d.get("m_ID").and_then(Value::as_str).map(str::to_owned))
+            .collect()
+    }
+
+    fn definition<'v>(data: &'v Value, id: &str) -> Option<&'v Value> {
+        data.get("m_maskDefinitions")
+            .and_then(Value::as_array)?
+            .iter()
+            .find(|d| d.get("m_ID").and_then(Value::as_str) == Some(id))
+    }
+
+    /// A weight list (`m_boneIDs`, `m_weights`) over `skeleton`.
+    fn from_list(list: &Value, skeleton: &NmSkeleton) -> Option<Self> {
         let names = list.get("m_boneIDs").and_then(Value::as_array)?;
         let mut weights = Vec::new();
         if let Some(w) = list.get("m_weights") {

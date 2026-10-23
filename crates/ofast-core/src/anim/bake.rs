@@ -211,7 +211,7 @@ const AIM_ACTION_BLEND: f32 = 0.4;
 /// The aim's hand IK blend-in (`m_flHandIKBlendInTimeSeconds`), seconds.
 const HAND_IK_BLEND_IN: f32 = 0.3;
 /// Blend time when the graphs give none (a new action of another weapon's graph, a state without a transition).
-const DEFAULT_BLEND: f32 = 0.1;
+pub(crate) const DEFAULT_BLEND: f32 = 0.1;
 /// Fade-out of an action when the graph gives none.
 const DEFAULT_FADE_OUT: f32 = 0.2;
 /// `Defuse`: Off → Defuse and back (the main graph's `Defuse` state machine).
@@ -226,7 +226,7 @@ const FIRE_FADE: f32 = 0.1;
 /// A hit older than this (seconds) no longer flinches (CS2's flinch clips are shorter).
 const FLINCH_MAX: f32 = 2.0;
 /// A gameplay state's timestamp older than this (seconds) at the tick it is first seen is not its start.
-const STATE_TIMESTAMP_SLACK: f32 = 1.0;
+pub(crate) const STATE_TIMESTAMP_SLACK: f32 = 1.0;
 
 /// A state from a tick on, and the state it blends from.
 #[derive(Debug, Clone, Copy)]
@@ -316,7 +316,7 @@ impl ActionSegment {
 
 /// A repeatable value in 0 – 1 for a player's action at a tick (CS2 draws `deploy_variation` at random; OFAST
 /// needs the same pick on every export).
-fn variation(controller: u32, tick: u32) -> f32 {
+pub(crate) fn variation(controller: u32, tick: u32) -> f32 {
     let mut x = (u64::from(controller) << 32 | u64::from(tick)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     x ^= x >> 29;
     x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -538,7 +538,7 @@ fn crouch_blend(pair: &[Clip; 2], time: f32, crouch: f32) -> Result<Vec<Transfor
 }
 
 /// `a` towards `b` by `w` (0 – 1), bone by bone.
-fn mix(a: Vec<Transform>, b: Vec<Transform>, w: f32) -> Vec<Transform> {
+pub(crate) fn mix(a: Vec<Transform>, b: Vec<Transform>, w: f32) -> Vec<Transform> {
     if w >= 1.0 {
         return b;
     }

@@ -605,10 +605,275 @@ fn players_export_one_animation_per_player() {
         );
     }
     assert_eq!(listed, players);
+    // The first-person views: every player in one file, an animation each, every weapon on its own bones.
+    let mut in_viewmodels = HashSet::new();
+    for entry in manifest["viewmodels"].as_array().expect("viewmodels") {
+        let file = out.join(entry["file"].as_str().expect("file"));
+        let gltf: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).expect("glTF reads"))
+                .expect("JSON");
+        let entry_players = entry["players"].as_array().expect("players");
+        let names: Vec<String> = gltf["animations"]
+            .as_array()
+            .expect("animations")
+            .iter()
+            .map(|a| a["name"].as_str().expect("name").to_owned())
+            .collect();
+        for p in entry_players {
+            let controller = p.as_u64().expect("controller") as u32;
+            assert!(
+                names.contains(&format!("viewmodel_{controller}")),
+                "{names:?}"
+            );
+            assert!(
+                in_viewmodels.insert(controller),
+                "player {controller} twice"
+            );
+        }
+        let weapons = entry["weapons"].as_array().expect("weapons").len();
+        let roots = gltf["nodes"]
+            .as_array()
+            .expect("nodes")
+            .iter()
+            .filter(|n| {
+                n["name"]
+                    .as_str()
+                    .is_some_and(|s| s.starts_with('w') && s.ends_with("_weapon"))
+            })
+            .count();
+        assert_eq!(
+            roots,
+            weapons,
+            "{}: a `weapon` root per weapon",
+            file.display()
+        );
+        println!(
+            "{}: {} players, {weapons} weapons",
+            entry["file"],
+            entry_players.len()
+        );
+    }
+    assert_eq!(in_viewmodels, players);
     for warning in &report.warnings {
         println!("warning: {warning}");
     }
     std::fs::remove_dir_all(&out).ok();
+}
+
+/// Model-space positions of a pose's bones (parents before children).
+fn bone_positions(
+    pose: &[ofast_core::anim::Transform],
+    parents: &[Option<usize>],
+) -> Vec<[f32; 3]> {
+    let rotate = |q: [f32; 4], v: [f32; 3]| {
+        let u = [q[0], q[1], q[2]];
+        let cross = |a: [f32; 3], b: [f32; 3]| {
+            [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            ]
+        };
+        let t = cross(u, v).map(|c| 2.0 * c);
+        let c = cross(u, t);
+        [
+            v[0] + q[3] * t[0] + c[0],
+            v[1] + q[3] * t[1] + c[1],
+            v[2] + q[3] * t[2] + c[2],
+        ]
+    };
+    let mul = |a: [f32; 4], b: [f32; 4]| {
+        [
+            a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+            a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+            a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+            a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+        ]
+    };
+    let mut world: Vec<([f32; 4], [f32; 3])> = Vec::with_capacity(pose.len());
+    for (i, t) in pose.iter().enumerate() {
+        world.push(match parents[i] {
+            Some(p) => {
+                let (q, o) = world[p];
+                let r = rotate(q, t.translation);
+                (mul(q, t.rotation), [o[0] + r[0], o[1] + r[1], o[2] + r[2]])
+            }
+            None => (t.rotation, t.translation),
+        });
+    }
+    world.into_iter().map(|(_, t)| t).collect()
+}
+
+/// The first-person bake (M5) follows the demo over round 1: a viewmodel exactly while the player is alive with a
+/// weapon in hand, of that weapon; finite poses; the right hand on the weapon (the IK); at idle the weapon ahead of
+/// the camera, low and to the right, with its own bones; and every shot the demo records (a new timestamp of
+/// gameplay state 100 / 101) starts a shot on its tick.
+#[test]
+fn viewmodels_follow_the_weapon_in_hand() {
+    use ofast_core::anim::viewmodel::{bake_viewmodel, viewmodel_timeline};
+    use ofast_core::content::Content;
+    use ofast_core::export::players::load_player_rig;
+    use ofast_core::export::viewmodel::load_viewmodel_rig;
+    let Some((_, data)) = load() else { return };
+    let Some(install) = Cs2Install::locate() else {
+        println!("SKIPPED: no CS2 install");
+        return;
+    };
+    let content = Content::game(&install).expect("archives open");
+    let track = track_round(&data, 1).expect("round 1");
+    let player_rig = load_player_rig(&content, &track).expect("rig");
+    let weapons: Vec<(u32, String, String)> = player_rig
+        .upper
+        .as_ref()
+        .expect("weapon names")
+        .weapons
+        .iter()
+        .map(|(&item, w)| (item, w.weapon.clone(), w.category.clone()))
+        .collect();
+    let mut warnings = Vec::new();
+    let rig = load_viewmodel_rig(&content, &weapons, &mut warnings).expect("viewmodel rig");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        rig.weapons.len(),
+        weapons.len(),
+        "every weapon has a viewmodel"
+    );
+    let bone = |name: &str| rig.skeleton.find(name).expect("bone");
+    let (wpn, hand, target) = (bone("wpn"), bone("hand_R"), bone("wpnHand_R"));
+    // The arms' bones (shoulder → elbow → hand on each side) keep their lengths: the hand IK bends the arm, it does
+    // not stretch or tear it.
+    let parent = |b: usize| rig.skeleton.parents[b].expect("parent");
+    let arm_links: Vec<(usize, usize)> = ["hand_L", "hand_R"]
+        .iter()
+        .flat_map(|h| {
+            let hand = bone(h);
+            [(parent(hand), hand), (parent(parent(hand)), parent(hand))]
+        })
+        .collect();
+    let reference = bone_positions(&rig.skeleton.reference, &rig.skeleton.parents);
+    let length = |p: &[[f32; 3]], (a, b): (usize, usize)| {
+        (0..3)
+            .map(|k| (p[a][k] - p[b][k]).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    };
+    let fps = 1.0 / track.tick_interval;
+    let frames_at = ofast_core::anim::bake::frame_samples(&track, fps);
+    let controllers: HashSet<u32> = track
+        .samples
+        .iter()
+        .flat_map(|s| &s.players)
+        .map(|p| p.controller)
+        .collect();
+    let (mut shown, mut idles, mut shots) = (0usize, 0usize, 0usize);
+    for &controller in &controllers {
+        let frames = bake_viewmodel(&track, controller, &rig, fps).expect("bake");
+        assert_eq!(frames.len(), frames_at.len());
+        for (frame, &(tick, index)) in frames.iter().zip(&frames_at) {
+            let held = track.samples[index]
+                .players
+                .iter()
+                .find(|p| p.controller == controller && p.alive)
+                .and_then(|p| p.rig.weapon.as_ref());
+            let Some(frame) = frame else {
+                assert!(
+                    held.is_none(),
+                    "player {controller} at {tick}: no viewmodel"
+                );
+                continue;
+            };
+            let held = held.expect("a weapon in hand");
+            assert_eq!(frame.item, held.item, "player {controller} at {tick}");
+            shown += 1;
+            assert!(
+                frame
+                    .arms
+                    .iter()
+                    .chain(frame.weapon.iter().flatten())
+                    .all(|t| t
+                        .translation
+                        .iter()
+                        .chain(&t.rotation)
+                        .all(|v| v.is_finite())),
+                "player {controller} at {tick}: non-finite pose"
+            );
+            let at = bone_positions(&frame.arms, &rig.skeleton.parents);
+            let gap = (0..3)
+                .map(|k| (at[hand][k] - at[target][k]).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            assert!(
+                gap < 0.1,
+                "player {controller} at {tick}: right hand {gap} in off the weapon"
+            );
+            for &link in &arm_links {
+                let (now, rest) = (length(&at, link), length(&reference, link));
+                assert!(
+                    (now - rest).abs() < 0.05,
+                    "player {controller} at {tick}: arm bone {link:?} {now} in long, {rest} at rest"
+                );
+            }
+            // A gun long idle (half a second into state 50): ahead, to the right and below the eye, with its bones.
+            // The Dual Berettas keep `wpn` at the camera and carry each pistol on its own bone at a hand
+            // (`weapon_hand_l` / `_r` of `elite.vnmskel`).
+            let idle = held.anim_state == 50
+                && held
+                    .state_tick
+                    .is_some_and(|s| (tick - s as f32) * track.tick_interval > 0.5);
+            let weapon = &rig.weapons[&held.item];
+            if idle
+                && weapon.weapon != "weapon_elite"
+                && !matches!(
+                    weapon.category.as_str(),
+                    "weapon_category_grenade" | "weapon_category_equipment"
+                )
+            {
+                let w = at[wpn];
+                assert!(
+                    (4.0..30.0).contains(&w[0]) && w[1] < 2.0 && w[2] < 2.0,
+                    "player {controller} at {tick}: {} at {w:?}",
+                    weapon.weapon
+                );
+                if let Some((_, skeleton)) = &weapon.skeleton {
+                    assert_eq!(
+                        frame.weapon.as_ref().map(Vec::len),
+                        Some(skeleton.bones.len())
+                    );
+                }
+                idles += 1;
+            }
+        }
+        // Every shot's tick starts a shot.
+        let lines = viewmodel_timeline(&track, controller, &rig).expect("timeline");
+        let mut last: Option<(u32, Option<u32>)> = None;
+        for sample in &track.samples {
+            let Some(w) = sample
+                .players
+                .iter()
+                .find(|p| p.controller == controller && p.alive)
+                .and_then(|p| p.rig.weapon.as_ref())
+            else {
+                last = None;
+                continue;
+            };
+            let shot = matches!(w.anim_state, 100 | 101).then_some((w.item, w.state_tick));
+            if let Some((_, Some(stamp))) = shot
+                && shot != last
+                && stamp + 2 >= sample.tick
+            {
+                assert!(
+                    lines
+                        .iter()
+                        .any(|(t, l)| *t == stamp && l.contains("attack_gun")),
+                    "player {controller}: no shot at {stamp}"
+                );
+                shots += 1;
+            }
+            last = shot;
+        }
+    }
+    println!("{shown} frames with a viewmodel, {idles} idle gun frames checked, {shots} shots");
+    assert!(shown > 0 && idles > 0 && shots > 0);
 }
 
 /// The bake's decisions (M4.4c) follow the demo's own events in every round up to 5: each knife attack and grenade

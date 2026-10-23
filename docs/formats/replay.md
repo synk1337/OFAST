@@ -14,8 +14,8 @@ The map must be imported first (`import_map.py`): the sequence is built in its l
 ## Contents (version 1)
 
 The rig inputs, `weapons`, `jumps` and `landings` were added in M4.3 (2026-10-18), `dropped_weapons` and `doors`
-in M4.6 (2026-10-23), without changing the version: they are new keys, so readers of older files keep working; check for
-them before use. Everything is in CS2's own
+in M4.6 (2026-10-23), the players' `viewmodel` settings and the `left_handed` track in M5 (2026-10-23), without
+changing the version: they are new keys, so readers of older files keep working; check for them before use. Everything is in CS2's own
 units and axes: Source units (1 unit = 1 inch), x/y/z as in the game, angles in
 degrees (pitch positive = looking down, yaw counter-clockwise from +x, −180..180).
 
@@ -25,10 +25,10 @@ degrees (pitch positive = looking down, yaw counter-clockwise from +x, −180..1
 | `demo`, `map`, `round` | demo file name (without `.dem`), map name from the demo header, round number |
 | `tick_interval` | seconds per tick (1/64) |
 | `start_tick`, `freeze_end_tick`, `end_tick` | round start (freeze time begins), freeze time end (`round_freeze_end`), last tick of the round |
-| `players` | `controller` (entity index = player slot + 1), `name`, `steam_id` (text: 64-bit ids lose digits in float JSON readers), `team` (2 T, 3 CT) |
+| `players` | `controller` (entity index = player slot + 1), `name`, `steam_id` (text: 64-bit ids lose digits in float JSON readers), `team` (2 T, 3 CT), `viewmodel`: the player's own first-person settings as last known, `fov` (`viewmodel_fov`, horizontal at 4:3) and `offset` (`viewmodel_offset_x` / `_y` / `_z`: inches right, forward, up) ([demo.md](demo.md#first-person-view)) |
 | `samples.ticks` | every tick of the round with entity updates (one per tick in practice) |
 | `samples.players.<controller>` | arrays aligned with `samples.ticks`: `position` (feet, [x, y, z], 0.01 unit), `eye_height` (eye above the feet, networked view offset z), `angles` ([pitch, yaw], 0.01°), `alive`, and the rig inputs (below); `null` where the player had no pawn |
-| rig inputs (per tick, same arrays) | `body_yaw` (the way the model faces, 0.01°), `velocity` ([x, y, z] units/s, 0.1), `on_ground`, `duck` (crouch amount 0 – 1, 0.001), `walking`, `scoped`, `defusing`, `ladder`, `weapon` (item definition index), `weapon_state` (weapon animation state), `reloading`; the three weapon values are `null` with nothing in hand. Fields and values: [demo.md, Rig inputs](demo.md#rig-inputs) |
+| rig inputs (per tick, same arrays) | `body_yaw` (the way the model faces, 0.01°), `velocity` ([x, y, z] units/s, 0.1), `on_ground`, `duck` (crouch amount 0 – 1, 0.001), `walking`, `scoped`, `defusing`, `ladder`, `weapon` (item definition index), `weapon_state` (weapon animation state), `reloading`; the three weapon values are `null` with nothing in hand. Fields and values: [demo.md, Rig inputs](demo.md#rig-inputs). And `left_handed`: the viewmodel in the left hand (players flip it with a key during rounds) |
 | `weapons` | item definition index (as text) → weapon entity class seen in the round, e.g. `{"7": "CAK47", "42": "CKnife"}` |
 | `jumps`, `landings` | `{tick, player}` (controller) for every jump / landing of the round, from the pawns' last jump and landing ticks |
 | `kills` | `player_death` events: `tick`, `victim`, `attacker`, `assister` (controllers; `null` = nobody, e.g. fall damage), `weapon`, and the kill-feed flags `headshot`, `penetrated`, `noscope`, `thrusmoke`, `attackerblind`, `assistedflash`, `attackerinair` |
@@ -56,6 +56,7 @@ one glTF per look (agent model, mesh groups, glove skin), each with an animation
 | `agents[].weapons` | the weapon bones in order (`ofast_weapon_0`, `_1`, …): `model`, `mesh_groups`, `instance` (a second copy carried at once) |
 | `agents[].ragdolls` | controller (as text) → `[first tick, last tick]` of each of that player's deaths the animation holds as a ragdoll (from the death to the respawn or the round's end) |
 | `dropped_weapons` | one glTF per look of the weapons lying in the world: `file` (`<demo>_r<round>_dropped_<model file stem>_<mesh groups shown>.gltf`, the weapon model alone and rigid: a static mesh in Unreal), `model` (path), `model_id` as the replay names it, and `mesh_groups`: every mask the replay uses that shows this file (grenades send every bit, meaning the model's default groups) |
+| `viewmodels` | the players' first-person views ([animation.md](animation.md#first-person-view-animviewmodel-exportviewmodel)), one glTF per agent and glove skin: `file` (`<demo>_r<round>_viewmodel_<agent>[_<gloves>].gltf`), `model` (the agent), `gloves` (the glove model or `null`), `players` (animations `viewmodel_<controller>`), `weapons` (`model`, `mesh_groups` of each weapon in it, in the order of their bones `w0_…`, `w1_…`) |
 
 Checked: the kills of all 20 rounds of a real match equal demoparser2's (`kills_match_demoparser2`); positions and
 angles are the round tracks already checked against demoparser2 and CS2 (`docs/formats/demo.md`); in Unreal each
@@ -71,6 +72,7 @@ verification screenshots).
 | Player proxy | without the agents: engine cylinder scaled to CS2's 32 × 32 × 72-unit hull, CT blue / T orange, a grey visor at the eyes showing where the player faces; position (x, −y, z) × 2.54 cm, yaw → −yaw (eye yaw) |
 | Visibility | hidden while dead or without a pawn, and while the camera looks through that player's own eyes (CS2 does not draw your own body in first person either) |
 | First-person cameras | one per player at feet + eye height, aimed with Rotator(pitch = −pitch, yaw = −yaw), CS2's default field of view (90° at 4:3 = 106.26° horizontally at 16:9) |
+| Viewmodels | with the agents manifest's `viewmodels`: per player a skeletal mesh actor (`VM <name>`) attached to their first-person camera, playing `viewmodel_<controller>`, its transform track keyed at the player's offsets (relative location (forward, right, up) × 2.54 cm) and mirrored (scale y −1, the sideways offset negated) from every tick `left_handed` turns on; `FirstPersonPrimitiveType` First Person and no shadows, the camera's `FirstPersonFieldOfView` = the player's `viewmodel_fov` at 16:9 (2·atan(tan(fov/2)·(16/9)/(4/3)): 60 → 75.18°, 68 → 83.93°); shown only while the camera cuts look through that player's eyes and they are alive |
 | Doors | each door of the replay's `doors` that is not closed all round: the level's own door actor (a static mesh actor whose origin is within 2 cm of the door's closed position and whose rotation is its closed rotation; none: logged, not swung) keyed with the door's rotation, Euler-filtered as the weapons; every entry with the same closed position drives the same actor, which keeps its last rotation when the entity leaves the demo (a broken door stays). The sequence binds the level's actors: re-importing the map (`import_map.py`) makes new ones, so run `import_demo.py` again after it |
 | Dropped weapons | with the agents manifest's `dropped_weapons`: one static mesh actor per stretch of the replay's `dropped_weapons`, keyed on the stretch's keys (Rotator(roll = roll, pitch = −pitch, yaw = −yaw); each triple turned to the nearer of its two equivalent Euler forms, so a gun tumbling through the vertical never spins a full turn between two ticks in slow motion), shown from its first tick to its last |
 | Camera cuts | each kill in turn: the killer's camera from the previous cut until 0.5 s after the kill (the last one to the end of the round) |
@@ -86,7 +88,9 @@ instance CS2's Chase Cam behind a spectated player), so both show the same frame
 every other player, also one whose own camera cut is running then (the sequence otherwise hides the player the cut
 looks through). To compare with CS2: `demo_pause`, `demo_gototick <tick − 64>`, then `demo_step_tick 64` (seeking
 alone can leave poses stale), spectate the player (`spec_player "<name>"` for ASCII names, or the demo bar's player
-arrows; `spec_player_by_accountid` does nothing in demo playback), Steam's F12.
+arrows; `spec_player_by_accountid` does nothing in demo playback), Steam's F12. Once (2026-10-23), two shots of a
+run showed the sequence at another time (a POV camera at the round's start) and came out right in the next run:
+check a shot that disagrees by rendering it again before looking for a bug.
 
 A player whose death the players export baked as a ragdoll (`ragdolls` in the agents manifest) stays visible over
 the death's ticks: the body falls and lies there to the end of the round

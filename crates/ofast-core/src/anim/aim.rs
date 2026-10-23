@@ -335,28 +335,54 @@ impl AimBones {
     }
 
     fn model(&self, pose: &[Transform], bone: usize) -> Rigid {
-        let local = Rigid::of(&pose[bone]);
-        match self.parents.get(bone).copied().flatten() {
-            Some(p) => self.model(pose, p).then(local),
-            None => local,
-        }
+        model_of(pose, &self.parents, bone)
     }
 
     /// Sets a bone's local transform from a wanted model-space transform.
     fn set_model(&self, pose: &mut [Transform], bone: usize, model: Rigid) {
-        let parent = self
-            .parents
-            .get(bone)
-            .copied()
-            .flatten()
-            .map(|p| self.model(pose, p));
-        let local = match parent {
-            Some(p) => p.inverse().then(model),
-            None => model,
-        };
-        pose[bone].rotation = local.q;
-        pose[bone].translation = local.t;
+        set_model_of(pose, &self.parents, bone, model);
     }
+}
+
+/// A bone's model-space transform in `pose`.
+fn model_of(pose: &[Transform], parents: &[Option<usize>], bone: usize) -> Rigid {
+    let local = Rigid::of(&pose[bone]);
+    match parents.get(bone).copied().flatten() {
+        Some(p) => model_of(pose, parents, p).then(local),
+        None => local,
+    }
+}
+
+/// Sets a bone's local transform in `pose` from a wanted model-space transform.
+fn set_model_of(pose: &mut [Transform], parents: &[Option<usize>], bone: usize, model: Rigid) {
+    let parent = parents
+        .get(bone)
+        .copied()
+        .flatten()
+        .map(|p| model_of(pose, parents, p));
+    let local = match parent {
+        Some(p) => p.inverse().then(model),
+        None => model,
+    };
+    pose[bone].rotation = local.q;
+    pose[bone].translation = local.t;
+}
+
+/// CS2's `CNmTwoBoneIKNode` with a bone target (the viewmodel graph's `RightHandIK` and `LeftHandIK`): bends the arm
+/// `[upper, lower, hand]` so that the hand reaches bone `target` (position and rotation, blended from where it is by
+/// `weight`), as [`aim`] puts the hands on a third-person weapon.
+pub fn reach_bone(
+    pose: &mut [Transform],
+    parents: &[Option<usize>],
+    arm: [usize; 3],
+    target: usize,
+    weight: f32,
+) {
+    if weight <= 0.0 {
+        return;
+    }
+    let goal = model_of(pose, parents, target);
+    two_bone_ik_chain(pose, parents, arm, goal, weight);
 }
 
 /// Aims `pose` (clip-skeleton bones, relative to their parents) for `input`. Does nothing for a weapon the aim does
@@ -555,12 +581,24 @@ fn head_look_at(pose: &mut [Transform], bones: &AimBones, target: [f32; 3], t: f
 /// gives the hand the target's rotation: the elbow angle from the law of cosines in the arm's current bending plane,
 /// then the whole arm turned onto the target.
 fn two_bone_ik(pose: &mut [Transform], bones: &AimBones, side: usize, target: Rigid, weight: f32) {
-    let (upper, lower, hand) = (
+    let arm = [
         bones.arm_upper[side],
         bones.arm_lower[side],
         bones.hand[side],
-    );
-    let a = bones.model(pose, upper);
+    ];
+    two_bone_ik_chain(pose, &bones.parents, arm, target, weight);
+}
+
+/// [`two_bone_ik`] on any arm `[upper, lower, hand]` of a skeleton with these parents.
+fn two_bone_ik_chain(
+    pose: &mut [Transform],
+    parents: &[Option<usize>],
+    [upper, lower, hand]: [usize; 3],
+    target: Rigid,
+    weight: f32,
+) {
+    let model = |pose: &[Transform], bone: usize| model_of(pose, parents, bone);
+    let a = model(pose, upper);
     let b = a.then(Rigid::of(&pose[lower]));
     let c = b.then(Rigid::of(&pose[hand]));
     let goal = Rigid {
@@ -594,8 +632,8 @@ fn two_bone_ik(pose: &mut [Transform], bones: &AimBones, side: usize, target: Ri
     let swing = from_to(sub(c_after.t, a.t), sub(goal.t, a.t));
     let mut upper_model = a;
     upper_model.q = normalize_quat(quat_mul(swing, a.q));
-    bones.set_model(pose, upper, upper_model);
-    let lower_after = bones.model(pose, upper).then(Rigid {
+    set_model_of(pose, parents, upper, upper_model);
+    let lower_after = model(pose, upper).then(Rigid {
         q: normalize_quat(quat_mul(conjugate(a.q), lower_model.q)),
         t: pose[lower].translation,
     });
@@ -604,8 +642,8 @@ fn two_bone_ik(pose: &mut [Transform], bones: &AimBones, side: usize, target: Ri
         q: normalize_quat(quat_mul(swing, lower_model.q)),
         t: lower_after.t,
     };
-    bones.set_model(pose, lower, lower_wanted);
-    let lower_now = bones.model(pose, lower);
+    set_model_of(pose, parents, lower, lower_wanted);
+    let lower_now = model(pose, lower);
     let hand_local = lower_now.inverse().then(goal);
     pose[hand].rotation = hand_local.q;
 }

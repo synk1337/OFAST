@@ -89,6 +89,34 @@ pub struct PlayerSample {
     /// What killed the player, while dead (`None` while alive): the pawn's ragdoll damage fields, set on the death
     /// tick and kept until the next death.
     pub death: Option<Death>,
+    /// How the player set up their first-person view (field of view, offsets, hand).
+    pub viewmodel: ViewmodelSettings,
+}
+
+/// A player's own first-person view settings: CS2's `viewmodel_fov`, `viewmodel_offset_x` / `_y` / `_z` and
+/// `cl_righthand`, which the pawn networks (`m_flViewmodelFOV`, `m_flViewmodelOffsetX` / `Y` / `Z`,
+/// `m_bLeftHanded`) so that spectators see the viewmodel as the player does (`docs/formats/demo.md`, "First-person
+/// view"). Pawns that send none read as CS2's defaults.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewmodelSettings {
+    /// The viewmodel's field of view, degrees, horizontal at 4:3 like CS2's world FOV (CS2 allows 60 – 68).
+    pub fov: f32,
+    /// How far the viewmodel is moved from where its clips put it, inches, in view space: x to the right, y
+    /// forward, z up (CS2 allows −2 … 2.5 for x, −2 … 2 for y and z).
+    pub offset: [f32; 3],
+    /// Drawn in the left hand (mirrored).
+    pub left_handed: bool,
+}
+
+impl Default for ViewmodelSettings {
+    /// CS2's defaults: FOV 60, offsets (1, 1, −1), right-handed.
+    fn default() -> Self {
+        Self {
+            fov: 60.0,
+            offset: [1.0, 1.0, -1.0],
+            left_handed: false,
+        }
+    }
 }
 
 /// What killed a player: what CS2's client starts the ragdoll from (it simulates the ragdoll itself; demos carry no
@@ -249,6 +277,10 @@ pub struct ActiveWeapon {
     pub throw_strength: f32,
     /// Rounds in the magazine (`m_iClip1`); `None` for weapons without one (knives, grenades read −1).
     pub clip: Option<u32>,
+    /// Rounds left besides the magazine (`m_pReserveAmmo[0]`); `None` for weapons without reserve ammunition.
+    pub reserve: Option<u32>,
+    /// The silencer is on (`m_bSilencerOn`: the M4A1-S and USP-S, while screwed on).
+    pub silenced: bool,
 }
 
 /// `m_fFlags` bit: the pawn stands on something.
@@ -348,7 +380,49 @@ struct Paths {
     rig: RigPaths,
     appearance: AppearancePaths,
     death: DeathPaths,
+    viewmodel: ViewmodelPaths,
     doors: Option<DoorPaths>,
+}
+
+/// Field paths of a pawn's viewmodel settings. Each is optional (older demos may lack them).
+#[derive(Debug, Default)]
+struct ViewmodelPaths {
+    fov: Option<FieldPath>,
+    offset: [Option<FieldPath>; 3],
+    left_handed: Option<FieldPath>,
+}
+
+impl ViewmodelPaths {
+    fn find(serializers: &Serializers) -> Self {
+        let pawn = serializers.by_name("CCSPlayerPawn");
+        let path = |field: &str| pawn.and_then(|s| serializers.path_of(s, field));
+        Self {
+            fov: path("m_flViewmodelFOV"),
+            offset: ["X", "Y", "Z"].map(|axis| path(&format!("m_flViewmodelOffset{axis}"))),
+            left_handed: path("m_bLeftHanded"),
+        }
+    }
+
+    /// The pawn's settings; each one never sent (or missing from the demo) is CS2's default.
+    fn read(&self, pawn: &Entity) -> ViewmodelSettings {
+        let default = ViewmodelSettings::default();
+        let float = |path: &Option<FieldPath>, fallback: f32| {
+            path.as_ref()
+                .and_then(|p| pawn.get(p))
+                .and_then(FieldValue::as_f32)
+                .unwrap_or(fallback)
+        };
+        ViewmodelSettings {
+            fov: float(&self.fov, default.fov),
+            offset: [0, 1, 2].map(|k| float(&self.offset[k], default.offset[k])),
+            left_handed: self
+                .left_handed
+                .as_ref()
+                .and_then(|p| pawn.get(p))
+                .and_then(FieldValue::as_bool)
+                .unwrap_or(default.left_handed),
+        }
+    }
 }
 
 /// Field paths of a rotating door (`CPropDoorRotating`), when the demo has the class.
@@ -473,6 +547,9 @@ struct WeaponPaths {
     reloading: Option<FieldPath>,
     throw_strength: Option<FieldPath>,
     clip: Option<FieldPath>,
+    /// The reserve ammunition array (element 0 one level deeper).
+    reserve: Option<FieldPath>,
+    silenced: Option<FieldPath>,
     model: Option<FieldPath>,
     mesh_groups: Option<FieldPath>,
     /// Who carries it (`m_hOwnerEntity`) and what it is attached to (`CBodyComponent.m_hParent`).
@@ -508,6 +585,8 @@ impl RigPaths {
                     reloading: field("m_bInReload"),
                     throw_strength: field("m_flThrowStrength"),
                     clip: field("m_iClip1"),
+                    reserve: field("m_pReserveAmmo"),
+                    silenced: field("m_bSilencerOn"),
                     model: field(MODEL_FIELD),
                     mesh_groups: field(MESH_GROUPS_FIELD),
                     owner: field("m_hOwnerEntity"),
@@ -584,6 +663,7 @@ impl Paths {
             rig: RigPaths::find(serializers, classes),
             appearance: AppearancePaths::find(serializers),
             death: DeathPaths::find(serializers),
+            viewmodel: ViewmodelPaths::find(serializers),
             doors: DoorPaths::find(serializers),
         })
     }
@@ -857,6 +937,7 @@ fn read_players(parser: &DemoParser<'_>, paths: &Paths) -> Vec<PlayerSample> {
             appearance: read_appearance(&paths.appearance, pawn),
             weapons: read_weapons(parser, paths, pawn),
             death: (!alive).then(|| read_death(&paths.death, pawn)),
+            viewmodel: paths.viewmodel.read(pawn),
         });
     }
     players
@@ -1115,6 +1196,16 @@ fn read_rig(parser: &DemoParser<'_>, paths: &RigPaths, pawn: &Entity) -> RigInpu
                 clip: value(&fields.clip)
                     .and_then(FieldValue::as_i64)
                     .and_then(|c| u32::try_from(c).ok()),
+                reserve: fields
+                    .reserve
+                    .as_ref()
+                    .and_then(|p| p.child(0))
+                    .and_then(|p| w.get(&p))
+                    .and_then(FieldValue::as_i64)
+                    .and_then(|c| u32::try_from(c).ok()),
+                silenced: value(&fields.silenced)
+                    .and_then(FieldValue::as_bool)
+                    .unwrap_or(false),
             })
         });
     RigInputs {
@@ -1285,6 +1376,8 @@ mod tests {
                         send_node: Some("m_EconGloves"),
                         ..f("m_iItemDefinitionIndex", "uint16")
                     },
+                    // Field 11: the viewmodel's field of view (the offsets are never sent: CS2's defaults).
+                    f("m_flViewmodelFOV", "float32"),
                 ],
             ),
             (
@@ -1417,6 +1510,8 @@ mod tests {
     const GLOVES: u64 = 5030;
     /// Mesh groups of the synthetic AK-47 (its CS:GO-era model).
     const AK_GROUPS: u64 = 2;
+    /// The synthetic player's `viewmodel_fov`.
+    const VIEWMODEL_FOV: f32 = 68.0;
 
     fn agent_model() -> u64 {
         crate::resource::resource_id("agents/models/ctm_sas/ctm_sas.vmdl")
@@ -1461,6 +1556,7 @@ mod tests {
                 &[9, 1],
                 &[9, 1, 0],
                 &[10],
+                &[11],
             ]);
         }
         write_paths(w, &paths);
@@ -1490,7 +1586,8 @@ mod tests {
                 .varint((3 << 14) | u64::from(WEAPON)) // m_hActiveWeapon: serial 3, entity WEAPON
                 .varint(1) // m_hMyWeapons: one weapon…
                 .varint((3 << 14) | u64::from(WEAPON)) // … the same AK-47
-                .varint(GLOVES); // m_EconGloves.m_iItemDefinitionIndex
+                .varint(GLOVES) // m_EconGloves.m_iItemDefinitionIndex
+                .bits(u64::from(VIEWMODEL_FOV.to_bits()), 32); // m_flViewmodelFOV
         }
     }
 
@@ -1705,6 +1802,18 @@ mod tests {
                     ..ActiveWeapon::default()
                 }),
                 ..RigInputs::default()
+            }
+        );
+        // Viewmodel settings: CS2's defaults until sent, then the FOV sent (the offsets never were).
+        assert_eq!(
+            track.samples[1].players[0].viewmodel,
+            ViewmodelSettings::default()
+        );
+        assert_eq!(
+            last.viewmodel,
+            ViewmodelSettings {
+                fov: VIEWMODEL_FOV,
+                ..ViewmodelSettings::default()
             }
         );
         // Appearance and weapons: nothing until sent, then the agent and the AK-47 by resource id.

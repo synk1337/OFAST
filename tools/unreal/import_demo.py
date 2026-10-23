@@ -31,6 +31,10 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
   stays);
 - per player: a first-person camera at the eye (feet + the networked eye height), aimed along pitch and yaw, with
   CS2's default field of view (90 degrees at 4:3);
+- per player, when the export wrote their first-person view (the agents manifest's `viewmodels`): the viewmodel
+  (arms and the weapon in hand, `viewmodel_<controller>` baked from the demo's weapon states) on that camera at the
+  player's own viewmodel offsets, drawn with Unreal's first-person rendering at the player's viewmodel FOV, shown
+  only while the camera looks through the player's eyes;
 - per stretch a weapon lay in the world (the replay's `dropped_weapons`: a dead player's gun, a weapon dropped for
   a teammate), its model (the agents manifest's `dropped_weapons` glTFs) moved as the demo has it, with its full
   rotation (Rotator(roll=roll, pitch=-pitch, yaw=-yaw)), shown from the tick it was let go to the tick before it
@@ -464,10 +468,8 @@ def angle_between(a, b):
 def import_agents(replay):
     """Imports the players' animated agents written next to the replay by `ofast export-demo --players`, if any: the
     files <demo>_r<round>.agents.json lists, one per agent look. Returns controller -> (skeletal mesh,
-    AnimSequence, the [first tick, last tick] of each death the animation holds as a ragdoll: the body stays visible
-    there); Interchange names each AnimSequence <file><animation>, so the controller is read from its
-    `player_<controller>` ending (shortened in the middle when long, so only `_<controller>` is sure to remain) —
-    except in a file with a single animation, which it names <file>_Anim."""
+    AnimSequence `player_<controller>` (import_player_file), the [first tick, last tick] of each death the animation
+    holds as a ragdoll: the body stays visible there)."""
     loaded = agents_manifest(replay)
     if loaded is None:
         return {}
@@ -477,18 +479,7 @@ def import_agents(replay):
     for entry in manifest["agents"]:
         path = os.path.join(folder, entry["file"])
         look = entry["file"][len(base) + 1:-len(".gltf")]  # <agent>_<mesh groups>[_<gloves>]
-        objects = import_gltf(replay, path, look, pipelines)
-        meshes = [o for o in objects if isinstance(o, unreal.SkeletalMesh)]
-        animations = {}
-        sequences = [o for o in objects if isinstance(o, unreal.AnimSequence)]
-        for o in sequences:
-            # Interchange shortens long names in the middle ("aurora-_layer_10"): only the trailing number is safe.
-            match = re.search(r"_(\d+)$", o.get_name())
-            if match:
-                animations[int(match.group(1))] = o
-        # A file with one animation gets it named <file>_Anim instead (a look worn by one player only).
-        if not animations and len(sequences) == 1 and len(entry["players"]) == 1:
-            animations[entry["players"][0]] = sequences[0]
+        meshes, animations = import_player_file(replay, path, look, pipelines, entry["players"])
         if not meshes:
             log("agents %s: no skeletal mesh in %s" % (look, path))
             continue
@@ -506,6 +497,100 @@ def import_agents(replay):
             if controller in animations:
                 agents[controller] = (meshes[0], animations[controller], ragdolls.get(str(controller), []))
     return agents
+
+
+def import_player_file(replay, path, look, pipelines, players):
+    """Imports one glTF with an animation per player (an agent look, a viewmodel look). Returns (skeletal meshes,
+    controller -> AnimSequence). Interchange names each AnimSequence <file><animation>, shortened in the middle when
+    long ("aurora-_layer_10"): only the trailing `_<controller>` is sure to remain — except in a file with a single
+    animation, which it names <file>_Anim (a look worn by one player only)."""
+    objects = import_gltf(replay, path, look, pipelines)
+    meshes = [o for o in objects if isinstance(o, unreal.SkeletalMesh)]
+    sequences = [o for o in objects if isinstance(o, unreal.AnimSequence)]
+    animations = {}
+    for o in sequences:
+        match = re.search(r"_(\d+)$", o.get_name())
+        if match:
+            animations[int(match.group(1))] = o
+    if not animations and len(sequences) == 1 and len(players) == 1:
+        animations[players[0]] = sequences[0]
+    return meshes, animations
+
+
+def import_viewmodels(replay):
+    """Imports the players' first-person views (the agents manifest's `viewmodels`: one glTF per agent and glove
+    skin, with an animation `viewmodel_<controller>` per player). Returns controller -> (skeletal mesh,
+    AnimSequence)."""
+    loaded = agents_manifest(replay)
+    if loaded is None:
+        return {}
+    folder, base, manifest = loaded
+    pipelines = character_pipelines(manifest.get("fps", 30))
+    viewmodels = {}
+    for entry in manifest.get("viewmodels", []):
+        path = os.path.join(folder, entry["file"])
+        look = entry["file"][len(base) + 1:-len(".gltf")]  # viewmodel_<agent>[_<gloves>]
+        meshes, animations = import_player_file(replay, path, look, pipelines, entry["players"])
+        if not meshes:
+            log("viewmodel %s: no skeletal mesh in %s" % (look, path))
+            continue
+        log("viewmodel %s: %s with %d player animations, %d weapons"
+            % (look, meshes[0].get_name(), len(animations), len(entry.get("weapons", []))))
+        for controller in entry["players"]:
+            if controller in animations:
+                viewmodels[controller] = (meshes[0], animations[controller])
+    return viewmodels
+
+
+def viewmodel_fov_16_9(fov):
+    """CS2's viewmodel_fov is horizontal at 4:3 like its world FOV: the horizontal FOV of a 16:9 picture."""
+    return math.degrees(2 * math.atan(math.tan(math.radians(fov / 2)) * (16 / 9) / (4 / 3)))
+
+
+def spawn_viewmodel(player, mesh, camera):
+    """The player's viewmodel on their first-person camera, as CS2 draws it (decision 016): the rig's root is the
+    camera, drawn with Unreal's first-person rendering at the player's viewmodel_fov (FirstPersonFieldOfView),
+    without shadows. Its place on the camera (the player's offsets, and the hand) is keyed by key_viewmodel_hand."""
+    settings = player.get("viewmodel") or {}
+    actor = actors.spawn_actor_from_object(mesh, unreal.Vector(0.0, 0.0, 0.0))
+    actor.tags = [TAG]
+    actor.set_actor_label("VM %s" % player["name"])
+    component = actor.skeletal_mesh_component
+    component.set_editor_property("first_person_primitive_type", unreal.FirstPersonPrimitiveType.FIRST_PERSON)
+    component.set_editor_property("cast_shadow", False)
+    keep = unreal.AttachmentRule.KEEP_RELATIVE
+    actor.attach_to_actor(camera, "", keep, keep, keep, False)
+    lens = camera.camera_component
+    lens.set_editor_property("enable_first_person_field_of_view", True)
+    lens.set_editor_property("first_person_field_of_view", viewmodel_fov_16_9(settings.get("fov", 60.0)))
+    return actor
+
+
+def key_viewmodel_hand(binding, frames, hands, offset, end_frame):
+    """The viewmodel's transform on its camera: moved by the player's viewmodel_offset_x / _y / _z (inches in view
+    space: right, forward, up; Unreal's camera looks along +X with +Y to the right), and mirrored from every tick the
+    player holds it in the left hand (m_bLeftHanded, which the switch-hands key flips during a round), the sideways
+    offset with it — CS2 mirrors the whole viewmodel (cl_righthand 0; the mirrored offset is not checked against CS2
+    yet). Step keys: the hand changes from one tick to the next."""
+    right, forward, up = offset
+    track = binding.add_track(unreal.MovieScene3DTransformTrack)
+    section = track.add_section()
+    section.set_range(0, end_frame)
+    channels = channels_by_name(section)
+    for name, value in (("Location.X", forward * UNITS_TO_CM), ("Location.Y", right * UNITS_TO_CM),
+                        ("Location.Z", up * UNITS_TO_CM), ("Rotation.X", 0.0), ("Rotation.Y", 0.0),
+                        ("Rotation.Z", 0.0), ("Scale.X", 1.0), ("Scale.Y", 1.0), ("Scale.Z", 1.0)):
+        channels[name].set_default(value)
+    constant = unreal.MovieSceneKeyInterpolation.CONSTANT
+    previous = None
+    for frame, left in zip(frames, hands):
+        if left is None or left == previous:
+            continue
+        side = -1.0 if left else 1.0
+        for name, value in (("Location.Y", side * right * UNITS_TO_CM), ("Scale.Y", side)):
+            channels[name].add_key(unreal.FrameNumber(frame), value, 0.0, unreal.MovieSceneTimeUnit.DISPLAY_RATE,
+                                   constant)
+        previous = left
 
 
 def spawn_agent(player, mesh):
@@ -582,10 +667,12 @@ def key_visibility(binding, changes, end_frame):
             previous = value
 
 
-def visibility_changes(frames, alive, own_view):
+def visibility_changes(frames, alive, own_view, first_person=False):
     """(frame, visible) at every sample and every camera-cut boundary: shown while alive with a pawn, except while
     the camera looks through this player's own eyes (in first person CS2 does not draw your own body either; here
-    the visor and name would block the view). `own_view` lists the (start, end) frame ranges of those cuts."""
+    the visor and name would block the view). `own_view` lists the (start, end) frame ranges of those cuts. With
+    `first_person` (the player's viewmodel) the other way round: shown only while alive and the camera looks
+    through their eyes — attached to their camera, it would float in front of it in every other view."""
     boundaries = sorted({f for r in own_view for f in r} | set(frames))
     changes = []
     sample = 0
@@ -593,7 +680,7 @@ def visibility_changes(frames, alive, own_view):
         while sample + 1 < len(frames) and frames[sample + 1] <= frame:
             sample += 1
         watching = any(start <= frame < end for start, end in own_view)
-        changes.append((frame, alive[sample] and not watching))
+        changes.append((frame, alive[sample] and watching == first_person))
     return changes
 
 
@@ -648,6 +735,7 @@ def build(replay):
     keys = 0
     cuts = camera_cut_plan(replay, {p["controller"] for p in replay["players"]}, end_frame, fps)
     agents = import_agents(replay)
+    viewmodels = import_viewmodels(replay)
     for player in replay["players"]:
         track = replay["samples"]["players"][str(player["controller"])]
         positions = [None if p is None else to_unreal(p) for p in track["position"]]
@@ -692,10 +780,20 @@ def build(replay):
         camera_binding = sequence.add_possessable(camera)
         keys += key_transform(camera_binding, frames, eyes, rotations, (1.0, 1.0, 1.0), end_frame)
         cameras[player["controller"]] = (camera, camera_binding)
+        # The arms and the weapon in hand, on the camera, while the camera looks through this player's eyes.
+        viewmodel = viewmodels.get(player["controller"])
+        if viewmodel is not None:
+            vm = spawn_viewmodel(player, viewmodel[0], camera)
+            vm_binding = sequence.add_possessable(vm)
+            key_animation(vm_binding, viewmodel[1], end_frame)
+            offset = (player.get("viewmodel") or {}).get("offset", [1.0, 1.0, -1.0])
+            key_viewmodel_hand(vm_binding, frames, track.get("left_handed", []), offset, end_frame)
+            living = [bool(a) and p is not None for a, p in zip(track["alive"], positions)]
+            key_visibility(vm_binding, visibility_changes(frames, living, own_view, first_person=True), end_frame)
     keys += place_dropped_weapons(sequence, replay, import_dropped_weapons(replay), end_frame)
     keys += animate_doors(sequence, replay, end_frame)
-    log("sequence %s: %d players (%d animated agents), %d frames at %d fps, %d keys in %.0f s"
-        % (path, len(replay["players"]), len(agents), end_frame, fps, keys,
+    log("sequence %s: %d players (%d animated agents, %d viewmodels), %d frames at %d fps, %d keys in %.0f s"
+        % (path, len(replay["players"]), len(agents), len(viewmodels), end_frame, fps, keys,
            time.monotonic() - started))
     add_camera_cuts(sequence, cuts, cameras)
     add_markers(sequence, replay)

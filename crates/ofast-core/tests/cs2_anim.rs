@@ -385,7 +385,16 @@ fn graph_states_play_their_clips() {
         &states(locomotion, &ground),
         &ground,
     );
-    assert_eq!(into_air, Some(0.0));
+    // Into the air: the transition's own duration is 0, its override (`m_nDurationOverrideNodeIdx`) 0.1 s for a jump
+    // and 0.3 s for a fall.
+    assert!((into_air.unwrap() - 0.1).abs() < 1e-6, "{into_air:?}");
+    let fall = air.clone().id("air_action", "air_action_start_fall");
+    let into_fall = eval.transition_time(
+        &states(locomotion, &ground),
+        &states(locomotion, &fall),
+        &fall,
+    );
+    assert!((into_fall.unwrap() - 0.3).abs() < 1e-6, "{into_fall:?}");
     assert!((onto_ground.unwrap() - 0.2).abs() < 1e-6, "{onto_ground:?}");
     // Starts by direction.
     let start = |direction: &str| {

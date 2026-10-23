@@ -207,12 +207,13 @@ fn run(cli: Cli) -> Result<(), String> {
                 }
                 println!("wrote {}", report.manifest.display());
                 println!(
-                    "{} players animated with {} weapon bones ({} deaths as ragdolls), {} frames each, {} dropped weapon models, in {:.1}s",
+                    "{} players animated with {} weapon bones ({} deaths as ragdolls), {} frames each, {} dropped weapon models, {} first-person viewmodels, in {:.1}s",
                     report.players,
                     report.weapons,
                     report.deaths,
                     report.frames,
                     report.dropped,
+                    report.viewmodels,
                     started.elapsed().as_secs_f32()
                 );
                 for fall in &report.falls {

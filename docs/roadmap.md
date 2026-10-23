@@ -198,6 +198,25 @@ player and round.
   (`g_flMetalnessTransitionBias`?).
 - [ ] Weapon skins (paint kits, wear, seed, stickers: M10), and the molotov / incendiary holster if CS2 shows one.
 
+## M5 progress
+
+- [x] **Design** ([decision 016](decisions/016-viewmodel-baked-like-the-body.md)): CS2's viewmodel baked in Rust from
+  the demo's weapon states like the body, drawn by Unreal's first-person rendering.
+- [x] **Demo**: each player's viewmodel FOV, offsets and hand (switched with a key during rounds: keyed per tick),
+  the silencer and the reserve ammunition ([demo.md](formats/demo.md#first-person-view)).
+- [x] **Graphs**: CS2's viewmodel graphs evaluated (weapon-skeleton poses, layer masks and weights, scale nodes,
+  float maths, ID switches, restarts through twin states, clip events), a segment per weapon state blended over the
+  graphs' transitions, the hand IK ([animation.md](formats/animation.md#first-person-view-animviewmodel-exportviewmodel)).
+- [x] **Export**: one glTF per agent and glove skin: the arms, the agent's first-person meshes, the gloves, every
+  weapon held with its own bones (bolt, magazine, silencer), an animation per player.
+- [x] **Unreal**: each viewmodel on its player's POV camera at their offsets and hand, first-person rendering at
+  their viewmodel FOV, shown in their own cuts.
+- [x] **Checked against CS2's first-person view**: four kills (right- and left-handed, FOV 60 – 68, three offsets),
+  two reloads, two knife inspects match in size, angle, place and pose; on the local match demo every frame follows
+  the weapon in hand, the arms keep their lengths, every shot starts on its tick.
+- [ ] Sway behind turns, bob while running, landing dip (CS2's client code); view punch on the camera; ironsights;
+  shotguns' staged reloads; `FirstPersonScale` against walls; grenade throws and knife swings checked against CS2.
+
 ## Hard problems we know about
 
 - **Player animation.** Demos contain no skeleton poses; CS2 computes them while playing the demo. Plan: a "replay

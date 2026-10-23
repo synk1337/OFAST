@@ -16,29 +16,35 @@
 //! | `CNmBlend1DNode` | the two sources around the input value in `m_parameterization.m_blendRanges`, linearly |
 //! | `CNmBlend2DNode` | barycentric weights in the node's triangulation ([`super::locomotion::Blend2D`]) |
 //! | `CNmSelectorNode`, `CNmClipSelectorNode` | the first option whose condition holds |
-//! | `CNmParameterizedClipSelectorNode` | with `m_bHasWeightsSet`, the option a parameter in 0 – 1 falls on in `m_optionWeights` proportions; else the option whose index the parameter is; options without a clip skipped when `m_bIgnoreInvalidOptions` |
+//! | `CNmParameterizedClipSelectorNode`, `CNmParameterizedSelectorNode` | with `m_bHasWeightsSet`, the option a parameter in 0 – 1 falls on in `m_optionWeights` proportions; else the option whose index the parameter is; options without a clip skipped when `m_bIgnoreInvalidOptions` |
 //! | `CNmDurationScaleNode` | the child stretched to `m_flDefaultInputValue` (or its input) seconds |
 //! | `CNmSpeedScaleNode` | the child played `m_flDefaultInputValue` (or its input) times faster |
 //! | `CNmStateNode` | its child; an off state (no child) gives nothing |
 //! | `CNmStateMachineNode` | the first state whose entry condition holds, else `m_nDefaultStateIndex`; past the state's length, a transition whose condition is "state completed" moves on to its target (a jump into the landing blend, a defuse's enter into its loop); no other transitions |
-//! | `CNmLayerBlendNode` | the base, then each layer that gives a pose: additive layers added, others replacing it (masks are not applied) |
+//! | `CNmLayerBlendNode` | the base, then each layer that gives a pose: additive layers added, overlay layers blended over it, by the layer's weight and bone mask — or, for a state machine layer, its current state's (`m_nLayerWeightNodeIdx`, `m_nLayerBoneMaskNodeIdx`); masks come from [`Library::insert_mask`], a layer whose mask the library lacks covers every bone |
 //! | `CNmReferencedGraphNode` | the referenced graph's root (`m_nRootNodeIdx`), in the same [`Library`] |
 //! | `CNmZeroPoseNode` | nothing (an additive layer at rest) |
+//! | `CNmScaleNode` | its child, each bone's scale times its weight in the node's mask while the enable condition holds (the viewmodels hide the silencer this way) |
+//! | `CNmTwoBoneIKNode` | its child: the bake moves the hands itself ([`super::viewmodel`]) |
 //!
 //! Blends keep their sources in step by normalised time: the blend lasts the weighted average of its sources'
 //! lengths, and each source is sampled at the same fraction of its own length — how AnimGraph 2 synchronises
 //! blends without sync events, as [`super::locomotion`] does for the ground blends. Value nodes: control
-//! parameters, constants, curves (Hermite splines), switches, ID maps and remaps; springs, eases and caches pass
-//! their input through (they only smooth over time). Conditions: ID, float and range comparisons, booleans, `and` /
-//! `or` / `not`, and events (true when listed in [`Params::events`]); timers are false.
+//! parameters, constants (floats and IDs), curves (Hermite splines), float maths, switches (floats and IDs), ID
+//! maps and remaps; springs, eases and caches pass their input through (they only smooth over time); a state's
+//! current sync event ID has no value. Conditions: ID, float and range comparisons, booleans, `and` / `or` / `not`,
+//! and events (true when listed in [`Params::events`]); timers are false.
+//!
+//! [`Evaluator::secondary`] evaluates the same tree for a secondary skeleton: the weapon bones a viewmodel clip
+//! moves besides the arms (`m_secondaryAnimations`: the magazine, the bolt).
 //!
 //! Between two states the bake blends their poses over CS2's own transition time, found by
 //! [`Evaluator::transition_time`] from the states each pose comes from ([`Evaluator::states`]).
 
 use std::collections::{HashMap, HashSet};
 
-use super::graph::Graph;
-use super::layers::add_layer;
+use super::graph::{Graph, Transition};
+use super::layers::{BoneMask, add_layer};
 use super::locomotion::{Blend2D, BlendSource, blend_poses};
 use super::{AnimError, Clip, Transform};
 use crate::kv3::Value;
@@ -91,6 +97,10 @@ pub struct Library {
     /// `(graph, start node)` already walked by [`Library::load`] (`usize::MAX` for the root): each is walked once,
     /// which also ends graphs that reference each other.
     walked: HashSet<(String, usize)>,
+    /// Bone masks by ID, on the clips' own skeleton, for the layers that name one ([`Library::insert_mask`]).
+    masks: HashMap<String, BoneMask>,
+    /// Bone masks on a secondary skeleton: `(skeleton path, mask ID)`.
+    secondary_masks: HashMap<(String, String), BoneMask>,
 }
 
 impl Library {
@@ -181,6 +191,21 @@ impl Library {
     pub fn insert_graph(&mut self, path: &str, graph: Graph) {
         self.graphs.insert(path.to_owned(), graph);
     }
+
+    /// Adds a bone mask for the layers that name `id` (a layer's `CNmBoneMaskNode`, or a layer state's
+    /// `m_nLayerBoneMaskNodeIdx`): on the clips' own skeleton, or with `skeleton`, on that secondary skeleton (a
+    /// weapon's, [`Evaluator::secondary`]). Without masks, layers apply to every bone.
+    pub fn insert_mask(&mut self, skeleton: Option<&str>, id: &str, mask: BoneMask) {
+        match skeleton {
+            Some(s) => {
+                self.secondary_masks
+                    .insert((s.to_owned(), id.to_owned()), mask);
+            }
+            None => {
+                self.masks.insert(id.to_owned(), mask);
+            }
+        }
+    }
 }
 
 /// Every node index a node reads poses from (children, states, blend sources, options, layer inputs).
@@ -193,16 +218,25 @@ fn node_children(graph: &Graph, node: usize) -> Vec<usize> {
         out.extend(graph.children(node, key));
     }
     out.extend(graph.states(node).into_iter().map(|(state, _)| state));
-    out.extend(
-        layer_inputs(graph, node)
-            .into_iter()
-            .map(|(input, _)| input),
-    );
+    out.extend(layer_inputs(graph, node).into_iter().map(|l| l.input));
     out
 }
 
-/// A layer blend's layers: `(input node, additive)`.
-fn layer_inputs(graph: &Graph, node: usize) -> Vec<(usize, bool)> {
+/// One layer of a layer blend (`m_layerDefinition`).
+#[derive(Debug, Clone, Copy)]
+struct Layer {
+    /// The node giving the layer's pose.
+    input: usize,
+    /// Added over the pose below (`m_blendMode` `Additive`), else blended over it (`Overlay`).
+    additive: bool,
+    /// The layer's weight value node (`m_nWeightValueNodeIdx`); 1 without.
+    weight: Option<usize>,
+    /// The layer's bone mask value node (`m_nBoneMaskValueNodeIdx`); a state machine layer can name one per state.
+    mask: Option<usize>,
+}
+
+/// A layer blend's layers.
+fn layer_inputs(graph: &Graph, node: usize) -> Vec<Layer> {
     graph
         .nodes
         .get(node)
@@ -211,9 +245,18 @@ fn layer_inputs(graph: &Graph, node: usize) -> Vec<(usize, bool)> {
         .unwrap_or_default()
         .iter()
         .filter_map(|layer| {
-            let input = usize::try_from(layer.get("m_nInputNodeIdx")?.as_i64()?).ok()?;
-            let additive = layer.get("m_blendMode").and_then(Value::as_str) == Some("Additive");
-            Some((input, additive))
+            let index = |key: &str| {
+                layer
+                    .get(key)
+                    .and_then(Value::as_i64)
+                    .and_then(|i| usize::try_from(i).ok())
+            };
+            Some(Layer {
+                input: index("m_nInputNodeIdx")?,
+                additive: layer.get("m_blendMode").and_then(Value::as_str) == Some("Additive"),
+                weight: index("m_nWeightValueNodeIdx"),
+                mask: index("m_nBoneMaskValueNodeIdx"),
+            })
         })
         .collect()
 }
@@ -245,8 +288,8 @@ enum Next<'l> {
     One(&'l str, usize, f32),
     /// Weighted sources of a blend in the same graph: `(node, weight, time)`.
     Blend(Vec<(usize, f32, f32)>),
-    /// A layer blend: the base, then `(layer input, additive)`, all at the same time.
-    Layers(usize, Vec<(usize, bool)>),
+    /// A layer blend: the base, then its layers, all at the same time.
+    Layers(usize, Vec<Layer>),
     /// Nothing plays (an off state, a selector without a valid option).
     Nothing,
 }
@@ -255,6 +298,8 @@ enum Next<'l> {
 #[derive(Debug, Clone, Copy)]
 pub struct Evaluator<'l> {
     library: &'l Library,
+    /// With a secondary skeleton's path, poses are of that skeleton ([`Evaluator::secondary`]).
+    secondary: Option<&'l str>,
 }
 
 /// Deepest node nesting followed (graphs are trees of a few dozen levels at most).
@@ -263,7 +308,89 @@ const MAX_DEPTH: usize = 64;
 impl<'l> Evaluator<'l> {
     /// An evaluator over `library`.
     pub fn new(library: &'l Library) -> Self {
-        Self { library }
+        Self {
+            library,
+            secondary: None,
+        }
+    }
+
+    /// An evaluator whose poses are of the secondary skeleton `skeleton` (a weapon's own bones under a viewmodel's
+    /// `wpn`): every clip plays its secondary animation on that skeleton (`m_secondaryAnimations`), blended and
+    /// layered exactly like the clips themselves, with the masks' weights for that skeleton. Times, durations,
+    /// states and conditions stay those of the clips: a clip without such an animation gives nothing, so it drops
+    /// out of blends, and the weapon keeps the pose of the clips that have one.
+    pub fn secondary(library: &'l Library, skeleton: &'l str) -> Self {
+        Self {
+            library,
+            secondary: Some(skeleton),
+        }
+    }
+
+    /// The pose a clip gives at `time` (seconds of the clip): its own, or its secondary animation on
+    /// [`Evaluator::secondary`]'s skeleton (`None` when it has none).
+    fn sample_clip(
+        &self,
+        clip: &Clip,
+        time: f32,
+        looping: bool,
+    ) -> Result<Option<Vec<Transform>>, AnimError> {
+        match self.secondary {
+            None => Ok(Some(clip.sample(time, looping)?)),
+            Some(skeleton) => match clip.secondary.iter().find(|c| c.skeleton == skeleton) {
+                Some(secondary) => Ok(Some(secondary.sample(time, looping)?)),
+                None => Ok(None),
+            },
+        }
+    }
+
+    /// The bone mask that mask value node `node` (`CNmBoneMaskNode`) names, for the skeleton this evaluator poses:
+    /// `None` when `node` is no mask node, `Some(None)` when the library has no such mask for that skeleton.
+    fn mask(&self, path: &str, node: usize) -> Option<Option<&'l BoneMask>> {
+        let (_, graph) = self.graph(path).ok()?;
+        if graph.class(node) != "CNmBoneMaskNode" {
+            return None;
+        }
+        let id = graph.nodes.get(node)?.get("m_boneMaskID")?.as_str()?;
+        Some(match self.secondary {
+            None => self.library.masks.get(id),
+            Some(skeleton) => self
+                .library
+                .secondary_masks
+                .get(&(skeleton.to_owned(), id.to_owned())),
+        })
+    }
+
+    /// A layer's weight and mask `time` seconds in: its own, or for a state machine layer, those of the state it is
+    /// in (`m_nLayerWeightNodeIdx`, `m_nLayerBoneMaskNodeIdx`). A mask the library lacks covers every bone of the
+    /// clips' own skeleton, and none of a secondary skeleton: CS2's masks list weights for some weapon skeletons
+    /// only (`GunEmpty`'s for the pistols and the SCAR-20, not the AK-47's).
+    fn layer_weight_and_mask(
+        &self,
+        path: &'l str,
+        layer: &Layer,
+        params: &Params,
+        time: f32,
+        depth: usize,
+    ) -> Result<(f32, Option<&'l BoneMask>), AnimError> {
+        let (_, graph) = self.graph(path)?;
+        let mut weight = layer.weight.map_or(1.0, |w| self.float(path, w, params));
+        let mut named = layer.mask.and_then(|m| self.mask(path, m));
+        if graph.class(layer.input) == "CNmStateMachineNode"
+            && let Some((state, _)) = self.machine_state(path, layer.input, params, time, depth)?
+        {
+            if let Some(w) = graph.child(state, "m_nLayerWeightNodeIdx") {
+                weight *= self.float(path, w, params);
+            }
+            if named.is_none() {
+                named = graph
+                    .child(state, "m_nLayerBoneMaskNodeIdx")
+                    .and_then(|m| self.mask(path, m));
+            }
+        }
+        if matches!(named, Some(None)) && self.secondary.is_some() {
+            weight = 0.0;
+        }
+        Ok((weight.clamp(0.0, 1.0), named.flatten()))
     }
 
     /// The library's own copy of a graph path, and the graph.
@@ -384,8 +511,15 @@ impl<'l> Evaluator<'l> {
             let (_, g) = self.graph(path)?;
             match g.class(machine) {
                 "CNmStateMachineNode" => break,
-                "CNmStateNode" => match g.child(machine, "m_nChildNodeIdx") {
-                    Some(child) => machine = child,
+                "CNmStateNode" | "CNmScaleNode" | "CNmTwoBoneIKNode" => {
+                    match g.child(machine, "m_nChildNodeIdx") {
+                        Some(child) => machine = child,
+                        None => return Ok(Leave::Unknown),
+                    }
+                }
+                // The machine under the layers (a viewmodel's actions, under its bullets' layer).
+                "CNmLayerBlendNode" => match g.child(machine, "m_nBaseNodeIdx") {
+                    Some(base) => machine = base,
                     None => return Ok(Leave::Unknown),
                 },
                 "CNmReferencedGraphNode" => {
@@ -427,7 +561,7 @@ impl<'l> Evaluator<'l> {
             .find(|t| t.condition.is_some_and(|c| self.condition(path, c, params)))
             .map_or(Leave::Stays, |t| Leave::Leaves {
                 state: states[t.target].0,
-                blend: t.duration,
+                blend: self.transition_duration(path, &t, params),
             }))
     }
 
@@ -461,7 +595,90 @@ impl<'l> Evaluator<'l> {
                     .iter()
                     .find(|t| t.condition.is_some_and(|c| self.condition(path, c, params)))
                     .or(transitions.first())?;
-                Some(chosen.duration)
+                Some(self.transition_duration(path, chosen, params))
+            })
+    }
+
+    /// CS2's blend time when an action starts over in the same states ([`Evaluator::states`]): its graph restarts
+    /// it by switching to a twin state (`ATK0` ↔ `ATK2` for shots, `Deploy0` ↔ `Deploy2` for draws, `inspect0` ↔
+    /// `inspect1`) on `action_reset`. The first transition, innermost machine first, out of one of `states` that
+    /// holds with `action_reset` set and not without it. `None` when there is none.
+    pub fn restart_time(&self, states: &[StateId], params: &Params) -> Option<f32> {
+        let reset = params.clone().flag("action_reset", true);
+        let unset = params.clone().flag("action_reset", false);
+        states.iter().rev().find_map(|(path, state)| {
+            let (path, graph) = self.graph(path).ok()?;
+            (0..graph.nodes.len())
+                .filter(|&m| graph.class(m) == "CNmStateMachineNode")
+                .find_map(|machine| {
+                    let index = graph
+                        .states(machine)
+                        .iter()
+                        .position(|&(s, _)| s == *state)?;
+                    graph
+                        .transitions(machine, index)
+                        .into_iter()
+                        .find(|t| {
+                            t.condition.is_some_and(|c| {
+                                self.condition(path, c, &reset) && !self.condition(path, c, &unset)
+                            })
+                        })
+                        .map(|t| self.transition_duration(path, &t, &reset))
+                })
+        })
+    }
+
+    /// The events of the clip weighing most in `node`'s pose `time` seconds in ([`Evaluator::dominant_clip`]) that
+    /// are on at that time: what conditions on events see (the draw's `WPN_INSPECT_USE_DRAW_VERSION` when an inspect
+    /// starts during it, `WPN_DISABLE_LEFT_HAND_IK` while a hand leaves the weapon).
+    pub fn events_at(
+        &self,
+        graph: &str,
+        node: usize,
+        params: &Params,
+        time: f32,
+    ) -> Result<HashSet<String>, AnimError> {
+        let Some((clip, t)) = self.dominant_clip(graph, node, params, time)? else {
+            return Ok(HashSet::new());
+        };
+        // Event times are fractions of the clip.
+        Ok(clip
+            .events
+            .iter()
+            .filter(|e| {
+                let start = e.start * clip.duration;
+                t >= start && t <= start + e.duration * clip.duration
+            })
+            .map(|e| e.id.clone())
+            .collect())
+    }
+
+    /// The events the states `states` ([`Evaluator::states`]) send while playing (`m_executeEvents`, as the
+    /// viewmodel's `Idle` sends `WPN_STATE_IDLE`): what a "fully in state" graph event condition of the next
+    /// action sees when these states had fully blended in.
+    pub fn state_events(&self, states: &[StateId]) -> HashSet<String> {
+        let mut out = HashSet::new();
+        for (path, state) in states {
+            let Ok((_, graph)) = self.graph(path) else {
+                continue;
+            };
+            let listed = graph
+                .nodes
+                .get(*state)
+                .and_then(|n| n.get("m_executeEvents"))
+                .and_then(Value::as_array)
+                .unwrap_or_default();
+            out.extend(listed.iter().filter_map(Value::as_str).map(str::to_owned));
+        }
+        out
+    }
+
+    /// A transition's blend time: its duration override (a float value node) when it has one, else its duration.
+    fn transition_duration(&self, path: &str, transition: &Transition, params: &Params) -> f32 {
+        transition
+            .duration_override
+            .map_or(transition.duration, |n| {
+                self.float(path, n, params).max(0.0)
             })
     }
 
@@ -476,10 +693,14 @@ impl<'l> Evaluator<'l> {
     ) -> Result<Next<'l>, AnimError> {
         let (_, graph) = self.graph(path)?;
         Ok(match graph.class(node) {
-            "CNmStateNode" => match graph.child(node, "m_nChildNodeIdx") {
-                Some(child) => Next::One(path, child, time),
-                None => Next::Nothing,
-            },
+            // A scale node (bones of a mask scaled, [`Evaluator::pose`] applies it) and a two-bone IK node (a hand
+            // onto its target, which the bake applies) change their child's pose after it is computed.
+            "CNmStateNode" | "CNmScaleNode" | "CNmTwoBoneIKNode" => {
+                match graph.child(node, "m_nChildNodeIdx") {
+                    Some(child) => Next::One(path, child, time),
+                    None => Next::Nothing,
+                }
+            }
             "CNmDurationScaleNode" => match graph.child(node, "m_nChildNodeIdx") {
                 Some(child) => {
                     let desired = self.scale_input(path, node, params);
@@ -501,12 +722,13 @@ impl<'l> Evaluator<'l> {
                 Some((state, t)) => Next::One(path, state, t),
                 None => Next::Nothing,
             },
-            "CNmSelectorNode" | "CNmClipSelectorNode" | "CNmParameterizedClipSelectorNode" => {
-                match self.chosen_option(path, node, params) {
-                    Some(option) => Next::One(path, option, time),
-                    None => Next::Nothing,
-                }
-            }
+            "CNmSelectorNode"
+            | "CNmClipSelectorNode"
+            | "CNmParameterizedClipSelectorNode"
+            | "CNmParameterizedSelectorNode" => match self.chosen_option(path, node, params) {
+                Some(option) => Next::One(path, option, time),
+                None => Next::Nothing,
+            },
             "CNmReferencedGraphNode" => match graph.referenced_graph(node) {
                 Some(other) => {
                     let (other, g) = self.graph(other)?;
@@ -568,6 +790,30 @@ impl<'l> Evaluator<'l> {
             )));
         }
         let (_, graph) = self.graph(path)?;
+        // The masked bones' scales times their mask weight, while the enable condition holds: the viewmodels'
+        // silencer hidden (`silencer` mask: the weapon's `silencer` bone at 0) unless it is on or being shown.
+        if graph.class(node) == "CNmScaleNode" {
+            let Some(child) = graph.child(node, "m_nChildNodeIdx") else {
+                return Ok(None);
+            };
+            let Some(mut pose) = self.pose_at(path, child, params, time, depth + 1)? else {
+                return Ok(None);
+            };
+            let enabled = graph
+                .child(node, "m_nEnableNodeIdx")
+                .is_none_or(|c| self.condition_at(path, c, params, depth + 1));
+            if enabled
+                && let Some(mask) = graph
+                    .child(node, "m_nMaskNodeIdx")
+                    .and_then(|m| self.mask(path, m))
+                    .flatten()
+            {
+                for (bone, t) in pose.iter_mut().enumerate() {
+                    t.scale *= mask.0.get(bone).copied().unwrap_or(1.0);
+                }
+            }
+            return Ok(Some(pose));
+        }
         match self.next(path, node, params, time, depth)? {
             Next::Leaf => match graph.class(node) {
                 "CNmClipNode" => {
@@ -575,7 +821,7 @@ impl<'l> Evaluator<'l> {
                         return Ok(None);
                     };
                     let clip = self.clip(clip)?;
-                    Ok(Some(clip.sample(time * speed, looping(graph, node))?))
+                    self.sample_clip(clip, time * speed, looping(graph, node))
                 }
                 "CNmAnimationPoseNode" => {
                     let Some((clip, _)) = graph.clip(node) else {
@@ -583,7 +829,7 @@ impl<'l> Evaluator<'l> {
                     };
                     let clip = self.clip(clip)?;
                     let fraction = self.pose_fraction(path, node, params, clip, depth);
-                    Ok(Some(clip.sample(fraction * clip.duration, false)?))
+                    self.sample_clip(clip, fraction * clip.duration, false)
                 }
                 _ => Ok(None),
             },
@@ -607,13 +853,19 @@ impl<'l> Evaluator<'l> {
                 let Some(mut pose) = self.pose_at(path, base, params, time, depth + 1)? else {
                     return Ok(None);
                 };
-                for (input, additive) in layers {
-                    if let Some(layer) = self.pose_at(path, input, params, time, depth + 1)? {
-                        if additive {
-                            add_layer(&mut pose, &layer, 1.0, None);
-                        } else {
-                            pose = layer;
-                        }
+                for layer in layers {
+                    let Some(top) = self.pose_at(path, layer.input, params, time, depth + 1)?
+                    else {
+                        continue;
+                    };
+                    let (weight, mask) =
+                        self.layer_weight_and_mask(path, &layer, params, time, depth + 1)?;
+                    if layer.additive {
+                        add_layer(&mut pose, &top, weight, mask);
+                    } else if weight >= 1.0 && mask.is_none() {
+                        pose = top;
+                    } else {
+                        overlay(&mut pose, &top, weight, mask);
                     }
                 }
                 Ok(Some(pose))
@@ -648,8 +900,8 @@ impl<'l> Evaluator<'l> {
             }
             Next::Layers(base, layers) => {
                 self.states_at(path, base, params, time, depth + 1, out)?;
-                for (input, _) in layers {
-                    self.states_at(path, input, params, time, depth + 1, out)?;
+                for layer in layers {
+                    self.states_at(path, layer.input, params, time, depth + 1, out)?;
                 }
                 Ok(())
             }
@@ -762,7 +1014,10 @@ impl<'l> Evaluator<'l> {
     fn chosen_option(&self, path: &str, node: usize, params: &Params) -> Option<usize> {
         let (_, graph) = self.graph(path).ok()?;
         let options = graph.children(node, "m_optionNodeIndices");
-        if graph.class(node) != "CNmParameterizedClipSelectorNode" {
+        if !matches!(
+            graph.class(node),
+            "CNmParameterizedClipSelectorNode" | "CNmParameterizedSelectorNode"
+        ) {
             let conditions = graph.children(node, "m_conditionNodeIndices");
             return options
                 .iter()
@@ -980,6 +1235,35 @@ impl<'l> Evaluator<'l> {
                 .copied()
                 .unwrap_or(0.0),
             "CNmConstFloatNode" => number("m_flValue"),
+            // A op B, B a value node or the constant `m_flValueB` (`weapon_ammo_max − weapon_ammo`: rounds to
+            // reload).
+            "CNmFloatMathNode" => {
+                let operand = |key: &str| {
+                    graph
+                        .child(node, key)
+                        .map(|n| self.float_at(path, n, params, depth + 1))
+                };
+                let a = operand("m_nInputValueNodeIdxA").unwrap_or(0.0);
+                let b = operand("m_nInputValueNodeIdxB").unwrap_or(number("m_flValueB"));
+                let flag = |key: &str| raw.get(key).and_then(Value::as_bool).unwrap_or(false);
+                // The operators CS2's graphs use are `Mod` (198 times in the viewmodel graphs: odd or even rounds
+                // for the belts' bullets) and `Sub`; one not listed here gives 0.
+                let mut value = match raw.get("m_operator").and_then(Value::as_str) {
+                    Some("Add") => a + b,
+                    Some("Sub") => a - b,
+                    Some("Mul") => a * b,
+                    Some("Div") if b != 0.0 => a / b,
+                    Some("Mod") if b != 0.0 => a % b,
+                    _ => 0.0,
+                };
+                if flag("m_bReturnAbsoluteResult") {
+                    value = value.abs();
+                }
+                if flag("m_bReturnNegatedResult") {
+                    value = -value;
+                }
+                value
+            }
             "CNmFloatCurveNode" => curve(raw.get("m_curve"), input()),
             "CNmFloatSpringNode" | "CNmFloatEaseNode" | "CNmCachedFloatNode" => input(),
             "CNmFloatSwitchNode" => {
@@ -1035,15 +1319,40 @@ impl<'l> Evaluator<'l> {
         }
     }
 
-    /// An ID value node's value (a control parameter).
+    /// An ID value node's value: a control parameter, a constant, or a switch between two. The current sync event of
+    /// a state (`CNmCurrentSyncEventIDNode`) needs the graph's running state, which OFAST does not keep: no value.
     fn id(&self, path: &str, node: usize, params: &Params) -> Option<String> {
+        self.id_at(path, node, params, 0)
+    }
+
+    fn id_at(&self, path: &str, node: usize, params: &Params, depth: usize) -> Option<String> {
         let (_, graph) = self.graph(path).ok()?;
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let raw = graph.nodes.get(node)?;
+        let text = |key: &str| raw.get(key).and_then(Value::as_str).map(str::to_owned);
         match graph.class(node) {
             "CNmControlParameterIDNode" => graph
                 .parameters
                 .get(node)
                 .and_then(|name| params.ids.get(name))
                 .cloned(),
+            "CNmConstIDNode" => text("m_value"),
+            "CNmIDSwitchNode" => {
+                let switch = graph
+                    .child(node, "m_nSwitchValueNodeIdx")
+                    .is_some_and(|c| self.condition_at(path, c, params, depth + 1));
+                let (key, fallback) = if switch {
+                    ("m_nTrueValueNodeIdx", "m_trueValue")
+                } else {
+                    ("m_nFalseValueNodeIdx", "m_falseValue")
+                };
+                match graph.child(node, key) {
+                    Some(value) => self.id_at(path, value, params, depth + 1),
+                    None => text(fallback),
+                }
+            }
             _ => None,
         }
     }
@@ -1143,6 +1452,17 @@ impl<'l> Evaluator<'l> {
                 listed.chain(ruled).any(|id| params.events.contains(id))
             }
             _ => false,
+        }
+    }
+}
+
+/// Blends `layer` over `pose` bone by bone (parent space) by `weight` times the mask's weight of the bone: an
+/// overlay layer.
+fn overlay(pose: &mut [Transform], layer: &[Transform], weight: f32, mask: Option<&BoneMask>) {
+    for (bone, (p, l)) in pose.iter_mut().zip(layer).enumerate() {
+        let w = weight * mask.map_or(1.0, |m| m.0.get(bone).copied().unwrap_or(0.0));
+        if w > 0.0 {
+            *p = p.lerp(l, w.min(1.0));
         }
     }
 }
@@ -1359,6 +1679,206 @@ mod tests {
 
     fn x(pose: Option<Vec<Transform>>) -> f32 {
         pose.expect("a pose")[0].translation[0]
+    }
+
+    /// A track at a fixed translation `(x, 0, 0)`.
+    fn still_track(x: f32) -> crate::anim::TrackSettings {
+        crate::anim::TrackSettings {
+            translation_range: [(x, 0.0), (0.0, 0.0), (0.0, 0.0)],
+            scale_range: (1.0, 0.0),
+            constant_rotation: [0.0, 0.0, 0.0, 1.0],
+            rotation_static: true,
+            translation_static: true,
+            scale_static: true,
+        }
+    }
+
+    /// A graph laid out like a viewmodel weapon graph (`viewmodel_gun.vnmgraph+…`), two bones:
+    ///
+    /// - node 4 (root), `Scale`: bones scaled by mask `tip` unless `silenced`;
+    /// - node 5, a layer blend: base `actions` (node 8: `ATK0` / `ATK2`, both clip a, which switch to each other on
+    ///   `action_reset` during an attack, over 0.25 s while `silenced`, else 0.5 s: a duration override; `ATK0`
+    ///   sends `ATK_ON` while it plays), one overlay state machine layer (node 13) whose `Empty` state (when
+    ///   30 − `ammo` ≥ 30) holds clip b's pose, masked by its state's mask `tip`;
+    /// - node 24: whether the ID switch on `silenced` gives `on`; node 27: whether `ammo` is even (`Mod` 2).
+    ///
+    /// Clip a: bone 0 x 0 → 1 over 2 s, bone 1 at 5, an event `E` over 20 – 40 % of it (0.4 – 0.8 s), and secondary
+    /// animations on `weapon.vnmskel` (one bone at 7) and `other.vnmskel` (one bone at 9). Clip b: bones at 10 and
+    /// 20, and on `other.vnmskel` 11; mask `tip` has weights for `weapon.vnmskel` only.
+    fn viewmodel_library() -> Library {
+        let parameters = vec!["ammo", "silenced", "action_reset", "action"];
+        let graph = serde_json::json!({
+            "m_nRootNodeIdx": 4,
+            "m_controlParameterIDs": parameters,
+            "m_nodePaths": ["ammo", "silenced", "action_reset", "action", "Scale", "Layers", "tip", "not",
+                "actions", "actions/ATK0", "actions/ATK2", "reset", "transition", "Empty", "Empty/Empty",
+                "Empty/Off", "is_empty", "missing", "Empty/Empty/pose", "a", "attacking", "thirty", "switch", "off",
+                "is_on", "override", "parity", "even"],
+            "m_resources": ["a.vnmclip", "b.vnmclip"],
+            "m_nodes": [
+                { "_class": "CNmControlParameterFloatNode::CDefinition" },
+                { "_class": "CNmControlParameterBoolNode::CDefinition" },
+                { "_class": "CNmControlParameterBoolNode::CDefinition" },
+                { "_class": "CNmControlParameterIDNode::CDefinition" },
+                { "_class": "CNmScaleNode::CDefinition", "m_nChildNodeIdx": 5, "m_nMaskNodeIdx": 6,
+                  "m_nEnableNodeIdx": 7 },
+                { "_class": "CNmLayerBlendNode::CDefinition", "m_nBaseNodeIdx": 8, "m_layerDefinition": [
+                    { "m_nInputNodeIdx": 13, "m_nWeightValueNodeIdx": -1, "m_nBoneMaskValueNodeIdx": -1,
+                      "m_bIsStateMachineLayer": true, "m_blendMode": "Overlay" } ] },
+                { "_class": "CNmBoneMaskNode::CDefinition", "m_boneMaskID": "tip" },
+                { "_class": "CNmNotNode::CDefinition", "m_nInputValueNodeIdx": 1 },
+                { "_class": "CNmStateMachineNode::CDefinition", "m_nDefaultStateIndex": 0, "m_stateDefinitions": [
+                    { "m_nStateNodeIdx": 9, "m_nEntryConditionNodeIdx": -1, "m_transitionDefinitions": [
+                        { "m_nTargetStateIdx": 1, "m_nConditionNodeIdx": 11, "m_nTransitionNodeIdx": 12 } ] },
+                    { "m_nStateNodeIdx": 10, "m_nEntryConditionNodeIdx": -1, "m_transitionDefinitions": [
+                        { "m_nTargetStateIdx": 0, "m_nConditionNodeIdx": 11, "m_nTransitionNodeIdx": 12 } ] } ] },
+                { "_class": "CNmStateNode::CDefinition", "m_nChildNodeIdx": 19, "m_executeEvents": ["ATK_ON"] },
+                { "_class": "CNmStateNode::CDefinition", "m_nChildNodeIdx": 19 },
+                { "_class": "CNmAndNode::CDefinition", "m_conditionNodeIndices": [2, 20] },
+                { "_class": "CNmTransitionNode::CDefinition", "m_flDuration": 0.1, "m_nDurationOverrideNodeIdx": 25 },
+                { "_class": "CNmStateMachineNode::CDefinition", "m_nDefaultStateIndex": 1, "m_stateDefinitions": [
+                    { "m_nStateNodeIdx": 14, "m_nEntryConditionNodeIdx": 16 },
+                    { "m_nStateNodeIdx": 15, "m_nEntryConditionNodeIdx": -1 } ] },
+                { "_class": "CNmStateNode::CDefinition", "m_nChildNodeIdx": 18, "m_nLayerBoneMaskNodeIdx": 6 },
+                { "_class": "CNmStateNode::CDefinition" },
+                { "_class": "CNmFloatComparisonNode::CDefinition", "m_nInputValueNodeIdx": 17,
+                  "m_comparison": "GreaterThanEqual", "m_flComparisonValue": 30.0 },
+                { "_class": "CNmFloatMathNode::CDefinition", "m_nInputValueNodeIdxA": 21,
+                  "m_nInputValueNodeIdxB": 0, "m_operator": "Sub" },
+                { "_class": "CNmAnimationPoseNode::CDefinition", "m_nDataSlotIdx": 1,
+                  "m_nPoseTimeValueNodeIdx": -1, "m_flUserSpecifiedTime": 0.0 },
+                { "_class": "CNmClipNode::CDefinition", "m_nDataSlotIdx": 0, "m_flSpeedMultiplier": 1.0 },
+                { "_class": "CNmIDComparisonNode::CDefinition", "m_nInputValueNodeIdx": 3,
+                  "m_comparison": "Matches", "m_comparisionIDs": ["action_attack"] },
+                { "_class": "CNmConstFloatNode::CDefinition", "m_flValue": 30.0 },
+                { "_class": "CNmIDSwitchNode::CDefinition", "m_nSwitchValueNodeIdx": 1,
+                  "m_nTrueValueNodeIdx": -1, "m_nFalseValueNodeIdx": 23, "m_trueValue": "on",
+                  "m_falseValue": "" },
+                { "_class": "CNmConstIDNode::CDefinition", "m_value": "off" },
+                { "_class": "CNmIDComparisonNode::CDefinition", "m_nInputValueNodeIdx": 22,
+                  "m_comparison": "Matches", "m_comparisionIDs": ["on"] },
+                { "_class": "CNmFloatSwitchNode::CDefinition", "m_nSwitchValueNodeIdx": 1,
+                  "m_nTrueValueNodeIdx": -1, "m_nFalseValueNodeIdx": -1, "m_flTrueValue": 0.25,
+                  "m_flFalseValue": 0.5 },
+                { "_class": "CNmFloatMathNode::CDefinition", "m_nInputValueNodeIdxA": 0,
+                  "m_nInputValueNodeIdxB": -1, "m_flValueB": 2.0, "m_operator": "Mod" },
+                { "_class": "CNmFloatComparisonNode::CDefinition", "m_nInputValueNodeIdx": 26,
+                  "m_comparison": "NearEqual", "m_flComparisonValue": 0.0, "m_flEpsilon": 0.01 }
+            ]
+        });
+        let mut library = Library::new();
+        library.insert_graph("v", Graph::parse(&kv3(graph)).expect("graph"));
+        let still = |skeleton: &str, x: f32| Clip {
+            skeleton: skeleton.into(),
+            frames: 1,
+            tracks: vec![still_track(x)],
+            offsets: vec![0],
+            ..Clip::default()
+        };
+        let mut a = moving_clip(0.0, 1.0, 2.0);
+        a.tracks.push(still_track(5.0));
+        a.events.push(crate::anim::ClipEvent {
+            id: "E".into(),
+            start: 0.2,
+            duration: 0.2,
+        });
+        a.secondary = vec![still("weapon.vnmskel", 7.0), still("other.vnmskel", 9.0)];
+        library.insert_clip("a.vnmclip", a);
+        library.insert_clip(
+            "b.vnmclip",
+            Clip {
+                frames: 1,
+                tracks: vec![still_track(10.0), still_track(20.0)],
+                offsets: vec![0],
+                secondary: vec![still("other.vnmskel", 11.0)],
+                ..Clip::default()
+            },
+        );
+        library.insert_mask(None, "tip", BoneMask(vec![0.0, 1.0]));
+        library.insert_mask(Some("weapon.vnmskel"), "tip", BoneMask(vec![0.0]));
+        library
+    }
+
+    #[test]
+    fn viewmodel_graphs_mask_scale_and_restart() {
+        let library = viewmodel_library();
+        let eval = Evaluator::new(&library);
+        let firing = Params::default()
+            .float("ammo", 5.0)
+            .flag("silenced", true)
+            .id("action", "action_attack");
+        let pose = eval.pose("v", 4, &firing, 1.0).unwrap().expect("a pose");
+        let xs = |p: &[Transform]| p.iter().map(|t| t.translation[0]).collect::<Vec<_>>();
+        let scales = |p: &[Transform]| p.iter().map(|t| t.scale).collect::<Vec<_>>();
+        assert_eq!(xs(&pose), [0.5, 5.0]);
+        assert_eq!(scales(&pose), [1.0, 1.0]);
+        // Out of ammo (30 − 0 ≥ 30): the empty pose over the bones of its state's mask only.
+        let empty = firing.clone().float("ammo", 0.0);
+        assert_eq!(
+            xs(&eval.pose("v", 4, &empty, 1.0).unwrap().unwrap()),
+            [0.5, 20.0]
+        );
+        // Not silenced: the scale node takes the mask's weights as scales.
+        let bare = firing.clone().flag("silenced", false);
+        assert_eq!(
+            scales(&eval.pose("v", 4, &bare, 0.5).unwrap().unwrap()),
+            [0.0, 1.0]
+        );
+
+        // The weapon's own bone: clip a's secondary animation, scaled by the mask's weight for its skeleton; clip b
+        // has none, so the empty layer leaves it.
+        let weapon = Evaluator::secondary(&library, "weapon.vnmskel");
+        let w = weapon.pose("v", 4, &firing, 0.5).unwrap().unwrap();
+        assert_eq!((xs(&w), scales(&w)), (vec![7.0], vec![1.0]));
+        assert_eq!(
+            scales(&weapon.pose("v", 4, &bare, 0.5).unwrap().unwrap()),
+            [0.0]
+        );
+        assert_eq!(
+            xs(&weapon.pose("v", 4, &empty, 0.5).unwrap().unwrap()),
+            [7.0]
+        );
+        // A skeleton the layer's mask lists no weights for: the layer leaves it (clip b's 11 does not show).
+        let other = Evaluator::secondary(&library, "other.vnmskel");
+        assert_eq!(
+            xs(&other.pose("v", 4, &empty, 0.5).unwrap().unwrap()),
+            [9.0]
+        );
+
+        // A second shot restarts the attack through its twin state, over the override's 0.25 s while silenced and
+        // 0.5 s otherwise; outside an attack nothing restarts. `ATK0` sends its event while it plays.
+        let states = eval.states("v", 4, &firing, 0.0).unwrap();
+        assert_eq!(states.first(), Some(&("v".to_owned(), 9)));
+        assert_eq!(eval.restart_time(&states, &firing), Some(0.25));
+        assert_eq!(eval.restart_time(&states, &bare), Some(0.5));
+        let idle = firing.clone().id("action", "action_idle");
+        assert_eq!(eval.restart_time(&states, &idle), None);
+        assert!(eval.state_events(&states).contains("ATK_ON"));
+        // The machine under the scale node and the layers is the one asked.
+        assert_eq!(
+            eval.leaves(
+                "v",
+                4,
+                &firing,
+                0.1,
+                &firing.clone().flag("action_reset", true)
+            )
+            .unwrap(),
+            Leave::Leaves {
+                state: 10,
+                blend: 0.25
+            }
+        );
+        // Clip a's event is on over 20 – 40 % of its 2 s: 0.4 – 0.8 s.
+        assert!(eval.events_at("v", 4, &firing, 0.6).unwrap().contains("E"));
+        assert!(eval.events_at("v", 4, &firing, 0.3).unwrap().is_empty());
+        assert!(eval.events_at("v", 4, &firing, 0.9).unwrap().is_empty());
+        // The ID switch: `on` while silenced, the constant `off` otherwise.
+        assert!(eval.condition("v", 24, &firing));
+        assert!(!eval.condition("v", 24, &bare));
+        // Float maths: `ammo Mod 2` is 0 for an even count.
+        assert!(eval.condition("v", 27, &firing.clone().float("ammo", 4.0)));
+        assert!(!eval.condition("v", 27, &firing));
     }
 
     #[test]

@@ -17,8 +17,11 @@
 //! The weapons lying in the world (a dead player's gun, a dropped one: the replay's `dropped_weapons`) get one glTF
 //! per look, the weapon model alone: `<demo>_r<round>_dropped_<model>_<mesh groups>.gltf`.
 //!
-//! `<demo>_r<round>.agents.json` lists the files, their looks, their players, the deaths baked as ragdolls and the
-//! dropped weapons' models (`docs/formats/replay.md`);
+//! The players' first-person views (their arms and the weapon in hand, as CS2 draws them in a POV shot) get one
+//! glTF per agent and glove skin: `<demo>_r<round>_viewmodel_<agent>[_<gloves>].gltf` ([`super::viewmodel`]).
+//!
+//! `<demo>_r<round>.agents.json` lists the files, their looks, their players, the deaths baked as ragdolls, the
+//! dropped weapons' models and the viewmodels (`docs/formats/replay.md`);
 //! `tools/unreal/import_demo.py` plays each animation on its player's actor, which the replay's positions and body
 //! yaw move.
 
@@ -37,6 +40,7 @@ use super::loadout::{
     AgentMounts, Place, Slot, WeaponFrames, WeaponLook, carried_places, hide_changes, key_places,
     skeleton_with_slots, slot_target,
 };
+use super::viewmodel::{export_viewmodel_look, load_viewmodel_rig};
 use crate::anim::aim::AimBones;
 use crate::anim::bake::{
     ActionGraph, GraphRig, LocomotionSets, UpperBody, WeaponAnimation, WeaponSet, bake_player,
@@ -44,6 +48,7 @@ use crate::anim::bake::{
 };
 use crate::anim::graph::Graph;
 use crate::anim::layers::BoneMask;
+use crate::anim::viewmodel::ARMS_MODEL;
 use crate::anim::weapon::WeaponClips;
 use crate::anim::{
     BoneConstraints, Clip, Locomotion, NmSkeleton, Retargeter, Transform, matrix_to_quat,
@@ -83,6 +88,8 @@ pub struct PlayersReport {
     pub deaths: usize,
     /// Weapon models written for the weapons lying in the world (`<demo>_r<round>_dropped_…`).
     pub dropped: usize,
+    /// First-person viewmodel files written (`<demo>_r<round>_viewmodel_…`, [`super::viewmodel`]).
+    pub viewmodels: usize,
     /// One line per death: who, when, how far the body went and when it lay still.
     pub falls: Vec<String>,
     /// Key rate of the animations ([`animation_fps`]).
@@ -335,6 +342,7 @@ pub fn export_players(
         weapons: 0,
         deaths: 0,
         dropped: 0,
+        viewmodels: 0,
         falls: Vec::new(),
         fps: round.fps,
         frames: round.frames.len(),
@@ -405,6 +413,7 @@ pub fn export_players(
         report.weapons += weapons.len();
     }
     let dropped = export_dropped(&round, demo_name, out_dir, &mut report);
+    let viewmodels = export_viewmodels(&round, &groups, demo_name, out_dir, &mut report);
     std::fs::write(
         &report.manifest,
         serde_json::to_string_pretty(&json!({
@@ -415,10 +424,107 @@ pub fn export_players(
             "fps": round.fps,
             "agents": manifest,
             "dropped_weapons": dropped,
+            "viewmodels": viewmodels,
         }))
         .expect("JSON serializes"),
     )?;
     Ok(report)
+}
+
+/// Writes the players' first-person views ([`super::viewmodel`]): one glTF per agent and glove skin of the looks
+/// in `groups`, `<demo>_r<round>_viewmodel_<agent>[_<gloves>].gltf`. Returns the manifest entries: file, agent,
+/// gloves, players, and the weapon looks it holds. Without the upper-body data (no weapon names) or CS2's viewmodel
+/// files there is none, with a warning; a look that fails is left out with a warning too.
+fn export_viewmodels(
+    round: &Round<'_>,
+    groups: &BTreeMap<Look, Vec<u32>>,
+    demo_name: &str,
+    out_dir: &Path,
+    report: &mut PlayersReport,
+) -> Vec<serde_json::Value> {
+    let Some(upper) = &round.upper else {
+        report
+            .warnings
+            .push("no weapon names: no first-person views".into());
+        return Vec::new();
+    };
+    let mut weapons: Vec<(u32, String, String)> = upper
+        .weapons
+        .iter()
+        .map(|(&item, w)| (item, w.weapon.clone(), w.category.clone()))
+        .collect();
+    weapons.sort();
+    let rig = match load_viewmodel_rig(round.content, &weapons, &mut report.warnings) {
+        Ok(rig) => rig,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("viewmodel graphs: {e}: no first-person views"));
+            return Vec::new();
+        }
+    };
+    let arms = match load_model(round.content, ARMS_MODEL) {
+        Ok(model) => model,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("{ARMS_MODEL}: {e}: no first-person views"));
+            return Vec::new();
+        }
+    };
+    // The defuse kit makes no difference in first person: one file per agent and gloves.
+    let mut looks: BTreeMap<(&str, Option<&str>), Vec<u32>> = BTreeMap::new();
+    for (look, players) in groups {
+        looks
+            .entry((look.agent.as_str(), look.gloves.as_deref()))
+            .or_default()
+            .extend(players);
+    }
+    let mut entries = Vec::new();
+    for ((agent, gloves), mut players) in looks {
+        players.sort_unstable();
+        let mut name = format!(
+            "{demo_name}_r{}_viewmodel_{}",
+            round.track.round,
+            stem(agent)
+        );
+        if let Some(gloves) = gloves {
+            name = format!("{name}_{}", stem(gloves));
+        }
+        match export_viewmodel_look(
+            round.content,
+            &rig,
+            &arms,
+            round.track,
+            round.fps,
+            &round.models,
+            agent,
+            gloves,
+            &players,
+            out_dir,
+            &name,
+        ) {
+            Ok((written, weapons)) => {
+                entries.push(json!({
+                    "file": format!("{name}.gltf"),
+                    "model": agent,
+                    "gloves": gloves,
+                    "players": players,
+                    "weapons": weapons.iter().map(|w| json!({
+                        "model": w.model,
+                        "mesh_groups": w.mesh_groups,
+                    })).collect::<Vec<_>>(),
+                }));
+                report.files.push(written.gltf);
+                report.warnings.extend(written.warnings);
+                report.viewmodels += 1;
+            }
+            Err(e) => report
+                .warnings
+                .push(format!("viewmodel {name}: {e}: not written")),
+        }
+    }
+    entries
 }
 
 /// Writes one glTF per look of the weapons lying in the world during the round (the replay's `dropped_weapons`):
@@ -754,7 +860,7 @@ fn place_of(carried: Option<&Vec<(Slot, Place)>>, slot: &Slot) -> Place {
 
 /// The mesh groups to show: `mask` as the entity sent it, or the model's default when it sent none (0) or all bits
 /// (knives and grenades send every bit).
-fn shown_groups(model: &Model, mask: u64) -> u64 {
+pub(super) fn shown_groups(model: &Model, mask: u64) -> u64 {
     if mask == 0 || mask == u64::MAX {
         model.default_mesh_group_mask
     } else {
@@ -802,7 +908,7 @@ fn in_hand(player: &PlayerSample, tick: f32, interval: f32) -> Option<u32> {
 }
 
 /// A model path's file name without its extension (`agents/models/ctm_sas/ctm_sas.vmdl` → `ctm_sas`).
-fn stem(path: &str) -> &str {
+pub(super) fn stem(path: &str) -> &str {
     let file = path.rsplit('/').next().unwrap_or(path);
     file.split('.').next().unwrap_or(file)
 }

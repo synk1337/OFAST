@@ -469,7 +469,11 @@ renames one, it reads as its default and positions keep working.
 switch, every weapon), 50 = idle, 100 = shooting (rifles and pistols), 200 / 202 = grenade (pin, throw), 300 = C4
 planting, 500 / 501 / 503 = knife attacks, 800 / 801 = reloading (with `m_bInReload`), 1000 / 1001 = after a draw
 on every weapon, mostly knives (7,162 of 9,945 samples): very likely the inspect animation and its end (not yet
-checked in the game).
+checked in the game). On the Aurora vs FURIA de_nuke demo (round 5) 1000 comes 1 – 28 ticks after a draw (the
+inspect key pressed during the draw, which CS2's viewmodel graphs turn into an inspect from the draw: see
+[First-person view](#first-person-view)), 1001 follows 3.4 s later on a knife and lasts until idle (50) 1.3 s
+later: the inspect and its last part. 1 and 10 show on weapons as they are switched away. Every new shot restarts
+state 100 with a new timestamp (0.1 s apart on the AK-47); the state stays 100 for about 0.6 s after the last one.
 
 **Game ticks.** `GameTick_t` fields count the server's ticks, not the demo's. `CNETMsg_Tick` carries the server
 tick of each packet; it runs a constant distance ahead of the frame tick (2403 on the match demo, the same figure
@@ -556,6 +560,27 @@ Unreal does (`compare_doors_b.png`, top two pairs).
 **Checked** (`doors_swing_open_and_shut` in `tests/cs2_demo.rs`): over the first three rounds of both test demos,
 every closed door sample (65,473 and 59,015) stands at its closed angles, every open one (8,119 and 9,022) has swung
 60 – 120° about z, and no door leaves its hinge.
+
+## First-person view
+
+CS2's viewmodel is client-side (`C_CS2HudModelArms`, since July 2025): demos carry no viewmodel entity and no pose.
+They carry what drives it — the weapon in hand and its animation state ([Rig inputs](#rig-inputs)) — and on each
+pawn the player's own viewmodel settings (`PlayerSample::viewmodel`, `ViewmodelSettings`), which CS2 networks so
+that spectators see the viewmodel as the player does:
+
+| Field (pawn) | Setting | Seen (Aurora vs FURIA, de_nuke) |
+|---|---|---|
+| `m_flViewmodelFOV` | `viewmodel_fov`, horizontal at 4:3 like the world FOV (60 – 68, default 60) | 60, 65, 68 |
+| `m_flViewmodelOffsetX` / `Y` / `Z` | `viewmodel_offset_x` / `_y` / `_z`: inches in view space, right, forward, up (defaults 1, 1, −1) | (2.5, 0, −1.5), (2, 2, −2), (1, 1, −1), (−0.5, 1, −2), (2.5, 0, −2) |
+| `m_bLeftHanded` | the viewmodel in the left hand (`cl_righthand 0`, or the switch-hands key) | 3 of 10 players start round 5 left-handed; yuurih switched hands 31 times in the round, KSCERATO 4 |
+
+Pawns that never send them read as CS2's defaults. CS2's notes say the FOV only reaches spectators correctly since
+2026-05-07; OFAST uses what the demo carries. For the viewmodel the weapon also tells `m_bSilencerOn` (the M4A1-S
+and USP-S, `ActiveWeapon::silenced`) and its reserve ammunition (`m_pReserveAmmo[0]`, `ActiveWeapon::reserve`: the
+graphs' empty pose, slide back, is for a gun out of everything). The pawn also sends the view punch
+(`m_vecCsViewPunchAngle`, with the tick it was set and a sub-tick ratio) and `m_pAimPunchServices`, which the client
+decays itself; OFAST does not read them yet. The inspect fields (`m_bInspectPending`, `m_bInspectShouldLoop`,
+`m_flInspectCancelCompleteTime`) stay at their defaults in this demo: inspects show only in the animation state.
 
 ## Models
 

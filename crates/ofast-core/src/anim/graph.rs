@@ -45,6 +45,10 @@ pub struct Transition {
     pub condition: Option<usize>,
     /// Blend time, seconds (the transition node's `m_flDuration`).
     pub duration: f32,
+    /// A float value node that replaces `duration` when present (`m_nDurationOverrideNodeIdx`: a viewmodel's
+    /// Attack → Actions is 0 s into a draw and 0.2 s otherwise, the locomotion's fall 0.3 s and jump 0.1 s);
+    /// [`super::eval::Evaluator`] evaluates it.
+    pub duration_override: Option<usize>,
 }
 
 fn strings(root: &Value, key: &'static str) -> Vec<String> {
@@ -112,12 +116,15 @@ impl Graph {
             .unwrap_or_default()
             .iter()
             .filter_map(|t| {
+                let node = index(t.get("m_nTransitionNodeIdx"));
                 Some(Transition {
                     target: index(t.get("m_nTargetStateIdx"))?,
                     condition: index(t.get("m_nConditionNodeIdx")),
-                    duration: index(t.get("m_nTransitionNodeIdx"))
+                    duration: node
                         .and_then(|n| self.number(n, "m_flDuration"))
                         .unwrap_or(0.0) as f32,
+                    duration_override: node
+                        .and_then(|n| self.child(n, "m_nDurationOverrideNodeIdx")),
                 })
             })
             .collect()
