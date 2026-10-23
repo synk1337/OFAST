@@ -23,7 +23,8 @@ Ordered so that **Demo → Unreal scene** works first. Every milestone ends in s
 - [x] VPK reader (synthetic tests in CI, oracle tests on the local CS2 install — MD5 + BLAKE3 chunks, CRCs)
 - [x] Binary KV3 decoder v1–v5, none/LZ4/ZSTD — all 245,863 KV3 blocks in CS2 decode exactly
 - [x] KV3 text writer
-- [ ] KV3 text parser (needed to diff against other tools' decompiled output)
+- [x] KV3 text parser — all 1333 `m_keyValueText` texts in CS2's models parse and round-trip (M4.4e's procedural
+  bones read their constraints with it)
 - [x] Resource container reader
 - [x] `ofast` CLI: `find`, `export-model`, `vpk verify` (`crates/ofast-cli`)
 - [x] Demo header + player positions for one round (whole 216 MB match demo parses in ~3.5 s; round 1 positions and
