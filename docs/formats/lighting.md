@@ -52,8 +52,8 @@ hemisphere average); black on de_mirage (albedo 0).
   `size_params[0]`; `light_rect` / `light_barn` are rectangles lighting the hemisphere in front of them, and their
   `light_rect` `size_params` are **half**-sizes (Hammer's defaults 16 × 16 with 80 cd and 120 nits only agree for
   32 × 32 units; likewise the omni2 default 9816 nits ↔ a sphere of radius 2). A `light_barn`'s `size_params` is its
-  barn-door aperture instead; its emitter is `luminaire_size` (default 4) — OFAST uses that as a square and ignores
-  the barn doors for now. `light_spot` uses `innerconeangle` / `outerconeangle`.
+  aperture instead, a frustum, and its emitter is `luminaire_size` (default 4) across ([barn lights and their
+  cookies](#barn-lights-and-their-cookies)). `light_spot` uses `innerconeangle` / `outerconeangle`.
 - `range` is where the light has faded out: full strength up to `range × (1 − skirt)`, then linear down to nothing
   at `range` (Source 2 Viewer's `SceneLight.ComputeDistanceFade`; `skirt` defaults to 0.1, and 0 means no fade before
   the cut — most of de_nuke's lights). `bouncescale` scales its bounce in the bake (≈ Unreal's Indirect Lighting
@@ -105,6 +105,90 @@ from atlas" on de_nuke.
 to intensity / (0.5 × width × height), while point and spot lights use the intensity as is. `import_map.py` halves
 rect lights' candela; without it de_mirage's palace came out 1.48× too bright, with it 0.81× (then 0.93 with the
 bounce gains).
+
+### Barn lights and their cookies
+
+A `light_barn` ("Barn Door Light") does not light the hemisphere in front of it. Source 2 Viewer's renderer
+(`SceneLight.cs`, `Shaders/common/lighting.barn.slang`), which reproduces CS2's run-time shading:
+
+- `size_params` = (x, y, z), "Aperture Size (x, y, angle)" in `lights2.fgd` (default 16 16 0.0625), is a
+  perspective frustum: half-tangents **x·z** and **y·z** (45° for the default; de_vertigo's hall lamps 4 × 1.85 =
+  7.41, 82°), its eye 1/z behind the origin. A z of 0 or less is an orthographic box of light.
+- Inside the frustum the intensity is uniform: the linear brightness 100 units past the luminaire, falling off with
+  the square of the distance from the eye. Outside it there is none. Hammer's stored lumens agree: lumens ≈ 81 ×
+  linear brightness × the frustum's solid angle, on every barn light of de_vertigo.
+- A `lightcookie` texture is stretched over the frustum (`uv = ndc × −0.5 + 0.5`) and multiplies the light, in place
+  of the soft edges (`soft_x`, `soft_y`, `shape`).
+- The light is also cut to its precomputed box (`precomputedobb*`) when that is valid and the light casts shadows.
+
+**The cookies are sRGB.** `materials/effects/lightcookies/flashlight.vtex` stores a linear average of 0.098: the mean
+of its sRGB-decoded pixels (0.099), not of the raw ones (0.22). Decoded, it lets through 0.33 – 0.47 within half the
+frustum's radius, 0.20 at 0.50 – 0.55, 0.07 at 0.60 – 0.65 and nothing past 0.95: a round spot inside the square.
+
+OFAST exported every barn light as a rect light of `luminaire_size` lighting the whole hemisphere, without its frustum
+or cookie. On de_vertigo all 51 barn lights carry the flashlight cookie (48 static, 3 stationary), and they were what
+made its shade too bright. Measured on 2026-10-18 with what-ifs: renders of the saved level with groups of lights
+switched, as `shoot_views.py -Try` does (the level still drew the earlier H(3.4 x) / H(6 W) curve; its renders were
+read through that rule and re-toned to the current one, which reproduces the earlier import's 1.82 for the T spawn).
+Unreal / CS2's default picture, whole image, references `cs2_de_vertigo_{t0,ct0}.jpg` read with `--cs2-gamma
+2.013074`:
+
+| What-if | T spawn | CT spawn |
+|---|---|---|
+| as imported | 1.81 | 1.33 |
+| the 36 static hall lamps off (EV 2.17, 91 cd, size 4 4 1.85) | **1.09** | 1.30 |
+| the 3 stationary barn lights off (EV 4.15, 359 cd, size 1 1 1.82) | 1.82 | 0.73 |
+| every local light off | 1.03 | 0.71 |
+| the 3 stationary ones as cookie spots (below) | 1.81 | **0.93** |
+| the 36 static lamps as cookie spots too | 1.45 | 0.94 |
+| … with the static lamps at a quarter of that | 1.14 | 0.93 |
+| Sky Light's lower hemisphere black | 1.68 | 1.28 |
+| then also: sun bounce off / sky light off / bounce gains 1.25 → 1 | 1.57 / 1.38 / 1.65 | 1.21 / 1.08 / 1.27 |
+
+Light (lit ÷ albedo, `tools/compare/tone_fit.py light`) in the T spawn's covered hall: 1.08 on the floor against
+CS2's 0.29, 0.34 without the lamps, 0.73 with them as cookie spots; on its ceiling, which only bounce lights, 0.39
+against 0.156, 0.153 without the lamps. In the CT spawn the stationary lights as cookie spots take the far wall from
+2.4× CS2's light to 1.05×, the floor from 1.32 / 0.98× to 0.79 / 0.60×; what the floor then lacks is sky-blue
+(0.02, 0.10, 0.19 in linear RGB): see the sky [below](#sky-in-de_vertigos-ct-courtyard). The other suspects move
+the pictures far less: the sky's lower hemisphere (`lower_hemisphere_color`, 0.69 0.75 0.86 here) 7 / 4 %, the sun's
+bounce 6 %, the bounce gains 1 %; the whole Sky Light 16 – 18 %.
+
+**What OFAST does now.** The exporter writes each perspective barn light's frustum into the manifest (`barn`: `tan`,
+`near`), and for a cookie its radial profile (`cookie_profile`, the decoded luminance in 20 rings of the frustum's
+radius; `cookie_mean`) and the Unreal spot light that matches it on that frustum (`spot`: `scale`, `inner_cone`,
+`outer_cone`; least squares over the rings' solid angles against Unreal's ((cos θ − cos outer) / (cos inner − cos
+outer))² falloff). `import_map.py` builds **stationary and dynamic** barn lights with a cookie as that spot light at
+the frustum's eye, with intensity × `scale` (0.39 – 0.40 for the flashlight cookie): de_vertigo's three get a 38.7 –
+55.6° cone where the rect lit 90°. Re-exported and re-imported with it (and main's other changes since 2026-10-17),
+de_vertigo reads 0.82 / 1.61 (CT / T) of CS2's default picture, was 1.27 / 1.82; light (lit ÷ albedo) per cell, CT
+0.35 – 0.87 (median 0.69, was 0.56 – 2.10), T unchanged in the hall (3.1 – 3.9). Both pictures came out about a
+tenth darker than the what-ifs predicted (0.93 / 1.81); the T view's base colours read 0.95 of CS2's albedo in this
+import (1.00 before), and main's other changes since the earlier import were not separated.
+
+**Open: static barn lights with a cookie.** They keep their rect. CS2's bake does not light de_vertigo's 36 hall lamps
+the way its run-time shader would: as cookie spots they still leave the hall floor 2.6× and the T spawn 1.45× CS2's
+picture, while without them the T spawn reads 1.09, its hall floor 1.18 and its ceiling 0.98. Regressed on the lamps'
+predicted light (205 shaded floor pixels), CS2's hall-floor light is ≈ 0.65 × (Unreal without the lamps) + 0.07 ×
+(the frustum without cookie): next to nothing. The lamp's fixture (`constructionlight`, 3 units above the origin)
+does not enclose it, and the hall floor lies inside each lamp's precomputed box. Yet de_nuke's garage, lit by 14
+static flashlight lamps (EV 2.7, size 10 10 0.23), reads 1.31 with plain rects, 0.50 as cookie spots and 0.13
+without them (what-ifs on the saved de_nuke level, shot twice): there CS2 does light them. The only key that tells the two sets
+apart is **`skirt_near`** ("Near Falloff"): 0 on all 48 static barn lights of de_vertigo, 0.1 on de_nuke's (the
+run-time shader skips a near fade of 0; a bake that divides by it would lose the light). Other maps with static
+barn lights at `skirt_near` 0: de_overpass 21, de_train 6, de_anubis 5, de_inferno 1 — none in a checked view yet.
+Until a CS2 view settles it (one of those lights lighting a wall or floor nearby), static barn lights keep the
+hemisphere rect, and de_vertigo's T spawn stays too bright.
+
+### Sky in de_vertigo's CT courtyard
+
+What the CT spawn's floor lacks once its barn lights are right is sky. Sampling the hemisphere above a floor point
+with OFAST's own geometry (`map_raycast` in 648 directions; Source -857 740 11776) gives a cosine-weighted open sky
+of 0.37 and, with the exported sky's radiance in those directions, a direct sky light of 0.11 0.27 0.62 (linear RGB,
+light units). With every local light off, Unreal lights that floor 0.04 – 0.05, 0.10 – 0.11, 0.19 – 0.22: a third of
+the sky's blue. CS2's floor shows 0.54 – 0.61 in blue, its lamps (warm) adding little of it. In the T spawn's hall the
+same sampling predicts 0.23 in blue: CS2's floor has about that, Unreal's 1.6× (local lights off). Lumen's sky
+occlusion in this courtyard of fences, studs, scaffolding and floor plates is the likely cause; not looked into
+further.
 
 ## Sky — `env_sky`
 
@@ -280,7 +364,8 @@ against Unreal's scene values (its shots inverted through its own rule) on lit c
 So with this rule the sky agrees on all three maps, and where a picture still differs it is the scene: de_anubis's
 surfaces are 5 – 8 % bright in Unreal (read as its base colours, 1.08; in fact Unreal's sun highlight, which CS2 does
 not draw, and the unlit view's specular term: [highlights](#highlights-cs2-does-not-draw-2026-10-18)), de_vertigo's shade is far too bright (the light, not
-the materials: in its T spawn's covered hall Unreal's light is 2 – 4× CS2's, warm where CS2's is blue), and
+the materials: in its T spawn's covered hall Unreal's light is 2 – 4× CS2's, warm where CS2's is blue — its barn
+lights, [above](#barn-lights-and-their-cookies)), and
 de_inferno's surfaces are too dark (its materials, base colour 0.5 – 0.6× CS2's albedo; open). Its sunlit ground is
 odd in CS2: lit ÷ fullbright gives fewer units of light than the sun alone, so for some de_inferno materials fullbright
 may not show the albedo the lit shader uses.
@@ -502,6 +587,13 @@ sniper's nest 1.26 / 1.27 → 1.20 / 1.22, underpass 1.28 (unchanged; per view i
 now CT shade 0.97, T shade 1.05, palace 1.00: `OUTDOOR_BOUNCE_GAIN`, `LOCAL_BOUNCE_GAIN` and the rect halving stay.
 Indoors the baked lamps' highlights are gone too; the B apartments, short of the corridor bounce already, drop further.
 
+**On the other maps** (2026-10-18; re-exported, re-imported, per view in
+[checks.md](../checks.md#the-highlight-rule-on-the-other-maps-2026-10-18)): every one bakes its sun, and the sunlit
+surfaces drop by 4 – 11 % — pooled de_anubis 1.06 → 1.01, de_dust2 1.18 → 1.13, de_inferno 0.97 → 0.91, de_nuke
+1.24 → 1.11, de_vertigo 1.16 → 1.07. The outdoor shade moves by 0 – 4 %. Lamp-lit rooms follow their lamps: de_nuke
+bakes 97 of its 153 baked lamps' highlights into the cubemaps and its rooms change by 0 – 1 % (its ramp room, half
+lit by lamps without one, by 16 %); de_vertigo's T-spawn hall, lit by static barn lamps without one, by 6 %.
+
 Two further differences, measured but not changed:
 - **Interchange's glTF master reflected twice as much** (fixed since, [below](#reflections-of-interchanges-gltf-master-2026-10-18)). Unreal's unlit view adds 0.45 × the specular colour (F0), so
   the difference between `ShowFlag.Lighting 0` renders with and without `ShowFlag.Specular 0` gives each pixel's F0:
@@ -625,11 +717,16 @@ Measured 2026-10-17 / 18. Every reference above was taken at this machine's brig
 measured on that picture (k = 2.85, w = 4.2), Unreal / CS2, whole image; de_anubis and de_inferno re-imported with the
 merged code (renders in `test-data/shots/refit/`), de_vertigo with the code of 2026-10-17:
 
-| View | Brighter references, k 3.4 | Default picture, k 3.4 | Default picture, k 2.85 | Notes |
-|---|---|---|---|---|
-| de_anubis CT / T | 1.01 / 1.01 | 1.11 / 1.08 | 1.04 / 1.02 | lit surfaces 2.67 / 2.77 against k = 2.85: read as base colours a few % above CS2's albedo (1.08 in the CT view); the base colours are right (0.99), it is mostly the sun highlight ([highlights](#highlights-cs2-does-not-draw-2026-10-18)) |
-| de_inferno CT / T | 0.76 / 1.22 | 0.81 / 1.44 | 0.75 / 1.30 | sky right (k 2.82); surfaces too dark from its materials (base colour 0.5 – 0.6× CS2's albedo); its 12 other views in [checks.md](../checks.md#after-merging-all-branches-2026-10-18) |
-| de_vertigo CT / T | — | 1.42 / 2.04 | 1.27 / 1.82 | new map; the shade is too bright (light 2 – 4× CS2's in the T spawn's hall), materials right (base colour 1.00 – 1.01) — open |
+| View | Brighter references, k 3.4 | Default picture, k 3.4 | Default picture, k 2.85 | Highlights only where CS2 draws them (2026-10-18): level before → re-imported | Notes |
+|---|---|---|---|---|---|
+| de_anubis CT / T | 1.01 / 1.01 | 1.11 / 1.08 | 1.04 / 1.02 | 1.04 / 1.02 → **1.01 / 1.01** | lit surfaces 2.67 / 2.77 against k = 2.85: read as base colours a few % above CS2's albedo (1.08 in the CT view); the base colours are right (0.99), it was mostly the sun highlight ([highlights](#highlights-cs2-does-not-draw-2026-10-18)): sunlit 1.06 → 1.01 |
+| de_inferno CT / T | 0.76 / 1.22 | 0.81 / 1.44 | 0.75 / 1.30 | 0.79 / 1.41 → **0.77 / 1.37** | sky right (k 2.82); surfaces too dark from its materials (base colour 0.5 – 0.6× CS2's albedo); its 12 other views in [checks.md](../checks.md#the-highlight-rule-on-the-other-maps-2026-10-18) |
+| de_vertigo CT / T | — | 1.42 / 2.04 | 1.27 / 1.82 | 0.82 / 1.61 → **0.82 / 1.48** | new map; the shade too bright from its barn lights (light 2 – 4× CS2's in the T spawn's hall), materials right (base colour 1.00 – 1.01). With the stationary barn lights as cookie spots (2026-10-18): 0.82 / 1.61 — the CT floor now short of sky, the T spawn's static lamps open ([barn lights](#barn-lights-and-their-cookies)); without their highlights the T spawn's shade 1.73 → 1.63 |
+
+The "before" of the highlight column is the level as other sessions had last imported it, shot again on the day
+(de_inferno has moved since the k = 2.85 column, by other imports in the shared sandbox); the linear maps, the same
+way: de_mirage 1.05 / 1.05 → 1.02 / 1.04 (scene), de_dust2 0.28 / 1.06 → 0.28 / 1.03, de_nuke 1.00 / 0.97 →
+0.93 / 0.92.
 
 The real imports reproduce `tone_fit.py simulate` to 0.1 – 0.2 % (de_vertigo CT and T, re-toned from k = 3.4, w = 6).
 The linear maps do not use k and w; their numbers against the default picture are in checks.md. Their lighting
@@ -760,7 +857,8 @@ a power law).
 
 - ValveResourceFormat (MIT): `Renderer/Renderer/World/WorldLightingInfo.cs`, `SceneEnvironment/SceneLight.cs`,
   `ScenePostProcessVolume.cs`, `SceneSkybox2D.cs`, `Entities/EnvSky.cs`, `EnvCubemapFog.cs`, shaders
-  `common/pbr.slang`, `post_processing.frag.slang`, `sky.frag.slang`, `common/fog.slang`
+  `common/pbr.slang`, `common/lighting.barn.slang` (barn lights, cookies), `post_processing.frag.slang`,
+  `sky.frag.slang`, `common/fog.slang`
 - Hammer's FGDs in the CS2 install: `game/core/lights_base.fgd`, `lights2.fgd`, `postprocessing.fgd`
 - Unreal 5.8 source: `PostProcessEyeAdaptation.cpp` (manual exposure), `Scene.h` (tone curve settings),
   `InterchangeGltfTranslator.cpp` (light units), `InterchangeGenericTexturePipeline.h` (`.hdr` → cube)
