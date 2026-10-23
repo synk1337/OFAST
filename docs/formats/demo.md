@@ -526,9 +526,10 @@ the end of the round.
 
 **Checked** (`the_dead_let_go_of_their_guns` in `tests/cs2_demo.rs`, 2026-10-23): over the first three rounds of
 both test demos, each of the 46 players who died carrying more than a knife let go of a weapon within two ticks and
-96 units of the body (124 stretches of weapons lying in the world in all). In Unreal (`import_demo.py`, round 5)
-KSCERATO's AK-47 lies flat on its side on the floor where the demo has it, 2 m past his body; a CS2 reference
-of the same frames is still to take.
+96 units of the body (124 stretches of weapons lying in the world in all). Against CS2 (`compare_doors_b.png`,
+bottom pair: tick 40290 of Aurora vs FURIA round 5, from CS2's own Chase Cam position behind MAJ3R): KSCERATO's
+AK-47 lies in Unreal where CS2 draws it, on its side, stock towards the doorway (CS2's carries its skin; Unreal shows
+the default finish).
 
 ## Doors
 
@@ -548,7 +549,9 @@ The A-site door (hinge 257, −1310, −416) closes the doorway players cross: o
 they cross it only while it stands open (yaw −89°), and in round 3, closed all round, nobody does. The Aurora vs FURIA
 demo (an older build: CS2 says "old demo") disagrees: its A door is networked closed at its closed angles all round 5,
 like the others, yet players walk through the doorway 10 times, and CS2 playing that demo draws the doorway clear. So
-on that demo Unreal shows a closed A door CS2 does not (`compare_doors_a.png`); not explained yet.
+on that demo Unreal shows a closed A door CS2 does not (`compare_doors_a.png`); not explained yet. On a local server
+(current build, round start) CS2 draws the A door and the tunnel's double door closed in their frames exactly as
+Unreal does (`compare_doors_b.png`, top two pairs).
 
 **Checked** (`doors_swing_open_and_shut` in `tests/cs2_demo.rs`): over the first three rounds of both test demos,
 every closed door sample (65,473 and 59,015) stands at its closed angles, every open one (8,119 and 9,022) has swung
