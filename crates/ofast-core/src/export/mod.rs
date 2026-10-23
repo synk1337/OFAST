@@ -10,7 +10,9 @@
 //! - [`players`]: the players of a round as animated CS2 agents, with their weapons in hand and holstered (one glTF
 //!   per agent look).
 //! - [`loadout`]: where each weapon a player carries sits on the agent, frame by frame.
+//! - [`deaths`]: each death as CS2's ragdoll of the agent, simulated and written onto its bones.
 
+pub mod deaths;
 mod environment;
 pub mod gltf;
 mod light_cookie;

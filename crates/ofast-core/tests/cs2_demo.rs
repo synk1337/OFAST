@@ -329,6 +329,82 @@ fn rig_inputs_match_movement_and_demoparser2() {
     );
 }
 
+/// Deaths as ragdolls (M4.6): over the first rounds with deaths, with the map's collision open, every player who
+/// dies has the death baked; each body comes to rest on the floor near where the player died (not through it, not
+/// metres away), and the manifest lists each death's ticks under `ragdolls`, from the death to the round's end.
+#[test]
+fn deaths_fall_as_ragdolls() {
+    use ofast_core::content::Content;
+    use ofast_core::export::players::export_players;
+    let Some((_, data)) = load() else { return };
+    let Some(install) = Cs2Install::locate() else {
+        println!("SKIPPED: no CS2 install");
+        return;
+    };
+    let rounds = list_rounds(&data).expect("rounds");
+    let out = std::env::temp_dir().join("ofast_deaths_test");
+    let mut checked = 0;
+    for round in rounds.iter().take(3) {
+        let track = track_round(&data, round.round).expect("round");
+        let content = Content::for_map(&install, &track.map_name).expect("map archive opens");
+        // Players who die in the round (alive, then dead).
+        let mut died = HashSet::new();
+        let mut alive: HashMap<u32, bool> = HashMap::new();
+        for p in track.samples.iter().flat_map(|s| &s.players) {
+            if alive.get(&p.controller) == Some(&true) && !p.alive {
+                died.insert(p.controller);
+            }
+            alive.insert(p.controller, p.alive);
+        }
+        let report = export_players(&content, &track, "deaths", &out).expect("players export");
+        assert!(
+            !report.warnings.iter().any(|w| w.contains("no collision")),
+            "{:?}",
+            report.warnings
+        );
+        assert_eq!(report.deaths, died.len(), "round {}", round.round);
+        assert_eq!(report.falls.len(), died.len());
+        for fall in &report.falls {
+            println!("round {}: {fall}", round.round);
+            // "… the body moved 1.2 m (0.7 m down) and lay still after 3.4 s at (…)". A body that fell through the
+            // world would never lie still; one flung away would land far off. Drops are the map's: on de_nuke one
+            // body falls 4.6 m past a railing into a pit, off the player clip its player stood on.
+            let words: Vec<&str> = fall
+                .rsplit("moved ")
+                .next()
+                .expect("distance")
+                .split(' ')
+                .collect();
+            let moved: f32 = words[0].parse().expect("distance");
+            let down: f32 = words[2].trim_start_matches('(').parse().expect("drop");
+            let across = (moved * moved - down * down).max(0.0).sqrt();
+            assert!(fall.contains("lay still"), "{fall}");
+            assert!(across < 6.0, "{fall}");
+        }
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&report.manifest).expect("manifest reads"),
+        )
+        .expect("JSON");
+        let mut listed = HashSet::new();
+        let last_tick = track.end_tick as f64;
+        for agent in manifest["agents"].as_array().expect("agents") {
+            for (controller, deaths) in agent["ragdolls"].as_object().expect("ragdolls") {
+                listed.insert(controller.parse::<u32>().expect("controller"));
+                // Competitive rounds have no respawns: each death lasts to the round's end.
+                for death in deaths.as_array().expect("deaths") {
+                    let (first, last) = (death[0].as_f64().unwrap(), death[1].as_f64().unwrap());
+                    assert!(first < last && last == last_tick, "{death}");
+                }
+            }
+        }
+        assert_eq!(listed, died);
+        checked += died.len();
+    }
+    std::fs::remove_dir_all(&out).ok();
+    println!("{checked} deaths baked");
+    assert!(checked > 0, "the first rounds have deaths");
+}
+
 /// `export_players` on round 1: one glTF per agent look, listed in the manifest with its players, each with an
 /// animation per player keyed on every tick (64 per second) over the whole round, and a skeleton of the agent's bones plus one bone
 /// per weapon listed (every player of a pistol round carries a knife and a pistol).

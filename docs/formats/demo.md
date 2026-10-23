@@ -486,6 +486,25 @@ faster than 50 units/s — positions advance by sub-tick moves). Round 5 compare
 difference. demoparser2 cannot check the velocity (its `CCSPlayerPawn.m_vecX/Y/Z` mixes the velocity and the view
 offset, see below).
 
+## Deaths
+
+CS2 simulates a dead player's ragdoll on the client: demos do not carry its motion. On the death tick the pawn's
+`m_lifeState` turns 1 (dying; 2, dead, about 1.8 s later), `m_bRagdollClientSide` turns true, and
+`m_RagdollPose.m_Transforms` (a networked pose, for server-side ragdolls) stays empty. What the client starts the
+ragdoll from is set on the pawn that tick and kept until the next death (`PlayerSample::death`, read while dead):
+
+| Field | What | Seen |
+|---|---|---|
+| `m_nRagdollDamageBone` | the bone hit, an index into the agent's skeleton | 7 (`head_0`) for a headshot, 4 (`spine_2`) for an AWP body shot |
+| `m_vRagdollDamageForce` | the killing hit's force, world, along the shot | (−26553, 16367, 712) for an M4A1-S headshot, (27317, 6145, 167) for an AWP body shot |
+| `m_vRagdollDamagePosition` | where it hit, world | |
+| `m_bRagdollDamageHeadshot`, `m_szRagdollDamageWeaponName` | headshot flag, weapon (`m4a1_silencer`, `awp`) | |
+| `m_vRagdollServerOrigin` | the pawn's origin a tick before the death, not where the body ends up | |
+| `m_qDeathEyeAngles` | the eye angles at death | |
+
+The dead pawn itself stays where it died (its position and body yaw no longer change). OFAST simulates the ragdoll
+from these and the agent's `PHYS` block ([animation.md](animation.md#deaths-exportdeaths-physicsragdoll)).
+
 ## Models
 
 What each player looks like and carries, read per tick into `PlayerSample::appearance` and `PlayerSample::weapons`

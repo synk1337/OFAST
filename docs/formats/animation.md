@@ -339,6 +339,60 @@ between keys, so the weapon shrinks and grows where it is and only travels while
 the body. In Unreal the weapons are part of the agent's skeletal mesh: no attached actors, and scrubbing shows the
 same weapons as playback.
 
+## Deaths (`export::deaths`, `physics::ragdoll`)
+
+A dead player's body falls as the agent's ragdoll and stays where it lies until the round ends. CS2 simulates the
+ragdoll on the client and demos carry only what starts it ([demo.md](demo.md#deaths)), so OFAST simulates it too
+(decision 015), from CS2's own data: the agent's `PHYS` block (15 capsule parts, 14 conical joints,
+[model.md](model.md#skeleton-and-skinning)), the map's `world_physics` collision, and the death fields.
+
+- **Start**: on the first frame where the pawn is dead, the parts sit on the last living pose and move as that pose
+  moved over its last frame (the run, the limbs), plus the killing hit: `m_vRagdollDamageForce` × 0.1
+  (`DEATH_FORCE_SCALE`, a first guess) as an impulse at `m_vRagdollDamagePosition` on the part of the hit bone.
+- **Solver** (`physics::ragdoll`): extended position-based dynamics, 8 substeps per frame; gravity 800 in/s²; joints
+  keep their frames' origins together, the child's z axis within the swing cone (a hinge without one) and the twist
+  about z within its range; spheres along each capsule collide with the world's hulls (face planes) and triangles
+  and with the parts they are not joined to; every contact, with the world or between parts, ends the substep with
+  no speed along its normal (no bounce, and no speed left over from being pushed out) and friction 0.9 / 0.7 (the
+  sliding friction an impulse of at most 0.7 × the contact's push, so a part slides as on a real floor whatever
+  its mass); the parts' damping plus their drag (`m_flLinearDrag`, `m_flAngularDrag`, counted as damping:
+  `DRAG_AS_DAMPING`). Before the first step, 16 positions-only passes bring the living pose within the joints'
+  limits and out of the world without giving it speed, and two parts that overlap in that pose (an arm across the
+  chest) collide only once they have come apart. The body stops being simulated once no point of it has drifted
+  more than half an inch over half a second (`REST_DRIFT`: a body that has come down keeps an invisible creep of a
+  few tenths of an inch per second, which this freezes the way engines put bodies to sleep).
+- **World**: the shapes that stop a body are the solid world ("Default") and the "ConditionallySolid" grates,
+  glass and blockers (`passbullets`, `window`, `solid`); clips that stop only players, NPCs or grenades do not
+  (`CollisionAttribute::stops_bodies`). Without the map's archive, a floor where the player last stood.
+- **Bones**: the parts' bones take the parts' frames; every other bone keeps its offset from its parent as in the
+  last living pose (the root its own), then the model's constraints place the twist bones and shoulder blades. The
+  pose is written relative to the actor Unreal places at the dead pawn (which no longer moves), so the glTF
+  animation holds the fall; weapons are hidden from the death on (dropped weapons are separate entities).
+- **Unreal**: the agents manifest lists each baked death's first and last tick under `ragdolls`
+  ([replay.md](replay.md#agents-manifest-demo_rroundagentsjson)); `import_demo.py` keeps the body visible over those
+  ticks.
+
+Checked: the solver's unit tests (a body falls and rests on a floor, joints hold their swing and twist limits, a
+push moves the body its way, the same start gives the same fall, a body started 2 inches into the floor comes out
+without jumping, a body sliding at 200 in/s stops after v² / (2 μ g) ≈ 36 inches, broken shapes stay harmless); on
+all 80 agents the joints sit within their limits at bind pose (hinges with no swing), and the SAS ragdoll dropped
+on de_nuke's CT spawn rests on the floor after 4.5 s with its joints together within 0.04 inch
+(`tests/cs2_model.rs`); over the first three rounds of both test demos all 46 deaths are baked and every body lies
+still after 2.3 – 10.5 s, within 0.7 – 3.8 m of where its player died (`tests/cs2_demo.rs`
+`deaths_fall_as_ragdolls`, which limits the distance across the ground to 6 m: on de_nuke one body falls 5.9 m
+straight down, past a railing into a pit, off the player clip its player stood on, which bodies do not collide
+with). `examples/ragdoll_settle.rs` prints a ragdoll settling on a flat floor, part by part.
+Against CS2 (Aurora vs FURIA, de_nuke, round 5, `compare_deaths_b.png`, `compare_deaths_c.png`,
+`compare_deaths_d.png`): KSCERATO, shot running at 248 in/s, lies in CS2 about 2.4 – 2.8 m from where he died along
+his run (−35°), face down, an arm reaching to a duct; OFAST's body goes 2.5 m and lies face down, its head at the
+duct and an arm out to the side (CS2's legs bent, OFAST's straight; before the review's fixes it went 2.8 m and lay
+with an arm by its head). Without drag it went 3.7 m, most of it in the air while tipping over. Two first-person
+references were lost to a smoke and to a crate in the way.
+
+Not yet: the force scale checked against more deaths (OFAST's AWP and headshot pushes are a first guess), joint
+friction, bodies colliding with each other and with props that move, doors in the state the demo has them (the map
+export places them closed: one hid a body in a comparison), dropped weapons on the ground.
+
 ## Verified
 
 - `crates/ofast-core/tests/cs2_anim.rs` (2026-10-18): **all 2735 clip files, 4309 clips with the nested ones, decode;

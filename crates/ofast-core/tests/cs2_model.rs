@@ -281,3 +281,202 @@ fn attachments_and_glove_skeletons_fit_the_agents() {
         "bind rotations differ: {worst_angle:?}"
     );
 }
+
+/// The `PHYS` blocks: every agent's ragdoll reads, its parts follow bones of the agent at the agent's own bind pose,
+/// its joints link parts whose frames meet; de_nuke's world collision reads, with every shape inside its bounds.
+#[test]
+fn ragdolls_and_world_collision_read() {
+    use ofast_core::content::Content;
+    use ofast_core::model::compose;
+    use ofast_core::physics::ragdoll::{Ragdoll, WorldCollision, joint_angles};
+    use ofast_core::physics::{PhysicsData, ShapeKind};
+
+    let vpk = vpk();
+    let paths: Vec<String> = vpk
+        .entries()
+        .iter()
+        .map(|e| e.path().to_owned())
+        .filter(|p| {
+            p.starts_with("agents/models/") && !p.contains("/shared/") && p.ends_with(".vmdl_c")
+        })
+        .collect();
+    let (mut agents, mut worst_bind, mut worst_joint) = (0usize, 0.0f32, 0.0f32);
+    let (mut worst_swing, mut worst_twist) = (f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for path in &paths {
+        let resource_bytes = vpk.read_path(path).unwrap();
+        let resource = Resource::parse(&resource_bytes).unwrap();
+        let model = Model::parse(&resource).unwrap();
+        let Some(physics) = PhysicsData::from_resource(&resource).unwrap() else {
+            continue;
+        };
+        agents += 1;
+        assert_eq!(physics.bones.len(), physics.parts.len(), "{path}");
+        assert_eq!(physics.bind_pose.len(), physics.parts.len(), "{path}");
+        let bind = model.skeleton.world_transforms();
+        for (part, name) in physics.parts.iter().zip(&physics.bones) {
+            assert!(part.mass > 0.0, "{path} {name}: mass");
+            assert!(
+                part.shapes.iter().all(|s| matches!(
+                    s.kind,
+                    ShapeKind::Capsule { .. } | ShapeKind::Sphere { .. } | ShapeKind::Hull { .. }
+                )),
+                "{path} {name}: shapes"
+            );
+        }
+        for (i, name) in physics.bones.iter().enumerate() {
+            // The part's bone, by name ignoring case (the ragdoll spells `leg_upper_l`, the skeleton `leg_upper_L`).
+            let bone = model
+                .skeleton
+                .bones
+                .iter()
+                .position(|b| b.name.eq_ignore_ascii_case(name))
+                .unwrap_or_else(|| panic!("{path}: no bone {name}"));
+            let difference = (0..3)
+                .flat_map(|r| (0..4).map(move |c| (r, c)))
+                .map(|(r, c)| (physics.bind_pose[i][r][c] - bind[bone][r][c]).abs())
+                .fold(0.0f32, f32::max);
+            worst_bind = worst_bind.max(difference);
+        }
+        for joint in &physics.joints {
+            // At bind pose both frames of a joint are the same point (the joint's pivot).
+            let a = compose(&physics.bind_pose[joint.body1], &joint.frame1);
+            let b = compose(&physics.bind_pose[joint.body2], &joint.frame2);
+            let gap = (0..3)
+                .map(|k| (a[k][3] - b[k][3]).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            worst_joint = worst_joint.max(gap);
+            // At bind pose each joint sits within its own limits, measured the way the solver measures them
+            // (swing between the frames' z axes, twist of their x axes about the mean z): the axis convention.
+            let (swing, twist) = joint_angles(
+                joint,
+                &physics.bind_pose[joint.body1],
+                &physics.bind_pose[joint.body2],
+            );
+            // A joint without a swing limit is a hinge: no swing.
+            worst_swing = worst_swing.max(swing - joint.swing.map_or(0.0, |(_, max)| max));
+            if let Some((min, max)) = joint.twist {
+                worst_twist = worst_twist.max(min - twist).max(twist - max);
+            }
+        }
+    }
+    println!(
+        "{agents} agents with a ragdoll; part bind poses within {worst_bind:.4} of the skeleton's, joint frames meet within {worst_joint:.4} inch; at bind pose swings at most {worst_swing:.3} rad and twists at most {worst_twist:.3} rad past their limits"
+    );
+    assert!(agents >= 70, "{agents} agents with a ragdoll");
+    assert!(
+        worst_swing < 0.05 && worst_twist < 0.05,
+        "bind poses within the joints' limits"
+    );
+
+    let install = Cs2Install::locate().expect("CS2 install found");
+    let content = Content::for_map(&install, "de_nuke").expect("de_nuke archives open");
+    let bytes = content
+        .read_resource("maps/de_nuke/world_physics.vmdl")
+        .expect("world physics reads");
+    let world = PhysicsData::from_resource(&Resource::parse(&bytes).unwrap())
+        .unwrap()
+        .expect("a PHYS block");
+    let (mut hulls, mut meshes, mut triangles, mut default) = (0usize, 0usize, 0usize, 0usize);
+    let mut worst_corner = f32::NEG_INFINITY;
+    for shape in world.parts.iter().flat_map(|p| &p.shapes) {
+        default += usize::from(world.attribute(shape).is_some_and(|a| a.is_default()));
+        let (vertices, min, max) = match &shape.kind {
+            ShapeKind::Hull {
+                vertices,
+                planes,
+                min,
+                max,
+            } => {
+                hulls += 1;
+                // Every corner lies on or inside every face plane (to float rounding at world coordinates).
+                for v in vertices {
+                    for (n, d) in planes {
+                        let side = n[0] * v[0] + n[1] * v[1] + n[2] * v[2] - d;
+                        worst_corner = worst_corner.max(side);
+                    }
+                }
+                (vertices, min, max)
+            }
+            ShapeKind::Mesh {
+                vertices,
+                triangles: t,
+                min,
+                max,
+            } => {
+                meshes += 1;
+                triangles += t.len();
+                (vertices, min, max)
+            }
+            _ => continue,
+        };
+        for v in vertices {
+            for k in 0..3 {
+                assert!(
+                    v[k] >= min[k] - 0.1 && v[k] <= max[k] + 0.1,
+                    "a vertex outside its bounds"
+                );
+            }
+        }
+    }
+    println!(
+        "de_nuke world physics: {} parts, {hulls} hulls, {meshes} meshes ({triangles} triangles), {default} Default shapes, {} attributes",
+        world.parts.len(),
+        world.attributes.len()
+    );
+    println!("hull corners at most {worst_corner:.3} inch outside their own planes");
+    assert!(hulls + meshes > 1000 && default > 1000);
+    assert!(worst_corner < 0.2, "hull planes match their corners");
+
+    // The SAS ragdoll dropped at bind pose 20 inches above de_nuke's CT spawn floor: it settles on the floor in a
+    // few seconds, joints holding, nothing through the floor.
+    let collision = WorldCollision::from_physics(&world);
+    println!(
+        "de_nuke collision: {:?} solid hulls and triangles",
+        collision.counts()
+    );
+    let sas_bytes = vpk
+        .read_path("agents/models/ctm_sas/ctm_sas.vmdl_c")
+        .unwrap();
+    let sas = PhysicsData::from_resource(&Resource::parse(&sas_bytes).unwrap())
+        .unwrap()
+        .expect("ragdoll");
+    // CT spawn on de_nuke: a player stood at (2584, −504) on the floor at z = −352 (Aurora vs FURIA, round 5).
+    const FLOOR: f32 = -352.0;
+    let lift = ofast_core::model::affine([0.0, 0.0, 0.0, 1.0], [2584.0, -504.0, FLOOR + 20.0]);
+    let start: Vec<_> = sas.bind_pose.iter().map(|m| compose(&lift, m)).collect();
+    let mut ragdoll = Ragdoll::new(&sas, &start, &[]);
+    let mut frames = 0;
+    let started = std::time::Instant::now();
+    let mut speeds = Vec::new();
+    while !ragdoll.at_rest() && frames < 64 * 8 {
+        ragdoll.step(1.0 / 64.0, &collision);
+        frames += 1;
+        if frames % 32 == 0 {
+            speeds.push(format!("{:.0}", ragdoll.speed()));
+        }
+    }
+    println!("speed every half second: {}", speeds.join(" "));
+    let now = ragdoll.frames();
+    let lowest = now.iter().map(|m| m[2][3]).fold(f32::MAX, f32::min);
+    let highest = now.iter().map(|m| m[2][3]).fold(f32::MIN, f32::max);
+    let mut gap = 0.0f32;
+    for joint in &sas.joints {
+        let a = compose(&now[joint.body1], &joint.frame1);
+        let b = compose(&now[joint.body2], &joint.frame2);
+        gap = gap.max(
+            (0..3)
+                .map(|k| (a[k][3] - b[k][3]).powi(2))
+                .sum::<f32>()
+                .sqrt(),
+        );
+    }
+    println!(
+        "SAS ragdoll: still after {frames} frames ({:.0} ms), parts between z {lowest:.1} and {highest:.1}, joints apart at most {gap:.2} inch",
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+    assert!(ragdoll.at_rest(), "comes to rest");
+    assert!(lowest > FLOOR - 1.0, "nothing sinks through the floor");
+    assert!(highest < FLOOR + 20.0, "lying down");
+    assert!(gap < 1.0, "joints hold");
+}

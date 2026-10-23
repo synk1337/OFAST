@@ -12,9 +12,10 @@
 //! - one animation per player, `player_<controller>` (the controller index of the replay file), keyed on every
 //!   tick ([`animation_fps`]) from the round's first tick to its last: CS2's locomotion and weapon layers baked from
 //!   the demo's rig inputs ([`crate::anim::bake`]) and retargeted onto the agent, plus every weapon bone on the hand,
-//!   on its holster, or scaled to 0.
+//!   on its holster, or scaled to 0; from each death on, the body falling as the agent's ragdoll ([`super::deaths`]).
 //!
-//! `<demo>_r<round>.agents.json` lists the files, their looks and their players (`docs/formats/replay.md`);
+//! `<demo>_r<round>.agents.json` lists the files, their looks, their players and the deaths baked as ragdolls
+//! (`docs/formats/replay.md`);
 //! `tools/unreal/import_demo.py` plays each animation on its player's actor, which the replay's positions and body
 //! yaw move.
 
@@ -24,6 +25,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use super::ExportError;
+use super::deaths::bake_deaths;
 use super::gltf::{
     Binding, BoneAnimation, MergedModel, export_character, load_model, resource_data,
 };
@@ -46,6 +48,9 @@ use crate::content::Content;
 use crate::demo::players::{COUNTER_TERRORISTS, PlayerSample, RoundTrack};
 use crate::items::{item_names, item_values};
 use crate::model::{Affine, Model, compose, invert_rigid};
+use crate::physics::PhysicsData;
+use crate::physics::ragdoll::WorldCollision;
+use crate::resource::Resource;
 
 /// Agent model of Counter-Terrorists whose own is unknown.
 pub const CT_AGENT: &str = "agents/models/ctm_sas/ctm_sas.vmdl";
@@ -70,6 +75,10 @@ pub struct PlayersReport {
     pub players: usize,
     /// Weapon bones over all files.
     pub weapons: usize,
+    /// Deaths baked as ragdolls ([`super::deaths`]).
+    pub deaths: usize,
+    /// One line per death: who, when, how far the body went and when it lay still.
+    pub falls: Vec<String>,
     /// Key rate of the animations ([`animation_fps`]).
     pub fps: f32,
     /// Frames per animation.
@@ -130,6 +139,29 @@ struct Round<'a> {
     fps: f32,
     /// For each animation frame: its demo tick and sample index.
     frames: Vec<(f32, usize)>,
+    /// The map's solid collision, for the bodies of the dead (`None` when it could not be read).
+    collision: Option<WorldCollision>,
+}
+
+/// The solid collision of `map` (`maps/<map>/world_physics.vmdl`), or why it cannot be read (the map's archive is
+/// not open, or the file is broken).
+fn load_world_collision(content: &Content, map: &str) -> Result<WorldCollision, String> {
+    let path = format!("maps/{map}/world_physics.vmdl");
+    let bytes = content
+        .read_resource(&path)
+        .map_err(|e| format!("{path}: {e} (is the map's archive open?)"))?;
+    let resource = Resource::parse(&bytes).map_err(|e| format!("{path}: {e}"))?;
+    let physics = PhysicsData::from_resource(&resource)
+        .map_err(|e| format!("{path}: {e}"))?
+        .ok_or_else(|| format!("{path}: no PHYS block"))?;
+    Ok(WorldCollision::from_physics(&physics))
+}
+
+/// An agent's ragdoll (its `PHYS` block); `None` when it has none.
+fn load_ragdoll(content: &Content, agent: &str) -> Option<PhysicsData> {
+    let bytes = content.read_resource(agent).ok()?;
+    let resource = Resource::parse(&bytes).ok()?;
+    PhysicsData::from_resource(&resource).ok()?
 }
 
 /// Everything the bake reads from CS2 for a round's players ([`load_player_rig`]).
@@ -221,6 +253,14 @@ pub fn export_players(
         .as_deref()
         .map(|text| item_values(text, "model_world"))
         .unwrap_or_default();
+    let collision = load_world_collision(content, &track.map_name)
+        .inspect_err(|e| {
+            warnings.push(format!(
+                "no collision for {}: {e}: the dead fall onto a floor where they last stood",
+                track.map_name
+            ))
+        })
+        .ok();
     let round = Round {
         content,
         track,
@@ -231,6 +271,7 @@ pub fn export_players(
         models: content.resource_paths("vmdl"),
         fps: animation_fps(track),
         frames: frame_samples(track, animation_fps(track)),
+        collision,
     };
 
     // Each player's look, from the last sample where they were alive (else their last one).
@@ -286,6 +327,8 @@ pub fn export_players(
         manifest: out_dir.join(format!("{demo_name}_r{}.agents.json", track.round)),
         players: 0,
         weapons: 0,
+        deaths: 0,
+        falls: Vec::new(),
         fps: round.fps,
         frames: round.frames.len(),
         warnings,
@@ -301,13 +344,48 @@ pub fn export_players(
         if let Some(gloves) = &look.gloves {
             name = format!("{name}_{}", stem(gloves));
         }
-        let (written, weapons) = export_look(&round, look, players, out_dir, &name)?;
+        let (written, weapons, falls) = export_look(&round, look, players, out_dir, &name)?;
+        report.deaths += falls.len();
+        // Each player's baked deaths: the ticks of their first and last frames.
+        let mut ragdolls: BTreeMap<String, Vec<[f32; 2]>> = BTreeMap::new();
+        for (controller, fall) in &falls {
+            let last = round.frames[fall.end_frame - 1].0;
+            ragdolls
+                .entry(controller.to_string())
+                .or_default()
+                .push([fall.tick, last]);
+        }
+        for (controller, fall) in falls {
+            let name = last.get(&controller).map_or("?", |p| p.name.as_str());
+            let at = format!(
+                "({:.0}, {:.0}, {:.0})",
+                fall.rest[0], fall.rest[1], fall.rest[2]
+            );
+            // How far the body's centre went, and how much of it down (lying down alone is about 0.7 m).
+            let moved = format!(
+                "{:.1} m ({:.1} m down)",
+                fall.distance() * 0.0254,
+                (fall.start[2] - fall.rest[2]) * 0.0254
+            );
+            report.falls.push(match fall.frames_to_rest {
+                Some(frames) => format!(
+                    "{name} (tick {:.0}): the body moved {moved} and lay still after {:.1} s at {at}",
+                    fall.tick,
+                    frames as f32 / round.fps
+                ),
+                None => format!(
+                    "{name} (tick {:.0}): the body moved {moved}, still moving at the round's end at {at}",
+                    fall.tick
+                ),
+            });
+        }
         manifest.push(json!({
             "file": format!("{name}.gltf"),
             "model": look.agent,
             "mesh_groups": look.mesh_groups,
             "gloves": look.gloves,
             "players": players,
+            "ragdolls": ragdolls,
             "weapons": weapons.iter().map(|s| json!({
                 "model": s.look.model,
                 "mesh_groups": s.look.mesh_groups,
@@ -334,17 +412,26 @@ pub fn export_players(
     Ok(report)
 }
 
-/// Writes one look's glTF; returns the export report and the weapon slots it holds.
+/// What [`export_look`] returns: the glTF export's report, the weapon slots it holds, and each death baked as a
+/// ragdoll (the player's controller, the fall).
+type LookExport = (
+    super::gltf::ExportReport,
+    Vec<Slot>,
+    Vec<(u32, super::deaths::DeathSummary)>,
+);
+
+/// Writes one look's glTF ([`LookExport`]).
 fn export_look(
     round: &Round<'_>,
     look: &Look,
     players: &[u32],
     out_dir: &Path,
     file_name: &str,
-) -> Result<(super::gltf::ExportReport, Vec<Slot>), ExportError> {
+) -> Result<LookExport, ExportError> {
     let content = round.content;
     let track = round.track;
     let agent = load_model(content, &look.agent)?;
+    let ragdoll = load_ragdoll(content, &look.agent);
     let mut mesh_groups = shown_groups(&agent, look.mesh_groups);
     let mounts = AgentMounts::of(&agent);
     let retargeter = Retargeter::new(&agent.skeleton, &round.clip_skeleton);
@@ -467,9 +554,10 @@ fn export_look(
 
     // One animation per player: the agent's bones, then the weapon bones.
     let mut animations = Vec::new();
+    let mut falls = Vec::new();
     for ((&controller, poses), carried) in players.iter().zip(bodies).zip(&places) {
         let poses = hold_gaps(poses, &round.clip_skeleton.reference);
-        let worlds: Vec<Vec<Affine>> = poses
+        let mut worlds: Vec<Vec<Affine>> = poses
             .iter()
             .map(|pose| {
                 let mut world = retargeter.world(pose);
@@ -477,6 +565,27 @@ fn export_look(
                 world
             })
             .collect();
+        // Each death: the body falls as the agent's ragdoll and stays.
+        if let Some(ragdoll) = &ragdoll {
+            let deaths = bake_deaths(
+                track,
+                controller,
+                &round.frames,
+                round.fps,
+                &agent,
+                ragdoll,
+                round.collision.as_ref(),
+                &mut worlds,
+            );
+            for summary in &deaths.summaries {
+                falls.push((controller, *summary));
+                // The twist bones and shoulder blades follow the fallen limbs (only there: a living pose already
+                // has them, and a point constraint would move a second time).
+                for world in &mut worlds[summary.first_frame..summary.end_frame] {
+                    constraints.apply(world);
+                }
+            }
+        }
         // Each weapon bone, frame by frame: where it is keyed (relative to the root) and whether it shows.
         let slot_keys: Vec<Vec<(Affine, bool)>> = slots
             .iter()
@@ -550,7 +659,7 @@ fn export_look(
         file_name,
     )?;
     written.warnings.extend(warnings);
-    Ok((written, slots))
+    Ok((written, slots, falls))
 }
 
 /// Where `slot`'s weapon is in one frame's list (hidden when the player does not carry it).

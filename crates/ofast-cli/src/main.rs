@@ -196,7 +196,10 @@ fn run(cli: Cli) -> Result<(), String> {
                     None => Cs2Install::locate(),
                 }
                 .ok_or("CS2 not found — pass --cs2 <folder> or set OFAST_CS2_DIR")?;
-                let content = Content::game(&install).map_err(|e| e.to_string())?;
+                // The map's archive too, for its collision (the dead fall on it); the game's alone if it is missing.
+                let content = Content::for_map(&install, &track.map_name)
+                    .or_else(|_| Content::game(&install))
+                    .map_err(|e| e.to_string())?;
                 let report =
                     export_players(&content, &track, name, out).map_err(|e| e.to_string())?;
                 for file in &report.files {
@@ -204,12 +207,16 @@ fn run(cli: Cli) -> Result<(), String> {
                 }
                 println!("wrote {}", report.manifest.display());
                 println!(
-                    "{} players animated with {} weapon bones, {} frames each, in {:.1}s",
+                    "{} players animated with {} weapon bones ({} deaths as ragdolls), {} frames each, in {:.1}s",
                     report.players,
                     report.weapons,
+                    report.deaths,
                     report.frames,
                     started.elapsed().as_secs_f32()
                 );
+                for fall in &report.falls {
+                    println!("  death: {fall}");
+                }
                 for warning in &report.warnings {
                     println!("warning: {warning}");
                 }

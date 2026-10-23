@@ -26,7 +26,9 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
   baked animation (`player_<controller>`: body, weapons in hand and holstered), its feet on the demo's positions and
   turned along the body yaw; otherwise a proxy (a capsule-sized cylinder in team colours: CT blue, T orange, with a
   "visor" at the eyes showing where the player faces) turned along the eye yaw. Actor label "CT <name>" /
-  "T <name>"; hidden while dead and while the camera looks through the player's own eyes;
+  "T <name>"; hidden while the camera looks through the player's own eyes, and while dead unless the export baked
+  the death as a ragdoll (the agents manifest lists the ticks of those deaths under `ragdolls`: the body falls and
+  stays);
 - per player: a first-person camera at the eye (feet + the networked eye height), aimed along pitch and yaw, with
   CS2's default field of view (90 degrees at 4:3);
 - a camera cut track that follows the killer of each kill in turn (from the previous kill until half a second after
@@ -240,7 +242,8 @@ def apply_specular_factors(gltf_path, objects):
 def import_agents(replay):
     """Imports the players' animated agents written next to the replay by `ofast export-demo --players`, if any: the
     files <demo>_r<round>.agents.json lists, one per agent look. Returns controller -> (skeletal mesh,
-    AnimSequence); Interchange names each AnimSequence <file><animation>, so the controller is read from its
+    AnimSequence, the [first tick, last tick] of each death the animation holds as a ragdoll: the body stays visible
+    there); Interchange names each AnimSequence <file><animation>, so the controller is read from its
     `player_<controller>` ending (shortened in the middle when long, so only `_<controller>` is sure to remain) —
     except in a file with a single animation, which it names <file>_Anim."""
     folder = os.path.dirname(REPLAY_PATH)
@@ -289,11 +292,14 @@ def import_agents(replay):
             sample = next(iter(animations.values()))
             rate = ", %d frames over %.3f s" % (unreal.AnimationLibrary.get_num_frames(sample),
                                                 sample.get_play_length())
-        log("agents %s: %s with %d player animations%s, %d weapons"
-            % (look, meshes[0].get_name(), len(animations), rate, len(entry.get("weapons", []))))
+        # Controller (as text) -> [[first tick, last tick], …] of each death baked as a ragdoll.
+        ragdolls = entry.get("ragdolls", {})
+        log("agents %s: %s with %d player animations%s, %d weapons, %d deaths as ragdolls"
+            % (look, meshes[0].get_name(), len(animations), rate, len(entry.get("weapons", [])),
+               sum(len(r) for r in ragdolls.values())))
         for controller in entry["players"]:
             if controller in animations:
-                agents[controller] = (meshes[0], animations[controller])
+                agents[controller] = (meshes[0], animations[controller], ragdolls.get(str(controller), []))
     return agents
 
 
@@ -459,7 +465,10 @@ def build(replay):
             body_rotations = [None if r is None else (0.0, r[1]) for r in rotations]
             binding = sequence.add_possessable(body)
             keys += key_transform(binding, frames, centres, body_rotations, HULL_SCALE, end_frame)
-        alive = [bool(a) and p is not None for a, p in zip(track["alive"], positions)]
+        # Shown while alive, and through each death the animation holds as a ragdoll (the body lies there).
+        deaths = agent[2] if agent is not None else []
+        alive = [(bool(a) or any(first <= t <= last for first, last in deaths)) and p is not None
+                 for a, p, t in zip(track["alive"], positions, ticks)]
         own_view = [(start, end) for start, end, who in cuts if who == player["controller"]]
         # Frames other cameras screenshot (close-ups, other players' eyes) show this player even inside his own cut.
         shown = [t - tick0 for t, _ in CLOSE_SHOTS] + [view[0] - tick0 for view in VIEW_SHOTS] + \

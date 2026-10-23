@@ -81,6 +81,26 @@ pub struct PlayerSample {
     /// Every weapon the player carries, the one in hand included (`m_pWeaponServices.m_hMyWeapons`), in the order
     /// the game lists them.
     pub weapons: Vec<CarriedWeapon>,
+    /// What killed the player, while dead (`None` while alive): the pawn's ragdoll damage fields, set on the death
+    /// tick and kept until the next death.
+    pub death: Option<Death>,
+}
+
+/// What killed a player: what CS2's client starts the ragdoll from (it simulates the ragdoll itself; demos carry no
+/// ragdoll pose). Read from the pawn on the death tick (`docs/formats/demo.md`, "Deaths").
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Death {
+    /// The bone hit (`m_nRagdollDamageBone`), an index into the agent's skeleton: 7 = `head_0` for a headshot.
+    pub bone: Option<u32>,
+    /// The force of the killing hit (`m_vRagdollDamageForce`), world, along the shot: magnitudes of about 20000 –
+    /// 30000 for rifle bullets.
+    pub force: [f32; 3],
+    /// Where it hit (`m_vRagdollDamagePosition`), world.
+    pub position: [f32; 3],
+    /// A headshot (`m_bRagdollDamageHeadshot`).
+    pub headshot: bool,
+    /// The weapon's name (`m_szRagdollDamageWeaponName`: `m4a1_silencer`, `ak47`…).
+    pub weapon: String,
 }
 
 /// What a player looks like. Models are named by resource id ([`crate::resource::resource_id`] of the `.vmdl`
@@ -275,6 +295,31 @@ struct Paths {
     game_phase: FieldPath,
     rig: RigPaths,
     appearance: AppearancePaths,
+    death: DeathPaths,
+}
+
+/// Field paths of what killed a pawn. Each is optional.
+#[derive(Debug, Default)]
+struct DeathPaths {
+    bone: Option<FieldPath>,
+    force: Option<FieldPath>,
+    position: Option<FieldPath>,
+    headshot: Option<FieldPath>,
+    weapon: Option<FieldPath>,
+}
+
+impl DeathPaths {
+    fn find(serializers: &Serializers) -> Self {
+        let pawn = serializers.by_name("CCSPlayerPawn");
+        let path = |field: &str| pawn.and_then(|s| serializers.path_of(s, field));
+        Self {
+            bone: path("m_nRagdollDamageBone"),
+            force: path("m_vRagdollDamageForce"),
+            position: path("m_vRagdollDamagePosition"),
+            headshot: path("m_bRagdollDamageHeadshot"),
+            weapon: path("m_szRagdollDamageWeaponName"),
+        }
+    }
 }
 
 /// The model's resource id and mesh groups, at the same place in every class with a body.
@@ -428,6 +473,7 @@ impl Paths {
             game_phase: path(rules, "m_pGameRules.m_gamePhase")?,
             rig: RigPaths::find(serializers, classes),
             appearance: AppearancePaths::find(serializers),
+            death: DeathPaths::find(serializers),
         })
     }
 }
@@ -672,6 +718,11 @@ fn read_players(parser: &DemoParser<'_>, paths: &Paths) -> Vec<PlayerSample> {
             .get(&paths.eye_angles)
             .and_then(FieldValue::as_vector3)
             .unwrap_or_default();
+        let alive = pawn
+            .get(&paths.life_state)
+            .and_then(FieldValue::as_u64)
+            .unwrap_or(0)
+            == 0;
         players.push(PlayerSample {
             controller: controller.index,
             name: controller
@@ -688,17 +739,38 @@ fn read_players(parser: &DemoParser<'_>, paths: &Paths) -> Vec<PlayerSample> {
             view_offset,
             pitch: angles[0],
             yaw: angles[1],
-            alive: pawn
-                .get(&paths.life_state)
-                .and_then(FieldValue::as_u64)
-                .unwrap_or(0)
-                == 0,
+            alive,
             rig: read_rig(parser, &paths.rig, pawn),
             appearance: read_appearance(&paths.appearance, pawn),
             weapons: read_weapons(parser, paths, pawn),
+            death: (!alive).then(|| read_death(&paths.death, pawn)),
         });
     }
     players
+}
+
+/// What killed the pawn (its ragdoll damage fields; defaults where not sent).
+fn read_death(paths: &DeathPaths, pawn: &Entity) -> Death {
+    let get = |path: &Option<FieldPath>| path.as_ref().and_then(|p| pawn.get(p));
+    let vector = |path: &Option<FieldPath>| {
+        get(path)
+            .and_then(FieldValue::as_vector3)
+            .unwrap_or_default()
+    };
+    Death {
+        bone: get(&paths.bone)
+            .and_then(FieldValue::as_i64)
+            .and_then(|b| u32::try_from(b).ok()),
+        force: vector(&paths.force),
+        position: vector(&paths.position),
+        headshot: get(&paths.headshot)
+            .and_then(FieldValue::as_bool)
+            .unwrap_or(false),
+        weapon: get(&paths.weapon)
+            .and_then(FieldValue::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+    }
 }
 
 /// The pawn's model, mesh groups and gloves (0 where not sent).

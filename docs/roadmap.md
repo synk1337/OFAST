@@ -174,7 +174,14 @@ player and round.
   holstered pistols and grenades where CS2 draws them. Glove skins merged by bone name but not seen in the game yet
   (no glove skins in the local demo). [animation.md](formats/animation.md#weapons-in-hand-and-holstered-exportloadout),
   [demo.md](formats/demo.md#models).
-- [ ] M4.6 Deaths: ragdolls in Unreal from the demo's ragdoll force and bone.
+- [x] **M4.6 Deaths**: each death as CS2's ragdoll of the agent (its `PHYS` block: 15 capsules, 14 conical joints
+  twisting about z), simulated in Rust (extended position-based dynamics) against the map's own collision
+  (`world_physics`: solid world, grates and glass, not the player clips) from the demo's death fields (hit bone, force,
+  position) and the last living pose's motion, baked into the glTF animation; the body stays visible in Unreal.
+  Checked: all 46 deaths of three rounds of two demos baked, bodies at rest on floors; against CS2, a running
+  player's body lies where CS2's does to about 0.5 m, face down like CS2's (decision 015,
+  [animation.md](formats/animation.md#deaths-exportdeaths-physicsragdoll)). To do: the force scale against more
+  deaths, doors in their demo state, dropped weapons.
 - [x] **Character and weapon materials, first pass**: roughness read where each material keeps it (94 character
   materials, the SAS body among them, keep it in `g_tAnisoGloss`, not the normal map: they rendered mirror-smooth),
   weapons' 2 % dielectric specular. The SAS agents now read as dark cloth like CS2's.

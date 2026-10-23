@@ -51,6 +51,7 @@ one glTF per look (agent model, mesh groups, glove skin), each with an animation
 | `agents[].model`, `.mesh_groups`, `.gloves` | the agent model path, its mesh-group mask (0 = the model's default), the glove model path or `null` |
 | `agents[].players` | the controllers animated in that file (animations `player_<controller>`) |
 | `agents[].weapons` | the weapon bones in order (`ofast_weapon_0`, `_1`, …): `model`, `mesh_groups`, `instance` (a second copy carried at once) |
+| `agents[].ragdolls` | controller (as text) → `[first tick, last tick]` of each of that player's deaths the animation holds as a ragdoll (from the death to the respawn or the round's end) |
 
 Checked: the kills of all 20 rounds of a real match equal demoparser2's (`kills_match_demoparser2`); positions and
 angles are the round tracks already checked against demoparser2 and CS2 (`docs/formats/demo.md`); in Unreal each
@@ -81,8 +82,12 @@ looks through). To compare with CS2: `demo_pause`, `demo_gototick <tick − 64>`
 alone can leave poses stale), spectate the player (`spec_player "<name>"` for ASCII names, or the demo bar's player
 arrows; `spec_player_by_accountid` does nothing in demo playback), Steam's F12.
 
+A player whose death the players export baked as a ragdoll (`ragdolls` in the agents manifest) stays visible over
+the death's ticks: the body falls and lies there to the end of the round
+([animation.md](animation.md#deaths-exportdeaths-physicsragdoll)).
+
 ## Not yet
 
-Foot IK of CS2's animation graph, weapon skins, ragdolls (M4.6), grenades
+Foot IK of CS2's animation graph, weapon skins, grenades
 and their effects (M6), sounds, a name label above each player (Unreal's text render did not show in the
 screenshots; the names are the actors' labels in Sequencer), several rounds in one sequence.

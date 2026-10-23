@@ -15,6 +15,7 @@
 //! | [`game`] | Locating a CS2 install on disk | — |
 //! | [`items`] | Item definitions (`scripts/items/items_game.txt`, KeyValues 1): weapon names by index | — |
 //! | [`anim`] | Animation clips, skeletons, CS2's locomotion graph, each player's baked animation | `docs/formats/animation.md` |
+//! | [`physics`] | Rubikon physics (`PHYS` blocks): agents' ragdolls, maps' world collision | `docs/formats/model.md` |
 //! | [`bytes`] | Shared little-endian byte cursor (and varints) used by every binary reader | — |
 //!
 //! More modules (textures, meshes, materials, maps…) arrive milestone by milestone — see
@@ -41,6 +42,7 @@ pub mod kv3;
 pub mod map;
 pub mod meshopt;
 pub mod model;
+pub mod physics;
 pub mod resource;
 pub mod texture;
 pub mod vpk;

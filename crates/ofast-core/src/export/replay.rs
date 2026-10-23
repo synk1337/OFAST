@@ -329,6 +329,7 @@ mod tests {
             rig,
             appearance: Default::default(),
             weapons: Vec::new(),
+            death: None,
         }
     }
 

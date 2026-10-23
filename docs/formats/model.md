@@ -119,6 +119,24 @@ procedural twist bones). Parents come before children in all 93 agent and glove 
 point and aim constraints; the eyes' dot-to-morph ones drive morphs). Read and applied by `anim::constraints`
 ([animation.md](animation.md#procedural-bones-animconstraints)).
 
+**Physics** (`PHYS` block, KV3; `src/physics/mod.rs`): `m_parts` (rigid bodies: `m_flMass`, `m_flInertiaScale`,
+`m_flLinearDamping` / `m_flAngularDamping`, `m_flLinearDrag` / `m_flAngularDrag`, and `m_rnShape` with
+`m_spheres`, `m_capsules`, `m_hulls`, `m_meshes`), `m_boneNames` (the bone each part follows), `m_bindPose` (each
+part's bind transform, a row-major 3 × 4 matrix), `m_joints` (`m_nType` 4 = conical, `m_nBody1` / `m_nBody2`,
+`m_Frame1` / `m_Frame2` as position, scale, quaternion, `m_SwingLimit` / `m_TwistLimit` with their enable flags,
+`m_flFriction`) and `m_collisionAttributes` (`m_CollisionGroupString`, `m_InteractAsStrings`). Hulls keep their
+vertices (`m_VertexPositions`, or `m_Vertices` before late 2023) and face planes (`m_Planes`: normal and offset,
+inside when `normal · p − offset < 0`) as binary blobs; meshes their vertices and triangles (three `i32`).
+- **An agent's ragdoll**: 15 capsule parts (`pelvis`, `spine_2`, `head_0`, upper and lower arms, hands, thighs,
+  shins, `ankle_l` / `_r`), 14 conical joints. On all 80 agents the parts' bind poses equal the skeleton's (to
+  0.0009) and every joint's two frames meet at its pivot (`tests/cs2_model.rs` `ragdolls_and_world_collision_read`).
+  The joints twist about their frames' **z** axis and swing as the angle between the frames' z axes; a joint without
+  a swing limit is a hinge (the knees: twist 0° … 110°, which CS2's poses keep at exactly 0° of swing).
+- **A map's collision**: `maps/<map>/world_physics.vmdl_c`, one part of hulls and meshes in world space (de_nuke:
+  5988 hulls, 11 meshes of 80182 triangles). Collision groups: "Default" (solid) and "ConditionallySolid" tagged
+  `passbullets` (grates and floor panels: de_nuke's B site floor is one), `window`, `solid`, or clips that stop only
+  some objects (`playerclip`, `npcclip`, `csgo_grenadeclip`, `navclip`, `blocksound`, `sky`).
+
 **Remapping**: `DATA m_remappingTable` holds one slice per mesh, starting at `m_remappingTableStarts[mesh index]` and
 ending at the next start. A vertex's bone index `i` is skeleton bone `table[start + i]`. A slice begins with the
 mesh's own render bones (`MDAT m_skeleton.m_bones`, same order, each with an `m_invBindPose`) and on agents ends with
