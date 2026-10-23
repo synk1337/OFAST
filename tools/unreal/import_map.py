@@ -32,9 +32,14 @@ default field of view → screenshots → quit. Everything the script adds is ta
 import json
 import math
 import os
+import sys
 import time
 
 import unreal
+
+# Unreal runs this file without its folder on sys.path; the shared modules sit next to it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gltf_specular  # noqa: E402
 
 GLTF = os.environ["OFAST_GLTF"]
 SHOT_DIR = os.environ["OFAST_SHOT"]
@@ -1715,7 +1720,7 @@ def put_overlay_decals(imported, instances):
 # TRANSLUCENCY_LIGHTING, and GLTF_BLEND_PARENTS maps each of Interchange's translucent instances to a copy of it
 # parented to GLTF_MASTER (same blend mode and sidedness overrides, same parameters). Versioned like BLEND_MASTER;
 # made once by duplicating the plugin's assets, so a newer engine's M_Default is picked up only by a new version.
-INTERCHANGE_MASTER = "/InterchangeAssets/gltf/M_Default"
+INTERCHANGE_MASTER = gltf_specular.INTERCHANGE_MASTER
 GLTF_MASTER = "/Game/OFAST/Materials/M_OFAST_glTFDefault_v1"
 GLTF_BLEND_PARENTS = {
     "/InterchangeAssets/gltf/MaterialInstances/MI_Default_Blend": "/Game/OFAST/Materials/MI_OFAST_glTFDefault_Blend_v1",
@@ -2023,27 +2028,13 @@ def set_unlit_blend_modes():
     return count
 
 
-# Interchange's glTF master (M_Default, and OFAST's copy GLTF_MASTER) feeds Unreal's Specular from its body function
-# (MF_Default_Body): occlusion x SpecularFactor x the specular texture's alpha x MF_IOR's ((IOR - 1) / (IOR + 1))^2 /
-# 0.08 when the material has a specular texture (static switch bHasSpecularTexture), but occlusion x SpecularFactor
-# alone when it has none. So glTF's defaults (factor 1, IOR 1.5: F0 0.04) render as Specular 1, F0 0.08: twice what
-# glTF means, what CS2 uses for every non-metal but weapons (Source 2 Viewer's complex.frag.slang) and what OFAST's own
-# masters draw (Specular unconnected, 0.5), which doubled Lumen's reflections on most surfaces (docs/formats/
-# lighting.md). set_gltf_specular gives those instances the IOR term in SpecularFactor.
-GLTF_DEFAULT_IOR = 1.5  # KHR_materials_ior's default; OFAST's exports write neither it nor KHR_materials_specular
-
-
-def ior_specular(ior):
-    """Unreal's Specular for a dielectric of index `ior` as MF_IOR computes it: F0 / 0.08, at most 1 (0.5 for 1.5)."""
-    return min(((ior - 1.0) / (ior + 1.0)) ** 2 / 0.08, 1.0)
-
-
 def set_gltf_specular(skip):
     """Sets SpecularFactor on the Interchange instance of every glTF material not in `skip` (the materials whose slots
-    got OFAST's own instances) whose master is Interchange's glTF master or OFAST's copy and that has no specular
-    texture: the glTF specularFactor x ior_specular(IOR), as the master computes it with a texture. Written only when
-    it changes (set_scalar_parameter). Runs after the scene import and light_translucent_per_pixel (which may change
-    the parent). Returns the number of instances set this run and of those already right."""
+    got OFAST's own instances) that Interchange's glTF master or OFAST's copy draws without a specular texture: the
+    glTF specularFactor x the IOR term, as the master computes it with a texture (gltf_specular: without it the master
+    draws F0 0.08, which doubled Lumen's reflections on most surfaces, docs/formats/lighting.md). Written only when it
+    changes (set_scalar_parameter). Runs after the scene import and light_translucent_per_pixel (which may change the
+    parent). Returns the number of instances set this run and of those already right."""
     with open(GLTF) as f:
         document = json.load(f)
     masters = {unreal.EditorAssetLibrary.load_asset(path).get_path_name() for path in (INTERCHANGE_MASTER, GLTF_MASTER)
@@ -2054,16 +2045,9 @@ def set_gltf_specular(skip):
         if material["name"] in skip:
             continue
         instance = interchange_instance(material["name"])
-        if instance is None:
+        if instance is None or not gltf_specular.takes_specular_factor(instance, masters):
             continue
-        base = instance.get_base_material()
-        if base is None or base.get_path_name() not in masters:
-            continue  # the unlit master (KHR_materials_unlit) has no Specular
-        if mel.get_material_instance_static_switch_parameter_value(instance, "bHasSpecularTexture"):
-            continue  # the master applies the IOR term itself
-        extensions = material.get("extensions", {})
-        factor = extensions.get("KHR_materials_specular", {}).get("specularFactor", 1.0)
-        wanted = factor * ior_specular(extensions.get("KHR_materials_ior", {}).get("ior", GLTF_DEFAULT_IOR))
+        wanted = gltf_specular.specular_factor(material)
         if abs(mel.get_material_instance_scalar_parameter_value(instance, "SpecularFactor") - wanted) > 1e-6:
             set_scalar_parameter(instance, "SpecularFactor", wanted)
             changed += 1

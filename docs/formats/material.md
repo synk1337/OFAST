@@ -46,13 +46,36 @@ maps holding roughness, `Mip AnisoRoughness_RG` for `g_tAnisoGloss`). Until 2026
 `csgo_*` normal map, which is 0 on BC5: the 94 anisotropic bodies were mirror-smooth, the "too glossy" agents of
 M4.1. Weapons were right (R of `g_tMetalness`).
 
-**Weapons' specular.** `csgo_weapon` reflects 2 % at normal incidence off non-metals, not the 4 % glTF assumes
-(ValveResourceFormat's complex shader, `F0 = 0.02`): the export adds `KHR_materials_specular` with
-`specularFactor` 0.5. Unreal's Interchange creates the glTF master's `SpecularFactor` parameter but leaves it at 1,
-so `import_demo.py` sets it from the file.
+**Weapons' and agents' specular.** `csgo_weapon` reflects 2 % at normal incidence off non-metals, not the 4 % glTF
+assumes (ValveResourceFormat's complex shader, `F0 = 0.02`): the export adds `KHR_materials_specular` with
+`specularFactor` 0.5. Interchange creates the glTF master's `SpecularFactor` parameter at 1 whatever the file says,
+and without a specular texture the master's Specular is `SpecularFactor` alone, so F0 = 0.08 × `SpecularFactor`
+([lighting.md](lighting.md#reflections-of-interchanges-gltf-master-2026-10-18)). `import_demo.py` sets it by the rule
+`import_map.py` uses for maps (`tools/unreal/gltf_specular.py`: specularFactor × the IOR term, 0.5 at glTF's IOR
+1.5): 0.25 on weapons (F0 0.02), 0.5 on other materials (F0 0.04), finding each instance through its mesh's material
+slot, since Interchange shortens long instance names in the middle (`weapon_kni_e_karambit`). CS2's character
+materials (`csgo_character`: agents, gloves, arms) keep 1, F0 0.08 (`CHARACTER_SPECULAR_FACTOR`): CS2 gives its
+agents a cloth sheen and a rim light that OFAST does not convert (next paragraph), and without them the agents
+already read darker than CS2's; F0 0.04 darkens them further. Aurora vs FURIA round 5, CS2's Chase Cam views against
+Unreal's from the same camera (default picture): an SAS agent in the shade reads 0.60 of CS2 at 0.08 and 0.48 at
+0.04, the ground beside him 0.97; KSCERATO in the sun 0.96 and 0.92, the ground 1.09. A stand-in until the sheen is
+converted.
+
+Until 2026-10-23 `import_demo.py` wrote the glTF's 0.5 itself, matched by instance name: weapons drew F0 0.04, and
+in agent files whose instance names Interchange shortened some weapons (a karambit) kept 0.08. Per-pixel F0
+((`ShowFlag.Lighting 0` − the same with `ShowFlag.Specular 0`) / 0.45, through a straight tone line; the round's 13
+dropped-weapon models and 4 agent models against the sky; pixels where `SpecularFactor` 0 leaves no metal
+reflection): weapons median 0.0385 before, 0.0192 after (94 % within 0.01 – 0.03; most of the rest are the molotov's
+flame and liquid and the C4's panel, other shaders, at 0.04); agents 0.077 (0.0385 with the glTF rule). Medians sit a
+little under 0.02 / 0.04 / 0.08 where occlusion dims Specular. Lit, the weapons barely change: a FAMAS in the shade
+(close-up at tick 34230) reads 5 – 7 % darker on its plastic, the map not at all. Against CS2 the difference cannot
+be judged: every weapon in the round's CS2 views close enough to see wears a paint kit (OFAST draws the default
+finish until M10), and the light around them differs more than 2 % of reflectance does
+(`test-data/shots/weapon_specular/compare_weapons_cs2.jpg`).
 
 **Not converted** (glTF has no equivalent OFAST uses yet): characters' cloth shading (`g_tMetalness` B × (1 − G) is
-a cloth mask; CS2 gives those areas a sheen lobe, F0 = `sqrt(albedo) · g_flSheenScale`), retro-reflectivity
+a cloth mask; CS2 gives those areas a sheen lobe, F0 = `sqrt(albedo) · g_flSheenScale`), their rim light
+(`g_flRimlightStrength` on some materials), retro-reflectivity
 (`g_tMetalness` R with `F_RETRO_REFLECTIVE`), the characters' colour and roughness adjustments, anisotropy itself, and
 `g_flMetalnessTransitionBias` on weapons, which no public reference explains. Metal parts take their colour as F0 as
 in the standard model; knife blades, whose colour texture is dark grey (sRGB ≈ 0.38), render darker than in CS2.
@@ -513,7 +536,7 @@ lit skybox master (they need its depth offset); for `csgo_black_unlit` lit black
 | `csgo_effects` (dust and light-shaft cards) | not exported (they appeared as white sheets; to be rebuilt as Unreal effects) |
 | tints (`m_vTintColor`, `rendercolor`, a draw call's own tint) | a scene object's tint of (0, 0, 0, 0) is none (older 3D skyboxes, [map.md](map.md#world-node-vwnod_c-data)); material named `<name>_tintRRGGBB` (`<name>_tintRRGGBBAA` when the alpha is not full); `baseColorFactor` (sRGB → linear) when the tint covers the whole surface; environment shaders tint only their tint mask, in Unreal's material ("Model tint" above), and so do prop shaders with `F_TINT_MASK` ("Model tint of prop shaders" above); the draw call's tint multiplies the placement's first ("Draw-call tint" above) |
 | same file name in two folders | the second material is renamed `<name>_<folder>` (Unreal matches slots by name) |
-| reflectance of non-metals | F0 0.04, CS2's for every non-metal but weapons (Source 2 Viewer's `complex.frag.slang`) and glTF's at its default IOR 1.5: OFAST's own masters leave Unreal's Specular at 0.5; Interchange's glTF master draws 0.08 for a material without a specular texture, so `import_map.py` sets `SpecularFactor` 0.5 on its instances (`set_gltf_specular`; [lighting.md](lighting.md#reflections-of-interchanges-gltf-master-2026-10-18)) |
+| reflectance of non-metals | F0 0.04, CS2's for every non-metal but weapons (Source 2 Viewer's `complex.frag.slang`) and glTF's at its default IOR 1.5: OFAST's own masters leave Unreal's Specular at 0.5; Interchange's glTF master draws 0.08 for a material without a specular texture, so `import_map.py` and `import_demo.py` set `SpecularFactor` on its instances (`gltf_specular.py`: 0.5, 0.25 on weapons for their F0 0.02; [lighting.md](lighting.md#reflections-of-interchanges-gltf-master-2026-10-18)); agents keep 0.08 for now ("Weapons' and agents' specular" above) |
 
 ## Unreal project requirement
 

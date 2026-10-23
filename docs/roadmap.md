@@ -190,9 +190,11 @@ player and round.
   though networked closed.
 - [x] **Character and weapon materials, first pass**: roughness read where each material keeps it (94 character
   materials, the SAS body among them, keep it in `g_tAnisoGloss`, not the normal map: they rendered mirror-smooth),
-  weapons' 2 % dielectric specular. The SAS agents now read as dark cloth like CS2's.
+  weapons' 2 % dielectric specular (rendered as 4 % until 2026-10-23: Interchange's master drops the IOR term). The
+  SAS agents now read as dark cloth like CS2's.
   [material.md](formats/material.md#characters-and-weapons-csgo_character-csgo_weapon).
-- [ ] Characters' cloth sheen, retro-reflectivity and colour adjustments; why CS2's knife blades look brighter
+- [ ] Characters' cloth sheen, rim light, retro-reflectivity and colour adjustments (agents read darker than CS2's:
+  an SAS agent in the shade 0.60; they keep Interchange's F0 0.08 meanwhile); why CS2's knife blades look brighter
   (`g_flMetalnessTransitionBias`?).
 - [ ] Weapon skins (paint kits, wear, seed, stickers: M10), and the molotov / incendiary holster if CS2 shows one.
 

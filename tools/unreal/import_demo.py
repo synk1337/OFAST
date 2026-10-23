@@ -50,9 +50,14 @@ import json
 import math
 import os
 import re
+import sys
 import time
 
 import unreal
+
+# Unreal runs this file without its folder on sys.path; the shared modules sit next to it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gltf_specular  # noqa: E402
 
 REPLAY_PATH = os.environ["OFAST_REPLAY"]
 SHOT_DIR = os.environ.get("OFAST_SHOT", "")
@@ -81,6 +86,11 @@ DOOR_MATCH_CM = 2.0
 CUT_AFTER_KILL_S = 0.5
 WARM_UP_TICKS = 300
 SHOT_DELAY_S = 6.0  # as import_map.SHOT_DELAY_S: lets Lumen settle after each cut
+# SpecularFactor of CS2's character materials (csgo_character): Interchange's 1, F0 0.08, not glTF's 0.04. CS2 adds a
+# cloth sheen and a rim light to its agents that OFAST does not convert yet; without them the agents read darker than
+# CS2's, more so at F0 0.04 (an SAS agent in the shade 0.60 of CS2 at 0.08, 0.48 at 0.04; docs/formats/material.md,
+# "Weapons' and agents' specular"). A stand-in until the sheen is converted.
+CHARACTER_SPECULAR_FACTOR = 1.0
 
 levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -266,22 +276,41 @@ def static_pipelines():
             unreal.SoftObjectPath("/Interchange/Pipelines/DefaultGLTFPipeline.DefaultGLTFPipeline")]
 
 
-def apply_specular_factors(gltf_path, objects):
-    """Sets the glTF master's SpecularFactor on the imported material instances whose glTF material carries
-    KHR_materials_specular (CS2's weapon materials: 0.5, a 2 % reflectance for non-metals). Interchange creates the
-    parameter but leaves it at 1."""
+def set_gltf_specular(gltf_path, objects):
+    """Sets SpecularFactor on the imported material instances that Interchange's glTF master draws without a specular
+    texture, as import_map.py does for maps (gltf_specular.specular_factor): 0.25 on CS2's weapons (glTF
+    specularFactor 0.5, F0 0.02), 0.5 on the rest (F0 0.04); CHARACTER_SPECULAR_FACTOR on the agents. Interchange
+    leaves it at 1, F0 0.08. Instances are found through the meshes' material slots, which keep the glTF material
+    names: Interchange shortens long asset names in the middle (weapon_kni_e_karambit), so matching by the instance's
+    name missed some weapons."""
     with open(gltf_path, encoding="utf-8") as f:
-        materials = json.load(f).get("materials", [])
-    factors = {m["name"]: m["extensions"]["KHR_materials_specular"].get("specularFactor", 1.0)
-               for m in materials if "KHR_materials_specular" in m.get("extensions", {})}
-    count = 0
+        materials = {m["name"]: m for m in json.load(f).get("materials", [])}
+    masters = {assets.load_asset(gltf_specular.INTERCHANGE_MASTER).get_path_name()}
+    slots = []
     for o in objects:
-        if isinstance(o, unreal.MaterialInstanceConstant) and o.get_name() in factors:
-            unreal.MaterialEditingLibrary.set_material_instance_scalar_parameter_value(
-                o, "SpecularFactor", factors[o.get_name()])
-            count += 1
-    if count:
-        log("  specular factor set on %d of %d weapon materials" % (count, len(factors)))
+        if isinstance(o, unreal.StaticMesh):
+            slots += o.get_editor_property("static_materials")
+        elif isinstance(o, unreal.SkeletalMesh):
+            slots += o.get_editor_property("materials")
+    found = {}
+    for slot in slots:
+        instance = slot.get_editor_property("material_interface")
+        name = str(slot.get_editor_property("material_slot_name"))
+        if isinstance(instance, unreal.MaterialInstanceConstant) and name in materials:
+            found[instance.get_path_name()] = (instance, materials[name])
+    count = characters = 0
+    for instance, material in found.values():
+        if not gltf_specular.takes_specular_factor(instance, masters):
+            continue
+        if material.get("extras", {}).get("ofast", {}).get("shader") == "csgo_character.vfx":
+            factor = CHARACTER_SPECULAR_FACTOR
+            characters += 1
+        else:
+            factor = gltf_specular.specular_factor(material)
+        unreal.MaterialEditingLibrary.set_material_instance_scalar_parameter_value(instance, "SpecularFactor", factor)
+        count += 1
+    log("  SpecularFactor set on %d of %d glTF materials (%d on mesh slots), %d of them csgo_character"
+        % (count, len(materials), len(found), characters))
 
 
 def agents_manifest(replay):
@@ -309,7 +338,7 @@ def import_gltf(replay, path, look, pipelines):
     if assets.does_directory_exist(destination):
         assets.delete_directory(destination)
     objects = manager.import_asset(destination, unreal.InterchangeManager.create_source_data(path), params)
-    apply_specular_factors(path, objects)
+    set_gltf_specular(path, objects)
     # Interchange leaves imported assets in memory only: saved, the level's actors keep them when reopened.
     assets.save_directory(destination, only_if_is_dirty=True, recursive=True)
     return objects
