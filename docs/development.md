@@ -158,9 +158,11 @@ switching it on recompiles all shaders once (long).
    x,y …` on pure-sky pixels (linear maps; on Hable maps the curve and colour table come first, see
    [lighting.md](formats/lighting.md#exposure-and-tone-mapping--post_processing_volume--vpost)). To check or fit the
    tone rule itself (exposure, curve, colour table), use `tools/compare/tone_fit.py` (debug tools below).
-4. Albedo: CS2's `mat_fullbright 1` shows the albedo × 1 whatever the locked exposure and tone curve; the matching
-   Unreal render is `shoot_views.py -Try '{"console": ["ShowFlag.Lighting 0"]}'`, which runs at exposure 1 but through
-   OFAST's tone mapper.
+4. Albedo: CS2's `mat_fullbright 1` shows the albedo × 1 whatever the locked exposure and tone curve (on de_mirage and
+   de_inferno more than the lit shader uses: [lighting.md](formats/lighting.md#exposure-and-tone-mapping--post_processing_volume--vpost));
+   the matching Unreal render is `shoot_views.py -Try` with `{"console": ["ShowFlag.Lighting 0", "ShowFlag.Specular
+   0"]}` (as a .json file), which runs at exposure 1 but through OFAST's tone mapper. `ShowFlag.Lighting 0` alone adds
+   0.45 × the specular colour to the base colour.
 
 While CS2 runs, do not start it again (a second `cs2.exe` only shows "Only one instance of the game can be running"
 and keeps the game from getting focus); leave it in the main menu before long Unreal runs, which it slows down.

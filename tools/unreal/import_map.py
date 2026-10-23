@@ -2026,8 +2026,35 @@ def set_unlit_blend_modes():
 # scales (light_environment bouncescale / skybouncescale, each light's bouncescale), fitted on de_mirage's four
 # calibration views (docs/formats/lighting.md): CT / T / palace / B apartments at 0.95 / 0.86 / 0.81 / 0.74 of CS2
 # before, 0.99 / 0.96 / 0.93 / 0.75 after (CT and T cells 0.88-1.04; the apartments' corridor bounce stays short).
+# Those references were taken at a raised CS2 brightness. Checked again against CS2's default picture (2026-10-18),
+# with the material taken out (shade / lamp light relative to the sunlit surfaces of the same views): CT shade 0.93-0.95,
+# T shade 0.96-0.99, palace 0.98 of CS2's light, so both gains stay; the picture's 5-6 % excess there was in the
+# sunlit surfaces too: the highlights of baked lights, which CS2 does not draw (cs2_specular_scale). Without them:
+# sunlit 1.01, CT shade 0.97, T shade 1.05, palace 1.00 relative to the sun.
 OUTDOOR_BOUNCE_GAIN = 1.25  # sun and sky light
 LOCAL_BOUNCE_GAIN = 2.0  # local lights (palace: CS2 bounces 0.7x the direct light, Lumen 0.43x)
+
+
+def cs2_specular_scale(light, sun=False):
+    """Unreal Specular Scale for a manifest light (`sun`: the manifest's sun): how much of a highlight CS2 draws.
+
+    CS2 draws a light's own highlight only when it lights per pixel, `directlight` 3 (stationary) or 2 (dynamic). A
+    baked light (1) is in the lightmaps, which carry diffuse light only (Hammer's FGDs: "Static = Fully baked into
+    lightmap"; "Specular Softness" works only for stationary and dynamic lights); its highlight shows only when
+    Hammer bakes it into the cubemaps ("Bake Specular to Cubemaps", at that key's scale), approximated here by the
+    light's own highlight. A bounce-only light (0) has none. Every official map checked bakes its sun but de_cache,
+    and de_mirage bakes every local light, none into the cubemaps. Measured there (docs/formats/lighting.md, "The sun
+    has no highlight in CS2"): Unreal's sun highlight made the sunlit surfaces 5 % brighter than CS2's, which had been
+    read as base colours 7 % too bright. Returns None for manifests written before the exporter said (no `direct`
+    on the sun, no `bake_specular` on local lights): the caller keeps Unreal's full highlight then."""
+    direct = light.get("direct")
+    if direct is None or (not sun and direct == 1 and "bake_specular" not in light):
+        return None
+    if direct in (2, 3):
+        return 1.0
+    if direct == 1 and not sun and light.get("bake_specular"):
+        return float(light.get("bake_specular_scale", 1.0))
+    return 0.0
 
 # Versioned like BLEND_MASTER.
 SKY_MASTER = "/Game/OFAST/Materials/M_OFAST_Sky_v1"
@@ -2217,7 +2244,14 @@ def setup_sun(manifest):
             "lighting_channels": SUN_CHANNELS,
         }
     )
-    log("sun: pitch %.1f yaw %.1f, %.2f lux" % (pitch, yaw, sun["illuminance_lux"]))
+    specular = cs2_specular_scale(sun, sun=True)
+    if specular is None:
+        log("WARNING: the manifest does not say how CS2 draws the sun (directlight): its highlight is kept; re-export"
+            " the map with this version of OFAST")
+        specular = 1.0
+    component.set_editor_property("specular_scale", specular)
+    log("sun: pitch %.1f yaw %.1f, %.2f lux, specular %.2f (directlight %s)" % (
+        pitch, yaw, sun["illuminance_lux"], specular, sun.get("direct")))
 
 
 def setup_post(manifest):
@@ -2500,6 +2534,7 @@ def setup_local_lights(manifest, imported, physical=False):
     imported[:] = [a for a in imported if not isinstance(a, unreal.Light)]
     lights = manifest.get("lights") or []
     bounce_only = 0
+    highlights = {"none": 0, "own": 0, "cubemap": 0, "unknown": 0}
     for light in lights:
         pitch, yaw, roll = light["rotation"]
         actor = spawn(LIGHT_CLASSES[light["shape"]], light["location"], unreal.Rotator(roll=roll, pitch=pitch, yaw=yaw))
@@ -2524,6 +2559,14 @@ def setup_local_lights(manifest, imported, physical=False):
             "indirect_lighting_intensity": bounce,
             "cast_shadows": True,
         }
+        if not physical:
+            # Only the highlights CS2 draws (cs2_specular_scale); the realistic style keeps physical highlights.
+            specular = cs2_specular_scale(light)
+            if specular is None:
+                highlights["unknown"] += 1
+            else:
+                settings["specular_scale"] = specular
+                highlights["none" if specular == 0 else "own" if light.get("direct") in (2, 3) else "cubemap"] += 1
         if light.get("direct") == 0:
             # CS2 bakes only this light's bounce (see BOUNCE_ONLY_DIFFUSE_SCALE).
             settings.update(
@@ -2547,6 +2590,12 @@ def setup_local_lights(manifest, imported, physical=False):
             settings.update({"inner_cone_angle": light["inner_cone"], "outer_cone_angle": min(light["outer_cone"], 80.0)})
         component.set_editor_properties(settings)
     log("local lights: %d from the manifest (%d bounce only)" % (len(lights), bounce_only))
+    if not physical:
+        log("local light highlights as in CS2: %(own)d own (stationary / dynamic), %(cubemap)d baked into cubemaps, "
+            "%(none)d none (baked, or bounce only)" % highlights)
+        if highlights["unknown"]:
+            log("WARNING: %d local lights keep Unreal's full highlight: the manifest does not say whether CS2 bakes"
+                " theirs into the cubemaps; re-export the map with this version of OFAST" % highlights["unknown"])
 
 
 DIAGNOSTIC_SWITCHES = {"sun", "sky", "local", "bounce"}

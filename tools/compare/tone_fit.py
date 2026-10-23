@@ -20,7 +20,7 @@ back to `exposure x scene` per pixel and channel, and compares that with what it
     pair      a CS2 exposure pair of one view -> white (k cancels): every pixel must scale by the exposure ratio
     sky       CS2 sky pixels, whose radiance the exported sky gives -> k (with --fit: k and white together)
     lit       lit surfaces, CS2 against Unreal -> k x CS2 scene / Unreal scene per cell (= k if OFAST's light is right)
-    light     light = lit / albedo in each engine (CS2 mat_fullbright 1, Unreal ShowFlag.Lighting 0), per cell
+    light     light = lit / albedo in each engine (CS2 mat_fullbright 1, Unreal ShowFlag.Lighting 0 + Specular 0)
     simulate  re-tone an Unreal shot to another rule: what a rule change gives, without importing again
     table     the colour table's grey diagonal and its largest change
 
@@ -47,8 +47,9 @@ taken at brightness 2.013074, so add --cs2-gamma 2.013074 to each):
 The shots of one command must show the same view: CS2's `setpos`/`setang` = the Unreal camera, CS2's default field of
 view (90 degrees at 4:3). Unreal's shots are scaled to CS2's size. CS2 exposures are the `mat_tonemap_force_scale`
 values the shots were taken at; Unreal's is the manifest's (its minimum exposure) unless --ue-exposure says otherwise,
-and its ShowFlag.Lighting 0 render runs at exposure 1. CS2's mat_fullbright shows the albedo directly (no exposure,
-curve or table; measured on de_anubis), unless --fb-table says the table applies.
+and its base-colour render (ShowFlag.Lighting 0 with ShowFlag.Specular 0: Lighting 0 alone adds 0.45 x the specular
+colour) runs at exposure 1. CS2's mat_fullbright shows the albedo directly (no exposure, curve or table; measured on
+de_anubis), unless --fb-table says the table applies.
 """
 
 import argparse
@@ -533,8 +534,9 @@ def cmd_lit(args):
 
 def cmd_light(args):
     """Light = lit scene / albedo in each engine. CS2: its lit shot through --rule, its mat_fullbright shot as the
-    albedo (shown directly). Unreal: its lit shot through --ue-rule at its exposure, its ShowFlag.Lighting 0 render
-    (base colour) through --unlit-rule at exposure 1. Per cell: both lights, their ratio, and base colour / albedo."""
+    albedo (shown directly). Unreal: its lit shot through --ue-rule at its exposure, its base-colour render
+    (ShowFlag.Lighting 0 and ShowFlag.Specular 0) through --unlit-rule at exposure 1. Per cell: both lights, their
+    ratio, and base colour / albedo."""
     m = Map(args.manifest)
     cs2 = load_cs2(args.cs2, args.cs2_gamma)
     h, w = cs2.shape[:2]
@@ -648,7 +650,7 @@ def main():
     p.add_argument("exposure", type=float)
     p.add_argument("fullbright", help="CS2 shot with mat_fullbright 1")
     p.add_argument("unreal")
-    p.add_argument("unlit", help="Unreal shot with ShowFlag.Lighting 0 (shoot_views.py -Try)")
+    p.add_argument("unlit", help="Unreal shot with ShowFlag.Lighting 0 and ShowFlag.Specular 0 (shoot_views.py -Try)")
     p.add_argument("--unlit-rule", help="rule of the unlit render (default: --ue-rule)")
     p.add_argument("--unlit-exposure", type=float, default=1.0)
     p.add_argument("--fb-table", action="store_true", help="CS2's fullbright went through the colour table")
