@@ -44,7 +44,7 @@ use super::states::{
 };
 use super::{AnimError, Clip, Locomotion, Transform};
 use crate::demo::events::GameEvent;
-use crate::demo::players::{PlayerSample, RoundTrack};
+use crate::demo::players::{PlayerSample, RoundTrack, flash_starts};
 
 /// Which of CS2's three locomotion sets a weapon uses (`worldmodel_locomotion.vnmgraph+<set>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -635,8 +635,7 @@ impl Baker<'_> {
         let mut flinch_head: Option<(u32, &'static str)> = None;
         let mut burning: Option<(u32, u32)> = None;
         let mut blind: Option<(u32, f32)> = None;
-        // `m_flFlashDuration` at the previous sample: a flash is when it changes to a value above 0. `None` after a
-        // gap, so that a value left over from before it (or from the previous round) starts nothing.
+        // `m_flFlashDuration` at the previous sample, `None` after a gap (`flash_starts` says what a flash is).
         let mut flash_seen: Option<f32> = None;
         let mut steps = Vec::with_capacity(players.len());
         for (i, (sample, player)) in track.samples.iter().zip(&players).enumerate() {
@@ -984,7 +983,7 @@ impl Baker<'_> {
                 }
             }
             let duration = rig.flash_duration;
-            if duration > 0.0 && flash_seen.is_some_and(|seen| seen != duration) {
+            if flash_starts(flash_seen, duration) {
                 // A weaker flash does not cut a stronger one short: the one that ends later counts.
                 let ends = |(start, d): (u32, f32)| start as f32 * dt + d;
                 if blind.is_none_or(|b| ends((tick, duration)) >= ends(b)) {

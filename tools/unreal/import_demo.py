@@ -45,6 +45,10 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
   detonation, expiry or landing, keyed like the dropped weapons;
 - per smoke whose cloud the export simulated, a Heterogeneous Volume drawing it from its atlas, its frame picked by
   the demo tick keyed in /Game/OFAST/Replays/MPC_Replay (smoke_volumes.py);
+- per molotov or incendiary fire, CS2's flame sprites played by a material on instanced quads, one slot per sprite
+  per flame, driven by the same demo tick, and a flickering point light; per HE grenade and flashbang going off, its
+  fireball, smoke or flare sprites and a light pulse; a white flash over a blinded player's POV camera
+  (grenade_effects.py; the sprites need the agents manifest's `effects`, written by `--players`);
 - a camera cut track that follows the killer of each kill in turn (from the previous kill until half a second after
   this one), the way fragmovie editors cut a round;
 - marked frames: freeze time end, every kill ("attacker > victim (weapon, HS)") and bomb events.
@@ -66,6 +70,7 @@ import unreal
 # Unreal runs this file without its folder on sys.path; the shared modules sit next to it.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gltf_specular  # noqa: E402
+import grenade_effects  # noqa: E402
 import smoke_volumes  # noqa: E402
 
 REPLAY_PATH = os.environ["OFAST_REPLAY"]
@@ -821,7 +826,14 @@ def build(replay):
     world_models = import_dropped_weapons(replay)
     keys += place_dropped_weapons(sequence, replay, world_models, end_frame)
     keys += place_grenades(sequence, replay, world_models, end_frame)
+    # The demo tick the smokes, fires, blasts and flashed views read: keyed whatever the round has (a round without
+    # a smoke still has its fires and flashes).
+    smoke_volumes.key_replay_tick(sequence, replay, end_frame)
     smoke_volumes.place_smokes(sequence, replay, REPLAY_PATH, end_frame, spawn_tagged)
+    manifest = agents_manifest(replay)
+    grenade_effects.place_effects(sequence, replay, REPLAY_PATH, end_frame,
+                                  manifest[2].get("effects", []) if manifest else [],
+                                  {controller: camera for controller, (camera, _) in cameras.items()}, spawn_tagged)
     keys += animate_doors(sequence, replay, end_frame)
     log("sequence %s: %d players (%d animated agents, %d viewmodels), %d frames at %d fps, %d keys in %.0f s"
         % (path, len(replay["players"]), len(agents), len(viewmodels), end_frame, fps, keys,

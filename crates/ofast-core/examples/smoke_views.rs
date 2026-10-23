@@ -9,10 +9,12 @@
 //! Every 16 ticks of each cloud's life: players alive whose eye is 250 – 1500 units from the cloud's middle (the
 //! detonation point + 40 up), with the middle within 10° of their view, and whose sight line is clear up to 120 units
 //! short of it (small spheres marched along it against the map's collision, `maps/<map>/world_physics.vmdl`). Prints
-//! the most head-on view per smoke and phase (growing: the first 1.5 s; steady; fading).
+//! the most head-on view per smoke and phase (growing: the first 1.5 s; steady; fading), and per HE grenade and
+//! flashbang going off (2 – 6 ticks after).
 
 use ofast_core::content::Content;
-use ofast_core::demo::players::track_round;
+use ofast_core::demo::events::EventValue;
+use ofast_core::demo::players::{PlayerSample, track_round};
 use ofast_core::game::Cs2Install;
 use ofast_core::physics::PhysicsData;
 use ofast_core::physics::ragdoll::WorldCollision;
@@ -29,6 +31,41 @@ fn blocked(world: &WorldCollision, a: [f32; 3], b: [f32; 3]) -> bool {
             .sphere_contact([a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t], 3.0)
             .is_some()
     })
+}
+
+/// How far off a player's view `centre` is (degrees) and how far (units), when it is 250 – 1500 units away, within 10°
+/// of the view and in clear sight up to 120 units short of it.
+fn sees(world: &WorldCollision, p: &PlayerSample, centre: [f32; 3]) -> Option<(f32, f32)> {
+    let eye = [
+        p.position[0],
+        p.position[1],
+        p.position[2] + p.view_offset[2],
+    ];
+    let d = [centre[0] - eye[0], centre[1] - eye[1], centre[2] - eye[2]];
+    let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    if !(250.0..=1500.0).contains(&dist) {
+        return None;
+    }
+    let (pitch, yaw) = (p.pitch.to_radians(), p.yaw.to_radians());
+    let f = [
+        pitch.cos() * yaw.cos(),
+        pitch.cos() * yaw.sin(),
+        -pitch.sin(),
+    ];
+    let off = ((f[0] * d[0] + f[1] * d[1] + f[2] * d[2]) / dist)
+        .clamp(-1.0, 1.0)
+        .acos()
+        .to_degrees();
+    if off > 10.0 {
+        return None;
+    }
+    let near = (dist - 120.0) / dist;
+    let short = [
+        eye[0] + d[0] * near,
+        eye[1] + d[1] * near,
+        eye[2] + d[2] * near,
+    ];
+    (!blocked(world, eye, short)).then_some((off, dist))
 }
 
 fn main() {
@@ -75,38 +112,9 @@ fn main() {
                 "steady"
             };
             for p in sample.players.iter().filter(|p| p.alive) {
-                let eye = [
-                    p.position[0],
-                    p.position[1],
-                    p.position[2] + p.view_offset[2],
-                ];
-                let d = [centre[0] - eye[0], centre[1] - eye[1], centre[2] - eye[2]];
-                let dist = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                if !(250.0..=1500.0).contains(&dist) {
+                let Some((off, dist)) = sees(&world, p, centre) else {
                     continue;
-                }
-                let (pitch, yaw) = (p.pitch.to_radians(), p.yaw.to_radians());
-                let f = [
-                    pitch.cos() * yaw.cos(),
-                    pitch.cos() * yaw.sin(),
-                    -pitch.sin(),
-                ];
-                let off = ((f[0] * d[0] + f[1] * d[1] + f[2] * d[2]) / dist)
-                    .clamp(-1.0, 1.0)
-                    .acos()
-                    .to_degrees();
-                if off > 10.0 {
-                    continue;
-                }
-                let near = (dist - 120.0) / dist;
-                let short = [
-                    eye[0] + d[0] * near,
-                    eye[1] + d[1] * near,
-                    eye[2] + d[2] * near,
-                ];
-                if blocked(&world, eye, short) {
-                    continue;
-                }
+                };
                 match best.iter_mut().find(|b| b.0 == phase) {
                     Some(b) if b.1 <= off => {}
                     Some(b) => *b = (phase, off, sample.tick, p.name.clone(), p.controller, dist),
@@ -119,6 +127,41 @@ fn main() {
         for (phase, off, tick, name, controller, dist) in best {
             println!(
                 "smoke #{entity} {phase}: tick {tick} {name} ({controller}) {dist:.0} units, {off:.1}° off, clear sight"
+            );
+        }
+    }
+
+    // HE grenades and flashbangs going off: the most head-on view 2 – 6 ticks after.
+    for e in track
+        .events
+        .iter()
+        .filter(|e| e.name == "hegrenade_detonate" || e.name == "flashbang_detonate")
+    {
+        let float = |key: &str| match e.get(key) {
+            Some(EventValue::Float(v)) => *v,
+            _ => 0.0,
+        };
+        let centre = [float("x"), float("y"), float("z") + 20.0];
+        let mut best: Option<(f32, u32, String, u32, f32)> = None;
+        for sample in track
+            .samples
+            .iter()
+            .filter(|s| (e.tick + 2..=e.tick + 6).contains(&s.tick))
+        {
+            for p in sample.players.iter().filter(|p| p.alive) {
+                if let Some((off, dist)) = sees(&world, p, centre)
+                    && best.as_ref().is_none_or(|b| off < b.0)
+                {
+                    best = Some((off, sample.tick, p.name.clone(), p.controller, dist));
+                }
+            }
+        }
+        if let Some((off, tick, name, controller, dist)) = best {
+            println!(
+                "{} #{} at {}: tick {tick} {name} ({controller}) {dist:.0} units, {off:.1}° off, clear sight",
+                e.name,
+                e.int("entityid").unwrap_or(-1),
+                e.tick
             );
         }
     }

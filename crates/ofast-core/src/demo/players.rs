@@ -255,6 +255,17 @@ pub struct RigInputs {
     pub flash_max_alpha: f32,
 }
 
+/// Whether a pawn's flash duration ([`RigInputs::flash_duration`]) going from `seen` to `duration` is a new blinding.
+///
+/// A flashbang sets the duration on the tick it goes off, and the server clears it some time later, at no tick that
+/// means anything (`docs/formats/demo.md`, "Rig inputs"). So a blinding is a change to a value above 0. `seen` is the
+/// value at the previous sample of the living pawn, `None` after a gap (dead, absent, or the first sample): a value
+/// left from before the gap, or from the previous round, starts nothing. The animation bake (a blinded player's
+/// flinch) and the replay's `blindings` (the white screen) both use this, so they see the same flashes.
+pub fn flash_starts(seen: Option<f32>, duration: f32) -> bool {
+    duration > 0.0 && seen.is_some_and(|seen| seen != duration)
+}
+
 /// The weapon a player holds at one tick.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ActiveWeapon {
@@ -1784,6 +1795,20 @@ mod tests {
         );
         demo.frame(EDemoCommands::DemStop, Some(15), &[], false);
         demo.bytes
+    }
+
+    #[test]
+    fn a_flash_is_a_change_to_a_duration_above_zero() {
+        // A new flash, a stronger or weaker one on top of it.
+        assert!(flash_starts(Some(0.0), 2.5));
+        assert!(flash_starts(Some(2.5), 3.1));
+        assert!(flash_starts(Some(3.1), 0.8));
+        // The same value again, the server clearing it, nothing.
+        assert!(!flash_starts(Some(2.5), 2.5));
+        assert!(!flash_starts(Some(2.5), 0.0));
+        assert!(!flash_starts(Some(0.0), 0.0));
+        // Seen first, or after a gap: left from before, not a flash.
+        assert!(!flash_starts(None, 2.5));
     }
 
     #[test]

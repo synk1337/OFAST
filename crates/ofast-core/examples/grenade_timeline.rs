@@ -111,11 +111,26 @@ fn main() {
             if *incendiary { "incendiary" } else { "molotov" }
         );
     }
+    // Each player's flash fields (`m_flFlashDuration`, `m_flFlashMaxAlpha`) on every tick they change.
+    println!("flashes (tick, player, duration s, max alpha):");
+    let mut last: BTreeMap<u32, (f32, f32)> = BTreeMap::new();
+    for sample in &track.samples {
+        for p in &sample.players {
+            let now = (p.rig.flash_duration, p.rig.flash_max_alpha);
+            if last
+                .insert(p.controller, now)
+                .is_some_and(|before| before != now)
+            {
+                println!("  {:6} {} {:.2} {:.0}", sample.tick, p.name, now.0, now.1);
+            }
+        }
+    }
     println!("events:");
     for e in &track.events {
         if e.name.contains("grenade")
             || e.name.contains("flashbang")
             || e.name.starts_with("inferno")
+            || e.name == "player_blind"
         {
             let who = e
                 .controller("userid")
@@ -125,7 +140,12 @@ fn main() {
                 .int("entityid")
                 .map_or(String::new(), |i| format!(" #{i}"));
             let weapon = e.string("weapon").unwrap_or("");
-            println!("  {:6} {}{id} {who} {weapon}", e.tick, e.name);
+            // A blinding: how long (seconds).
+            let blind = match e.get("blind_duration") {
+                Some(ofast_core::demo::events::EventValue::Float(d)) => format!(" blind {d:.2} s"),
+                _ => String::new(),
+            };
+            println!("  {:6} {}{id} {who} {weapon}{blind}", e.tick, e.name);
         }
     }
 }

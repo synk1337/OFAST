@@ -25,17 +25,35 @@ pub const EFFECT_TEXTURES: &[(&str, &str)] = &[
         "fire",
         "materials/particle/fire_small_sim/fire_small_sim_b.vtex_c",
     ),
-    // particles/inferno_fx/molotov_child_glow01a.vpcf: the glow around the flames.
+    // particles/inferno_fx/molotov_child_flame03a.vpcf: taller tongues of burning gas among them (7 sequences of
+    // 16 – 19 frames).
     (
-        "glow",
-        "materials/particle/particle_flares/particle_flare_004b_mod.vtex_c",
+        "gas",
+        "materials/particle/fire_gas/fire_gas_batch_a_v2.vtex_c",
+    ),
+    // particles/explosions_fx/explosion_hegrenade_smoke_core.vpcf: an HE blast's fireball (grey: CS2's shader tints
+    // it) and its smoke (3 sequences each).
+    (
+        "blast_flame",
+        "materials/particle/explosion_fireballs/flame/explosion_fireball_01_flame.vtex_c",
+    ),
+    (
+        "blast_smoke",
+        "materials/particle/explosion_fireballs/smoke/explosion_fireball_01_smoke.vtex_c",
+    ),
+    // particles/explosions_fx/explosion_hegrenade.vpcf: the flare CS2's blasts and flashbangs go off with. OFAST draws
+    // it for flashbangs only (an HE blast's fireball is bright on its own); a molotov's glow (molotov_child_glow01a)
+    // is its light instead.
+    (
+        "flare",
+        "materials/particle/particle_flares/particle_flare_001.vtex_c",
     ),
 ];
 
 /// Writes [`EFFECT_TEXTURES`] into `out_dir` as flipbooks and returns their manifest entries: `role`, `texture`
-/// (CS2 path), `file`, `width`, `height`, `cell` (a frame's size, pixels), `columns` (cells per row) and
-/// `sequences` (`id`, `first_cell`, `frames`, `clamp`). A texture that is missing or does not decode is left out with
-/// a warning.
+/// (CS2 path), `file`, `width`, `height`, `cell` (a frame's size, pixels), `columns` and `rows` (cells across and
+/// down), `stride` (cells from one sequence to the next) and `sequences` (`id`, `first_cell`, `frames`, `clamp`). A
+/// texture that is missing or does not decode is left out with a warning.
 pub fn export_effect_textures(
     content: &Content,
     out_dir: &Path,
@@ -77,6 +95,8 @@ fn export_effect_texture(
         "height": book.image.height,
         "cell": [book.cell.0, book.cell.1],
         "columns": book.columns,
+        "rows": book.image.height / book.cell.1.max(1),
+        "stride": book.stride,
         "sequences": book.sequences.iter().map(|s| json!({
             "id": s.id,
             "first_cell": s.first_cell,
@@ -89,8 +109,8 @@ fn export_effect_texture(
 /// Frames per row of a [`Flipbook`].
 pub const FLIPBOOK_COLUMNS: usize = 8;
 
-/// A sprite sheet repacked as a regular grid: every frame in a cell of the same size, so a material plays a
-/// sequence by counting cells.
+/// A sprite sheet repacked as a regular grid: every frame in a cell of the same size, every sequence the same number
+/// of rows, so a material plays a sequence by counting cells: frame k of sequence n is cell n × stride + k.
 #[derive(Debug, Clone)]
 pub struct Flipbook {
     /// The cells, [`FLIPBOOK_COLUMNS`] per row; each sequence starts a new row.
@@ -99,6 +119,8 @@ pub struct Flipbook {
     pub cell: (usize, usize),
     /// Cells per row.
     pub columns: usize,
+    /// Cells from one sequence's first frame to the next's: whole rows, as many as the longest sequence needs.
+    pub stride: usize,
     /// Where each sequence's frames are.
     pub sequences: Vec<FlipbookSequence>,
 }
@@ -144,6 +166,7 @@ pub fn flipbook(image: &Image, sheet: &[SheetSequence]) -> Flipbook {
             image: image.clone(),
             cell: (image.width, image.height),
             columns: 1,
+            stride: 1,
             sequences: vec![FlipbookSequence {
                 id: 0,
                 first_cell: 0,
@@ -166,19 +189,22 @@ pub fn flipbook(image: &Image, sheet: &[SheetSequence]) -> Flipbook {
             cell_h = cell_h.max(y1 - y0);
         }
     }
-    let rows: usize = sheet
+    // Every sequence gets as many rows as the longest one needs: sequence n starts at cell n × stride.
+    let rows_per_sequence = sheet
         .iter()
         .map(|s| s.frames.len().div_ceil(FLIPBOOK_COLUMNS).max(1))
-        .sum();
+        .max()
+        .unwrap_or(1);
+    let stride = rows_per_sequence * FLIPBOOK_COLUMNS;
+    let rows = rows_per_sequence * sheet.len();
     let mut out = Image {
         width: FLIPBOOK_COLUMNS * cell_w,
         height: rows * cell_h,
         rgba: vec![0; FLIPBOOK_COLUMNS * cell_w * rows * cell_h * 4],
     };
     let mut sequences = Vec::new();
-    let mut row = 0;
-    for s in sheet {
-        let first_cell = row * FLIPBOOK_COLUMNS;
+    for (n, s) in sheet.iter().enumerate() {
+        let first_cell = n * stride;
         for (k, frame) in s.frames.iter().enumerate() {
             let Some(i) = frame.images.first() else {
                 continue;
@@ -211,12 +237,12 @@ pub fn flipbook(image: &Image, sheet: &[SheetSequence]) -> Flipbook {
             frames: s.frames.len(),
             clamp: s.clamp,
         });
-        row += s.frames.len().div_ceil(FLIPBOOK_COLUMNS).max(1);
     }
     Flipbook {
         image: out,
         cell: (cell_w, cell_h),
         columns: FLIPBOOK_COLUMNS,
+        stride,
         sequences,
     }
 }
@@ -284,5 +310,25 @@ mod tests {
         assert_eq!((at(4, 0), at(7, 3)), (4, 31));
         // The empty frame's cell stays empty.
         assert!((8..12).all(|x| (0..4).all(|y| at(x, y) == 0)));
+
+        // Sequences of 3 and 10 frames: each gets the 2 rows the longer needs, so the second starts at cell 16.
+        let mut two = sheet.clone();
+        two.push(SheetSequence {
+            id: 8,
+            frames: (0..10)
+                .map(|_| frame(rect(4.0, 0.0, 7.0, 3.0), rect(4.0, 0.0, 7.0, 3.0)))
+                .collect(),
+            ..sheet[0].clone()
+        });
+        let book = flipbook(&image, &two);
+        assert_eq!(book.stride, 2 * FLIPBOOK_COLUMNS);
+        assert_eq!(
+            book.sequences
+                .iter()
+                .map(|s| s.first_cell)
+                .collect::<Vec<_>>(),
+            vec![0, 16]
+        );
+        assert_eq!(book.image.height, 4 * 4);
     }
 }

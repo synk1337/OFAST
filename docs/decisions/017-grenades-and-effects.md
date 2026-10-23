@@ -66,6 +66,23 @@ from scriptable pieces, not with converted CS2 particle systems:
 - **HE grenades and flashbangs:** at the detonation, a short light pulse (CS2's flash is a white burst, an HE blast an
   orange one) and sprites from CS2's explosion sheets; an HE blast's smoke puff and scorch decal; the flashed white
   screen in the POV shots of the players the flash blinds (the pawn's flash duration).
+
+  How the sprites came out (2026-10-24): without Niagara, a "particle system in a material". Each effect is an actor
+  with instanced quads, one instance per sprite slot holding where it is, the ticks it may spawn in, a phase and a
+  seed; the material respawns a particle every lifetime from the demo tick (the smokes' parameter collection),
+  draws its size, place, roll and sheet sequence from CS2's own ranges (read from its particle systems) with a hash,
+  faces it to the camera in the vertex shader and plays the sheet's sequence over its life in the pixel shader. It
+  is deterministic in the demo tick, so the sequence scrubs. CS2's sheets pack frames tightly; the export repacks
+  them as regular flipbooks. Two traps of the approach: a slot's phase (where in its first lifetime it starts, so a
+  flame's slots do not respawn together) must be 0 for a one-shot, or its only particle is born up to a lifetime
+  away from the detonation and never shows; and the engine culls an instance by its mesh's bounds, which for a flat
+  plane have no height, so the quad is a copy of the plane with bounds reaching 6 m up. Two adjustments against CS2's picture: a sprite's half-size is half the particle's
+  radius (read as the half-size the flames came out twice CS2's height), and the sprites are lifted most of their
+  size and faded by depth where they meet the floor. The flashed view is a post-process material on each blinded
+  player's camera, fitted to CS2 (0.6 × saturate((seconds left − 0.5) / 2.5) towards a warm white: a first guess
+  of 0.8 by eye left the same view 30 levels brighter than CS2's).
+  Left out for now: an HE blast's debris, sparks, heat haze and scorch decal, a fire's flames along its outline and
+  up walls (CS2's snapshot-driven sets), and its smoke.
 - **Shots (later in M6):** muzzle flashes on the weapon (third person and viewmodel), tracers along the view to the
   first world hit (OFAST's map geometry), impact puffs.
 

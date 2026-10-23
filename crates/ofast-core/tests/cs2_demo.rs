@@ -1159,10 +1159,10 @@ fn bake_decisions_follow_the_demo() {
                     flash_seen = None;
                     continue;
                 };
-                // A flash is when the pawn's flash duration takes a new value above 0. A flash on the strongest of
-                // flashes that overlap (within 10 s).
+                // A flash is when the pawn's flash duration takes a new value above 0 (`flash_starts`). A flash on
+                // the strongest of flashes that overlap (within 10 s).
                 let flash = p.rig.flash_duration;
-                if flash > 0.0 && flash_seen.is_some_and(|seen| seen != flash) {
+                if ofast_core::demo::players::flash_starts(flash_seen, flash) {
                     assert!(
                         lines.iter().any(|(t, l)| *t <= sample.tick
                             && t + 640 > sample.tick

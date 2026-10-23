@@ -33,7 +33,7 @@ use super::smoke::{atlas_layout, smoke_atlas, write_smoke_atlas};
 use crate::demo::events::{EventValue, GameEvent};
 use crate::demo::grenades::{FireSample, GrenadeKind, GrenadeSample, SmokeLog};
 use crate::demo::players::{
-    DoorSample, DroppedWeapon, PlayerSample, RoundTrack, TickSample, track_round,
+    DoorSample, DroppedWeapon, PlayerSample, RoundTrack, TickSample, flash_starts, track_round,
 };
 use crate::demo::smoke::{self, SmokeSettings};
 
@@ -157,6 +157,32 @@ pub fn replay_json(track: &RoundTrack, demo_name: &str) -> Json {
                     },
                 }),
             );
+        }
+    }
+
+    // Blindings: the ticks a living pawn's `m_flFlashDuration` changes to a new value above 0 (`flash_starts`, the
+    // animation bake's rule too), with `m_flFlashMaxAlpha`. The previous sample's values of the pawns alive in it: a
+    // value seen first, or after a gap (dead, absent), starts nothing.
+    let mut blindings: BTreeMap<u32, Vec<Json>> = BTreeMap::new();
+    let mut seen: BTreeMap<u32, f32> = BTreeMap::new();
+    for sample in &track.samples {
+        let mut now: BTreeMap<u32, f32> = BTreeMap::new();
+        for p in sample.players.iter().filter(|p| p.alive) {
+            let duration = p.rig.flash_duration;
+            if flash_starts(seen.get(&p.controller).copied(), duration) {
+                blindings.entry(p.controller).or_default().push(json!({
+                    "tick": sample.tick,
+                    "duration": round(duration, 1000.0),
+                    "alpha": p.rig.flash_max_alpha,
+                }));
+            }
+            now.insert(p.controller, duration);
+        }
+        seen = now;
+    }
+    for (controller, list) in blindings {
+        if let Some(player) = players.get_mut(&controller) {
+            player["blindings"] = Json::Array(list);
         }
     }
 
@@ -712,6 +738,9 @@ mod tests {
                 on_ground: x < 1.5,
                 duck_amount: 0.25,
                 last_jump_tick: Some(if x < 1.0 { 50 } else { 101 }),
+                // Flashed from before the round (not a blinding of this round), then again at tick 101.
+                flash_duration: if x < 1.0 { 3.0 } else { 2.5 },
+                flash_max_alpha: 255.0,
                 weapon: Some(ActiveWeapon {
                     entity: 300,
                     item: 7,
@@ -826,6 +855,12 @@ mod tests {
         assert_eq!(kill["attacker"], json!(1));
         assert_eq!(kill["assister"], Json::Null);
         assert_eq!(kill["headshot"], json!(true));
+        // Player 1 was blinded once this round (the duration seen first is left from before); player 2 never.
+        assert_eq!(
+            replay["players"][0]["blindings"],
+            json!([{ "tick": 101, "duration": 2.5, "alpha": 255.0 }])
+        );
+        assert_eq!(replay["players"][1]["blindings"], Json::Null);
         assert_eq!(replay["players"][1]["steam_id"], json!("76561198000000002"));
         assert_eq!(
             replay["players"][1]["viewmodel"],

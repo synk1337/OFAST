@@ -232,9 +232,14 @@ player and round.
 - [x] **Smokes in Unreal**: a Heterogeneous Volume per smoke, its frame from the keyed demo tick, puffy surface,
   team tint, lit by the room; checked against CS2 through a player's eyes (a T smoke in a de_nuke corridor: same
   place, size, height and colour; two CT smokes through doorways; gone before the expiry as in CS2).
-- [x] **Effects groundwork**: CS2's sprite sheets read (`Texture::sheet`) and the molotov's flames written as
-  regular flipbooks with `--players` (not drawn yet).
-- [ ] HE holes in smokes; fires (CS2's fire sprite sheets, flickering lights); HE and flash bursts, the flashed POV.
+- [x] **Effects groundwork**: CS2's sprite sheets read (`Texture::sheet`) and written as regular flipbooks with
+  `--players`.
+- [x] **Fires, blasts, flashes**: CS2's sprite sheets played by a "particle system in a material" driven by the
+  demo tick (fires per flame, HE fireballs and smoke, flashbang flares), lights keyed per effect, the flashed POV
+  fitted to CS2. Checked against CS2 at the same ticks: a molotov's flames through the same eyes (same place and
+  height; CS2's denser and paler), an HE blast's fireball and smoke (from a camera past the A door, which Unreal
+  draws closed on that old demo), a long and a short blinding.
+- [ ] Holes blown in smokes; a blast's debris, sparks and scorch; fires climbing walls and their smoke.
 - [ ] Shots: muzzle flashes, tracers, impacts.
 
 ## Hard problems we know about

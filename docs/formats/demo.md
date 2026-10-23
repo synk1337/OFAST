@@ -659,6 +659,14 @@ early when a smoke puts it out (one burned 1.4 s) — although its entity stays 
 fires; `examples/grenade_timeline.rs` lists them next to the grenade events. Tournament demos carry no
 `bullet_impact`: shots are only `weapon_fire` (tick, player, weapon, silenced).
 
+A flashbang's blindings are the pawn's `m_flFlashDuration` (seconds) and `m_flFlashMaxAlpha` (0 – 255); the Aurora vs
+FURIA demo has no `player_blind` events. The server sets them on the tick the flashbang goes off (every blinded player
+at once: 4 players on tick 34353, matching `flashbang_detonate`) and clears the duration to 0 some time later, at no
+tick that means anything (0.97 s after a 4.62 s blinding, 4.4 s after a 3.13 s one). So a blinding is a tick where a living
+pawn's duration changes to a new value above 0, a value seen first or after the pawn's gap being left from before
+(`demo::players::flash_starts`: the replay's `blindings` and the animation's flinch); in round 5, 21 blindings of
+0.15 – 4.83 s, all at alpha 255. How CS2 draws them: [replay.md](replay.md#in-unreal-import_demopy) ("Flashed views").
+
 ## Models
 
 What each player looks like and carries, read per tick into `PlayerSample::appearance` and `PlayerSample::weapons`

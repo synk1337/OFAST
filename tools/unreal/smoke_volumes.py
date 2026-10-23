@@ -67,6 +67,64 @@ def log(message):
     unreal.log("OFAST: " + message)
 
 
+# Helpers shared with grenade_effects.py (its sprite and flashed-view materials are built the same way).
+
+def empty_material(path):
+    """The material asset at `path` without expressions: made on first use, emptied on every later run, so it is
+    rebuilt in place (its HLSL may have changed) and the instances keep it as their parent."""
+    if assets.does_asset_exist(path):
+        material = assets.load_asset(path)
+        mel.delete_all_material_expressions(material)
+        return material
+    folder, name = path.rsplit("/", 1)
+    return unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+        name, folder, unreal.Material, unreal.MaterialFactoryNew())
+
+
+def custom_node(material, code, output_type, input_names, x, y):
+    """A Custom expression on `material` running `code`, with inputs of these names."""
+    node = mel.create_material_expression(material, unreal.MaterialExpressionCustom, x, y)
+    node.set_editor_property("output_type", output_type)
+    node.set_editor_property("code", code)
+    inputs = []
+    for input_name in input_names:
+        custom_input = unreal.CustomInput()
+        custom_input.set_editor_property("input_name", input_name)
+        inputs.append(custom_input)
+    node.set_editor_property("inputs", inputs)
+    return node
+
+
+def material_instance(folder, name, parent):
+    """The material instance asset `folder`/`name` of `parent`, made when missing and otherwise kept (updated in
+    place: the level's actors keep it)."""
+    path = folder + "/" + name
+    if assets.does_asset_exist(path):
+        instance = assets.load_asset(path)
+    else:
+        instance = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+            name, folder, unreal.MaterialInstanceConstant, unreal.MaterialInstanceConstantFactoryNew())
+    mel.set_material_instance_parent(instance, parent)
+    return instance
+
+
+def import_png(replay_path, file_name, folder):
+    """A PNG the export wrote next to the replay, imported into `folder` (replacing an earlier import): the texture
+    as the importer named it (it changes characters a name may not hold: spaces, dots, brackets)."""
+    task = unreal.AssetImportTask()
+    task.filename = os.path.join(os.path.dirname(replay_path), file_name)
+    task.destination_path = folder
+    task.automated = True
+    task.replace_existing = True
+    task.save = False
+    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+    paths = list(task.imported_object_paths)
+    texture = assets.load_asset(paths[0]) if paths else None
+    if texture is None:
+        raise RuntimeError("texture import failed: " + file_name)
+    return texture
+
+
 def replay_collection():
     """REPLAY_COLLECTION, made once: the material parameter collection with `ReplayTick`, the demo tick the sequence
     shows (keyed by key_replay_tick), which the smoke volumes read to pick their frame."""
@@ -149,26 +207,13 @@ SMOKE_DEFAULTS = {"Threshold": SMOKE_THRESHOLD, "Ramp": SMOKE_RAMP, "NoiseAmount
 def smoke_material():
     """SMOKE_MATERIAL, built on first use and rebuilt in place on every run (the HLSL may have changed; the smokes'
     instances keep it as their parent)."""
-    if assets.does_asset_exist(SMOKE_MATERIAL):
-        material = assets.load_asset(SMOKE_MATERIAL)
-        mel.delete_all_material_expressions(material)
-    else:
-        folder, name = SMOKE_MATERIAL.rsplit("/", 1)
-        material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
-            name, folder, unreal.Material, unreal.MaterialFactoryNew())
+    material = empty_material(SMOKE_MATERIAL)
     material.set_editor_property("material_domain", unreal.MaterialDomain.MD_VOLUME)
     material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_ADDITIVE)
     material.set_editor_property("used_with_heterogeneous_volumes", True)
-    custom = mel.create_material_expression(material, unreal.MaterialExpressionCustom, -400, 0)
+    custom = custom_node(material, SMOKE_HLSL, unreal.CustomMaterialOutputType.CMOT_FLOAT1,
+                         ["Atlas", "WorldPos", "Tick", "Origin", "Noise"] + SMOKE_SCALARS, -400, 0)
     custom.set_editor_property("description", "OFAST smoke density")
-    custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT1)
-    custom.set_editor_property("code", SMOKE_HLSL)
-    inputs = []
-    for input_name in ["Atlas", "WorldPos", "Tick", "Origin", "Noise"] + SMOKE_SCALARS:
-        custom_input = unreal.CustomInput()
-        custom_input.set_editor_property("input_name", input_name)
-        inputs.append(custom_input)
-    custom.set_editor_property("inputs", inputs)
 
     def connect(node, input_name):
         if not mel.connect_material_expressions(node, "", custom, input_name):
@@ -226,8 +271,13 @@ def asset_name(text):
     return re.sub(r"[^A-Za-z0-9_-]", "_", text)
 
 
+def round_folder(parent, replay):
+    """The folder under `parent` for one round's own assets: `<end of the demo's name>_r<round>`."""
+    return "%s/%s_r%d" % (parent, asset_name(replay["demo"][-12:]), replay["round"])
+
+
 def smoke_folder(replay):
-    return "/Game/OFAST/Replays/Smokes/%s_r%d" % (asset_name(replay["demo"][-12:]), replay["round"])
+    return round_folder("/Game/OFAST/Replays/Smokes", replay)
 
 
 def instance_name(grenade):
@@ -238,19 +288,7 @@ def instance_name(grenade):
 def import_smoke_texture(replay, replay_path, file_name):
     """One smoke's atlas (8-bit grayscale PNG next to the replay) as a texture: linear, uncompressed, no mipmaps
     (an atlas's mips would blend neighbouring slices and frames)."""
-    folder = smoke_folder(replay)
-    task = unreal.AssetImportTask()
-    task.filename = os.path.join(os.path.dirname(replay_path), file_name)
-    task.destination_path = folder
-    task.automated = True
-    task.replace_existing = True
-    task.save = False
-    unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
-    # The asset as the importer named it (it changes characters a name may not hold: spaces, dots, brackets).
-    paths = list(task.imported_object_paths)
-    texture = assets.load_asset(paths[0]) if paths else None
-    if texture is None:
-        raise RuntimeError("smoke texture import failed: " + file_name)
+    texture = import_png(replay_path, file_name, smoke_folder(replay))
     texture.set_editor_property("compression_settings", unreal.TextureCompressionSettings.TC_GRAYSCALE)
     texture.set_editor_property("srgb", False)
     texture.set_editor_property("mip_gen_settings", unreal.TextureMipGenSettings.TMGS_NO_MIPMAPS)
@@ -335,13 +373,13 @@ def smoke_label(grenade):
 
 def place_smokes(sequence, replay, replay_path, end_frame, spawn):
     """One Heterogeneous Volume per smoke of the replay (smokes_of): a 640-unit cube on the cloud's grid, drawn by
-    the smoke's instance of SMOKE_MATERIAL, and REPLAY_COLLECTION's tick keyed on the sequence. `spawn(class, label,
-    location)` places a tagged actor. Returns the number of smokes placed."""
+    the smoke's instance of SMOKE_MATERIAL (which reads REPLAY_COLLECTION's tick: key_replay_tick, keyed once per
+    sequence by the caller). `spawn(class, label, location)` places a tagged actor. Returns the number of smokes
+    placed."""
     smokes = smokes_of(replay)
     if not smokes:
         return 0
     material = smoke_material()
-    key_replay_tick(sequence, replay, end_frame)
     for grenade in smokes:
         volume = grenade["smoke"]["volume"]
         instance = smoke_instance(replay, replay_path, grenade, material)
