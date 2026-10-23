@@ -503,7 +503,7 @@ now CT shade 0.97, T shade 1.05, palace 1.00: `OUTDOOR_BOUNCE_GAIN`, `LOCAL_BOUN
 Indoors the baked lamps' highlights are gone too; the B apartments, short of the corridor bounce already, drop further.
 
 Two further differences, measured but not changed:
-- **Interchange's glTF master reflects twice as much.** Unreal's unlit view adds 0.45 × the specular colour (F0), so
+- **Interchange's glTF master reflected twice as much** (fixed since, [below](#reflections-of-interchanges-gltf-master-2026-10-18)). Unreal's unlit view adds 0.45 × the specular colour (F0), so
   the difference between `ShowFlag.Lighting 0` renders with and without `ShowFlag.Specular 0` gives each pixel's F0:
   0.04 on the surfaces of OFAST's own masters (`M_OFAST_LayerBlend_v2`: de_mirage's blended ground and painted walls),
   which is CS2's F0 for every non-metal but weapons (Source 2 Viewer's `complex.frag.slang`), and 0.08 on everything Interchange's
@@ -516,6 +516,43 @@ Two further differences, measured but not changed:
 - CS2 takes the energy of its reflections off its baked diffuse light (Source 2 Viewer's `lighting.slang`: the
   lightmap × (1 − the reflection's directional albedo), a few % for F0 0.04); Unreal's legacy materials do not
   (`r.Material.EnergyConservation` is off, Substrate too). Not reproduced.
+
+### Reflections of Interchange's glTF master (2026-10-18)
+
+Why: Interchange's body function (`MF_Default_Body`, read as T3D with its `MF_Specular` and `MF_IOR`) computes
+Specular = occlusion × `SpecularFactor` × the specular texture's alpha × saturate(((IOR − 1) / (IOR + 1))² / 0.08)
+when a material has a specular texture (static switch `bHasSpecularTexture`), but occlusion × `SpecularFactor` alone
+when it has none. All 388 lit Interchange instances of de_mirage have no specular texture, `SpecularFactor` 1 and
+`IOR` 1.5: Specular 1, F0 0.08. OFAST exports neither `KHR_materials_specular` nor `KHR_materials_ior`, so glTF means
+F0 0.04, CS2's. **Fix:** `set_gltf_specular` (`import_map.py`, after the scene import) sets `SpecularFactor` to the
+glTF factor × the IOR term (0.5) on those instances: 372 on de_mirage (the other 16 have OFAST's instances on their
+slots). A scalar parameter, so no shader is compiled.
+
+Per-pixel F0 ((`ShowFlag.Lighting 0` − the same with `ShowFlag.Specular 0`) / 0.45, every non-sky pixel of the 14
+views): median 0.076 before (61 % at 0.07 – 0.09, the rest near 0.04: OFAST's masters); 0.039 in every view after
+the re-import, none above 0.06.
+
+Effect (Unreal / CS2 of the scene against the default picture, method as above; what-if with `SpecularFactor` 0.5 on
+the saved level, two editor sessions agreeing to 0.3 %, and the re-import's own shots):
+
+| View | All, before → what-if → import | Sunlit | Shade / lamp | Relative to the sun, before → after |
+|---|---|---|---|---|
+| ct0 / t0 | 1.02 / 1.03 → 1.00 / 1.01 → 1.00 / 1.01 | 1.02 / 1.03 → 1.01 / 1.02 | 0.99 / 1.05 → 0.94 / 1.02 | 0.97 / 1.04 → 0.94 / 1.02 |
+| asite / stairs | 1.03 / 1.01 → 1.00 / 0.97 → 0.99 / 0.98 | 1.04 / 1.03 → 1.01 / 1.02 | 1.01 / 0.99 → 0.96 / 0.94 | 1.00 / 0.98 → 0.96 / 0.94 |
+| bsite / bapps / middle | 0.84 / 0.83 / 0.94 → 0.82 / 0.81 / 0.93 (import the same) | 1.01 / 0.97 / 0.98 → 0.99 / 0.96 / 0.98 | 0.77 / 0.76 / 0.90 → 0.74 / 0.73 / 0.88 | 0.76 / 0.75 / 0.89 → 0.74 / 0.73 / 0.87 |
+| palace / apps | 1.01 / 0.76 → 0.98 / 0.74 → 0.97 / 0.74 | — | same | 1.00 / 0.75 → 0.97 / 0.74 |
+| connector / sniper | 1.20 / 1.23 → 1.14 / 1.16 → 1.14 / 1.16 | — | same | 1.19 / 1.21 → 1.14 / 1.16 |
+| shop / tramp / underpass | 0.74 / 1.14 / 1.28 → 0.69 / 1.09 / 1.23 → 0.67 / 1.03 / 1.22 | — | same | 0.73 / 1.13 / 1.27 → 0.66 / 1.03 / 1.22 |
+| seven outdoor views, pooled | | 1.014 → **1.001** | | |
+
+Closer on balance: the sunlit surfaces (the material) pool at 1.00, the three calibration views move from a mean
+|log| of 0.021 to 0.011 (import 0.014), all 14 views from 0.134 to 0.127; the bright interiors come down, the views
+already dark (B site, B apartments, middle, shop) get 2 – 4 % darker. The import matches the what-if to 0.5 % but in
+the shop and the T ramp (−4 / −6 %, views that vary between sessions). **Relative to the sun the light is now CT shade
+0.94, T shade 1.02, palace 0.97** (before 0.97, 1.04, 1.00): the reflections had covered part of the bounce the
+gains were fitted for. `OUTDOOR_BOUNCE_GAIN` and `LOCAL_BOUNCE_GAIN` were not changed; by the what-if table above
+about 1.3 and 2.2 would restore the balance (an estimate, not measured), pushing the connector and sniper's nest back
+up.
 
 ## Checked on three more maps (2026-10-16 evening)
 

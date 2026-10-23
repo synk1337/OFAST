@@ -22,7 +22,8 @@ OFAST's instances and textures no export uses any more are deleted: delete_unuse
 (road paint, signs, csgo_complex decals) as mesh decals, lit with the surface under them as in CS2
 (put_overlay_decals) → the other translucent surfaces (glass, fence and foliage cards) lit per pixel
 (light_translucent_per_pixel) → unlit cards in CS2's additive mode made additive (set_unlit_blend_modes; Interchange
-gives KHR_materials_unlit materials its unlit master) → light blockers hidden and
+gives KHR_materials_unlit materials its unlit master) → the other Interchange materials given glTF's reflectance
+(set_gltf_specular: F0 0.04, CS2's, where Interchange's master draws 0.08) → light blockers hidden and
 shadow proxies added (no sunlight through single-sided walls) → 3D skybox drawn behind the world → CS2's environment from the manifest: sun, sky sphere + Sky Light from the exported HDR, local lights with their real shapes and ranges, fixed
 exposure, CS2's tone curve (straight or Hable) and colour-correction table (docs/formats/lighting.md) → cameras at the spawns' eyes (and OFAST_VIEWS) with CS2's
 default field of view → screenshots → quit. Everything the script adds is tagged "OFAST" and rebuilt on every run.
@@ -2022,6 +2023,55 @@ def set_unlit_blend_modes():
     return count
 
 
+# Interchange's glTF master (M_Default, and OFAST's copy GLTF_MASTER) feeds Unreal's Specular from its body function
+# (MF_Default_Body): occlusion x SpecularFactor x the specular texture's alpha x MF_IOR's ((IOR - 1) / (IOR + 1))^2 /
+# 0.08 when the material has a specular texture (static switch bHasSpecularTexture), but occlusion x SpecularFactor
+# alone when it has none. So glTF's defaults (factor 1, IOR 1.5: F0 0.04) render as Specular 1, F0 0.08: twice what
+# glTF means, what CS2 uses for every non-metal but weapons (Source 2 Viewer's complex.frag.slang) and what OFAST's own
+# masters draw (Specular unconnected, 0.5), which doubled Lumen's reflections on most surfaces (docs/formats/
+# lighting.md). set_gltf_specular gives those instances the IOR term in SpecularFactor.
+GLTF_DEFAULT_IOR = 1.5  # KHR_materials_ior's default; OFAST's exports write neither it nor KHR_materials_specular
+
+
+def ior_specular(ior):
+    """Unreal's Specular for a dielectric of index `ior` as MF_IOR computes it: F0 / 0.08, at most 1 (0.5 for 1.5)."""
+    return min(((ior - 1.0) / (ior + 1.0)) ** 2 / 0.08, 1.0)
+
+
+def set_gltf_specular(skip):
+    """Sets SpecularFactor on the Interchange instance of every glTF material not in `skip` (the materials whose slots
+    got OFAST's own instances) whose master is Interchange's glTF master or OFAST's copy and that has no specular
+    texture: the glTF specularFactor x ior_specular(IOR), as the master computes it with a texture. Written only when
+    it changes (set_scalar_parameter). Runs after the scene import and light_translucent_per_pixel (which may change
+    the parent). Returns the number of instances set this run and of those already right."""
+    with open(GLTF) as f:
+        document = json.load(f)
+    masters = {unreal.EditorAssetLibrary.load_asset(path).get_path_name() for path in (INTERCHANGE_MASTER, GLTF_MASTER)
+               if unreal.EditorAssetLibrary.does_asset_exist(path)}
+    mel = unreal.MaterialEditingLibrary
+    changed = kept = 0
+    for material in document.get("materials", []):
+        if material["name"] in skip:
+            continue
+        instance = interchange_instance(material["name"])
+        if instance is None:
+            continue
+        base = instance.get_base_material()
+        if base is None or base.get_path_name() not in masters:
+            continue  # the unlit master (KHR_materials_unlit) has no Specular
+        if mel.get_material_instance_static_switch_parameter_value(instance, "bHasSpecularTexture"):
+            continue  # the master applies the IOR term itself
+        extensions = material.get("extensions", {})
+        factor = extensions.get("KHR_materials_specular", {}).get("specularFactor", 1.0)
+        wanted = factor * ior_specular(extensions.get("KHR_materials_ior", {}).get("ior", GLTF_DEFAULT_IOR))
+        if abs(mel.get_material_instance_scalar_parameter_value(instance, "SpecularFactor") - wanted) > 1e-6:
+            set_scalar_parameter(instance, "SpecularFactor", wanted)
+            changed += 1
+        else:
+            kept += 1
+    return changed, kept
+
+
 # Lumen carries less bounce light than CS2's path-traced lightmaps. Measured compensation on top of CS2's own bounce
 # scales (light_environment bouncescale / skybouncescale, each light's bouncescale), fitted on de_mirage's four
 # calibration views (docs/formats/lighting.md): CT / T / palace / B apartments at 0.95 / 0.86 / 0.81 / 0.74 of CS2
@@ -2030,7 +2080,8 @@ def set_unlit_blend_modes():
 # with the material taken out (shade / lamp light relative to the sunlit surfaces of the same views): CT shade 0.93-0.95,
 # T shade 0.96-0.99, palace 0.98 of CS2's light, so both gains stay; the picture's 5-6 % excess there was in the
 # sunlit surfaces too: the highlights of baked lights, which CS2 does not draw (cs2_specular_scale). Without them:
-# sunlit 1.01, CT shade 0.97, T shade 1.05, palace 1.00 relative to the sun.
+# sunlit 1.01, CT shade 0.97, T shade 1.05, palace 1.00 relative to the sun. With Interchange's F0 at 0.04 too
+# (set_gltf_specular): sunlit 1.00, CT shade 0.94, T shade 1.02, palace 0.97; the gains were not refitted.
 OUTDOOR_BOUNCE_GAIN = 1.25  # sun and sky light
 LOCAL_BOUNCE_GAIN = 2.0  # local lights (palace: CS2 bounces 0.7x the direct light, Lumen 0.43x)
 
@@ -2797,6 +2848,9 @@ def main():
     unlit = set_unlit_blend_modes()
     if unlit:
         log("unlit blend modes: %d Interchange materials additive" % unlit)
+    # Interchange's glTF master reflects twice what glTF (and CS2) mean without a specular texture: F0 0.08, not 0.04.
+    changed, kept = set_gltf_specular(blends)
+    log("glTF specular: SpecularFactor set on %d Interchange materials, %d already right" % (changed, kept))
     # Sunlight must not leak into interiors: CS2's light blockers and two-sided shadows for single-sided walls.
     hide_light_blockers(imported)
     add_shadow_proxies(imported)
