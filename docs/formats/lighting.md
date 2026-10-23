@@ -618,7 +618,9 @@ when it has none. All 388 lit Interchange instances of de_mirage have no specula
 `IOR` 1.5: Specular 1, F0 0.08. OFAST exports neither `KHR_materials_specular` nor `KHR_materials_ior`, so glTF means
 F0 0.04, CS2's. **Fix:** `set_gltf_specular` (`import_map.py`, after the scene import) sets `SpecularFactor` to the
 glTF factor × the IOR term (0.5) on those instances: 372 on de_mirage (the other 16 have OFAST's instances on their
-slots). A scalar parameter, so no shader is compiled.
+slots). A scalar parameter, so no shader is compiled. Demo imports (`import_demo.py`) apply the same rule since
+2026-10-23 (`tools/unreal/gltf_specular.py`, shared by both): weapons 0.25 for CS2's F0 0.02; the agents keep 1 for
+now ([material.md](material.md#characters-and-weapons-csgo_character-csgo_weapon)).
 
 Per-pixel F0 ((`ShowFlag.Lighting 0` − the same with `ShowFlag.Specular 0`) / 0.45, every non-sky pixel of the 14
 views): median 0.076 before (61 % at 0.07 – 0.09, the rest near 0.04: OFAST's masters); 0.039 in every view after
