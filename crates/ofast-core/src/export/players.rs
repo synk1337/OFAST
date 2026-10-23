@@ -1070,6 +1070,7 @@ mod tests {
             remapping_table: Vec::new(),
             remapping_starts: Vec::new(),
             key_values_text: String::new(),
+            reference_pose: None,
         };
         assert_eq!(with_own_gloves(&agent, 0b1001), 0b0101);
         assert_eq!(with_own_gloves(&agent, 0b0110), 0b0110);

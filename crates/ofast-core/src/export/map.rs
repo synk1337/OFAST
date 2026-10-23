@@ -397,7 +397,10 @@ impl MapExporter<'_> {
         Ok(())
     }
 
-    /// Writes one glTF mesh per default mesh of a model (most models have exactly one).
+    /// Writes one glTF mesh per default mesh of a model (most models have exactly one), each where CS2 draws it:
+    /// moved from its stored bind pose to the model's reference pose when that differs
+    /// ([`crate::model::Model::reference_correction`]: de_nuke's metal doors stood 90° off, a closed door looking
+    /// open).
     fn build_model_meshes(
         &mut self,
         path: &str,
@@ -410,10 +413,16 @@ impl MapExporter<'_> {
         let mut written = Vec::new();
         for mesh in model.default_meshes() {
             let draws: Vec<&DrawCall> = mesh.draw_calls.iter().collect();
-            if let Some(gltf_mesh) =
-                self.writer
-                    .mesh(&short_name(path), mesh, &draws, tint, normal_offset, None)?
-            {
+            let placement = model.reference_correction(mesh);
+            if let Some(gltf_mesh) = self.writer.mesh_with(
+                &short_name(path),
+                mesh,
+                &draws,
+                tint,
+                normal_offset,
+                None,
+                placement.as_ref(),
+            )? {
                 written.push(gltf_mesh);
             }
         }

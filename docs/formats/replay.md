@@ -13,8 +13,8 @@ The map must be imported first (`import_map.py`): the sequence is built in its l
 
 ## Contents (version 1)
 
-The rig inputs, `weapons`, `jumps` and `landings` were added in M4.3 (2026-10-18), `dropped_weapons` in M4.6
-(2026-10-23), without changing the version: they are new keys, so readers of older files keep working; check for
+The rig inputs, `weapons`, `jumps` and `landings` were added in M4.3 (2026-10-18), `dropped_weapons` and `doors`
+in M4.6 (2026-10-23), without changing the version: they are new keys, so readers of older files keep working; check for
 them before use. Everything is in CS2's own
 units and axes: Source units (1 unit = 1 inch), x/y/z as in the game, angles in
 degrees (pitch positive = looking down, yaw counter-clockwise from +x, −180..180).
@@ -33,7 +33,8 @@ degrees (pitch positive = looking down, yaw counter-clockwise from +x, −180..1
 | `jumps`, `landings` | `{tick, player}` (controller) for every jump / landing of the round, from the pawns' last jump and landing ticks |
 | `kills` | `player_death` events: `tick`, `victim`, `attacker`, `assister` (controllers; `null` = nobody, e.g. fall damage), `weapon`, and the kill-feed flags `headshot`, `penetrated`, `noscope`, `thrusmoke`, `attackerblind`, `assistedflash`, `attackerinair` |
 | `events` | round milestones with their raw keys: `round_freeze_end`, `bomb_beginplant`, `bomb_planted`, `bomb_begindefuse`, `bomb_defused`, `bomb_exploded`, `round_end` |
-| `dropped_weapons` | weapons lying in the world ([demo.md](demo.md#dropped-weapons)), one entry per stretch an entity lay unowned: `entity`, `item`, `class`, `model` (resource id as 16 hex digits), `mesh_groups`, `first_tick`, `last_tick` (the last tick it lay there: picked up on the next, or the round ended), `keys` = `[tick, x, y, z, pitch, yaw, roll]` at its first tick and on every tick it moved (after a rest, the resting transform is keyed again on the tick before the move, so straight lines between keys stay right) |
+| `doors` | the map's rotating doors ([demo.md](demo.md#doors)), one entry per door entity of the round: `entity`, `model`, `closed_position` and `closed_angles` (the map entity's origin and angles), `first_tick`, `last_tick`, `keys` as `dropped_weapons`' (on the ticks it swung) |
+| `dropped_weapons` | weapons lying in the world ([demo.md](demo.md#dropped-weapons)), one entry per stretch an entity lay unowned: `entity`, `item`, `class`, `model` (resource id as 16 hex digits), `mesh_groups`, `first_tick`, `last_tick` (the last tick it lay there: picked up on the next, or the round ended), `keys` = `[tick, x, y, z, pitch, yaw, roll]` at its first tick, on every tick it moved and at its last tick (after a rest, the resting transform is keyed again on the tick before the move, so straight lines between keys stay right) |
 
 A 111-second round of de_nuke: 10 players, 7,086 ticks, 9 kills, 64 jumps, about 8 MB (4 MB before the rig
 inputs), written in 0.8 s. `import_demo.py` reads only the keys it needs, so the rig inputs change nothing there yet;
@@ -70,6 +71,7 @@ verification screenshots).
 | Player proxy | without the agents: engine cylinder scaled to CS2's 32 × 32 × 72-unit hull, CT blue / T orange, a grey visor at the eyes showing where the player faces; position (x, −y, z) × 2.54 cm, yaw → −yaw (eye yaw) |
 | Visibility | hidden while dead or without a pawn, and while the camera looks through that player's own eyes (CS2 does not draw your own body in first person either) |
 | First-person cameras | one per player at feet + eye height, aimed with Rotator(pitch = −pitch, yaw = −yaw), CS2's default field of view (90° at 4:3 = 106.26° horizontally at 16:9) |
+| Doors | each door of the replay's `doors` that is not closed all round: the level's own door actor (a static mesh actor whose origin is within 2 cm of the door's closed position and whose rotation is its closed rotation; none: logged, not swung) keyed with the door's rotation, Euler-filtered as the weapons; every entry with the same closed position drives the same actor, which keeps its last rotation when the entity leaves the demo (a broken door stays). The sequence binds the level's actors: re-importing the map (`import_map.py`) makes new ones, so run `import_demo.py` again after it |
 | Dropped weapons | with the agents manifest's `dropped_weapons`: one static mesh actor per stretch of the replay's `dropped_weapons`, keyed on the stretch's keys (Rotator(roll = roll, pitch = −pitch, yaw = −yaw); each triple turned to the nearer of its two equivalent Euler forms, so a gun tumbling through the vertical never spins a full turn between two ticks in slow motion), shown from its first tick to its last |
 | Camera cuts | each kill in turn: the killer's camera from the previous cut until 0.5 s after the kill (the last one to the end of the round) |
 | Markers | marked frames at freeze time end, every kill (`attacker > victim (weapon, HS)`), bomb events and round end |

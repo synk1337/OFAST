@@ -161,6 +161,27 @@ pub struct DroppedWeapon {
     pub angles: [f32; 3],
 }
 
+/// A rotating door (`CPropDoorRotating`, the map's `prop_door_rotating`) at one tick. The server swings it about its
+/// origin (its hinge) and sends the rotation on every tick it moves; the entity is created again every round.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DoorSample {
+    /// The door's entity index (it changes from round to round).
+    pub entity: u32,
+    /// The door's model (resource id).
+    pub model: u64,
+    /// Where the door's origin is when closed (`m_closedPosition`): the map entity's origin, what names it
+    /// across rounds.
+    pub closed_position: [f32; 3],
+    /// Its rotation when closed (`m_closedAngles`), degrees: pitch, yaw, roll (the map entity's `angles`).
+    pub closed_angles: [f32; 3],
+    /// The origin now (body component's cell and offset; a rotating door keeps it).
+    pub position: [f32; 3],
+    /// The rotation now, degrees: pitch, yaw, roll (`CBodyComponent.m_angRotation`).
+    pub angles: [f32; 3],
+    /// `m_eDoorState`: 0 closed, 1 opening, 2 open, 3 closing (4 ajar).
+    pub state: u32,
+}
+
 /// Index of the flashbangs in the pawn's ammo counts (`m_pWeaponServices.m_iAmmo`). Observed on the local match
 /// demo, from the grenades each player carried: 13 HE, 14 flashbangs (2 with one flashbang entity), 15 smoke,
 /// 16 molotov or incendiary.
@@ -257,6 +278,8 @@ pub struct TickSample {
     pub players: Vec<PlayerSample>,
     /// Weapons lying in the world, in entity order.
     pub dropped: Vec<DroppedWeapon>,
+    /// The map's rotating doors, in entity order.
+    pub doors: Vec<DoorSample>,
 }
 
 /// The players of one round, tick by tick.
@@ -325,6 +348,45 @@ struct Paths {
     rig: RigPaths,
     appearance: AppearancePaths,
     death: DeathPaths,
+    doors: Option<DoorPaths>,
+}
+
+/// Field paths of a rotating door (`CPropDoorRotating`), when the demo has the class.
+#[derive(Debug)]
+struct DoorPaths {
+    class: String,
+    model: FieldPath,
+    closed_position: FieldPath,
+    closed_angles: FieldPath,
+    cell: [FieldPath; 3],
+    offset: [FieldPath; 3],
+    rotation: FieldPath,
+    state: FieldPath,
+}
+
+impl DoorPaths {
+    fn find(serializers: &Serializers) -> Option<Self> {
+        let class = "CPropDoorRotating";
+        let door = serializers.by_name(class)?;
+        let path = |field: &str| serializers.path_of(door, field);
+        let axes = |prefix: &str| -> Option<[FieldPath; 3]> {
+            Some([
+                path(&format!("{prefix}X"))?,
+                path(&format!("{prefix}Y"))?,
+                path(&format!("{prefix}Z"))?,
+            ])
+        };
+        Some(Self {
+            class: class.into(),
+            model: path(MODEL_FIELD)?,
+            closed_position: path("m_closedPosition")?,
+            closed_angles: path("m_closedAngles")?,
+            cell: axes("CBodyComponent.m_cell")?,
+            offset: axes("CBodyComponent.m_vec")?,
+            rotation: path("CBodyComponent.m_angRotation")?,
+            state: path("m_eDoorState")?,
+        })
+    }
 }
 
 /// Field paths of what killed a pawn. Each is optional.
@@ -522,6 +584,7 @@ impl Paths {
             rig: RigPaths::find(serializers, classes),
             appearance: AppearancePaths::find(serializers),
             death: DeathPaths::find(serializers),
+            doors: DoorPaths::find(serializers),
         })
     }
 }
@@ -694,6 +757,7 @@ pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
                 tick,
                 players: read_players(parser, paths),
                 dropped: read_dropped(parser, paths),
+                doors: read_doors(parser, paths),
             };
             // Several frames can share a tick; the last state of the tick wins.
             match track.samples.last_mut() {
@@ -950,6 +1014,57 @@ fn read_dropped(parser: &DemoParser<'_>, paths: &Paths) -> Vec<DroppedWeapon> {
                 .and_then(|p| weapon.get(p))
                 .and_then(FieldValue::as_vector3)
                 .unwrap_or_default(),
+        });
+    }
+    out
+}
+
+/// The rotating doors (fields never sent read as their defaults: 0; a door without its origin cell is skipped).
+fn read_doors(parser: &DemoParser<'_>, paths: &Paths) -> Vec<DoorSample> {
+    let Some(fields) = &paths.doors else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for door in parser.entities().iter() {
+        if parser.class_name(door.class_id) != Some(fields.class.as_str()) {
+            continue;
+        }
+        let vector = |path: &FieldPath| {
+            door.get(path)
+                .and_then(FieldValue::as_vector3)
+                .unwrap_or_default()
+        };
+        let mut position = [0.0; 3];
+        let mut complete = true;
+        for (k, value) in position.iter_mut().enumerate() {
+            match door.get(&fields.cell[k]).and_then(FieldValue::as_u64) {
+                Some(c) => {
+                    let o = door
+                        .get(&fields.offset[k])
+                        .and_then(FieldValue::as_f32)
+                        .unwrap_or(0.0);
+                    *value = c as f32 * CELL_WIDTH - MAX_COORD + o;
+                }
+                None => complete = false,
+            }
+        }
+        if !complete {
+            continue;
+        }
+        out.push(DoorSample {
+            entity: door.index,
+            model: door
+                .get(&fields.model)
+                .and_then(FieldValue::as_u64)
+                .unwrap_or(0),
+            closed_position: vector(&fields.closed_position),
+            closed_angles: vector(&fields.closed_angles),
+            position,
+            angles: vector(&fields.rotation),
+            state: door
+                .get(&fields.state)
+                .and_then(FieldValue::as_u64)
+                .unwrap_or(0) as u32,
         });
     }
     out

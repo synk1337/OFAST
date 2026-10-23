@@ -21,6 +21,7 @@
 //! Details: `docs/formats/model.md`. Knowledge from ValveResourceFormat (MIT); independent implementation.
 
 mod attributes;
+pub mod refpose;
 mod skeleton;
 
 use crate::bytes::{ByteReader, UnexpectedEof};
@@ -199,6 +200,9 @@ pub struct Mesh {
     pub bone_weight_count: u32,
     /// Named points on the skeleton (`m_attachments`): where a player's weapons sit, a weapon's muzzle, …
     pub attachments: Vec<Attachment>,
+    /// The mesh's own bones (`MDAT` → `m_skeleton.m_bones`): name and inverse bind pose (model space → the bone),
+    /// what CS2 skins the vertices with. Empty for a mesh drawn rigid as stored (de_inferno's breakable door).
+    pub skin_bones: Vec<(String, Affine)>,
 }
 
 /// A named point that follows bones: `weapon` on an agent's `wpn` bone, `pistol` on its right thigh,
@@ -299,6 +303,9 @@ pub struct Model {
     /// `m_modelInfo.m_keyValueText`: the model's keyvalues as KV3 text (`format:vmdlkeys4`), empty when it has
     /// none. Agents keep their procedural-bone constraints there ([`crate::anim::BoneConstraints`]).
     pub key_values_text: String,
+    /// Each bone in model space at the reference pose, how CS2 draws the model when nothing animates it
+    /// ([`refpose`]); `None` without an embedded animation.
+    pub reference_pose: Option<Vec<Affine>>,
 }
 
 impl Model {
@@ -337,7 +344,9 @@ impl Model {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned(),
+            reference_pose: None,
         };
+        model.reference_pose = refpose::reference_pose(resource, &model.skeleton);
 
         let embedded = ctrl
             .get("embedded_meshes")
@@ -364,6 +373,50 @@ impl Model {
             .unwrap_or(self.remapping_table.len())
             .min(self.remapping_table.len());
         self.remapping_table.get(start..end).unwrap_or_default()
+    }
+
+    /// The rigid transform (model space) that moves `mesh` from where its vertices are stored to where CS2 draws it
+    /// when nothing animates the model: CS2 skins a mesh's vertices with its own bones' inverse bind poses
+    /// ([`Mesh::skin_bones`]) and the model's reference pose ([`refpose`]), so each bone moves them by
+    /// `reference · inverse bind`. Returned when every bone of the mesh moves them the same way (de_nuke's metal
+    /// doors: 90° about z). `None` when that is no move (most meshes), when the mesh has no bones of its own (drawn
+    /// rigid as stored: de_inferno's breakable door shares the metal door's skeleton and animation but not its
+    /// skinning), when the model has no reference pose, or when bones move differently (that would need skinning).
+    pub fn reference_correction(&self, mesh: &Mesh) -> Option<Affine> {
+        let reference = self.reference_pose.as_ref()?;
+        let corrections: Vec<Affine> = mesh
+            .skin_bones
+            .iter()
+            .map(|(name, inverse_bind)| {
+                let bone = self.skeleton.find(name)?;
+                Some(compose(reference.get(bone)?, inverse_bind))
+            })
+            .collect::<Option<_>>()?;
+        let first = *corrections.first()?;
+        // Rotations to 1e-3 (48-bit quaternions carry ~1e-4), translations to 0.05 inch (half-float positions are
+        // off by up to 0.016 inch at 64 inches; the stored inverse bind poses match the bind chain to 3e-3).
+        let close = |a: &Affine, b: &Affine| {
+            (0..3).all(|i| {
+                (0..3).all(|j| (a[i][j] - b[i][j]).abs() <= 1e-3)
+                    && (a[i][3] - b[i][3]).abs() <= 0.05
+            })
+        };
+        let identity = affine([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
+        if close(&first, &identity) || !corrections.iter().all(|c| close(c, &first)) {
+            return None;
+        }
+        // Only a rigid move (a scaled inverse bind pose would distort normals; a mirror would flip the faces).
+        let column = |j: usize| [first[0][j], first[1][j], first[2][j]];
+        let rigid = (0..3).all(|j| {
+            (0..3).all(|k| {
+                let dot: f32 = (0..3).map(|i| column(j)[i] * column(k)[i]).sum();
+                (dot - if j == k { 1.0 } else { 0.0 }).abs() <= 1e-3
+            })
+        });
+        let [x, y, z] = [column(0), column(1), column(2)];
+        let determinant = x[0] * (y[1] * z[2] - y[2] * z[1]) - y[0] * (x[1] * z[2] - x[2] * z[1])
+            + z[0] * (x[1] * y[2] - x[2] * y[1]);
+        (rigid && determinant > 0.0).then_some(first)
     }
 
     /// Meshes shown by default: in the default mesh groups and in the most detailed LOD.
@@ -498,6 +551,7 @@ fn read_embedded_mesh(resource: &Resource<'_>, entry: &Value) -> Result<Mesh, Mo
     Ok(Mesh {
         draw_calls: read_draw_calls(&mesh_data),
         attachments: read_attachments(&mesh_data),
+        skin_bones: read_skin_bones(&mesh_data),
         bone_weight_count: mesh_data
             .get("m_skeleton")
             .and_then(|s| s.get("m_nBoneWeightCount"))
@@ -509,6 +563,28 @@ fn read_embedded_mesh(resource: &Resource<'_>, entry: &Value) -> Result<Mesh, Mo
         vertex_buffers,
         index_buffers,
     })
+}
+
+/// A mesh's own bones (`MDAT` → `m_skeleton.m_bones`: `m_boneName`, `m_invBindPose` as 12 floats, a 3 × 4 matrix
+/// row by row). A bone without a full matrix is left out.
+fn read_skin_bones(mesh_data: &Value) -> Vec<(String, Affine)> {
+    mesh_data
+        .get("m_skeleton")
+        .and_then(|s| s.get("m_bones"))
+        .and_then(Value::as_array)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|bone| {
+            let name = bone.get("m_boneName")?.as_str()?.to_owned();
+            let mut values = Vec::new();
+            crate::map::numbers(bone.get("m_invBindPose")?, &mut values);
+            (values.len() >= 12).then(|| {
+                let matrix: Affine =
+                    std::array::from_fn(|i| std::array::from_fn(|j| values[4 * i + j]));
+                (name, matrix)
+            })
+        })
+        .collect()
 }
 
 /// The attachments of a mesh (`MDAT` → `m_attachments`: a list of `{ key, value }`, the value holding up to three

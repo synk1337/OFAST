@@ -15,7 +15,9 @@
 //!   damage), weapon, headshot and the other flags CS2's kill feed shows;
 //! - round milestones (`round_freeze_end`, bomb events, `round_end`), with their keys as sent;
 //! - the weapons lying in the world (a dead player's gun, a dropped one): one entry per stretch an entity lay
-//!   unowned, with its look and its origin and rotation keyed on the ticks it moved.
+//!   unowned, with its look and its origin and rotation keyed on the ticks it moved;
+//! - the map's rotating doors, with their closed position (which names them in the map) and their rotation keyed on
+//!   the ticks they swung.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -25,7 +27,9 @@ use serde_json::{Value as Json, json};
 
 use super::ExportError;
 use crate::demo::events::{EventValue, GameEvent};
-use crate::demo::players::{DroppedWeapon, PlayerSample, RoundTrack, track_round};
+use crate::demo::players::{
+    DoorSample, DroppedWeapon, PlayerSample, RoundTrack, TickSample, track_round,
+};
 
 /// Format version written into the file; bump on incompatible changes.
 pub const REPLAY_VERSION: u32 = 1;
@@ -226,52 +230,109 @@ pub fn replay_json(track: &RoundTrack, demo_name: &str) -> Json {
         "kills": kills,
         "events": milestones,
         "dropped_weapons": dropped_json(track),
+        "doors": doors_json(track),
     })
 }
 
 /// The weapons lying in the world: one entry per stretch an entity lay unowned (a weapon picked up and dropped again
-/// has two), with `first_tick` and `last_tick` (the last tick it lay there), its look, and `keys` = `[tick, x, y, z,
-/// pitch, yaw, roll]` at its first tick and every tick it moved. Before a move that follows a rest, the resting
-/// transform is keyed again on the previous sampled tick, so a straight line between keys never drifts through the
-/// rest.
+/// has two), with `first_tick` and `last_tick` (the last tick it lay there), its look, and its keys
+/// ([`keyed_stretches`]).
 fn dropped_json(track: &RoundTrack) -> Vec<Json> {
-    struct Stretch<'t> {
-        weapon: &'t DroppedWeapon,
-        first: u32,
-        last: u32,
-        /// Transform at the latest key, and its tick.
-        value: [f64; 6],
-        keyed: u32,
-        keys: Vec<Json>,
-    }
-    let transform = |w: &DroppedWeapon| -> [f64; 6] {
-        let [x, y, z] = w.position.map(|v| round(v, 100.0));
-        let [p, yaw, r] = w.angles.map(|v| round(v, 100.0));
-        [x, y, z, p, yaw, r]
-    };
-    let key = |tick: u32, v: &[f64; 6]| json!([tick, v[0], v[1], v[2], v[3], v[4], v[5]]);
-    let finish = |s: Stretch<'_>| {
+    keyed_stretches(
+        track,
+        |sample| {
+            sample
+                .dropped
+                .iter()
+                .map(|w| (w.entity, w, w.position, w.angles))
+                .collect()
+        },
+        // An index reused by another weapon starts a new stretch.
+        |a: &DroppedWeapon, b: &DroppedWeapon| a.item == b.item && a.class == b.class,
+    )
+    .into_iter()
+    .map(|s| {
         json!({
-            "entity": s.weapon.entity,
-            "item": s.weapon.item,
-            "class": s.weapon.class,
+            "entity": s.item.entity,
+            "item": s.item.item,
+            "class": s.item.class,
             // As text, like the Steam ids: a 64-bit resource id.
-            "model": format!("{:016x}", s.weapon.model),
-            "mesh_groups": s.weapon.mesh_groups,
+            "model": format!("{:016x}", s.item.model),
+            "mesh_groups": s.item.mesh_groups,
             "first_tick": s.first,
             "last_tick": s.last,
             "keys": s.keys,
         })
-    };
-    let mut open: BTreeMap<u32, Stretch<'_>> = BTreeMap::new();
+    })
+    .collect()
+}
+
+/// The map's rotating doors: one entry per door entity of the round, with `closed_position` (the map entity's
+/// origin, which names the door in the map export) and `closed_angles`, its model, and its keys
+/// ([`keyed_stretches`]: the door's origin and rotation on the ticks it swung).
+fn doors_json(track: &RoundTrack) -> Vec<Json> {
+    keyed_stretches(
+        track,
+        |sample| {
+            sample
+                .doors
+                .iter()
+                .map(|d| (d.entity, d, d.position, d.angles))
+                .collect()
+        },
+        |a: &DoorSample, b: &DoorSample| a.closed_position == b.closed_position,
+    )
+    .into_iter()
+    .map(|s| {
+        json!({
+            "entity": s.item.entity,
+            "model": format!("{:016x}", s.item.model),
+            "closed_position": s.item.closed_position.map(|v| round(v, 100.0)),
+            "closed_angles": s.item.closed_angles.map(|v| round(v, 100.0)),
+            "first_tick": s.first,
+            "last_tick": s.last,
+            "keys": s.keys,
+        })
+    })
+    .collect()
+}
+
+/// One stretch an entity was there, keyed for [`keyed_stretches`].
+struct Stretch<'t, T> {
+    entity: u32,
+    /// The entity as first seen in the stretch.
+    item: &'t T,
+    first: u32,
+    last: u32,
+    /// `[tick, x, y, z, pitch, yaw, roll]` at the first tick and every tick the transform changed.
+    keys: Vec<Json>,
+    /// Transform at the latest key, and its tick.
+    value: [f64; 6],
+    keyed: u32,
+}
+
+/// The stretches `items` (entity index, item, position, angles per sample) were there, in order of first tick and
+/// entity: a stretch ends when the entity is gone from a sample or `same` says another one took its index. Its keys
+/// hold the transform at its first tick, every tick it changed (positions and angles rounded to 0.01) and its last
+/// tick. Before a change that follows a rest, the resting transform is keyed again on the previous sampled tick, so a
+/// straight line between keys never drifts through the rest.
+fn keyed_stretches<'t, T>(
+    track: &'t RoundTrack,
+    items: impl Fn(&'t TickSample) -> Vec<(u32, &'t T, [f32; 3], [f32; 3])>,
+    same: impl Fn(&T, &T) -> bool,
+) -> Vec<Stretch<'t, T>> {
+    let key = |tick: u32, v: &[f64; 6]| json!([tick, v[0], v[1], v[2], v[3], v[4], v[5]]);
+    let mut open: BTreeMap<u32, Stretch<'t, T>> = BTreeMap::new();
     let mut done = Vec::new();
     for sample in &track.samples {
         let tick = sample.tick;
-        for w in &sample.dropped {
-            let value = transform(w);
-            match open.get_mut(&w.entity) {
-                // The same weapon still lying there (an index reused by another weapon starts a new stretch).
-                Some(s) if s.weapon.item == w.item && s.weapon.class == w.class => {
+        let present = items(sample);
+        for &(entity, item, position, angles) in &present {
+            let [x, y, z] = position.map(|v| round(v, 100.0));
+            let [p, yaw, r] = angles.map(|v| round(v, 100.0));
+            let value = [x, y, z, p, yaw, r];
+            match open.get_mut(&entity) {
+                Some(s) if same(s.item, item) => {
                     if value != s.value {
                         if s.keyed < s.last {
                             let rest = s.value;
@@ -284,37 +345,46 @@ fn dropped_json(track: &RoundTrack) -> Vec<Json> {
                     s.last = tick;
                 }
                 _ => {
-                    if let Some(old) = open.remove(&w.entity) {
-                        done.push(finish(old));
+                    if let Some(old) = open.remove(&entity) {
+                        done.push(old);
                     }
                     open.insert(
-                        w.entity,
+                        entity,
                         Stretch {
-                            weapon: w,
+                            entity,
+                            item,
                             first: tick,
                             last: tick,
+                            keys: vec![key(tick, &value)],
                             value,
                             keyed: tick,
-                            keys: vec![key(tick, &value)],
                         },
                     );
                 }
             }
         }
-        // Picked up (or removed) this tick.
+        // Gone this tick (a weapon picked up, an entity removed).
         let gone: Vec<u32> = open
             .keys()
             .copied()
-            .filter(|e| !sample.dropped.iter().any(|w| w.entity == *e))
+            .filter(|e| !present.iter().any(|(entity, ..)| entity == e))
             .collect();
         for entity in gone {
             if let Some(s) = open.remove(&entity) {
-                done.push(finish(s));
+                done.push(s);
             }
         }
     }
-    done.extend(open.into_values().map(finish));
-    done.sort_by_key(|d| (d["first_tick"].as_u64(), d["entity"].as_u64()));
+    done.extend(open.into_values());
+    // Each stretch ends on a key: a reader joining stretches (a door's entity made again) never interpolates
+    // across the gap between them.
+    for s in &mut done {
+        if s.keyed < s.last {
+            let rest = s.value;
+            s.keys.push(key(s.last, &rest));
+        }
+    }
+    done.sort_by_key(|s| (s.first, s.entity));
     done
 }
 
@@ -438,18 +508,21 @@ mod tests {
                     tick: 100,
                     players: vec![player(1, 0.0, true), player(2, 5.0, true)],
                     dropped: vec![dropped(300, 7, 10.0), dropped(301, 44, 0.0)],
+                    doors: vec![door(0.0)],
                 },
                 TickSample {
                     tick: 101,
                     players: vec![player(1, 1.0, true)], // player 2 has no pawn this tick
                     // The HE grenade was picked up; the AK-47 lies still.
                     dropped: vec![dropped(300, 7, 10.0)],
+                    doors: vec![door(0.0)],
                 },
                 TickSample {
                     tick: 102,
                     players: vec![player(1, 2.0, true), player(2, 5.0, false)],
-                    // The AK-47 is pushed.
+                    // The AK-47 is pushed; the door starts to open.
                     dropped: vec![dropped(300, 7, 12.0)],
+                    doors: vec![door(6.5)],
                 },
             ],
             events: vec![GameEvent {
@@ -517,6 +590,31 @@ mod tests {
             (he["first_tick"].clone(), he["last_tick"].clone()),
             (json!(100), json!(100))
         );
+
+        // The door: closed at 100 and 101, swung 6.5° at 102.
+        let door = &replay["doors"][0];
+        assert_eq!(door["closed_position"], json!([257.0, -1310.0, -416.0]));
+        assert_eq!(
+            door["keys"],
+            json!([
+                [100, 257.0, -1310.0, -416.0, 0.0, 0.0, 0.0],
+                [101, 257.0, -1310.0, -416.0, 0.0, 0.0, 0.0],
+                [102, 257.0, -1310.0, -416.0, 0.0, 6.5, 0.0]
+            ])
+        );
+    }
+
+    /// de_nuke's door by A site, swung `yaw` degrees from closed.
+    fn door(yaw: f32) -> DoorSample {
+        DoorSample {
+            entity: 237,
+            model: 0xbb,
+            closed_position: [257.0, -1310.0, -416.0],
+            closed_angles: [0.0; 3],
+            position: [257.0, -1310.0, -416.0],
+            angles: [0.0, yaw, 0.0],
+            state: if yaw == 0.0 { 0 } else { 1 },
+        }
     }
 
     /// A weapon lying at (x, 2, 3) on its side.

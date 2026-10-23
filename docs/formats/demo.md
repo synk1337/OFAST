@@ -530,6 +530,30 @@ both test demos, each of the 46 players who died carrying more than a knife let 
 KSCERATO's AK-47 lies flat on its side on the floor where the demo has it, 2 m past his body; a CS2 reference
 of the same frames is still to take.
 
+## Doors
+
+A map's rotating doors (`prop_door_rotating`) are `CPropDoorRotating` entities, created again every round
+(`TickSample::doors`, `DoorSample`): `m_closedPosition` and `m_closedAngles` (the map entity's origin and angles: its
+hinge and closed rotation), `m_eDoorState` (0 closed, 1 opening, 2 open, 3 closing), the body component's origin and
+`m_angRotation` (sent on the ticks it swings), `m_hMaster` (the other half of a double door), the model. A de_nuke door
+opens 89° (the map's `distance`) in 28 ticks (0.44 s) and closes the same way; both halves of a double door swing
+together, one of them through ±180° of yaw.
+
+Seen (`examples/entity_probe.rs`, which prints any entity's fields by name when they change): on the Aurora vs FURIA
+de_nuke demo, round 4 opens and closes a double door; round 5 opens none. Every door entity leaves the demo at the
+round's restart, 320 ticks before the next freeze time, and one left mid-round with nothing changed on it before
+(out of the demo's view?): the replay keeps each door's last rotation.
+
+The A-site door (hinge 257, −1310, −416) closes the doorway players cross: on the local match demo (current build)
+they cross it only while it stands open (yaw −89°), and in round 3, closed all round, nobody does. The Aurora vs FURIA
+demo (an older build: CS2 says "old demo") disagrees: its A door is networked closed at its closed angles all round 5,
+like the others, yet players walk through the doorway 10 times, and CS2 playing that demo draws the doorway clear. So
+on that demo Unreal shows a closed A door CS2 does not (`compare_doors_a.png`); not explained yet.
+
+**Checked** (`doors_swing_open_and_shut` in `tests/cs2_demo.rs`): over the first three rounds of both test demos,
+every closed door sample (65,473 and 59,015) stands at its closed angles, every open one (8,119 and 9,022) has swung
+60 – 120° about z, and no door leaves its hinge.
+
 ## Models
 
 What each player looks like and carries, read per tick into `PlayerSample::appearance` and `PlayerSample::weapons`

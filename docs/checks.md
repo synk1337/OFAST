@@ -392,10 +392,11 @@ Per view, before → after (Unreal / CS2; the rule alone from the whole image):
 ### Open (follow-ups)
 
 5. **Doors stand open** (de_nuke's tunnel: CS2 shows a closed orange double door, Unreal an empty frame — the view
-   reads 1.6×). The door models (`metal_door_001_br`, de_inferno's `break_wooden_door_01`; de_mirage's ceiling fans
-   too) have a rotated root bone, and CS2 poses the mesh with its skeleton / reference animation; OFAST places the
-   bind-pose mesh, 90° off. The model loads fine (`ofast export-model`); the fix needs the skeleton's default pose
-   (and probably the `ref` animation, which is compressed) applied at export.
+   reads 1.6×). Fixed 2026-10-23: CS2 skins such meshes into the model's reference pose (its embedded `ref`
+   animation), which the map export now applies ([model.md](formats/model.md#reference-pose-modelrefpose)): de_nuke's
+   `metal_door_001_br` turns 90° about z into its frame. de_inferno's `break_wooden_door_01` was not off (its mesh
+   has no bones of its own: drawn as stored); de_mirage's ceiling fans have bones moving differently and stay as
+   stored.
 6. **No self-illumination.** Materials with `F_SELF_ILLUM` (`g_tSelfIllumMask`, `g_flSelfIllumBrightness`) are
    exported as plain lit materials: de_inferno's stained-glass church windows render grey (CS2: glowing colours),
    de_nuke's fluorescent tubes and bell lamps, lit signs, vending machine and control-room screens look switched off

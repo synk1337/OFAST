@@ -329,6 +329,53 @@ fn rig_inputs_match_movement_and_demoparser2() {
     );
 }
 
+/// Rotating doors: over the first rounds, a closed door (`m_eDoorState` 0) stands at its closed angles and an open
+/// one (2) has swung 60 – 120° about z from them (de_nuke's metal doors open 89°, the map's `distance`); the
+/// position stays at the hinge; and some door opens (both test demos open doors in their first rounds).
+#[test]
+fn doors_swing_open_and_shut() {
+    let Some((_, data)) = load() else { return };
+    let rounds = list_rounds(&data).expect("rounds");
+    let turn = |a: f32, b: f32| ((a - b + 180.0).rem_euclid(360.0) - 180.0).abs();
+    let (mut closed, mut open) = (0, 0);
+    for round in rounds.iter().take(3) {
+        let track = track_round(&data, round.round).expect("round");
+        for sample in &track.samples {
+            for door in &sample.doors {
+                let swing = turn(door.angles[1], door.closed_angles[1]);
+                let tilt = turn(door.angles[0], door.closed_angles[0])
+                    .max(turn(door.angles[2], door.closed_angles[2]));
+                assert!(tilt < 0.5, "tick {}: {door:?} tilts", sample.tick);
+                let moved = (0..3)
+                    .map(|k| (door.position[k] - door.closed_position[k]).abs())
+                    .fold(0.0, f32::max);
+                assert!(moved < 0.5, "tick {}: {door:?} left its hinge", sample.tick);
+                match door.state {
+                    0 => {
+                        assert!(
+                            swing < 0.5,
+                            "tick {}: closed but {swing}° open",
+                            sample.tick
+                        );
+                        closed += 1;
+                    }
+                    2 => {
+                        assert!(
+                            (60.0..120.0).contains(&swing),
+                            "tick {}: open {swing}°",
+                            sample.tick
+                        );
+                        open += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    println!("door samples: {closed} closed, {open} open");
+    assert!(closed > 0 && open > 0);
+}
+
 /// Weapons lying in the world: over the first rounds, every player who dies carrying more than a knife lets go of a
 /// weapon within two ticks of the death and within 96 units of where they died (CS2 drops the gun in hand, and a
 /// grenade); every stretch of the replay's `dropped_weapons` has its keys in tick order, inside its ticks and inside
@@ -800,7 +847,12 @@ fn glove_skins_merge_onto_the_agent() {
     }
     let out = std::env::temp_dir().join("ofast_gloves_test");
     let report = export_players(&content, &track, "demo", &out).expect("players export");
-    for file in &report.files {
+    // The agents' files (the export also writes the dropped weapons' models: `…_dropped_…`).
+    for file in report
+        .files
+        .iter()
+        .filter(|f| !f.to_string_lossy().contains("_dropped_"))
+    {
         let gltf: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(file).expect("glTF reads"))
                 .expect("JSON");

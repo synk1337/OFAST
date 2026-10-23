@@ -20,6 +20,70 @@ fn vpk() -> Vpk {
     Vpk::open(install.main_vpk()).expect("pak01_dir.vpk opens")
 }
 
+/// The reference pose (`model::refpose`): de_nuke's metal door, whose root bone is turned 90° about x at bind pose
+/// and to (0.5, 0.5, 0.5, 0.5) in its `ref` animation, is drawn where its own physics hull is once moved to the
+/// reference pose (at bind pose it stands 90° off: a closed door looked open); de_inferno's breakable door has the
+/// same skeleton and animation but no bones of its own on its mesh, so it is drawn as stored, where its hull is.
+#[test]
+fn doors_stand_where_their_physics_is() {
+    use ofast_core::content::Content;
+    use ofast_core::physics::{PhysicsData, ShapeKind};
+    let install = Cs2Install::locate().expect("CS2 install found");
+    let check = |map: &str, path: &str, corrected: bool| {
+        let content = Content::for_map(&install, map).expect("map archive opens");
+        let resource_bytes = content.read_resource(path).expect("model reads");
+        let resource = Resource::parse(&resource_bytes).unwrap();
+        let model = Model::parse(&resource).unwrap();
+        let mesh = model.default_meshes().next().expect("a mesh");
+        let correction = model.reference_correction(mesh);
+        assert_eq!(correction.is_some(), corrected, "{path}");
+        let apply = |p: [f32; 3]| -> [f32; 3] {
+            correction.map_or(p, |m| {
+                std::array::from_fn(|i| (0..3).map(|k| m[i][k] * p[k]).sum::<f32>() + m[i][3])
+            })
+        };
+        // The physics hull's bounds (model space: these parts follow no bone).
+        let physics = PhysicsData::from_resource(&resource)
+            .unwrap()
+            .expect("PHYS");
+        assert!(physics.bones.is_empty());
+        let (hull_min, hull_max) = physics
+            .parts
+            .iter()
+            .flat_map(|p| &p.shapes)
+            .find_map(|s| match &s.kind {
+                ShapeKind::Hull { min, max, .. } => Some((*min, *max)),
+                _ => None,
+            })
+            .expect("a hull");
+        // Every vertex within the hull's bounds grown by the handles' 7 inches.
+        let mut checked = 0;
+        for draw in &mesh.draw_calls {
+            for p in mesh.geometry(draw).unwrap().positions {
+                let p = apply(p);
+                for k in 0..3 {
+                    assert!(
+                        p[k] >= hull_min[k] - 7.0 && p[k] <= hull_max[k] + 7.0,
+                        "{path}: vertex {p:?} outside the hull {hull_min:?} – {hull_max:?}"
+                    );
+                }
+                checked += 1;
+            }
+        }
+        println!("{path}: {checked} vertices within its physics hull");
+    };
+    check(
+        "de_nuke",
+        "models/props/de_nuke/hr_nuke/metal_door_001/metal_door_001_br.vmdl",
+        true,
+    );
+    check(
+        "de_inferno",
+        "models/breakable_props/break_wooden_door_01/break_wooden_door_01.vmdl",
+        false,
+    );
+}
+
 #[test]
 fn ak47_decodes_to_a_sensible_rifle() {
     let vpk = vpk();

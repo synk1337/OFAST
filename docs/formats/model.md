@@ -163,6 +163,41 @@ bones added to the skeleton (`ofast_weapon_<n>`), their vertices moved into thos
 glTF pipeline makes one skeletal mesh per glTF mesh by default; `import_demo.py` imports characters with a copy that
 combines a skeleton's meshes (`combine_skeletal_meshes_behavior = BY_SKELETON`), so the actor shows them all.
 
+## Reference pose (`model::refpose`)
+
+A model nothing animates (a prop, a door) is drawn by CS2 in its **reference pose**: the first frame of the
+animation embedded in the model, `ref` (`ANIM` block, decoded with the `AGRP` block's `m_decodeKey`), skinned with
+each mesh's own bones (`MDAT m_skeleton.m_bones`, their `m_invBindPose`). For most models that is where the vertices
+are stored (the bind pose), but not for all: de_nuke's metal doors (`metal_door_001_br`) have their one bone at 90°
+about x in the skeleton's bind pose and at (0.5, 0.5, 0.5, 0.5) in `ref`, so stored as is the mesh stands 90° about z
+from where CS2 shows it, and a closed door looked open. de_inferno's breakable door shares that skeleton and that
+animation, but its mesh has no bones of its own (`m_skeleton.m_bones` empty): CS2 draws it rigid, as stored. So the
+correction is per mesh: `reference pose · inverse bind pose` of its bones (`Model::reference_correction`), applied
+when every bone of the mesh moves the vertices the same way (the map export writes the moved mesh; a mesh whose bones
+move differently would need skinning and is left as stored).
+
+`ANIM` layout, enough for one frame: `m_animArray[]` (`m_name`, `m_pData.m_frameblockArray[]`: a frame range and the
+indices of its segments), `m_decoderArray[]` (decoder names), `m_segmentArray[]` (`m_nLocalChannel` and a binary
+`m_container`). The decode key's `m_dataChannelArray[]` names each channel (`Position`, `Angle`, `Scale` bone channels)
+with its elements (bone names) and their element indices. A container is little-endian: decoder index, cardinality,
+element count n, total length (u16 each), n element indices (u16), then the values — once per element for `Static`
+decoders, per frame otherwise: `…Float` an f32, `…StaticVector3` / `…AnimVector3` three half floats, `…FullVector3`
+three f32, `…DeltaVector3` three f32 bases then three half deltas per frame, `…StaticQuaternion` /
+`…AnimQuaternion` 48 bits, `…FullQuaternion` four f32. A 48-bit quaternion is three 16-bit words: each one's low 15
+bits minus 16384, times sin 45° / 16384, are the three smallest components; the top bits of the first two words name
+the dropped one (none: w, second: x, first: y, both: z), the third word's its sign, and it is √(1 − the others²).
+
+**Checked** (`refpose_census` example over nine maps, `doors_stand_where_their_physics_is` in `tests/cs2_model.rs`,
+2026-10-23): of 899 entity models, 37 embed an animation; six are drawn away from their stored pose — de_nuke's metal
+door, de_overpass's `metal_door_112`, de_vertigo's crane load and de_mirage's `cloth03` land inside their own physics
+hulls once moved (as stored they stood 90° or 120° off), de_vertigo's spinning fan and a construction ribbon have no
+hull to check; five (a ceiling fan, vent slats, clothes, a helicopter, a train) have bones moving differently and
+stay as stored. de_inferno's breakable door, drawn as stored, fits its hull too. Bones agree when their moves match to
+1e-3 in rotation and 0.05 inch in translation (positions are half floats; with 1e-3 for both, `cloth03` and the
+ribbon read as uneven). On de_nuke the doors fill their frames: the tunnel's double door (hinges 120 units apart, each
+half 60 wide) closes in the middle, and on the current build players cross the A-site doorway only while that door is
+open (`docs/formats/demo.md`, "Doors").
+
 ## Meshopt buffers
 
 `MVTX` starts with `0xA1` (meshopt vertex codec v1) and `MIDX` with `0xE1` (index codec v1) in current CS2 files.

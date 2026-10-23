@@ -35,6 +35,8 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
   a teammate), its model (the agents manifest's `dropped_weapons` glTFs) moved as the demo has it, with its full
   rotation (Rotator(roll=roll, pitch=-pitch, yaw=-yaw)), shown from the tick it was let go to the tick before it
   was picked up or the round ended;
+- the map's rotating doors (the replay's `doors`), each the level's own door actor (found at its hinge) swung as the
+  demo has it;
 - a camera cut track that follows the killer of each kill in turn (from the previous kill until half a second after
   this one), the way fragmovie editors cut a round;
 - marked frames: freeze time end, every kill ("attacker > victim (weapon, HS)") and bomb events.
@@ -73,6 +75,8 @@ HFOV_16_9 = math.degrees(2 * math.atan(math.tan(math.radians(45)) * (16 / 9) / (
 # Key reduction tolerances: 0.2 cm and 0.1 degree.
 POSITION_TOLERANCE_CM = 0.2
 ANGLE_TOLERANCE_DEG = 0.1
+# A map actor is the demo's door when its origin is within this of the door's closed position (its hinge).
+DOOR_MATCH_CM = 2.0
 # Camera cuts: how long after a kill the killer's view stays on.
 CUT_AFTER_KILL_S = 0.5
 WARM_UP_TICKS = 300
@@ -367,6 +371,67 @@ def place_dropped_weapons(sequence, replay, meshes, end_frame):
     return keys
 
 
+def animate_doors(sequence, replay, end_frame):
+    """The map's rotating doors swung as the demo has them (the replay's `doors`). Each door is the map import's own
+    actor whose origin is the door's closed position (its hinge, the map entity's origin) and whose rotation is its
+    closed rotation; it is keyed with the demo's rotation on the ticks it swung, keeping its location and scale.
+    Every stretch with the same closed position drives the same actor (a door entity can leave the demo mid-round;
+    the door then keeps its last rotation). A door that never swings is left as the map has it. Returns the number of
+    keys."""
+    doors = replay.get("doors", [])
+    if not doors:
+        return 0
+    tick0 = replay["start_tick"]
+    by_hinge = {}
+    closed_angles = {}
+    for door in doors:
+        hinge = tuple(door["closed_position"])
+        by_hinge.setdefault(hinge, {}).update({k[0]: k for k in door["keys"]})
+        closed_angles[hinge] = door["closed_angles"]
+    candidates = [a for a in actors.get_all_level_actors()
+                  if TAG not in a.tags and isinstance(a, unreal.StaticMeshActor)]
+    keys = 0
+    swung = 0
+    for hinge, by_tick in by_hinge.items():
+        points = [by_tick[t] for t in sorted(by_tick)]
+        pitch, yaw, roll = closed_angles[hinge]
+        closed = unreal.Rotator(roll=roll, pitch=-pitch, yaw=-yaw)
+        first = unreal.Rotator(roll=points[0][6], pitch=-points[0][4], yaw=-points[0][5])
+        # Closed all round: the map already shows it so.
+        if all(p[4:] == points[0][4:] for p in points) and angle_between(first, closed) < 1.0:
+            continue
+        target = unreal.Vector(*to_unreal(hinge))
+        near = [a for a in candidates if (a.get_actor_location() - target).length() < DOOR_MATCH_CM]
+        # The door itself turns like its closed rotation (a frame or wall placed at the same point need not).
+        matches = [a for a in near if angle_between(a.get_actor_rotation(), closed) < 1.0]
+        if not matches:
+            log("door at %s: no map actor there with its closed rotation (%d at the hinge): not swung"
+                % (hinge, len(near)))
+            continue
+        frames = [p[0] - tick0 for p in points]
+        rotations = euler_filter([(p[6], -p[4], -p[5]) for p in points])
+        for actor in matches:
+            location = actor.get_actor_location()
+            scale = actor.get_actor_scale3d()
+            binding = sequence.add_possessable(actor)
+            keys += key_transform(binding, frames, [(location.x, location.y, location.z)] * len(frames), rotations,
+                                  (scale.x, scale.y, scale.z), end_frame)
+        swung += 1
+        log("door at %s: %s, %d keys, swings %.0f degrees" % (
+            hinge, ", ".join(a.get_actor_label() for a in matches), len(points),
+            max(abs(r[2] - rotations[0][2]) for r in rotations)))
+    if swung:
+        log("doors: %d of %d swung" % (swung, len(by_hinge)))
+    return keys
+
+
+def angle_between(a, b):
+    """Degrees between two Rotators (the angle of the rotation from one to the other)."""
+    qa, qb = a.quaternion(), b.quaternion()
+    dot = abs(qa.x * qb.x + qa.y * qb.y + qa.z * qb.z + qa.w * qb.w)
+    return math.degrees(2.0 * math.acos(min(1.0, dot)))
+
+
 def import_agents(replay):
     """Imports the players' animated agents written next to the replay by `ofast export-demo --players`, if any: the
     files <demo>_r<round>.agents.json lists, one per agent look. Returns controller -> (skeletal mesh,
@@ -599,6 +664,7 @@ def build(replay):
         keys += key_transform(camera_binding, frames, eyes, rotations, (1.0, 1.0, 1.0), end_frame)
         cameras[player["controller"]] = (camera, camera_binding)
     keys += place_dropped_weapons(sequence, replay, import_dropped_weapons(replay), end_frame)
+    keys += animate_doors(sequence, replay, end_frame)
     log("sequence %s: %d players (%d animated agents), %d frames at %d fps, %d keys in %.0f s"
         % (path, len(replay["players"]), len(agents), end_frame, fps, keys,
            time.monotonic() - started))

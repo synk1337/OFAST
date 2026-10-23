@@ -183,8 +183,11 @@ player and round.
   [animation.md](formats/animation.md#deaths-exportdeaths-physicsragdoll)). Dropped weapons: the guns the dead let
   go of (and weapons dropped for teammates, a dropped C4) moved as the server simulated them, read from the demo
   (owner-less weapon entities send their origin and rotation each tick) and placed in Unreal
-  ([demo.md](formats/demo.md#dropped-weapons)). To do: the force scale against more deaths, doors in their demo
-  state.
+  ([demo.md](formats/demo.md#dropped-weapons)). Doors: the map's rotating doors swing as the demo has them (each
+  the level's own door actor, found at its hinge), and models are drawn in their reference pose as CS2 skins them
+  (de_nuke's doors stood 90° off: a closed door looked open; [model.md](formats/model.md#reference-pose-modelrefpose)).
+  To do: the force scale against more deaths; why the old Aurora vs FURIA demo's A-site door does not block players
+  though networked closed.
 - [x] **Character and weapon materials, first pass**: roughness read where each material keeps it (94 character
   materials, the SAS body among them, keep it in `g_tAnisoGloss`, not the normal map: they rendered mirror-smooth),
   weapons' 2 % dielectric specular. The SAS agents now read as dark cloth like CS2's.
