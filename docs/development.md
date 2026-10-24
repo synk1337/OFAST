@@ -135,6 +135,20 @@ exposure, filmic tone curve) in its own level `<map>_realistic`; see the styles 
 The sandbox needs **DirectX 12 + Shader Model 6** for Nanite (set in `unreal/Sandbox/Config/DefaultEngine.ini`);
 switching it on recompiles all shaders once (long).
 
+The same file sets `r.MotionBlur.HalfResInput=0`. Without it, Unreal 5.8 closes the editor as soon as a camera is
+selected in an imported map ("Assertion failed: Texture->Desc.NumMips == 1", RenderGraphValidation.cpp):
+- With motion blur on, TSR gives its output a second, half-resolution mip for the blur.
+- The preview of a selected camera has motion blur on, but skips the blur on its first frame: locking the preview to
+  the camera is a camera cut. So the two-mip image goes on to tone mapping.
+- OFAST's CS2 tone curve replaces Unreal's tonemapper with a post-process material, and such a material's output
+  copies its input's layout, mips included. Unreal's own tonemapper makes a fresh one-mip image.
+- The selection outline copies that layout for its depth buffer, which may have only one mip.
+
+With the setting, motion blur reads the full-resolution image and still works. Long streaks, which used to be sampled
+from the half-resolution mip, are a little noisier on fast flicks. Reproduced and checked by selecting a POV camera,
+with and without the flashed view, during a `shoot_views.py` run (`-Try` with a `"script"` calling
+`EditorActorSubsystem.set_selected_level_actors`).
+
 ### Comparing with CS2
 
 1. Start CS2 with `-insecure` (`steam.exe -applaunch 730 -insecure -novid -console +map de_mirage`), open the console
