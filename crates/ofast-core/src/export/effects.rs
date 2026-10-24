@@ -72,10 +72,10 @@ pub const GROUND_REACH: f32 = 128.0;
 /// The sphere [`blasts_json`] moves down to find the ground: its radius and step, units. The step is half the radius,
 /// so the sphere first touches a floor from above, less than half its radius deep (a step as long as its diameter
 /// could put its centre under a thin floor's surface, where the contact is the floor's underside).
-const GROUND_PROBE: (f32, f32) = (1.0, 0.5);
+pub const GROUND_PROBE: (f32, f32) = (1.0, 0.5);
 
 /// A contact counts as ground when its normal points at least this much up (not a wall, a stair riser or an edge).
-const GROUND_UP: f32 = 0.5;
+pub const GROUND_UP: f32 = 0.5;
 
 /// Each HE grenade's blast, for what it leaves on the ground in Unreal (its scorch, where its debris lands): `entity`,
 /// `tick` and `position` of its `hegrenade_detonate`, and `ground`: the first solid surface facing up straight below
