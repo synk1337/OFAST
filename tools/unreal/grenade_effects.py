@@ -18,8 +18,12 @@ explosion_flashbang). Niagara systems cannot be written from editor Python, so O
   particle's place and size (from ScaleStart to ScaleEnd of its radius, rising Rise units over its life); the pixel
   shader plays the sequence's frames over the particle's life (CS2's ANIMATION_TYPE_MANUAL_FRAMES driven by the
   normalised age), tinted, fading in and out, and softened where it meets the world.
+- Some particles fly (an HE blast's sparks, debris, ground smoke): the same lines throw them along their heading and
+  up, slow them by CS2's drag and pull them down by gravity; sparks are drawn as streaks along their flight; sparks
+  and debris die at the ground under the blast (the agents manifest's `blasts`), as CS2's die on touching the world.
 - Every part of it is a function of the demo tick, so scrubbing the sequence shows the same flames every time.
 - A point light per effect, keyed: a fire's flickers with its flames, a blast's and a flashbang's pulse and die out.
+- A blast near the ground leaves scorch splats: decal actors with a material (SCORCH_MATERIAL) faded by the tick.
 - A blinded player's camera gets a post-process material (FLASHED_MATERIAL) whitening its view from the player's
   blindings (the replay's `blindings`) and the demo tick.
 """
@@ -49,6 +53,12 @@ UNITS_TO_CM = 2.54
 # to death (x radius), alpha, roll (+- degrees), how far from the centre a particle is born (units), how far it rises
 # over its life (units); and for Unreal: a brightness factor (CS2's overbright, tuned against CS2's picture), a tint
 # (CS2's grey fireball and smoke sheets are coloured by its shaders), translucent (alpha-blended) or additive.
+# Optional (LAYER_DEFAULTS): `name` (the layer's own, when two share a texture), `size` (sprite half-size per unit of
+# radius), `lift` (raised this much of its radius off its centre), how it flies — `speed` out along a random heading
+# and `up` (units/s), `gravity` (units/s^2), CS2's `drag` — `stretch` (a streak along its flight as long as `stretch`
+# seconds of it, `max_length` units at most), `sequence` (first sheet sequence, how many), `floor` (it dies at the
+# ground under a blast, as CS2's particles die on touching the world) and `hot` (r, g, b, share: born that colour,
+# cooling to the tint over that share of its life).
 FIRE_LAYERS = [
     # particles/inferno_fx/molotov_child_flame01a: the main flames.
     {"role": "fire", "slots": 8, "life": (0.65, 1.2), "radius": (28.0, 45.0), "scale": (1.5, 0.75),
@@ -58,13 +68,49 @@ FIRE_LAYERS = [
      "alpha": (0.78, 0.98), "roll": 45.0, "spread": 40.0, "rise": 25.0, "bright": 1.5},
 ]
 BLAST_LAYERS = [
-    # particles/explosions_fx/explosion_hegrenade_smoke_core: the fireball (its flame sheet, grey, tinted orange)...
+    # particles/explosions_fx/explosion_hegrenade: the white-hot flash it goes off with (radius 2 - 3 grown 10 to 15
+    # times over 0.25 s, fading over its second half). Twice that here: CS2's glow 3 ticks after a blast 272 units away
+    # spans about twice the particle's size (its renderer's radius scale and bloom).
+    {"name": "blast_flare", "role": "flare", "slots": 1, "life": (0.25, 0.25), "radius": (40.0, 60.0),
+     "scale": (1.0, 1.5), "alpha": (1.0, 1.0), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 10.0,
+     "tint": (1.0, 0.8, 0.55), "size": 1.0},
+    # particles/explosions_fx/explosion_hegrenade_smoke_core: the fireball (its flame sheet: grey and without alpha,
+    # DXT1, so additive only: alpha-blended, its black drew a black square), tinted orange; CS2's radius as the
+    # sprite's half-size (half of it drew the fireball half CS2's width 11 ticks after a blast)...
     {"role": "blast_flame", "slots": 3, "life": (0.35, 0.6), "radius": (90.0, 180.0), "scale": (0.7, 1.2),
-     "alpha": (0.9, 1.0), "roll": 180.0, "spread": 15.0, "rise": 20.0, "bright": 4.0, "tint": (1.0, 0.55, 0.22)},
-    # ... and its smoke, lasting 1 – 2 s.
+     "alpha": (0.9, 1.0), "roll": 180.0, "spread": 15.0, "rise": 20.0, "bright": 2.5, "tint": (1.0, 0.62, 0.38),
+     "size": 1.0},
+    # ... and its smoke, lasting 1 – 2 s: peach while the fire lights it, dark grey a third of its life on (CS2's: peach
+    # 11 ticks after a blast, black 33 ticks after).
     {"role": "blast_smoke", "slots": 4, "life": (1.0, 2.0), "radius": (90.0, 180.0), "scale": (0.6, 1.3),
      "alpha": (0.5, 0.7), "roll": 180.0, "spread": 25.0, "rise": 40.0, "bright": 1.0, "tint": (0.25, 0.24, 0.22),
-     "translucent": True},
+     "hot": (1.0, 0.68, 0.45, 0.35), "translucent": True},
+    # explosion_hegrenade_smoke_ground: dark puffs rolling out along the ground in a ring (born 20 out, radius 75 – 125
+    # grown from a third, 1.5 – 6 s, out at 25 – 200 units/s and slowed by drag 0.1; colour 64 of 255).
+    {"name": "blast_ground", "role": "blast_smoke", "slots": 8, "life": (1.5, 6.0), "radius": (75.0, 125.0),
+     "scale": (0.333, 1.0), "alpha": (0.81, 0.87), "roll": 180.0, "spread": 20.0, "rise": 0.0, "bright": 1.0,
+     "tint": (0.25, 0.25, 0.25), "translucent": True, "speed": (25.0, 200.0), "drag": 0.1, "lift": 0.3},
+    # explosion_hegrenade_sparktrails: 3 - 5 carriers flung out at up to 1400 units/s and 250 - 1000 up (gravity 500),
+    # each shedding streaks of sparks (sparks.vtex sequence 4, 252 / 209 / 187, self-lit) for half a second. Drawn as
+    # single streaks along such flights, each as long as 0.06 s of it: the lines CS2's picture shows. Orange and dim
+    # (CS2's are soft orange 11 ticks after a blast; at 4 x their colour they were hard white rays).
+    {"name": "sparks", "role": "sparks", "slots": 24, "life": (0.3, 0.7), "radius": (1.5, 3.0), "scale": (1.0, 0.3),
+     "alpha": (1.0, 1.0), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 1.2, "tint": (1.0, 0.62, 0.36),
+     "size": 1.0, "lift": 0.0, "speed": (300.0, 1400.0), "up": (250.0, 1000.0), "gravity": 500.0, "drag": 0.025,
+     "stretch": 0.06, "max_length": 100.0, "sequence": (4, 1), "floor": True},
+    # explosion_hegrenade_sparktrails_sparks_dots: the glow the sparks start with (radius 10 - 40 at 0.25 - 0.5 of it,
+    # 0.06 - 0.25 s).
+    {"name": "spark_glow", "role": "spark_glow", "slots": 6, "life": (0.0625, 0.25), "radius": (10.0, 40.0),
+     "scale": (1.0, 0.2), "alpha": (1.0, 1.0), "roll": 0.0, "spread": 10.0, "rise": 0.0, "bright": 1.5,
+     "tint": (0.99, 0.8, 0.74), "size": 0.375, "lift": 0.0, "speed": (50.0, 100.0)},
+    # explosion_hegrenade_debris_small: flecks (fleks.vtex sequences 15 - 39) thrown out at up to 250 units/s (plus up
+    # to 300 more from where they are born: 350 here, together) and 62 - 500 up, falling hard (gravity 200 and a pull
+    # of 400 - 600) until they touch the world; grey, alpha-blended. Radius
+    # 0.25 - 2.5 in CS2; 1 - 3 here (a sprite that small is a speck at any distance).
+    {"name": "debris", "role": "debris", "slots": 24, "life": (3.0, 4.0), "radius": (1.0, 3.0), "scale": (1.0, 0.5),
+     "alpha": (1.0, 1.0), "roll": 180.0, "spread": 10.0, "rise": 0.0, "bright": 1.0, "tint": (0.55, 0.55, 0.55),
+     "translucent": True, "size": 1.0, "lift": 0.0, "speed": (0.0, 350.0), "up": (62.5, 500.0), "gravity": 700.0,
+     "drag": 0.025, "sequence": (15, 25), "floor": True},
 ]
 FLASH_LAYERS = [
     # particles/explosions_fx/explosion_flashbang: one bright flare.
@@ -76,10 +122,21 @@ SOFT_EDGE_CM = 30.0
 # A sprite's half-size is SPRITE_SIZE x the particle's radius: CS2's radii read as half-sizes drew flames twice as
 # tall as CS2's (a molotov on de_nuke at the same tick, 2026-10-24).
 SPRITE_SIZE = 0.5
+# What a layer without these keys has: no flight, no streak, every sheet sequence, no ground.
+LAYER_DEFAULTS = {"size": SPRITE_SIZE, "lift": 0.6, "speed": (0.0, 0.0), "up": (0.0, 0.0), "gravity": 0.0,
+                  "drag": 0.0, "stretch": 0.0, "max_length": 0.0, "sequence": None, "floor": False,
+                  "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False}
+# CS2's particle drag takes a share of the velocity per simulation step; OFAST reads it as per 1/30 s (an assumption:
+# the step is not in the files) and turns it into a rate per second, -30 ln(1 - drag): 0.025 -> 0.76, 0.1 -> 3.2.
+DRAG_STEPS_PER_SECOND = 30.0
+# Below the ground: what a layer that does not die there gets as its floor (cm).
+NO_FLOOR_CM = -1.0e7
+# How far below a blast its debris may fall when the agents manifest knows no ground there (units).
+FALLBACK_DROP = 128.0
 # Per-instance data: centre x, y, z (cm), first and last tick particles may be born, phase (0 - 1 of LifeMax: where in
 # its first lifetime a slot starts, so a flame's slots do not all respawn together; 0 for a one-shot, born on its
-# tick), seed (0 - 100: small, so the shaders' sin() hashes keep their precision).
-CUSTOM_DATA = ["CenterX", "CenterY", "CenterZ", "FirstTick", "LastTick", "Phase", "Seed"]
+# tick), seed (0 - 100: small, so the shaders' sin() hashes keep their precision), the floor (cm) a particle dies at.
+CUSTOM_DATA = ["CenterX", "CenterY", "CenterZ", "FirstTick", "LastTick", "Phase", "Seed", "FloorZ"]
 # A fire's light: colour, intensity (candela) with LIGHT_FLAMES flames burning (the most a fire had in round 5 on
 # de_nuke), reach (units), keyed every this many ticks.
 LIGHT_COLOR = (1.0, 0.55, 0.22)
@@ -115,9 +172,12 @@ def log(message):
     unreal.log("OFAST: " + message)
 
 
-# The particle a slot shows at the demo tick: its age, normalised age, whether it is alive, and six hashes (0 - 1) of
-# the slot's seed and the respawn count. Shared by the vertex and pixel shaders (a Custom node cannot define
-# functions). Half a tick of slack: a one-shot's particle is born exactly on its first and last tick.
+# The particle a slot shows at the demo tick: its age, normalised age, eight hashes (0 - 1) of the slot's seed and the
+# respawn count, where its flight has taken it (cm) and whether it is alive. Shared by the vertex and pixel shaders (a
+# Custom node cannot define functions). Half a tick of slack: a one-shot's particle is born exactly on its first and
+# last tick. The flight: out along a random heading at Speed and up at Up (units/s), slowed by Drag (a rate per
+# second: v' = -Drag v) and pulled down by Gravity; without drag the plain parabola (the drag formulas lose their
+# precision as Drag goes to 0). A particle below FloorZ has hit the ground and is gone.
 SPRITE_STATE = r"""
 float t = (Tick - FirstTick) / TicksPerSecond;
 float cycle = floor((t + Phase * LifeMax) / LifeMax);
@@ -130,46 +190,73 @@ float h3 = frac(sin(dot(key, float2(73.156, 52.235))) * 63458.2342);
 float h4 = frac(sin(dot(key, float2(27.619, 57.583))) * 31337.1234);
 float h5 = frac(sin(dot(key, float2(91.211, 13.917))) * 12345.6789);
 float h6 = frac(sin(dot(key, float2(19.773, 83.517))) * 54321.9876);
+float h7 = frac(sin(dot(key, float2(45.164, 94.673))) * 21345.4321);
+float h8 = frac(sin(dot(key, float2(68.721, 31.297))) * 45231.7654);
 float life = lerp(LifeMin, LifeMax, h1);
 float norm = age / life;
-bool alive = Tick >= FirstTick && born >= FirstTick - 0.5 && born <= LastTick + 0.5 && norm <= 1.0;
+float heading = h3 * 6.2831853;
+float2 flat = float2(cos(heading), sin(heading));
+float speed = lerp(SpeedMin, SpeedMax, h7);
+float upward = lerp(UpMin, UpMax, h8);
+bool drags = Drag > 0.01;
+float slow = drags ? (1.0 - exp(-Drag * age)) / Drag : age;
+float fall = drags ? (age - slow) / Drag : 0.5 * age * age;
+float3 place = float3(CenterX, CenterY, CenterZ)
+    + float3(flat * (sqrt(h4) * Spread + speed * slow), upward * slow - Gravity * fall) * 2.54;
+bool alive = Tick >= FirstTick && born >= FirstTick - 0.5 && born <= LastTick + 0.5 && norm <= 1.0
+    && place.z >= FloorZ;
 """
 # Vertex shader: the world position offset putting the quad's corner where the particle's camera-facing sprite has it.
 SPRITE_WPO = SPRITE_STATE + r"""
 float2 corner = float2(UV.x * 2.0 - 1.0, 1.0 - UV.y * 2.0);
 float roll = radians((h5 * 2.0 - 1.0) * Roll);
 corner = float2(corner.x * cos(roll) - corner.y * sin(roll), corner.x * sin(roll) + corner.y * cos(roll));
-float angle = h3 * 6.2831853;
 float radius = alive ? lerp(RadiusMin, RadiusMax, h2) * lerp(ScaleStart, ScaleEnd, norm) * 2.54 : 0.0;
-// Lifted by most of its size, so the sprite stands on the ground rather than half in it (the frames' flames sit
-// low in their cells), rising as it ages.
-float3 centre = float3(CenterX, CenterY, CenterZ)
-    + float3(cos(angle), sin(angle), 0.0) * sqrt(h4) * Spread * 2.54
-    + float3(0.0, 0.0, 1.0) * (Rise * norm * 2.54 + radius * 0.6);
+// Lifted by Lift of its size (most of it for flames: the frames' flames sit low in their cells, so the sprite stands
+// on the ground rather than half in it), rising as it ages.
+float3 centre = place + float3(0.0, 0.0, 1.0) * (Rise * norm * 2.54 + radius * Lift);
 float3 forward = CameraPos - centre;
 forward = length(forward) > 0.001 ? normalize(forward) : float3(1.0, 0.0, 0.0);
 float3 right = cross(forward, float3(0.0, 0.0, 1.0));
 right = length(right) > 0.001 ? normalize(right) : float3(0.0, 1.0, 0.0);
 float3 up = cross(right, forward);
+if (Stretch > 0.0)
+{
+    // A streak along its flight as the camera sees it: as long as Stretch seconds of the flight (MaxLength units at
+    // most), as wide as its radius; the sheet's frame stands along it.
+    float decay = drags ? exp(-Drag * age) : 1.0;
+    float rising = drags ? (upward + Gravity / Drag) * decay - Gravity / Drag : upward - Gravity * age;
+    float3 velocity = float3(flat * speed * decay, rising) * 2.54;
+    float3 sideways = velocity - dot(velocity, forward) * forward;
+    float seen = length(sideways);
+    float3 along = seen > 0.001 ? sideways / seen : up;
+    float3 across = normalize(cross(forward, along));
+    float half_length = alive ? max(min(length(velocity) * Stretch, MaxLength * 2.54) * 0.5, radius) : 0.0;
+    return centre + along * corner.y * half_length + across * corner.x * radius - WorldPos;
+}
 return centre + (right * corner.x + up * corner.y) * radius - WorldPos;
 """
 # Pixel shader: the sequence's frame at the particle's age, faded in over its first tenth and out over its last
 # third; (colour x tint x brightness, opacity) in a float4.
 SPRITE_PIXEL = SPRITE_STATE + r"""
 if (!alive) return float4(0.0, 0.0, 0.0, 0.0);
-float sequence = min(floor(h6 * Sequences), Sequences - 1.0);
+float sequence = SequenceFirst + min(floor(h6 * Sequences), Sequences - 1.0);
 float frame = min(floor(norm * Frames), Frames - 1.0);
 float cell = sequence * Stride + frame;
 float row = floor((cell + 0.5) / Columns);
 float column = cell - row * Columns;
 float4 texel = Tex.Sample(TexSampler, (float2(column, row) + UV) / float2(Columns, Rows));
 float alpha = lerp(AlphaMin, AlphaMax, h2) * saturate(norm / 0.1) * saturate((1.0 - norm) / 0.33) * texel.a;
-return float4(texel.rgb * Tint * Bright, alpha);
+// Born Hot (rgb), cooling to Tint over the share of its life in Hot.a (a blast's smoke is lit by its own fire at
+// first); Hot.a = 0: Tint all along.
+float3 colour = lerp(Hot.rgb, Tint, saturate(norm / max(Hot.a, 0.0001)));
+return float4(texel.rgb * colour * Bright, alpha);
 """
 # Scalar parameters of the Custom nodes (each a material parameter), besides the per-instance data and the tick.
 SPRITE_SCALARS = ["TicksPerSecond", "LifeMin", "LifeMax", "RadiusMin", "RadiusMax", "ScaleStart", "ScaleEnd", "Roll",
-                  "Spread", "Rise", "AlphaMin", "AlphaMax", "Bright", "Sequences", "Frames", "Stride", "Columns",
-                  "Rows"]
+                  "Spread", "Rise", "AlphaMin", "AlphaMax", "Bright", "Sequences", "SequenceFirst", "Frames", "Stride",
+                  "Columns", "Rows", "Lift", "SpeedMin", "SpeedMax", "UpMin", "UpMax", "Gravity", "Drag", "Stretch",
+                  "MaxLength"]
 
 
 def sprite_material(translucent):
@@ -186,7 +273,7 @@ def sprite_material(translucent):
     output = unreal.CustomMaterialOutputType
     wpo = smoke_volumes.custom_node(material, SPRITE_WPO, output.CMOT_FLOAT3, ["UV", "WorldPos", "CameraPos"] + shared,
                                     -400, 400)
-    pixel = smoke_volumes.custom_node(material, SPRITE_PIXEL, output.CMOT_FLOAT4, ["UV", "Tex", "Tint"] + shared,
+    pixel = smoke_volumes.custom_node(material, SPRITE_PIXEL, output.CMOT_FLOAT4, ["UV", "Tex", "Tint", "Hot"] + shared,
                                       -400, -200)
 
     def connect(node, input_name, *targets):
@@ -208,6 +295,12 @@ def sprite_material(translucent):
     tint.set_editor_property("parameter_name", "Tint")
     tint.set_editor_property("default_value", unreal.LinearColor(1.0, 1.0, 1.0, 1.0))
     connect(tint, "Tint", pixel)
+    hot = mel.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -1200, -800)
+    hot.set_editor_property("parameter_name", "Hot")
+    hot.set_editor_property("default_value", unreal.LinearColor(1.0, 1.0, 1.0, 0.0))
+    # All four channels (the default output is RGB only): the alpha is the cooling share.
+    if not mel.connect_material_expressions(hot, "RGBA", pixel, "Hot"):
+        raise RuntimeError("sprite material: could not connect Hot")
     tick = mel.create_material_expression(material, unreal.MaterialExpressionCollectionParameter, -1200, -400)
     tick.set_editor_property("collection", smoke_volumes.replay_collection())
     tick.set_editor_property("parameter_name", "ReplayTick")
@@ -216,6 +309,9 @@ def sprite_material(translucent):
         node = mel.create_material_expression(material, unreal.MaterialExpressionPerInstanceCustomData, -1200,
                                               -300 + 60 * index)
         node.set_editor_property("data_index", index)
+        # A level imported before FloorZ existed has no such value: no floor, not one at z = 0.
+        if name == "FloorZ":
+            node.set_editor_property("const_default_value", NO_FLOOR_CM)
         connect(node, name, wpo, pixel)
     for index, name in enumerate(SPRITE_SCALARS):
         node = mel.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -900,
@@ -270,26 +366,66 @@ def sprite_mesh():
     return mesh
 
 
+def option(layer, key):
+    """A layer's value for `key`, or LAYER_DEFAULTS'."""
+    return layer.get(key, LAYER_DEFAULTS[key])
+
+
+def layer_name(layer):
+    """A layer's own name (its material instance's, its components'): `name`, or its texture's role."""
+    return layer.get("name", layer["role"])
+
+
+def instance_scale(layer):
+    """The scale of a layer's instances: SPRITE_INSTANCE_SCALE, or more for one whose particles fly further from their
+    centre than its bounds reach (SPRITE_MESH's ±50 cm sideways and up to SPRITE_BOUNDS_UP, times the scale): out as
+    far as the fastest flies in the longest life (or stops, slowed by drag), plus where it was born and its size."""
+    speed = option(layer, "speed")[1]
+    drag = option(layer, "drag")
+    rate = -DRAG_STEPS_PER_SECOND * math.log(1.0 - drag) if drag > 0.0 else 0.0
+    flight = min(speed * layer["life"][1], speed / rate) if rate > 0.0 else speed * layer["life"][1]
+    size = max(layer["radius"]) * option(layer, "size") * max(layer["scale"])
+    out = (layer["spread"] + flight + size) * UNITS_TO_CM / 50.0
+    lifted = size * (1.0 + option(layer, "lift"))
+    up = (option(layer, "up")[1] * layer["life"][1] + layer["rise"] + lifted) * UNITS_TO_CM / SPRITE_BOUNDS_UP
+    return max(SPRITE_INSTANCE_SCALE, out, up)
+
+
 def layer_instance(layer, effect, texture, material, tick_rate):
     """The material instance of one layer (shared by every round: CS2's sheets are the same), updated in place when
-    it exists (the level's effects keep it): its texture, flipbook layout, CS2's ranges, tint and brightness."""
-    instance = smoke_volumes.material_instance(FOLDER, "MI_Sprite_" + layer["role"], material)
+    it exists (the level's effects keep it): its texture, flipbook layout, CS2's ranges, flight, tint and
+    brightness."""
+    instance = smoke_volumes.material_instance(FOLDER, "MI_Sprite_" + layer_name(layer), material)
     sequences = effect["sequences"]
+    first, count = option(layer, "sequence") or (0, len(sequences))
+    first = min(first, len(sequences) - 1)
+    count = max(min(count, len(sequences) - first), 1)
+    size = option(layer, "size")
+    drag = option(layer, "drag")
     values = {
         "TicksPerSecond": tick_rate,
         "LifeMin": layer["life"][0], "LifeMax": layer["life"][1],
-        "RadiusMin": layer["radius"][0] * SPRITE_SIZE, "RadiusMax": layer["radius"][1] * SPRITE_SIZE,
+        "RadiusMin": layer["radius"][0] * size, "RadiusMax": layer["radius"][1] * size,
         "ScaleStart": layer["scale"][0], "ScaleEnd": layer["scale"][1],
         "Roll": layer["roll"], "Spread": layer["spread"], "Rise": layer["rise"],
         "AlphaMin": layer["alpha"][0], "AlphaMax": layer["alpha"][1], "Bright": layer["bright"],
-        # Every sequence plays as many frames as the shortest has (they differ by one or two).
-        "Sequences": len(sequences), "Frames": min(s["frames"] for s in sequences),
+        # Every sequence plays as many frames as the shortest of the layer's has (they differ by one or two).
+        "Sequences": count, "SequenceFirst": first,
+        "Frames": min(s["frames"] for s in sequences[first:first + count]),
         "Stride": effect["stride"], "Columns": effect["columns"], "Rows": effect["rows"],
+        "Lift": option(layer, "lift"),
+        "SpeedMin": option(layer, "speed")[0], "SpeedMax": option(layer, "speed")[1],
+        "UpMin": option(layer, "up")[0], "UpMax": option(layer, "up")[1],
+        "Gravity": option(layer, "gravity"),
+        "Drag": -DRAG_STEPS_PER_SECOND * math.log(1.0 - drag) if drag > 0.0 else 0.0,
+        "Stretch": option(layer, "stretch"), "MaxLength": option(layer, "max_length"),
     }
     for param, value in values.items():
         mel.set_material_instance_scalar_parameter_value(instance, param, float(value))
-    r, g, b = layer.get("tint", (1.0, 1.0, 1.0))
+    r, g, b = option(layer, "tint")
     mel.set_material_instance_vector_parameter_value(instance, "Tint", unreal.LinearColor(r=r, g=g, b=b, a=1.0))
+    hr, hg, hb, cooling = option(layer, "hot") or (r, g, b, 0.0)
+    mel.set_material_instance_vector_parameter_value(instance, "Hot", unreal.LinearColor(r=hr, g=hg, b=hb, a=cooling))
     mel.set_material_instance_texture_parameter_value(instance, "Tex", texture)
     assets.save_loaded_asset(instance)
     return instance
@@ -297,24 +433,26 @@ def layer_instance(layer, effect, texture, material, tick_rate):
 
 def update_layers(replay, replay_path, effects):
     """Rebuilds the sprite materials and updates every layer's instance from the layer tables and the manifest's
-    `effects` (the level's effects keep them: probe_smoke.py's quick look at a change). Returns role -> instance for
-    the layers whose texture the export wrote."""
+    `effects` (the level's effects keep them: probe_smoke.py's quick look at a change). Returns layer name -> instance
+    for the layers whose texture the export wrote."""
     by_role = {e["role"]: e for e in effects}
     materials = {translucent: sprite_material(translucent) for translucent in (False, True)}
-    tick_rate = round(1.0 / replay["tick_interval"])
+    tick_rate = tick_rate_of(replay)
+    textures = {}
     out = {}
     for layer in FIRE_LAYERS + BLAST_LAYERS + FLASH_LAYERS:
-        effect = by_role.get(layer["role"])
+        role = layer["role"]
+        effect = by_role.get(role)
         if effect is None:
             continue
         if "stride" not in effect:
-            log("effect %s: the agents manifest predates regular flipbooks (no stride): export the round again"
-                % layer["role"])
+            log("effect %s: the agents manifest predates regular flipbooks (no stride): export the round again" % role)
             continue
-        texture = smoke_volumes.import_png(replay_path, effect["file"], FOLDER)
-        assets.save_loaded_asset(texture)
-        out[layer["role"]] = layer_instance(layer, effect, texture, materials[layer.get("translucent", False)],
-                                            tick_rate)
+        if role not in textures:
+            textures[role] = smoke_volumes.import_png(replay_path, effect["file"], FOLDER)
+            assets.save_loaded_asset(textures[role])
+        out[layer_name(layer)] = layer_instance(layer, effect, textures[role],
+                                                materials[option(layer, "translucent")], tick_rate)
     return out
 
 
@@ -331,24 +469,24 @@ def add_component(actor, cls, name):
     return unreal.SubobjectDataBlueprintFunctionLibrary.get_object(data)
 
 
-def add_sprites(actor, layer, instance, mesh, slots, rng):
+def add_sprites(actor, layer, instance, mesh, slots, rng, floor_cm=NO_FLOOR_CM):
     """One instanced mesh of `layer` on `actor`: an instance per (centre in Source units, first tick, last tick) of
-    `slots`, times the layer's slots."""
-    ism = add_component(actor, unreal.InstancedStaticMeshComponent, "sprites_" + layer["role"])
+    `slots`, times the layer's slots; its particles die below `floor_cm` (Unreal z)."""
+    ism = add_component(actor, unreal.InstancedStaticMeshComponent, "sprites_" + layer_name(layer))
     ism.set_static_mesh(mesh)
     ism.set_material(0, instance)
     ism.set_editor_property("cast_shadow", False)
     ism.set_num_custom_data_floats(len(CUSTOM_DATA))
-    scale = unreal.Vector(*[SPRITE_INSTANCE_SCALE] * 3)
+    scale = unreal.Vector(*[instance_scale(layer)] * 3)
     for (sx, sy, sz), first, last in slots:
         position = unreal.Vector(sx * UNITS_TO_CM, -sy * UNITS_TO_CM, sz * UNITS_TO_CM)
         for _ in range(layer["slots"]):
-            # Scaled up so the instance's bounds hold the sprite the shader draws around it.
+            # Scaled up so the instance's bounds hold the sprites the shader draws around it (instance_scale).
             index = ism.add_instance(unreal.Transform(position, unreal.Rotator(0.0, 0.0, 0.0), scale), True)
             # A one-shot's particle is born on its tick: a phase would put its birth up to a lifetime before or
             # after it, outside the half tick the shader allows, and it would never show.
             phase = rng.random() if last > first else 0.0
-            values = [position.x, position.y, position.z, first, last, phase, rng.uniform(0.0, 100.0)]
+            values = [position.x, position.y, position.z, first, last, phase, rng.uniform(0.0, 100.0), floor_cm]
             for k, value in enumerate(values):
                 ism.set_custom_data_value(index, k, float(value), k == len(values) - 1)
 
@@ -437,7 +575,7 @@ def place_fires(sequence, replay, end_frame, instances, mesh, spawn):
     """One actor per fire of the replay (`fires`), with a sprite slot per flame and layer of FIRE_LAYERS (quads:
     `mesh`), and its flickering light. Returns the number of fires placed."""
     fires = [f for f in replay.get("fires", []) if f["flames"]]
-    layers = [layer for layer in FIRE_LAYERS if layer["role"] in instances]
+    layers = [layer for layer in FIRE_LAYERS if layer_name(layer) in instances]
     if not fires:
         return 0
     tick0 = replay["start_tick"]
@@ -450,7 +588,7 @@ def place_fires(sequence, replay, end_frame, instances, mesh, spawn):
         rng = random.Random(fire["entity"] * 104729 + fire["start_tick"])
         slots = [(f["position"], f["first_tick"], f["last_tick"]) for f in flames]
         for layer in layers:
-            add_sprites(actor, layer, instances[layer["role"]], mesh, slots, rng)
+            add_sprites(actor, layer, instances[layer_name(layer)], mesh, slots, rng)
         light = spawn_light(spawn, light_label(fire), (x, y, z + 30.0), LIGHT_COLOR, LIGHT_RADIUS)
         channel = intensity_channel(sequence, light, end_frame)
         flicker = random.Random(fire["entity"] * 7919 + fire["start_tick"])
@@ -463,9 +601,10 @@ def place_fires(sequence, replay, end_frame, instances, mesh, spawn):
     return len(fires)
 
 
-def place_bursts(sequence, replay, end_frame, instances, mesh, spawn):
+def place_bursts(sequence, replay, end_frame, instances, mesh, grounds, spawn):
     """One actor per HE grenade's and flashbang's detonation (bursts_of): its one-shot sprites (BLAST_LAYERS,
-    FLASH_LAYERS on quads `mesh`: every slot spawns once, on the detonation's tick) and its light pulse (BLAST_LIGHT,
+    FLASH_LAYERS on quads `mesh`: every slot spawns once, on the detonation's tick; a layer with `floor` dies at the
+    ground under it, from `grounds`: (entity, tick) -> the agents manifest's blast) and its light pulse (BLAST_LIGHT,
     FLASH_LIGHT). Returns the number placed."""
     tick0 = replay["start_tick"]
     placed = 0
@@ -476,9 +615,12 @@ def place_bursts(sequence, replay, end_frame, instances, mesh, spawn):
         label = burst_label(grenade)
         actor = spawn(unreal.Actor, label, (x * UNITS_TO_CM, -y * UNITS_TO_CM, z * UNITS_TO_CM))
         rng = random.Random(grenade["entity"] * 15485863 + tick)
+        ground = (grounds.get((grenade["entity"], tick)) or {}).get("ground")
+        floor_cm = (ground["z"] if ground else z - FALLBACK_DROP) * UNITS_TO_CM
         for layer in layers:
-            if layer["role"] in instances:
-                add_sprites(actor, layer, instances[layer["role"]], mesh, [((x, y, z), tick, tick)], rng)
+            if layer_name(layer) in instances:
+                add_sprites(actor, layer, instances[layer_name(layer)], mesh, [((x, y, z), tick, tick)], rng,
+                            floor_cm if option(layer, "floor") else NO_FLOOR_CM)
         light = spawn_light(spawn, burst_light_label(grenade), (x, y, z + 20.0), pulse["color"], pulse["radius"])
         channel = intensity_channel(sequence, light, end_frame)
         if tick - tick0 > 0:
@@ -489,6 +631,107 @@ def place_bursts(sequence, replay, end_frame, instances, mesh, spawn):
         placed += 1
     if placed:
         log("blasts and flashes: %d" % placed)
+    return placed
+
+
+SCORCH_MATERIAL = "/Game/OFAST/Replays/M_Scorch"
+# particles/explosions_fx/explosion_hegrenade_decal: up to 3 splats (fluidsplat_a_noisy_trans, made near black by
+# scortch_projected_cheap.vmat: colour 0.04 x 32 - 96 of 255), 10 - 20 units from the blast across the ground, radius
+# 30 - 40, alpha 0.9 - 1, rolled at random, projected onto what lies within 30 units of the blast's height (a blast
+# higher above the ground leaves none); 20 - 30 s, in over 0.125 - 0.15 s, out over the second half of its life.
+# In Unreal the decal's box sits on the ground found under the blast, `depth` units deep each way: a box at the blast's
+# height 30 deep would also blacken the legs of players walking over it and a wall beside it.
+SCORCH = {"count": 3, "offset": (10.0, 20.0), "radius": (30.0, 40.0), "alpha": (0.9, 1.0), "reach": 30.0,
+          "depth": 8.0, "life": (20.0, 30.0), "fade_in": (0.125, 0.15), "fade_out": 0.5, "color": 0.01}
+# A splat's opacity at the demo tick (times the texture's alpha).
+SCORCH_HLSL = r"""
+float age = (Tick - FirstTick) / TicksPerSecond;
+if (Tick < FirstTick || age > Life) return 0.0;
+return Alpha * saturate(age / FadeIn) * saturate((Life - age) / (FadeOut * Life));
+"""
+SCORCH_SCALARS = ["TicksPerSecond", "FirstTick", "Life", "Alpha", "FadeIn", "FadeOut"]
+
+
+def scorch_material():
+    """SCORCH_MATERIAL, rebuilt in place: a translucent deferred decal, near black, its opacity the splat texture's
+    alpha (`Tex`) x SCORCH_HLSL."""
+    material = smoke_volumes.empty_material(SCORCH_MATERIAL)
+    material.set_editor_property("material_domain", unreal.MaterialDomain.MD_DEFERRED_DECAL)
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+    fade = smoke_volumes.custom_node(material, SCORCH_HLSL, unreal.CustomMaterialOutputType.CMOT_FLOAT1,
+                                     ["Tick"] + SCORCH_SCALARS, -400, 0)
+    tick = mel.create_material_expression(material, unreal.MaterialExpressionCollectionParameter, -900, -200)
+    tick.set_editor_property("collection", smoke_volumes.replay_collection())
+    tick.set_editor_property("parameter_name", "ReplayTick")
+    mel.connect_material_expressions(tick, "", fade, "Tick")
+    for index, name in enumerate(SCORCH_SCALARS):
+        node = mel.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -900, -100 + 60 * index)
+        node.set_editor_property("parameter_name", name)
+        node.set_editor_property("default_value", 1.0)
+        mel.connect_material_expressions(node, "", fade, name)
+    texture = mel.create_material_expression(material, unreal.MaterialExpressionTextureSampleParameter2D, -700, -400)
+    texture.set_editor_property("parameter_name", "Tex")
+    texture.set_editor_property("texture", assets.load_asset("/Engine/EngineResources/DefaultTexture"))
+    opacity = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, -150, -200)
+    mel.connect_material_expressions(texture, "A", opacity, "A")
+    mel.connect_material_expressions(fade, "", opacity, "B")
+    color = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, -400, -400)
+    color.set_editor_property("constant", unreal.LinearColor(*[SCORCH["color"]] * 3, 1.0))
+    rough = mel.create_material_expression(material, unreal.MaterialExpressionConstant, -400, -300)
+    rough.set_editor_property("r", 1.0)
+    prop = unreal.MaterialProperty
+    if not (mel.connect_material_property(color, "", prop.MP_BASE_COLOR)
+            and mel.connect_material_property(rough, "", prop.MP_ROUGHNESS)
+            and mel.connect_material_property(opacity, "", prop.MP_OPACITY)):
+        raise RuntimeError("scorch material: could not connect its outputs")
+    mel.recompile_material(material)
+    assets.save_loaded_asset(material)
+    return material
+
+
+def place_scorches(replay, replay_path, effects, blasts, spawn):
+    """The scorch an HE blast leaves (SCORCH) as decal actors, one per splat, each with its instance of
+    SCORCH_MATERIAL in the round's folder: for the agents manifest's `blasts` whose ground lies within SCORCH's reach
+    below them, on that ground, projected into it along its normal. Returns the number of splats."""
+    scorch = next((e for e in effects if e["role"] == "scorch"), None)
+    reached = [b for b in blasts if b.get("ground") and b["position"][2] - b["ground"]["z"] <= SCORCH["reach"]]
+    if scorch is None or not reached:
+        return 0
+    texture = smoke_volumes.import_png(replay_path, scorch["file"], FOLDER)
+    assets.save_loaded_asset(texture)
+    material = scorch_material()
+    folder = smoke_volumes.round_folder(FOLDER, replay)
+    placed = 0
+    for blast in reached:
+        x, y, _ = blast["position"]
+        z = blast["ground"]["z"]
+        nx, ny, nz = blast["ground"]["normal"]
+        entity, tick = blast["entity"], blast["tick"]
+        rng = random.Random(entity * 7727 + tick)
+        # A decal projects along its X axis: into the ground, against its normal (Unreal's y is CS2's -y).
+        facing = unreal.MathLibrary.make_rot_from_x(unreal.Vector(-nx, ny, -nz))
+        for k in range(SCORCH["count"]):
+            angle = rng.uniform(0.0, 2.0 * math.pi)
+            away = rng.uniform(*SCORCH["offset"])
+            at = (x + math.cos(angle) * away, y + math.sin(angle) * away, z)
+            actor = spawn(unreal.DecalActor, "scorch #%d at %d (%d)" % (entity, tick, k),
+                          (at[0] * UNITS_TO_CM, -at[1] * UNITS_TO_CM, at[2] * UNITS_TO_CM))
+            actor.set_actor_rotation(unreal.Rotator(roll=rng.uniform(0.0, 360.0), pitch=facing.pitch,
+                                                    yaw=facing.yaw), False)
+            radius = rng.uniform(*SCORCH["radius"]) * UNITS_TO_CM
+            instance = smoke_volumes.material_instance(folder, "MI_Scorch_%d_%d_%d" % (entity, tick, k), material)
+            values = {"TicksPerSecond": tick_rate_of(replay), "FirstTick": tick, "Life": rng.uniform(*SCORCH["life"]),
+                      "Alpha": rng.uniform(*SCORCH["alpha"]), "FadeIn": rng.uniform(*SCORCH["fade_in"]),
+                      "FadeOut": SCORCH["fade_out"]}
+            for name, value in values.items():
+                mel.set_material_instance_scalar_parameter_value(instance, name, float(value))
+            mel.set_material_instance_texture_parameter_value(instance, "Tex", texture)
+            assets.save_loaded_asset(instance)
+            component = actor.get_editor_property("decal")
+            component.set_editor_property("decal_size", unreal.Vector(SCORCH["depth"] * UNITS_TO_CM, radius, radius))
+            component.set_decal_material(instance)
+            placed += 1
+    log("scorches: %d splats under %d blasts" % (placed, len(reached)))
     return placed
 
 
@@ -588,13 +831,17 @@ def flash_cameras(replay, cameras):
     return len(blinded)
 
 
-def place_effects(sequence, replay, replay_path, end_frame, effects, cameras, spawn):
-    """Everything above for a round: the sprite layers (from the agents manifest's `effects`; none written: no sprites),
-    the fires, the blasts and flashes, the blinded players' views."""
+def place_effects(sequence, replay, replay_path, end_frame, agents, cameras, spawn):
+    """Everything above for a round: the sprite layers (from the agents manifest `agents`' `effects`; without one: no
+    sprites), the fires, the blasts and flashes (their debris on the ground of its `blasts`), the scorches, the
+    blinded players' views."""
+    effects = agents.get("effects", [])
+    blasts = agents.get("blasts", [])
     instances = update_layers(replay, replay_path, effects) if effects else {}
     if (replay.get("fires") or bursts_of(replay)) and not instances:
         log("fires and blasts: no sprite textures in the agents manifest (export with --players): lights only")
     mesh = sprite_mesh()
     place_fires(sequence, replay, end_frame, instances, mesh, spawn)
-    place_bursts(sequence, replay, end_frame, instances, mesh, spawn)
+    place_bursts(sequence, replay, end_frame, instances, mesh, {(b["entity"], b["tick"]): b for b in blasts}, spawn)
+    place_scorches(replay, replay_path, effects, blasts, spawn)
     flash_cameras(replay, cameras)

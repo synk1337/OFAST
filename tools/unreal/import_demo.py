@@ -96,6 +96,10 @@ POSITION_TOLERANCE_CM = 0.2
 ANGLE_TOLERANCE_DEG = 0.1
 # A map actor is the demo's door when its origin is within this of the door's closed position (its hinge).
 DOOR_MATCH_CM = 2.0
+# A door is blown apart when an HE grenade goes off this close to its hinge (units) this few ticks after its entity's
+# last tick (broken_doors; seen: 9 - 83 units, 1 tick).
+DOOR_BLAST_REACH = 128.0
+DOOR_BLAST_TICKS = 4
 # Camera cuts: how long after a kill the killer's view stays on.
 CUT_AFTER_KILL_S = 0.5
 WARM_UP_TICKS = 300
@@ -441,8 +445,8 @@ def animate_doors(sequence, replay, end_frame):
     """The map's rotating doors swung as the demo has them (the replay's `doors`). Each door is the map import's own
     actor whose origin is the door's closed position (its hinge, the map entity's origin) and whose rotation is its
     closed rotation; it is keyed with the demo's rotation on the ticks it swung, keeping its location and scale.
-    Every stretch with the same closed position drives the same actor (a door entity can leave the demo mid-round;
-    the door then keeps its last rotation). A door that never swings is left as the map has it. Returns the number of
+    Every stretch with the same closed position drives the same actor. A door an HE grenade blew apart is hidden from
+    then on (broken_doors). A door that never swings nor breaks is left as the map has it. Returns the number of
     keys."""
     doors = replay.get("doors", [])
     if not doors:
@@ -454,17 +458,21 @@ def animate_doors(sequence, replay, end_frame):
         hinge = tuple(door["closed_position"])
         by_hinge.setdefault(hinge, {}).update({k[0]: k for k in door["keys"]})
         closed_angles[hinge] = door["closed_angles"]
+    broken_at = broken_doors(replay)
     candidates = [a for a in actors.get_all_level_actors()
                   if TAG not in a.tags and isinstance(a, unreal.StaticMeshActor)]
     keys = 0
     swung = 0
+    broken = 0
     for hinge, by_tick in by_hinge.items():
         points = [by_tick[t] for t in sorted(by_tick)]
         pitch, yaw, roll = closed_angles[hinge]
         closed = unreal.Rotator(roll=roll, pitch=-pitch, yaw=-yaw)
         first = unreal.Rotator(roll=points[0][6], pitch=-points[0][4], yaw=-points[0][5])
-        # Closed all round: the map already shows it so.
-        if all(p[4:] == points[0][4:] for p in points) and angle_between(first, closed) < 1.0:
+        gone = broken_at.get(hinge)
+        still = all(p[4:] == points[0][4:] for p in points) and angle_between(first, closed) < 1.0
+        # Closed all round and never broken: the map already shows it so.
+        if still and not gone:
             continue
         target = unreal.Vector(*to_unreal(hinge))
         near = [a for a in candidates if (a.get_actor_location() - target).length() < DOOR_MATCH_CM]
@@ -477,18 +485,43 @@ def animate_doors(sequence, replay, end_frame):
         frames = [p[0] - tick0 for p in points]
         rotations = euler_filter([(p[6], -p[4], -p[5]) for p in points])
         for actor in matches:
-            location = actor.get_actor_location()
-            scale = actor.get_actor_scale3d()
             binding = sequence.add_possessable(actor)
-            keys += key_transform(binding, frames, [(location.x, location.y, location.z)] * len(frames), rotations,
-                                  (scale.x, scale.y, scale.z), end_frame)
-        swung += 1
-        log("door at %s: %s, %d keys, swings %.0f degrees" % (
+            if not still:
+                location = actor.get_actor_location()
+                scale = actor.get_actor_scale3d()
+                keys += key_transform(binding, frames, [(location.x, location.y, location.z)] * len(frames),
+                                      rotations, (scale.x, scale.y, scale.z), end_frame)
+            if gone:
+                key_visibility(binding, [(0, True), (gone - tick0, False)], end_frame)
+        swung += not still
+        broken += gone is not None
+        log("door at %s: %s, %d keys, swings %.0f degrees%s" % (
             hinge, ", ".join(a.get_actor_label() for a in matches), len(points),
-            max(abs(r[2] - rotations[0][2]) for r in rotations)))
-    if swung:
-        log("doors: %d of %d swung" % (swung, len(by_hinge)))
+            max(abs(r[2] - rotations[0][2]) for r in rotations), ", broken at %d" % gone if gone else ""))
+    if swung or broken:
+        log("doors: %d of %d swung, %d broken" % (swung, len(by_hinge), broken))
     return keys
+
+
+def broken_doors(replay):
+    """Hinge -> the tick a door was blown apart, for the replay's doors an HE grenade broke. CS2 removes the entity of a
+    door a blast breaks and draws the doorway clear from then: on the Aurora vs FURIA de_nuke demo the A door's entity
+    leaves the demo mid-round in each of rounds 1 - 8, every time one tick before an HE grenade goes off 9 - 83 units
+    from its hinge, and players cross the doorway only after. Doors also leave at the round's restart (320 ticks before
+    the next freeze time), unbroken: so a door counts as broken only when a blast follows its entity's last tick within
+    DOOR_BLAST_TICKS, within DOOR_BLAST_REACH of its hinge."""
+    blasts = [g["detonation"] for g in replay.get("grenades", []) if g["kind"] == "he" and g.get("detonation")]
+    last_seen = {}
+    for door in replay.get("doors", []):
+        hinge = tuple(door["closed_position"])
+        last_seen[hinge] = max(last_seen.get(hinge, 0), door["last_tick"])
+    out = {}
+    for hinge, last in last_seen.items():
+        for blast in blasts:
+            near = math.dist(blast["position"], hinge) <= DOOR_BLAST_REACH
+            if near and 0 < blast["tick"] - last <= DOOR_BLAST_TICKS:
+                out[hinge] = blast["tick"]
+    return out
 
 
 def angle_between(a, b):
@@ -627,8 +660,10 @@ def key_viewmodel_hand(binding, frames, hands, offset, end_frame):
 
 
 def spawn_agent(player, mesh):
-    """The player as the team's agent model (feet at the actor's origin, facing +X)."""
+    """The player as the team's agent model (feet at the actor's origin, facing +X). It takes no decals: a blast's
+    scorch (grenade_effects.SCORCH) would blacken the feet of a player walking over it."""
     actor = actors.spawn_actor_from_object(mesh, unreal.Vector(0.0, 0.0, 0.0))
+    actor.skeletal_mesh_component.set_editor_property("receives_decals", False)
     actor.tags = [TAG]
     actor.set_actor_label("%s %s" % (TEAM_NAMES.get(player["team"], "?"), player["name"]))
     return actor
@@ -831,8 +866,7 @@ def build(replay):
     smoke_volumes.key_replay_tick(sequence, replay, end_frame)
     smoke_volumes.place_smokes(sequence, replay, REPLAY_PATH, end_frame, spawn_tagged)
     manifest = agents_manifest(replay)
-    grenade_effects.place_effects(sequence, replay, REPLAY_PATH, end_frame,
-                                  manifest[2].get("effects", []) if manifest else [],
+    grenade_effects.place_effects(sequence, replay, REPLAY_PATH, end_frame, manifest[2] if manifest else {},
                                   {controller: camera for controller, (camera, _) in cameras.items()}, spawn_tagged)
     keys += animate_doors(sequence, replay, end_frame)
     log("sequence %s: %d players (%d animated agents, %d viewmodels), %d frames at %d fps, %d keys in %.0f s"

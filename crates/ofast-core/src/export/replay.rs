@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value as Json, json};
 
 use super::ExportError;
-use super::smoke::{atlas_layout, smoke_atlas, write_smoke_atlas};
+use super::smoke::{Blast, atlas_layout, smoke_atlas, write_smoke_atlas};
 use crate::demo::events::{EventValue, GameEvent};
 use crate::demo::grenades::{FireSample, GrenadeKind, GrenadeSample, SmokeLog};
 use crate::demo::players::{
@@ -120,7 +120,9 @@ pub fn write_replay(
             ));
         }
         if !frames.is_empty() {
-            let atlas = smoke_atlas(&frames, SmokeSettings::default());
+            let settings = SmokeSettings::default();
+            let blasts = smoke_blasts(track, log, &frames, settings.hole_radius);
+            let atlas = smoke_atlas(&frames, settings, &blasts, track.tick_interval);
             write_smoke_atlas(&out_dir.join(smoke_texture_name(log, &prefix)), &atlas)?;
         }
     }
@@ -408,6 +410,49 @@ fn grenades_json(track: &RoundTrack, file_prefix: &str) -> Vec<Json> {
         })
     })
     .collect()
+}
+
+/// The HE grenades that went off while a smoke's log ran (from its first frame to its last) close enough for their
+/// hole (`reach`, voxels) to touch its grid, as blasts in that grid. CS2 sends no record of them in the smoke's log
+/// (no hole record in any round of four demos, `examples/smoke_holes.rs`): every client carves the hole itself, as
+/// OFAST does, from the detonation (`hegrenade_detonate`).
+fn smoke_blasts(
+    track: &RoundTrack,
+    log: &SmokeLog,
+    frames: &[smoke::VoxelFrame],
+    reach: f32,
+) -> Vec<Blast> {
+    // The detonation point as the smoke's `grid_origin` has it (grenades_json: its last sample), so the holes fall
+    // where the grid is drawn.
+    let Some(point) = track
+        .samples
+        .iter()
+        .flat_map(|s| &s.grenades)
+        .filter(|g| g.entity == log.entity && g.serial == log.serial)
+        .filter_map(|g| g.smoke.map(|c| c.position))
+        .next_back()
+    else {
+        return Vec::new();
+    };
+    let (Some(first), Some(last)) = (frames.first(), frames.last()) else {
+        return Vec::new();
+    };
+    let half = smoke::GRID as f32 * smoke::VOXEL_SIZE / 2.0;
+    let span = -reach..=smoke::GRID as f32 + reach;
+    track
+        .events
+        .iter()
+        .filter(|e| e.name == "hegrenade_detonate" && (first.tick..=last.tick).contains(&e.tick))
+        .filter_map(|e| {
+            let at = e.position()?;
+            let voxel: [f32; 3] =
+                std::array::from_fn(|k| (at[k] - (point[k] - half)) / smoke::VOXEL_SIZE);
+            voxel.iter().all(|v| span.contains(v)).then_some(Blast {
+                tick: e.tick,
+                voxel,
+            })
+        })
+        .collect()
 }
 
 /// A smoke's texture file name: `<file_prefix>_smoke<entity>-<serial>.png`.

@@ -34,7 +34,7 @@ use serde_json::json;
 
 use super::ExportError;
 use super::deaths::bake_deaths;
-use super::effects::export_effect_textures;
+use super::effects::{blasts_json, export_effect_textures};
 use super::gltf::{
     Binding, BoneAnimation, MergedModel, export_character, export_model_static, load_model,
     resource_data,
@@ -418,6 +418,7 @@ pub fn export_players(
     let dropped = export_dropped(&round, demo_name, out_dir, &mut report);
     let viewmodels = export_viewmodels(&round, &groups, demo_name, out_dir, &mut report);
     let effects = export_effect_textures(content, out_dir, &mut report.warnings);
+    let blasts = blasts_json(track, round.collision.as_ref());
     std::fs::write(
         &report.manifest,
         serde_json::to_string_pretty(&json!({
@@ -430,6 +431,7 @@ pub fn export_players(
             "dropped_weapons": dropped,
             "viewmodels": viewmodels,
             "effects": effects,
+            "blasts": blasts,
         }))
         .expect("JSON serializes"),
     )?;

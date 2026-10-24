@@ -251,6 +251,30 @@ pub struct SmokeSettings {
     pub above: f32,
     /// Weight of the neighbour below (z − 1).
     pub below: f32,
+    /// An HE blast's hole ([`Simulation::carve`], every step while it lasts): its radius, voxels.
+    pub hole_radius: f32,
+    /// The width of the hole's soft wall, voxels.
+    pub hole_edge: f32,
+    /// Seconds the hole stays at its full radius after the blast.
+    pub hole_hold: f32,
+    /// Seconds it then takes to shrink to nothing, letting the cloud back in.
+    pub hole_close: f32,
+}
+
+impl SmokeSettings {
+    /// The hole's radius (voxels) `age` seconds after its blast: [`SmokeSettings::hole_radius`] for
+    /// [`SmokeSettings::hole_hold`], then shrinking evenly over [`SmokeSettings::hole_close`]; 0 before the blast and
+    /// after.
+    pub fn hole_radius_at(&self, age: f32) -> f32 {
+        if age < 0.0 {
+            0.0
+        } else if age <= self.hole_hold {
+            self.hole_radius
+        } else {
+            self.hole_radius
+                * (1.0 - (age - self.hole_hold) / self.hole_close.max(f32::EPSILON)).max(0.0)
+        }
+    }
 }
 
 impl Default for SmokeSettings {
@@ -268,6 +292,10 @@ impl Default for SmokeSettings {
             side,
             above: side * 1.25,
             below: side * 0.75,
+            hole_radius: 12.0,
+            hole_edge: 2.0,
+            hole_hold: 0.5,
+            hole_close: 4.0,
         }
     }
 }
@@ -399,6 +427,24 @@ impl Simulation {
         self.steps += 1;
     }
 
+    /// An HE grenade's hole in the cloud: the smoke within `radius` voxels of `centre` (grid coordinates in voxels from
+    /// the grid's corner: a voxel's middle is at its index + 0.5) goes, all of it inside `radius − edge` and less of
+    /// it towards `radius`, so the hole's wall is not a staircase of voxels. Run after every step while the hole lasts
+    /// ([`SmokeSettings::hole_radius_at`]): once, the emitters inside it would fill it again within a step.
+    pub fn carve(&mut self, centre: [f32; 3], radius: f32, edge: f32) {
+        for (code, d) in self.density.iter_mut().enumerate() {
+            if *d == 0.0 {
+                continue;
+            }
+            let v = demorton(code as u32, 5);
+            let distance = (0..3)
+                .map(|k| (v[k] as f32 + 0.5 - centre[k]).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            *d *= ((distance - (radius - edge)) / edge.max(f32::EPSILON)).clamp(0.0, 1.0);
+        }
+    }
+
     /// Density of the voxel at `voxel` (grid coordinates, 0 – 31 each).
     pub fn density(&self, voxel: [usize; 3]) -> f32 {
         self.density[morton(voxel) as usize]
@@ -490,6 +536,45 @@ mod tests {
         for code in 0..4096 {
             assert_eq!(morton(demorton(code, 4)), code);
         }
+    }
+
+    #[test]
+    fn holes_open_hold_and_close() {
+        let s = SmokeSettings::default();
+        assert_eq!(s.hole_radius_at(-0.1), 0.0);
+        assert_eq!(s.hole_radius_at(0.0), s.hole_radius);
+        assert_eq!(s.hole_radius_at(s.hole_hold), s.hole_radius);
+        let halfway = s.hole_radius_at(s.hole_hold + s.hole_close / 2.0);
+        assert!((halfway - s.hole_radius / 2.0).abs() < 1e-4, "{halfway}");
+        assert_eq!(s.hole_radius_at(s.hole_hold + s.hole_close + 0.1), 0.0);
+
+        // A one-emitter cloud in an open grid (a few voxels across), carved 2.5 voxels around the middle of the voxel
+        // before the emitter with a 1-voxel wall: nothing left within 1.5, part of it out to 2.5, all of it beyond.
+        let bricks = (0..512u16).map(|index| Brick { index, solid: 0 }).collect();
+        let mut sim = Simulation::new(s);
+        sim.step(&VoxelFrame {
+            emitters: vec![Emitter {
+                voxel: [16, 16, 16],
+                level: 5,
+                hold: 0.0,
+            }],
+            bricks,
+            ..VoxelFrame::default()
+        });
+        for number in 1..60 {
+            sim.step(&VoxelFrame {
+                number,
+                ..VoxelFrame::default()
+            });
+        }
+        let before = [16, 17, 18].map(|x| sim.density([x, 16, 16]));
+        assert!(before.iter().all(|&d| d > 0.0), "{before:?}");
+        sim.carve([15.5, 16.5, 16.5], 2.5, 1.0);
+        assert_eq!(sim.density([15, 16, 16]), 0.0);
+        assert_eq!(sim.density([16, 16, 16]), 0.0);
+        // Voxel 17's middle is 2 voxels out: half way through the wall, half its smoke kept.
+        assert!((sim.density([17, 16, 16]) - before[1] / 2.0).abs() < 1e-3);
+        assert_eq!(sim.density([18, 16, 16]), before[2]);
     }
 
     #[test]

@@ -15,6 +15,8 @@ use serde_json::{Value as Json, json};
 use super::ExportError;
 use super::gltf::write_png;
 use crate::content::Content;
+use crate::demo::players::RoundTrack;
+use crate::physics::ragdoll::WorldCollision;
 use crate::resource::Resource;
 use crate::texture::{Image, SheetSequence, Texture};
 
@@ -41,14 +43,75 @@ pub const EFFECT_TEXTURES: &[(&str, &str)] = &[
         "blast_smoke",
         "materials/particle/explosion_fireballs/smoke/explosion_fireball_01_smoke.vtex_c",
     ),
-    // particles/explosions_fx/explosion_hegrenade.vpcf: the flare CS2's blasts and flashbangs go off with. OFAST draws
-    // it for flashbangs only (an HE blast's fireball is bright on its own); a molotov's glow (molotov_child_glow01a)
-    // is its light instead.
+    // particles/explosions_fx/explosion_hegrenade.vpcf: the flare CS2's blasts and flashbangs go off with (a molotov's
+    // glow, molotov_child_glow01a, is its light instead).
     (
         "flare",
         "materials/particle/particle_flares/particle_flare_001.vtex_c",
     ),
+    // particles/explosions_fx/explosion_hegrenade_sparktrails_sparks.vpcf: the streaks a blast's sparks leave, and the
+    // glow they start with (…_sparks_dots.vpcf).
+    ("sparks", "materials/particle/sparks/sparks.vtex_c"),
+    (
+        "spark_glow",
+        "materials/effects/glows/simple_glow_001.vtex_c",
+    ),
+    // particles/explosions_fx/explosion_hegrenade_debris_small.vpcf: the flecks a blast throws.
+    ("debris", "materials/particle/impact/fleks.vtex_c"),
+    // particles/explosions_fx/explosion_hegrenade_decal.vpcf: its scorch (materials/effects/scortch_projected_cheap.vmat's
+    // colour texture; the material darkens it to near black).
+    (
+        "scorch",
+        "materials/effects/fluidsplat_a_noisy_trans_tga_c46d6803.vtex_c",
+    ),
 ];
+
+/// How far below an HE grenade's detonation [`blasts_json`] looks for the ground, units.
+pub const GROUND_REACH: f32 = 128.0;
+
+/// The sphere [`blasts_json`] moves down to find the ground: its radius and step, units. The step is half the radius,
+/// so the sphere first touches a floor from above, less than half its radius deep (a step as long as its diameter
+/// could put its centre under a thin floor's surface, where the contact is the floor's underside).
+const GROUND_PROBE: (f32, f32) = (1.0, 0.5);
+
+/// A contact counts as ground when its normal points at least this much up (not a wall, a stair riser or an edge).
+const GROUND_UP: f32 = 0.5;
+
+/// Each HE grenade's blast, for what it leaves on the ground in Unreal (its scorch, where its debris lands): `entity`,
+/// `tick` and `position` of its `hegrenade_detonate`, and `ground`: the first solid surface facing up straight below
+/// the point within [`GROUND_REACH`] units, as `{z, normal}` (z where the sphere touches it), found by moving a small
+/// sphere down the map's collision ([`GROUND_PROBE`]); `null` without collision or with nothing that close (a grenade
+/// going off in the air above a drop).
+pub fn blasts_json(track: &RoundTrack, collision: Option<&WorldCollision>) -> Vec<Json> {
+    let (radius, step) = GROUND_PROBE;
+    track
+        .events
+        .iter()
+        .filter(|e| e.name == "hegrenade_detonate")
+        .filter_map(|e| {
+            let at = e.position()?;
+            let ground = collision.and_then(|world| {
+                (0..=(GROUND_REACH / step) as usize).find_map(|k| {
+                    let centre = [at[0], at[1], at[2] - step * k as f32];
+                    let (depth, normal) = world.sphere_contact(centre, radius)?;
+                    // The contact point: from the centre against the normal, to the surface.
+                    (normal[2] >= GROUND_UP).then(|| {
+                        json!({
+                            "z": ((centre[2] - normal[2] * (radius - depth)) * 100.0).round() / 100.0,
+                            "normal": normal.map(|n| (n * 1000.0).round() / 1000.0),
+                        })
+                    })
+                })
+            });
+            Some(json!({
+                "entity": e.int("entityid"),
+                "tick": e.tick,
+                "position": at,
+                "ground": ground,
+            }))
+        })
+        .collect()
+}
 
 /// Writes [`EFFECT_TEXTURES`] into `out_dir` as flipbooks and returns their manifest entries: `role`, `texture`
 /// (CS2 path), `file`, `width`, `height`, `cell` (a frame's size, pixels), `columns` and `rows` (cells across and
@@ -110,16 +173,17 @@ fn export_effect_texture(
 pub const FLIPBOOK_COLUMNS: usize = 8;
 
 /// A sprite sheet repacked as a regular grid: every frame in a cell of the same size, every sequence the same number
-/// of rows, so a material plays a sequence by counting cells: frame k of sequence n is cell n × stride + k.
+/// of cells (`stride`), so a material plays a sequence by counting cells: frame k of sequence n is cell n × stride + k.
 #[derive(Debug, Clone)]
 pub struct Flipbook {
-    /// The cells, [`FLIPBOOK_COLUMNS`] per row; each sequence starts a new row.
+    /// The cells, [`FLIPBOOK_COLUMNS`] per row; each sequence starts `stride` cells after the one before.
     pub image: Image,
     /// A cell's size, pixels: the largest uncropped frame of the sheet.
     pub cell: (usize, usize),
     /// Cells per row.
     pub columns: usize,
-    /// Cells from one sequence's first frame to the next's: whole rows, as many as the longest sequence needs.
+    /// Cells from one sequence's first frame to the next's: as many as the longest sequence needs, rounded up to a
+    /// power of two up to a row (1, 2, 4, 8) and to whole rows above.
     pub stride: usize,
     /// Where each sequence's frames are.
     pub sequences: Vec<FlipbookSequence>,
@@ -189,14 +253,21 @@ pub fn flipbook(image: &Image, sheet: &[SheetSequence]) -> Flipbook {
             cell_h = cell_h.max(y1 - y0);
         }
     }
-    // Every sequence gets as many rows as the longest one needs: sequence n starts at cell n × stride.
-    let rows_per_sequence = sheet
+    // Every sequence gets as many cells as the longest one needs, so sequence n starts at cell n × stride: up to a
+    // row's worth, a power of two of them (sequences then tile the rows: a sheet of 64 one-frame flecks is 8 rows,
+    // not 64), else whole rows.
+    let longest = sheet
         .iter()
-        .map(|s| s.frames.len().div_ceil(FLIPBOOK_COLUMNS).max(1))
+        .map(|s| s.frames.len())
         .max()
-        .unwrap_or(1);
-    let stride = rows_per_sequence * FLIPBOOK_COLUMNS;
-    let rows = rows_per_sequence * sheet.len();
+        .unwrap_or(1)
+        .max(1);
+    let stride = if longest <= FLIPBOOK_COLUMNS {
+        longest.next_power_of_two()
+    } else {
+        longest.div_ceil(FLIPBOOK_COLUMNS) * FLIPBOOK_COLUMNS
+    };
+    let rows = (sheet.len() * stride).div_ceil(FLIPBOOK_COLUMNS);
     let mut out = Image {
         width: FLIPBOOK_COLUMNS * cell_w,
         height: rows * cell_h,
@@ -290,6 +361,8 @@ mod tests {
         }];
         let book = flipbook(&image, &sheet);
         assert_eq!(book.cell, (4, 4));
+        // Three frames: a stride of four cells, half a row.
+        assert_eq!(book.stride, 4);
         assert_eq!(
             (book.image.width, book.image.height),
             (FLIPBOOK_COLUMNS * 4, 4)
@@ -330,5 +403,18 @@ mod tests {
             vec![0, 16]
         );
         assert_eq!(book.image.height, 4 * 4);
+
+        // Nine one-frame sequences: one cell each, nine cells in two rows.
+        let single: Vec<SheetSequence> = (0..9)
+            .map(|id| SheetSequence {
+                id,
+                frames: vec![frame(rect(4.0, 0.0, 7.0, 3.0), rect(4.0, 0.0, 7.0, 3.0))],
+                ..sheet[0].clone()
+            })
+            .collect();
+        let book = flipbook(&image, &single);
+        assert_eq!(book.stride, 1);
+        assert_eq!(book.sequences[8].first_cell, 8);
+        assert_eq!(book.image.height, 2 * 4);
     }
 }

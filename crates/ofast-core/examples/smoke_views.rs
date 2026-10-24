@@ -96,7 +96,7 @@ fn main() {
             }
         }
     }
-    for (entity, _, start, position, last) in smokes {
+    for &(entity, _, start, position, last) in &smokes {
         let centre = [position[0], position[1], position[2] + 40.0];
         let mut best: Vec<(&str, f32, u32, String, u32, f32)> = Vec::new();
         for sample in track
@@ -163,6 +163,45 @@ fn main() {
                 e.int("entityid").unwrap_or(-1),
                 e.tick
             );
+        }
+        // An HE grenade going off inside a smoke's cloud (within 320 units of its detonation point, while it lasts):
+        // the most head-on view of the blast point at moments after it, to watch the hole open and close.
+        if e.name != "hegrenade_detonate" {
+            continue;
+        }
+        for &(entity, _, start, position, last) in &smokes {
+            let away = ((centre[0] - position[0]).powi(2)
+                + (centre[1] - position[1]).powi(2)
+                + (centre[2] - 20.0 - position[2]).powi(2))
+            .sqrt();
+            if !(start..=last).contains(&e.tick) || away > 320.0 {
+                continue;
+            }
+            println!(
+                "  in smoke #{entity} (out since {:.1} s), {away:.0} units from its detonation point:",
+                (e.tick - start) as f32 / 64.0
+            );
+            for after in [8u32, 32, 64, 128, 192, 320, 448] {
+                let mut best: Option<(f32, u32, String, u32, f32)> = None;
+                for sample in track
+                    .samples
+                    .iter()
+                    .filter(|s| (e.tick + after - 2..=e.tick + after + 2).contains(&s.tick))
+                {
+                    for p in sample.players.iter().filter(|p| p.alive) {
+                        if let Some((off, dist)) = sees(&world, p, centre)
+                            && best.as_ref().is_none_or(|b| off < b.0)
+                        {
+                            best = Some((off, sample.tick, p.name.clone(), p.controller, dist));
+                        }
+                    }
+                }
+                if let Some((off, tick, name, controller, dist)) = best {
+                    println!(
+                        "    +{after} ticks: tick {tick} {name} ({controller}) {dist:.0} units, {off:.1}° off, clear sight"
+                    );
+                }
+            }
         }
     }
 }

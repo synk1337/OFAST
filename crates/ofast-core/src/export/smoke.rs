@@ -65,9 +65,26 @@ pub fn atlas_layout(frames: usize) -> (usize, usize, usize) {
     (columns, columns * FRAME_WIDTH, rows * FRAME_HEIGHT)
 }
 
+/// An HE grenade going off in or near a smoke's cloud: when (demo tick) and where, in the smoke's grid (voxels from its
+/// corner).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Blast {
+    /// The detonation's demo tick.
+    pub tick: u32,
+    /// The detonation point in the grid, voxels.
+    pub voxel: [f32; 3],
+}
+
 /// Runs OFAST's simulation through `frames` (a smoke's log, [`crate::demo::smoke::frames`]) and lays out every
-/// step's cloud ([`atlas_layout`]).
-pub fn smoke_atlas(frames: &[VoxelFrame], settings: SmokeSettings) -> SmokeAtlas {
+/// step's cloud ([`atlas_layout`]). Each of `blasts` carves its hole ([`Simulation::carve`]) after every step whose
+/// frame was sent while the hole lasts, as big as [`SmokeSettings::hole_radius_at`] says for the frame's age since the
+/// blast (`tick_interval`: seconds per demo tick).
+pub fn smoke_atlas(
+    frames: &[VoxelFrame],
+    settings: SmokeSettings,
+    blasts: &[Blast],
+    tick_interval: f32,
+) -> SmokeAtlas {
     let count = frames.len();
     let (columns, width, height) = atlas_layout(count);
     let mut atlas = SmokeAtlas {
@@ -81,6 +98,14 @@ pub fn smoke_atlas(frames: &[VoxelFrame], settings: SmokeSettings) -> SmokeAtlas
     let mut sim = Simulation::new(settings);
     for (k, frame) in frames.iter().enumerate() {
         sim.step(frame);
+        // After the step, so what it spread or fed into a hole is gone again from the frame drawn.
+        for blast in blasts {
+            let age = (frame.tick as f32 - blast.tick as f32) * tick_interval;
+            let radius = settings.hole_radius_at(age);
+            if radius > 0.0 {
+                sim.carve(blast.voxel, radius, settings.hole_edge);
+            }
+        }
         let grid = sim.render_grid();
         let (tile_x, tile_y) = ((k % columns) * FRAME_WIDTH, (k / columns) * FRAME_HEIGHT);
         for z in 0..GRID {
@@ -132,7 +157,7 @@ mod tests {
             });
         }
         let settings = SmokeSettings::default();
-        let atlas = smoke_atlas(&frames, settings);
+        let atlas = smoke_atlas(&frames, settings, &[], 1.0 / 64.0);
         assert_eq!((atlas.frames, atlas.columns), (3, 2));
         assert_eq!((atlas.width, atlas.height), (512, 256));
         assert_eq!(atlas.texels.len(), 512 * 256);
@@ -163,5 +188,27 @@ mod tests {
             atlas.texels[row * atlas.width + column],
             atlas.texel(1, [16, 16, 16])
         );
+
+        // An HE grenade going off at the emitter on tick 10, frames sent 7 ticks apart: frames 0 and 1 (ticks 0 and 7)
+        // keep their cloud; from frame 2 (tick 14) the hole holds it empty, the emitter's feed too.
+        for (k, frame) in frames.iter_mut().enumerate() {
+            frame.tick = 7 * k as u32;
+        }
+        frames.push(VoxelFrame {
+            number: 3,
+            tick: 21,
+            ..VoxelFrame::default()
+        });
+        let blast = Blast {
+            tick: 10,
+            voxel: [16.5, 16.5, 16.5],
+        };
+        let atlas = smoke_atlas(&frames, settings, &[blast], 1.0 / 64.0);
+        assert_eq!(atlas.texel(0, [16, 16, 16]), 255);
+        assert_eq!(atlas.texel(1, [16, 16, 16]), 255);
+        for k in [2, 3] {
+            assert_eq!(atlas.texel(k, [16, 16, 16]), 0, "frame {k}");
+            assert_eq!(atlas.texel(k, [17, 16, 16]), 0, "frame {k}");
+        }
     }
 }

@@ -546,16 +546,20 @@ together, one of them through ±180° of yaw.
 
 Seen (`examples/entity_probe.rs`, which prints any entity's fields by name when they change): on the Aurora vs FURIA
 de_nuke demo, round 4 opens and closes a double door; round 5 opens none. Every door entity leaves the demo at the
-round's restart, 320 ticks before the next freeze time, and one left mid-round with nothing changed on it before
-(out of the demo's view?): the replay keeps each door's last rotation.
+round's restart, 320 ticks before the next freeze time, and one left mid-round with nothing changed on it before.
 
-The A-site door (hinge 257, −1310, −416) closes the doorway players cross: on the local match demo (current build)
-they cross it only while it stands open (yaw −89°), and in round 3, closed all round, nobody does. The Aurora vs FURIA
-demo (an older build: CS2 says "old demo") disagrees: its A door is networked closed at its closed angles all round 5,
-like the others, yet players walk through the doorway 10 times, and CS2 playing that demo draws the doorway clear. So
-on that demo Unreal shows a closed A door CS2 does not (`compare_doors_a.png`); not explained yet. On a local server
-(current build, round start) CS2 draws the A door and the tunnel's double door closed in their frames exactly as
-Unreal does (`compare_doors_b.png`, top two pairs).
+That one is a **broken door**: the A-site door (hinge 257, −1310, −416) left the demo on tick 33989, and on tick
+33990 an HE grenade went off 27 units in front of it (`hegrenade_detonate`; the blast reached the door first). CS2
+removes a door a blast breaks: it draws the doorway clear from then, and all 10 times players walk through it in
+round 5 come after (34387 – 41837). The same happens in each of rounds 1 – 8 (teams open A by blowing the door): the
+A door's entity leaves one tick before an HE grenade goes off 9 – 83 units from its hinge. Doors also leave at the
+round's restart, 320 ticks before the next freeze time, unbroken (in rounds 4, 6 and 7 that is before the replay's
+last tick). So a door is gone from the tick an HE grenade goes off within 128 units of its hinge at most 4 ticks
+after its entity's last tick (`import_demo.py`, `broken_doors`); any other keeps its last rotation. (This first looked like a
+disagreement between the old demo and the current build: on the local match demo players cross the A doorway only
+while the door stands open, yaw −89°, and in round 3, closed all round, nobody does; on a local server CS2 draws the A
+door and the tunnel's double door closed in their frames exactly as Unreal does, `compare_doors_b.png`. With the door
+gone after the blast, Unreal's doorway matches CS2's at the same ticks.)
 
 **Checked** (`doors_swing_open_and_shut` in `tests/cs2_demo.rs`): over the first three rounds of both test demos,
 every closed door sample (65,473 and 59,015) stands at its closed angles, every open one (8,119 and 9,022) has swung
@@ -638,7 +642,7 @@ memorin.app); a CS2 step and the layout's numbers were checked in our demos:
 | emitters | 40 – 44, all in frame 0, level 5, hold 0: a 5 × 5 × 2 lattice 2 voxels apart around the detonation point (points inside geometry left out) plus a few in the middle; the lowest at z 16, the first voxel above the floor |
 | bricks | frame 0: exactly the bricks the emitters' bounding box grown by one voxel touches (48 in round 5's first smoke); then one or two at a time as the cloud reaches new space, some even while it fades; 62 – 98 per smoke |
 | axis order | with x, y, z as above only 2 of 387 emitters sit in a solid voxel; any other order of the axes puts 38 – 88 there |
-| holes | none in round 5 of the de_nuke demo; the 20-byte records are not decoded |
+| holes | none in any round of four demos (de_nuke, de_inferno, de_mirage, a local match of the current build; `examples/smoke_holes.rs`), although HE grenades go off inside smokes (round 5, tick 34286: 126 units from a smoke's detonation point, and CS2 draws the hole); the 20-byte records are not decoded. CS2 sends nothing for a blast's hole: every client carves it from the detonation (`hegrenade_detonate`), and OFAST does the same (below) |
 
 CS2's simulation itself is not known. OFAST runs its own ([`demo::smoke::Simulation`], decision 017): each voxel
 takes smoke from its six neighbours, more from the one above than from the one below (so the cloud sinks), with
@@ -649,6 +653,15 @@ notes when its simulation first needs each brick and compares with the frame the
 (`examples/smoke_fit.rs`), it needs 39 – 46 % of the bricks sent after frame 0 within 2 frames of CS2 and misses
 7 – 14 % (the cloud's thinnest reaches) on the four demos. Its steady cloud has about 766 voxels above 5 % of full
 in the open, a hemisphere of 143 units' radius: CS:GO's smoke radius was 144.
+
+An HE grenade going off in or near a smoke blows a hole in it (`Simulation::carve`, `export::smoke::Blast`): after
+every step from the blast on, the smoke within 240 units of the detonation is taken out (all of it inside 200, less
+towards 240), for 0.5 s, then the hole shrinks to nothing over 4 s and the cloud comes back from its edges and its
+emitters. Fitted to CS2 on round 5 (`examples/smoke_hole_fit.rs`, CS2 references `cs2_tick34282…34738_*_he222_*`):
+before the blast a doorway is full of the smoke; 33 ticks after it CS2 sees through to the room's far wall (with 240
+units every one of five sight lines through the doorway is clear in OFAST's cloud, with 200 two of them are not); 2 s
+after, CS2's cloud is still gone from that side of the room, as OFAST's; 5 s after, both are back at full size. Carved
+once, the emitters inside the hole would fill it again within a step: CS2's stays open, so the carve runs every step.
 
 A molotov's or an incendiary's fire is a `CInferno` (`TickSample::fires`, `FireSample`): `m_fireCount` flames of 64
 slots, each with its world position (`m_firePositions`), the flame it spread from (`m_fireParentPositions`), the

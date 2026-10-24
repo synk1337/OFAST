@@ -45,7 +45,7 @@ from scriptable pieces, not with converted CS2 particle systems:
   server sends are those the simulation needs, frame by frame — and against CS2's picture. The density frames go to
   Unreal as one texture per smoke (32 slices of 32 × 32 per frame, frames in an atlas), drawn by a Heterogeneous
   Volume whose volume material samples the atlas at the frame of the sequence's demo tick (interpolating between
-  frames); HE holes first as an analytic carve-out in the material.
+  frames); HE holes first as an analytic carve-out in the material (it went into the simulation instead: below).
 
   How it came out (2026-10-23). The simulation is a diffusion whose weights add up to 1 (smoke moves, only a fixed
   loss per voxel takes it away, so the cloud fills a volume and spreads further along a corridor than in the open),
@@ -60,6 +60,14 @@ from scriptable pieces, not with converted CS2 particle systems:
   frame comes from one keyed value, the demo tick in a material parameter collection (`MPC_Replay.ReplayTick`), so
   the volumes need no keys of their own: each smoke's material instance knows its frames' first tick and spacing, its
   fading and its expiry.
+
+  HE holes (2026-10-24) went into the simulation, not the material as first planned: CS2 sends nothing for them (no
+  hole record in any round of four demos), so its clients carve them themselves from the detonation, and carving
+  OFAST's simulated cloud lets it come back the way the cloud spreads. The hole is emptied after every step while it
+  lasts (once, the emitters inside it fill it again within a step, while CS2's stays open): 240 units for 0.5 s, then
+  shrinking to nothing over 4 s, fitted to CS2's picture at five moments after a blast in a smoke (see
+  `docs/formats/demo.md`, "Smoke voxels"). It is baked into the smoke's atlas, so nothing changes in Unreal. Bullets'
+  thin tunnels through smokes are left for the shots.
 - **Fires:** per flame, from the tick it starts burning to the tick it stops: a camera-facing animated sprite from
   CS2's own fire sprite sheets (the sheet's frame rectangles from the texture's data) and a flickering point light,
   so the ground and walls glow.
@@ -81,8 +89,15 @@ from scriptable pieces, not with converted CS2 particle systems:
   size and faded by depth where they meet the floor. The flashed view is a post-process material on each blinded
   player's camera, fitted to CS2 (0.6 × saturate((seconds left − 0.5) / 2.5) towards a warm white: a first guess
   of 0.8 by eye left the same view 30 levels brighter than CS2's).
-  Left out for now: an HE blast's debris, sparks, heat haze and scorch decal, a fire's flames along its outline and
-  up walls (CS2's snapshot-driven sets), and its smoke.
+  An HE blast also got (2026-10-24) its flash, the ring of smoke it rolls along the ground, its sparks, their glow and
+  its debris flecks, as sprites that fly: the material throws them along a random heading and up, slows them by
+  CS2's drag and pulls them down by gravity, and those that would touch the world die at the ground under the blast,
+  which the export finds in the map's collision. The sparks are one streak per flight along the velocity, standing in
+  for CS2's carriers that shed trails of sparks. Its scorch is up to three decal actors, faded by the demo tick in
+  their material. A door's entity leaving the demo mid-round turned out to be a door a blast broke (it leaves one
+  tick before an HE grenade goes off by it, in each of eight rounds; doors also leave unbroken at the round's
+  restart): Unreal hides it from the blast on, as CS2 does. Left out: a blast's heat haze, embers and model debris (CS2's `flecks3` meshes), a fire's
+  flames along its outline and up walls (CS2's snapshot-driven sets), and its smoke.
 - **Shots (later in M6):** muzzle flashes on the weapon (third person and viewmodel), tracers along the view to the
   first world hit (OFAST's map geometry), impact puffs.
 

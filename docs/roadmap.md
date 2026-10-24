@@ -239,7 +239,11 @@ player and round.
   fitted to CS2. Checked against CS2 at the same ticks: a molotov's flames through the same eyes (same place and
   height; CS2's denser and paler), an HE blast's fireball and smoke (from a camera past the A door, which Unreal
   draws closed on that old demo), a long and a short blinding.
-- [ ] Holes blown in smokes; a blast's debris, sparks and scorch; fires climbing walls and their smoke.
+- [x] **Holes and blast debris**: HE blasts carve holes into the simulated smokes (240 units, open 0.5 s, closing
+  over 4 s; CS2 sends none, its clients carve them too), fitted to CS2 at five moments after a blast in a smoke; a
+  blast's flash, ground smoke, sparks, glow and debris flecks fly in the sprite material and die at the ground the
+  export finds under it; up to three scorch decals; a door a blast breaks disappears, as in CS2.
+- [ ] Fires climbing walls and their smoke; a blast's heat haze, embers and model debris.
 - [ ] Shots: muzzle flashes, tracers, impacts.
 
 ## Hard problems we know about

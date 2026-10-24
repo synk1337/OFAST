@@ -76,6 +76,17 @@ impl GameEvent {
         }
     }
 
+    /// The world position in its `x`, `y`, `z` keys (a grenade's detonation, `hegrenade_detonate` …), inches; `None`
+    /// when one of them is missing or not a number.
+    pub fn position(&self) -> Option<[f32; 3]> {
+        let float = |key: &str| match self.get(key)? {
+            EventValue::Float(v) => Some(*v),
+            EventValue::Int(v) => Some(*v as f32),
+            _ => None,
+        };
+        Some([float("x")?, float("y")?, float("z")?])
+    }
+
     /// The player controller entity index a player-slot key (`userid`, `attacker`, `assister`) points at, or
     /// `None` for nobody.
     pub fn controller(&self, key: &str) -> Option<u32> {
