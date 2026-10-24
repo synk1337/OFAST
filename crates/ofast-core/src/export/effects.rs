@@ -56,6 +56,18 @@ pub const EFFECT_TEXTURES: &[(&str, &str)] = &[
         "spark_glow",
         "materials/effects/glows/simple_glow_001.vtex_c",
     ),
+    // particles/inferno_fx/molotov_groundfire_endcap_groundsmoke.vpcf and _endcap_wall.vpcf: the near-black wisps a
+    // fire leaves for 5 s when it goes out.
+    (
+        "fire_smoke",
+        "materials/particle/simulated/steam/wispy_steam_set.vtex_c",
+    ),
+    // particles/inferno_fx/molotov_groundfire_remnant.vpcf: the soot a fire leaves where it burned
+    // (materials/effects/scortch_mod_projected_cheap.vmat's colour texture).
+    (
+        "fire_scorch",
+        "materials/particle/particle_smokegrenade_trans_tga_9bc0185f.vtex_c",
+    ),
     // particles/explosions_fx/explosion_hegrenade_debris_small.vpcf: the flecks a blast throws.
     ("debris", "materials/particle/impact/fleks.vtex_c"),
     // particles/explosions_fx/explosion_hegrenade_decal.vpcf: its scorch (materials/effects/scortch_projected_cheap.vmat's
@@ -109,6 +121,136 @@ pub fn blasts_json(track: &RoundTrack, collision: Option<&WorldCollision>) -> Ve
                 "position": at,
                 "ground": ground,
             }))
+        })
+        .collect()
+}
+
+/// How far from a flame [`fire_walls_json`] looks for a wall, units. CS2 traces its fire's outline points along their
+/// outward normals as far as a control point the game sets (its particle systems preview it at 80); OFAST traces from
+/// every flame, so half that, from the flame rather than the outline.
+pub const WALL_REACH: f32 = 40.0;
+
+/// Directions [`fire_walls_json`] looks in, evenly around a flame.
+pub const WALL_RAYS: usize = 8;
+
+/// The sphere [`fire_walls_json`] moves out to find a wall: radius and step (half the radius: see [`GROUND_PROBE`]),
+/// and the height above the flame it starts at, units.
+pub const WALL_PROBE: (f32, f32, f32) = (2.0, 1.0, 10.0);
+
+/// Wall points closer than this to one already found, on a wall facing the same way, are the same place, units.
+pub const WALL_SPACING: f32 = 16.0;
+
+/// How much higher [`fire_walls_json`] checks that a wall it met goes on (a curb, a step or a crate's edge at the
+/// probe's height is not a wall to climb), units.
+pub const WALL_CONFIRM: f32 = 20.0;
+
+/// A fire as [`fire_walls_json`] gathers it: (entity, serial), its start tick, its flames' first positions in order.
+type FireFlames = ((u32, u32), Option<u32>, Vec<[f32; 3]>);
+
+/// A wall point as [`fire_walls_json`] gathers it: the flames whose rays met it, the point, the wall's normal.
+type WallPoint = (Vec<[f32; 3]>, [f32; 3], [f32; 3]);
+
+/// The first wall a ray from `flame` along (`dx`, `dy`) meets within [`WALL_REACH`] ([`fire_walls_json`]): the point
+/// on it at the flame's height and its normal, or `None`. The sphere ([`WALL_PROBE`]) starts at the flame itself, so
+/// it never begins behind a wall's face. A surface facing up or down (normal z at least [`GROUND_UP`] either way: a
+/// floor, a step, a ceiling) ends the ray; so does one facing along the ray (the back of a face the sphere is already
+/// past), and one that is not there [`WALL_CONFIRM`] higher (a lip, not a wall).
+fn wall_hit(
+    world: &WorldCollision,
+    flame: [f32; 3],
+    dx: f32,
+    dy: f32,
+) -> Option<([f32; 3], [f32; 3])> {
+    let (radius, step, lift) = WALL_PROBE;
+    (0..=(WALL_REACH / step) as usize)
+        .find_map(|k| {
+            let d = step * k as f32;
+            let centre = [flame[0] + dx * d, flame[1] + dy * d, flame[2] + lift];
+            let (depth, normal) = world.sphere_contact(centre, radius)?;
+            let facing_back = normal[0] * dx + normal[1] * dy < -0.3;
+            let higher = [centre[0], centre[1], centre[2] + WALL_CONFIRM];
+            let goes_on = world
+                .sphere_contact(higher, radius)
+                .is_some_and(|(_, n)| n[2].abs() < GROUND_UP);
+            if normal[2].abs() >= GROUND_UP || !facing_back || !goes_on {
+                return Some(None);
+            }
+            // The contact point: from the centre against the normal, to the surface; at the flame's height.
+            let at = |i: usize| centre[i] - normal[i] * (radius - depth);
+            Some(Some(([at(0), at(1), flame[2]], normal)))
+        })
+        .flatten()
+}
+
+/// Where each fire's flames meet walls, for the flames that climb them in Unreal: per fire (`entity`, `start_tick`),
+/// `walls`: `flames` (the positions of the flames whose rays met it, as the replay's `fires` give them), `position`
+/// (the point on the wall, at the first such flame's height) and `normal` (the wall's, horizontal-ish). CS2's client
+/// builds these itself from the networked flames by tracing against the world (`molotov_groundfire_climbingset`
+/// reads them as a point set; the demo holds none), so OFAST traces too (`wall_hit`): from each flame, 10 units up,
+/// in [`WALL_RAYS`] directions up to [`WALL_REACH`]. A point within [`WALL_SPACING`] of an earlier one on a wall
+/// facing the same way is that one (its flames gather), so an inside corner keeps both walls. Without collision, none.
+pub fn fire_walls_json(track: &RoundTrack, collision: Option<&WorldCollision>) -> Vec<Json> {
+    let Some(world) = collision else {
+        return Vec::new();
+    };
+    // Each fire's flames once, by their first position (as the replay's `fires` have them), in order.
+    let mut fires: Vec<FireFlames> = Vec::new();
+    for sample in &track.samples {
+        for f in &sample.fires {
+            let at = match fires
+                .iter()
+                .position(|(key, _, _)| *key == (f.entity, f.serial))
+            {
+                Some(at) => at,
+                None => {
+                    fires.push((
+                        (f.entity, f.serial),
+                        f.start_tick.or(Some(sample.tick)),
+                        Vec::new(),
+                    ));
+                    fires.len() - 1
+                }
+            };
+            for (k, flame) in f.flames.iter().enumerate() {
+                if fires[at].2.len() <= k {
+                    fires[at].2.push(flame.position);
+                }
+            }
+        }
+    }
+    fires
+        .into_iter()
+        .map(|((entity, _), start, flames)| {
+            let mut walls: Vec<WallPoint> = Vec::new();
+            for flame in &flames {
+                for ray in 0..WALL_RAYS {
+                    let angle = ray as f32 * std::f32::consts::TAU / WALL_RAYS as f32;
+                    let Some((point, normal)) = wall_hit(world, *flame, angle.cos(), angle.sin())
+                    else {
+                        continue;
+                    };
+                    let same = |w: &&mut WallPoint| {
+                        (0..3).map(|i| (w.1[i] - point[i]).powi(2)).sum::<f32>()
+                            < WALL_SPACING.powi(2)
+                            && (0..3).map(|i| w.2[i] * normal[i]).sum::<f32>() > 0.7
+                    };
+                    match walls.iter_mut().find(same) {
+                        Some(wall) if !wall.0.contains(flame) => wall.0.push(*flame),
+                        Some(_) => {}
+                        None => walls.push((vec![*flame], point, normal)),
+                    }
+                }
+            }
+            let round = |v: [f32; 3], scale: f32| v.map(|x| (x * scale).round() / scale);
+            json!({
+                "entity": entity,
+                "start_tick": start,
+                "walls": walls.iter().map(|(by, point, normal)| json!({
+                    "flames": by.iter().map(|f| round(*f, 100.0)).collect::<Vec<_>>(),
+                    "position": round(*point, 100.0),
+                    "normal": round(*normal, 1000.0),
+                })).collect::<Vec<_>>(),
+            })
         })
         .collect()
 }
@@ -321,7 +463,86 @@ pub fn flipbook(image: &Image, sheet: &[SheetSequence]) -> Flipbook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::demo::events::{EventValue, GameEvent};
+    use crate::demo::grenades::{FireSample, Flame};
+    use crate::demo::players::TickSample;
     use crate::texture::{SheetFrame, SheetImage};
+
+    #[test]
+    fn walls_and_ground_are_found_in_the_collision() {
+        // A floor with its top at z 0, a wall whose face is at x 20, and a curb 12 units tall at x -85 to -75.
+        let mut world = WorldCollision::default();
+        world.add_box([-200.0, -200.0, -10.0], [200.0, 200.0, 0.0]);
+        world.add_box([20.0, -200.0, 0.0], [40.0, 200.0, 200.0]);
+        world.add_box([-85.0, -200.0, 0.0], [-75.0, 200.0, 12.0]);
+        let flame = |x: f32| Flame {
+            position: [x, 0.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            burning: true,
+        };
+        let fire = FireSample {
+            entity: 500,
+            serial: 3,
+            incendiary: false,
+            start_tick: Some(10),
+            lifetime: 7.0,
+            flames: vec![flame(0.0), flame(-100.0)],
+        };
+        let float = |v: f32| EventValue::Float(v);
+        let track = RoundTrack {
+            round: 1,
+            start_tick: 0,
+            end_tick: 20,
+            tick_interval: 1.0 / 64.0,
+            map_name: "de_test".into(),
+            samples: vec![TickSample {
+                tick: 10,
+                players: Vec::new(),
+                dropped: Vec::new(),
+                doors: Vec::new(),
+                grenades: Vec::new(),
+                fires: vec![fire],
+            }],
+            // An HE grenade going off 3.5 units above the floor.
+            events: vec![GameEvent {
+                tick: 12,
+                name: "hegrenade_detonate".into(),
+                keys: vec![
+                    ("entityid".into(), EventValue::Int(7)),
+                    ("x".into(), float(-50.0)),
+                    ("y".into(), float(0.0)),
+                    ("z".into(), float(3.5)),
+                ],
+            }],
+            smoke_logs: Vec::new(),
+        };
+
+        // The flame 20 units from the wall meets it straight ahead and on the two diagonals (18 units to each side,
+        // further apart than WALL_SPACING): three points on its face, at the flame's height, facing back. The one by
+        // the curb gets none: the curb is not there 20 units higher.
+        let fires = fire_walls_json(&track, Some(&world));
+        let walls = fires[0]["walls"].as_array().unwrap();
+        assert_eq!(walls.len(), 3, "{walls:?}");
+        for wall in walls {
+            assert_eq!(wall["flames"], json!([[0.0, 0.0, 0.0]]));
+            assert_eq!(wall["normal"], json!([-1.0, 0.0, 0.0]));
+            assert!((wall["position"][0].as_f64().unwrap() - 20.0).abs() < 0.01);
+            assert_eq!(wall["position"][2], json!(0.0));
+        }
+        assert_eq!(walls[0]["position"][1], json!(0.0));
+
+        // The blast's ground: the floor's top, facing up (half-unit steps: the sphere meets it from above).
+        let blasts = blasts_json(&track, Some(&world));
+        assert!(
+            blasts[0]["ground"]["z"].as_f64().unwrap().abs() < 0.01,
+            "{}",
+            blasts[0]
+        );
+        assert_eq!(blasts[0]["ground"]["normal"], json!([0.0, 0.0, 1.0]));
+        // Without collision, neither.
+        assert!(fire_walls_json(&track, None).is_empty());
+        assert_eq!(blasts_json(&track, None)[0]["ground"], Json::Null);
+    }
 
     #[test]
     fn flipbooks_put_each_frame_in_its_cell() {

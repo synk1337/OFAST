@@ -672,6 +672,16 @@ early when a smoke puts it out (one burned 1.4 s) — although its entity stays 
 fires; `examples/grenade_timeline.rs` lists them next to the grenade events. Tournament demos carry no
 `bullet_impact`: shots are only `weapon_fire` (tick, player, weapon, silenced).
 
+The flames burn on the floor: 105 of round 5's 107 have the normal (0, 0, 1), one a slope, one a wall. What climbs
+walls in CS2 is drawn, not networked: `client.dll`'s `C_Inferno` holds point sets it builds itself from the flames
+by tracing against the world (`m_hInfernoPointsSnapshot`, `…FillerPointsSnapshot`, `…OutlinePointsSnapshot`,
+`…ClimbingOutlinePointsSnapshot`, `…DecalsSnapshot`; a note in a particle system: "Fraction from ray trace to
+wall"), and `particles/inferno_fx/molotov_groundfire.vpcf` places its wall flames, outline flames and filler from
+them through control points. The demo holds none of these points, so OFAST traces its own (`export::effects`, the
+agents manifest's `fires`). The filler projects scorch under the burning fire; when the fire goes out the client
+plays `molotov_groundfire_remnant.vpcf`: soot decals and 5 s of near-black wisps; a burning fire has no smoke
+system.
+
 A flashbang's blindings are the pawn's `m_flFlashDuration` (seconds) and `m_flFlashMaxAlpha` (0 – 255); the Aurora vs
 FURIA demo has no `player_blind` events. The server sets them on the tick the flashbang goes off (every blinded player
 at once: 4 players on tick 34353, matching `flashbang_detonate`) and clears the duration to 0 some time later, at no

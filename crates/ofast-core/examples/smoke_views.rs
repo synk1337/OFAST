@@ -131,6 +131,38 @@ fn main() {
         }
     }
 
+    // Fires going out (`inferno_expire`): the most head-on view of where they burned 0.5, 1.5 and 3 s after, for the
+    // smoke a fire leaves.
+    for e in track.events.iter().filter(|e| e.name == "inferno_expire") {
+        let Some([x, y, z]) = e.position() else {
+            continue;
+        };
+        let centre = [x, y, z + 20.0];
+        for after in [32u32, 96, 192] {
+            let mut best: Option<(f32, u32, String, u32, f32)> = None;
+            for sample in track
+                .samples
+                .iter()
+                .filter(|s| (e.tick + after - 2..=e.tick + after + 2).contains(&s.tick))
+            {
+                for p in sample.players.iter().filter(|p| p.alive) {
+                    if let Some((off, dist)) = sees(&world, p, centre)
+                        && best.as_ref().is_none_or(|b| off < b.0)
+                    {
+                        best = Some((off, sample.tick, p.name.clone(), p.controller, dist));
+                    }
+                }
+            }
+            if let Some((off, tick, name, controller, dist)) = best {
+                println!(
+                    "inferno_expire #{} at {}: +{after} ticks: tick {tick} {name} ({controller}) {dist:.0} units, {off:.1}° off, clear sight",
+                    e.int("entityid").unwrap_or(-1),
+                    e.tick
+                );
+            }
+        }
+    }
+
     // HE grenades and flashbangs going off: the most head-on view 2 – 6 ticks after.
     for e in track
         .events

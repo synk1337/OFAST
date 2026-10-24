@@ -96,8 +96,18 @@ from scriptable pieces, not with converted CS2 particle systems:
   for CS2's carriers that shed trails of sparks. Its scorch is up to three decal actors, faded by the demo tick in
   their material. A door's entity leaving the demo mid-round turned out to be a door a blast broke (it leaves one
   tick before an HE grenade goes off by it, in each of eight rounds; doors also leave unbroken at the round's
-  restart): Unreal hides it from the blast on, as CS2 does. Left out: a blast's heat haze, embers and model debris (CS2's `flecks3` meshes), a fire's
-  flames along its outline and up walls (CS2's snapshot-driven sets), and its smoke.
+  restart): Unreal hides it from the blast on, as CS2 does. Left out: a blast's heat haze, embers and model debris
+  (CS2's `flecks3` meshes).
+
+  Fires on walls and their smoke (2026-10-24). CS2's client builds point sets from the networked flames by tracing
+  against the world (the fire's outline, the walls next to it, filler and decal points) and feeds them to its
+  particle systems; the demo holds none. OFAST's export traces its own from each flame through the map's collision
+  (8 directions, up to 40 units) and Unreal shoots short flame streaks up the walls it finds while the flame next to
+  them burns. A burning fire has no smoke in CS2: it scorches the ground under it as it burns, and when it goes out
+  it leaves 5 s of near-black wisps over where it burned and up its walls, as OFAST's does now (soot decals per
+  flame from the fire's start, wisps from its end). Its flames also go out with it (they faded over their
+  whole 1.2 s life before). Left out: the outline flames leaning inward along the fire's edge, and the reach of CS2's
+  wall traces (a control point the game sets; 40 units here, a guess checked against CS2's picture).
 - **Shots (later in M6):** muzzle flashes on the weapon (third person and viewmodel), tracers along the view to the
   first world hit (OFAST's map geometry), impact puffs.
 

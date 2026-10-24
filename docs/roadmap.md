@@ -243,7 +243,10 @@ player and round.
   over 4 s; CS2 sends none, its clients carve them too), fitted to CS2 at five moments after a blast in a smoke; a
   blast's flash, ground smoke, sparks, glow and debris flecks fly in the sprite material and die at the ground the
   export finds under it; up to three scorch decals; a door a blast breaks disappears, as in CS2.
-- [ ] Fires climbing walls and their smoke; a blast's heat haze, embers and model debris.
+- [x] **Fires on walls and their smoke**: wall points traced from each flame through the map's collision, flames
+  shooting up them; soot darkening under a fire as it burns; when it goes out its flames end with it and it leaves
+  5 s of near-black wisps (CS2 has no smoke on a burning fire).
+- [ ] A blast's heat haze, embers and model debris; a fire's outline flames.
 - [ ] Shots: muzzle flashes, tracers, impacts.
 
 ## Hard problems we know about

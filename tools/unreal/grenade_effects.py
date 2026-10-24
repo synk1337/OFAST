@@ -6,9 +6,11 @@ CS2 draws these with particle systems (particles/inferno_fx/molotov_groundfire.v
 explosion_flashbang). Niagara systems cannot be written from editor Python, so OFAST rebuilds their main layers as
 "particle systems in a material", with CS2's own sprite sheets (the export's flipbooks, export::effects):
 
-- Each effect (a fire, a blast, a burst) is one actor with one instanced static mesh per layer (FIRE_LAYERS,
-  BLAST_LAYERS, FLASH_LAYERS). An instance is a sprite slot; its per-instance data hold where it is (Unreal cm), the
-  ticks it may spawn particles in, a phase and a seed.
+- Each effect (a fire, a blast, a burst) is one actor with one instanced static mesh per layer: a fire's flames
+  (FIRE_LAYERS, a slot set per flame), the flames up the walls it meets (WALL_LAYERS, per wall point the export
+  found), the wisps it leaves when it goes out (SMOKE_LAYERS, WALL_SMOKE_LAYERS); a blast's or a flashbang's layers
+  (BLAST_LAYERS, FLASH_LAYERS). An instance is a sprite slot; its per-instance data hold where it is (Unreal cm), the
+  ticks it may spawn particles in, a phase, a seed and the floor it dies at.
 - The materials (SPRITE_MATERIALS: additive for flames and flares, translucent for smoke; unlit) read the demo tick
   from the parameter collection the smokes use (smoke_volumes.REPLAY_COLLECTION) and, in the vertex and the pixel
   shader alike, the same few lines (SPRITE_STATE): the slot respawns a particle every LifeMax seconds while its span
@@ -23,7 +25,8 @@ explosion_flashbang). Niagara systems cannot be written from editor Python, so O
   and debris die at the ground under the blast (the agents manifest's `blasts`), as CS2's die on touching the world.
 - Every part of it is a function of the demo tick, so scrubbing the sequence shows the same flames every time.
 - A point light per effect, keyed: a fire's flickers with its flames, a blast's and a flashbang's pulse and die out.
-- A blast near the ground leaves scorch splats: decal actors with a material (SCORCH_MATERIAL) faded by the tick.
+- A blast near the ground leaves scorch splats, a fire soot under its flames: decal actors with a material
+  (SCORCH_MATERIAL) faded by the tick.
 - A blinded player's camera gets a post-process material (FLASHED_MATERIAL) whitening its view from the player's
   blindings (the replay's `blindings`) and the demo tick.
 """
@@ -57,15 +60,49 @@ UNITS_TO_CM = 2.54
 # radius), `lift` (raised this much of its radius off its centre), how it flies — `speed` out along a random heading
 # and `up` (units/s), `gravity` (units/s^2), CS2's `drag` — `stretch` (a streak along its flight as long as `stretch`
 # seconds of it, `max_length` units at most), `sequence` (first sheet sequence, how many), `floor` (it dies at the
-# ground under a blast, as CS2's particles die on touching the world) and `hot` (r, g, b, share: born that colour,
-# cooling to the tint over that share of its life).
+# ground under a blast, as CS2's particles die on touching the world), `hot` (r, g, b, share: born that colour,
+# cooling to the tint over that share of its life) and `end_fade` (seconds: its particles die out that fast after
+# their slot's last tick, whatever their age).
+# A flame's particles go out within this of its last burning tick: at a fire's end CS2's flames are gone (the
+# system stops), where a particle living out its 1.2 s showed flames half a second after (de_nuke, 2026-10-24).
+FLAME_END_FADE = 0.15
 FIRE_LAYERS = [
     # particles/inferno_fx/molotov_child_flame01a: the main flames.
     {"role": "fire", "slots": 8, "life": (0.65, 1.2), "radius": (28.0, 45.0), "scale": (1.5, 0.75),
-     "alpha": (0.47, 0.59), "roll": 24.0, "spread": 40.0, "rise": 15.0, "bright": 3.0},
+     "alpha": (0.47, 0.59), "roll": 24.0, "spread": 40.0, "rise": 15.0, "bright": 3.0, "end_fade": FLAME_END_FADE},
     # particles/inferno_fx/molotov_child_flame03a: tongues of burning gas among them.
     {"role": "gas", "slots": 3, "life": (0.75, 1.35), "radius": (24.0, 55.0), "scale": (1.0, 0.9),
-     "alpha": (0.78, 0.98), "roll": 45.0, "spread": 40.0, "rise": 25.0, "bright": 1.5},
+     "alpha": (0.78, 0.98), "roll": 45.0, "spread": 40.0, "rise": 25.0, "bright": 1.5, "end_fade": FLAME_END_FADE},
+]
+# particles/inferno_fx/molotov_groundfire_climbingoutline: flames shooting up a wall where a fire meets it (CS2's client
+# finds those places by tracing from the fire's outline; the export traces from its flames: the agents manifest's
+# `fires`' `walls`), from WALL_OFFSET off the wall and WALL_RAISE up, while the flame next to it burns: up at 40 - 120
+# units/s (pushed up by a gravity of +200, at most 100 units/s: 40 - 100 here), 0.45 - 1 s, radius 5 - 15 grown from
+# half to 1.5 times, CS2's trails from where they were born drawn as streaks along their flight.
+WALL_LAYERS = [
+    {"name": "fire_wall", "role": "fire", "slots": 2, "life": (0.45, 1.0), "radius": (5.0, 15.0), "scale": (0.5, 1.5),
+     "alpha": (0.8, 1.0), "roll": 0.0, "spread": 2.0, "rise": 0.0, "bright": 3.0, "size": 1.0, "lift": 0.0,
+     "up": (40.0, 100.0), "drag": 0.01, "stretch": 0.35, "max_length": 100.0, "sequence": (0, 3),
+     "end_fade": FLAME_END_FADE},
+]
+WALL_OFFSET = 5.0
+WALL_RAISE = 7.5
+# particles/inferno_fx/molotov_groundfire_remnant's end caps: when a fire goes out, near-black wisps over where it
+# burned for FIRE_SMOKE_SECONDS (_endcap_groundsmoke: 2 - 4 s each, radius 10 - 20 grown to 3 times, alpha
+# 0.08 - 0.35 x 4, colour 117 x 39 of 255, rising 0 - 5 units/s; wispy_steam_set) and up the walls it met
+# (_endcap_wall: 2.6 s, radius 5 - 15, alpha 0.34 - 0.69 x 4, rising 5 - 10). A burning fire has no smoke in CS2.
+FIRE_SMOKE_SECONDS = 5.0
+# CS2 emits 30 per second over a fire (about 90 alive): 6 slots per flame here, each born first at an even spread over
+# its first lifetime (a 16-flame fire: 96 slots, 24 per second from the fire's end on).
+SMOKE_LAYERS = [
+    {"name": "fire_smoke", "role": "fire_smoke", "slots": 6, "life": (2.0, 4.0), "radius": (10.0, 20.0),
+     "scale": (0.5, 3.0), "alpha": (0.3, 1.0), "roll": 180.0, "spread": 10.0, "rise": 0.0, "bright": 1.0,
+     "tint": (0.07, 0.07, 0.07), "translucent": True, "size": 1.0, "lift": 0.3, "up": (0.0, 5.0), "gravity": -5.0},
+]
+WALL_SMOKE_LAYERS = [
+    {"name": "fire_wall_smoke", "role": "fire_smoke", "slots": 2, "life": (2.4, 2.8), "radius": (5.0, 15.0),
+     "scale": (0.5, 3.0), "alpha": (0.6, 1.0), "roll": 180.0, "spread": 2.0, "rise": 0.0, "bright": 1.0,
+     "tint": (0.07, 0.07, 0.07), "translucent": True, "size": 1.0, "lift": 0.0, "up": (5.0, 10.0)},
 ]
 BLAST_LAYERS = [
     # particles/explosions_fx/explosion_hegrenade: the white-hot flash it goes off with (radius 2 - 3 grown 10 to 15
@@ -125,7 +162,7 @@ SPRITE_SIZE = 0.5
 # What a layer without these keys has: no flight, no streak, every sheet sequence, no ground.
 LAYER_DEFAULTS = {"size": SPRITE_SIZE, "lift": 0.6, "speed": (0.0, 0.0), "up": (0.0, 0.0), "gravity": 0.0,
                   "drag": 0.0, "stretch": 0.0, "max_length": 0.0, "sequence": None, "floor": False,
-                  "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False}
+                  "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False, "end_fade": 0.0}
 # CS2's particle drag takes a share of the velocity per simulation step; OFAST reads it as per 1/30 s (an assumption:
 # the step is not in the files) and turns it into a rate per second, -30 ln(1 - drag): 0.025 -> 0.76, 0.1 -> 3.2.
 DRAG_STEPS_PER_SECOND = 30.0
@@ -203,8 +240,12 @@ float slow = drags ? (1.0 - exp(-Drag * age)) / Drag : age;
 float fall = drags ? (age - slow) / Drag : 0.5 * age * age;
 float3 place = float3(CenterX, CenterY, CenterZ)
     + float3(flat * (sqrt(h4) * Spread + speed * slow), upward * slow - Gravity * fall) * 2.54;
+// A layer with EndFade (s) dies out that fast after the slot's last tick, whatever its age: a fire's flames go out
+// with the fire, CS2's system being stopped then; without, a particle lives out its life.
+float ending = (LastTick + EndFade * TicksPerSecond - Tick) / max(EndFade * TicksPerSecond, 0.001);
+float end_fade = EndFade > 0.0 ? saturate(ending) : 1.0;
 bool alive = Tick >= FirstTick && born >= FirstTick - 0.5 && born <= LastTick + 0.5 && norm <= 1.0
-    && place.z >= FloorZ;
+    && place.z >= FloorZ && end_fade > 0.0;
 """
 # Vertex shader: the world position offset putting the quad's corner where the particle's camera-facing sprite has it.
 SPRITE_WPO = SPRITE_STATE + r"""
@@ -246,7 +287,8 @@ float cell = sequence * Stride + frame;
 float row = floor((cell + 0.5) / Columns);
 float column = cell - row * Columns;
 float4 texel = Tex.Sample(TexSampler, (float2(column, row) + UV) / float2(Columns, Rows));
-float alpha = lerp(AlphaMin, AlphaMax, h2) * saturate(norm / 0.1) * saturate((1.0 - norm) / 0.33) * texel.a;
+float alpha = lerp(AlphaMin, AlphaMax, h2) * saturate(norm / 0.1) * saturate((1.0 - norm) / 0.33) * texel.a
+    * end_fade;
 // Born Hot (rgb), cooling to Tint over the share of its life in Hot.a (a blast's smoke is lit by its own fire at
 // first); Hot.a = 0: Tint all along.
 float3 colour = lerp(Hot.rgb, Tint, saturate(norm / max(Hot.a, 0.0001)));
@@ -256,7 +298,7 @@ return float4(texel.rgb * colour * Bright, alpha);
 SPRITE_SCALARS = ["TicksPerSecond", "LifeMin", "LifeMax", "RadiusMin", "RadiusMax", "ScaleStart", "ScaleEnd", "Roll",
                   "Spread", "Rise", "AlphaMin", "AlphaMax", "Bright", "Sequences", "SequenceFirst", "Frames", "Stride",
                   "Columns", "Rows", "Lift", "SpeedMin", "SpeedMax", "UpMin", "UpMax", "Gravity", "Drag", "Stretch",
-                  "MaxLength"]
+                  "MaxLength", "EndFade"]
 
 
 def sprite_material(translucent):
@@ -419,6 +461,7 @@ def layer_instance(layer, effect, texture, material, tick_rate):
         "Gravity": option(layer, "gravity"),
         "Drag": -DRAG_STEPS_PER_SECOND * math.log(1.0 - drag) if drag > 0.0 else 0.0,
         "Stretch": option(layer, "stretch"), "MaxLength": option(layer, "max_length"),
+        "EndFade": option(layer, "end_fade"),
     }
     for param, value in values.items():
         mel.set_material_instance_scalar_parameter_value(instance, param, float(value))
@@ -440,7 +483,7 @@ def update_layers(replay, replay_path, effects):
     tick_rate = tick_rate_of(replay)
     textures = {}
     out = {}
-    for layer in FIRE_LAYERS + BLAST_LAYERS + FLASH_LAYERS:
+    for layer in FIRE_LAYERS + WALL_LAYERS + SMOKE_LAYERS + WALL_SMOKE_LAYERS + BLAST_LAYERS + FLASH_LAYERS:
         role = layer["role"]
         effect = by_role.get(role)
         if effect is None:
@@ -571,24 +614,57 @@ def burst_light_label(grenade):
     return burst_label(grenade) + " light"
 
 
-def place_fires(sequence, replay, end_frame, instances, mesh, spawn):
+def wall_slots(fire, walls):
+    """The sprite slots of a fire's wall flames: per wall point the agents manifest found for it (`walls`), its place
+    off the wall (WALL_OFFSET out, WALL_RAISE up from the floor) and the ticks any of the flames it was found from
+    burns (matched by position: the replay and the manifest both have them to 0.01 unit; a flame that never burned is
+    not in the replay)."""
+    out = []
+    for wall in walls:
+        spans = []
+        for position in wall["flames"]:
+            flame = min(fire["flames"], key=lambda f: math.dist(f["position"], position))
+            if math.dist(flame["position"], position) <= 0.5:
+                spans.append((flame["first_tick"], flame["last_tick"]))
+        if not spans:
+            continue
+        place = [p + n * WALL_OFFSET for p, n in zip(wall["position"], wall["normal"])]
+        place[2] += WALL_RAISE
+        out.append((place, min(s[0] for s in spans), max(s[1] for s in spans)))
+    return out
+
+
+def place_fires(sequence, replay, end_frame, instances, mesh, walls, spawn):
     """One actor per fire of the replay (`fires`), with a sprite slot per flame and layer of FIRE_LAYERS (quads:
-    `mesh`), and its flickering light. Returns the number of fires placed."""
+    `mesh`), per wall point and layer of WALL_LAYERS (`walls`: (entity, start tick) -> the agents manifest's wall
+    points), its smoke when it goes out (SMOKE_LAYERS over its flames, WALL_SMOKE_LAYERS up its walls) and its
+    flickering light. Returns the number of fires placed."""
     fires = [f for f in replay.get("fires", []) if f["flames"]]
-    layers = [layer for layer in FIRE_LAYERS if layer_name(layer) in instances]
     if not fires:
         return 0
     tick0 = replay["start_tick"]
     tick_rate = tick_rate_of(replay)
+    flame_layers, wall_layers, smoke_layers, wall_smoke_layers = (
+        [layer for layer in layers if layer_name(layer) in instances]
+        for layers in (FIRE_LAYERS, WALL_LAYERS, SMOKE_LAYERS, WALL_SMOKE_LAYERS))
+    placed_walls = 0
     for fire in fires:
         flames = fire["flames"]
         x, y, z = [sum(f["position"][k] for f in flames) / len(flames) for k in range(3)]
         actor = spawn(unreal.Actor, "fire #%d at %d" % (fire["entity"], fire["start_tick"]),
                       (x * UNITS_TO_CM, -y * UNITS_TO_CM, z * UNITS_TO_CM))
         rng = random.Random(fire["entity"] * 104729 + fire["start_tick"])
-        slots = [(f["position"], f["first_tick"], f["last_tick"]) for f in flames]
-        for layer in layers:
-            add_sprites(actor, layer, instances[layer_name(layer)], mesh, slots, rng)
+        on_walls = wall_slots(fire, walls.get((fire["entity"], fire["start_tick"]), []))
+        placed_walls += len(on_walls)
+        out, smoke_end = fire["end_tick"], fire["end_tick"] + round(FIRE_SMOKE_SECONDS * tick_rate)
+        for layers, slots in (
+                (flame_layers, [(f["position"], f["first_tick"], f["last_tick"]) for f in flames]),
+                (wall_layers, on_walls),
+                (smoke_layers, [(f["position"], out, smoke_end) for f in flames]),
+                (wall_smoke_layers, [(place, out, smoke_end) for place, _, _ in on_walls])):
+            for layer in layers:
+                if slots:
+                    add_sprites(actor, layer, instances[layer_name(layer)], mesh, slots, rng)
         light = spawn_light(spawn, light_label(fire), (x, y, z + 30.0), LIGHT_COLOR, LIGHT_RADIUS)
         channel = intensity_channel(sequence, light, end_frame)
         flicker = random.Random(fire["entity"] * 7919 + fire["start_tick"])
@@ -597,7 +673,8 @@ def place_fires(sequence, replay, end_frame, instances, mesh, spawn):
         for tick in range(start, end + 1, FLICKER_TICKS):
             add_key(channel, tick - tick0, light_intensity(fire, tick, tick_rate, flicker))
         add_key(channel, min(end - tick0 + FLICKER_TICKS, end_frame), 0.0)
-    log("fires: %d, %d sprite layers" % (len(fires), len(layers)))
+    log("fires: %d, %d sprite layers, %d wall points" % (
+        len(fires), len(flame_layers + wall_layers + smoke_layers + wall_smoke_layers), placed_walls))
     return len(fires)
 
 
@@ -643,6 +720,17 @@ SCORCH_MATERIAL = "/Game/OFAST/Replays/M_Scorch"
 # height 30 deep would also blacken the legs of players walking over it and a wall beside it.
 SCORCH = {"count": 3, "offset": (10.0, 20.0), "radius": (30.0, 40.0), "alpha": (0.9, 1.0), "reach": 30.0,
           "depth": 8.0, "life": (20.0, 30.0), "fade_in": (0.125, 0.15), "fade_out": 0.5, "color": 0.01}
+# The soot of a fire: CS2 projects scorch under it while it burns (molotov_groundfire_filltest's `projected` child,
+# from its decal points) and, when it goes out, a splat per point it burned on (molotov_groundfire_remnant:
+# particle_smokegrenade_trans through scortch_mod_projected_cheap.vmat, radius 20 - 65, 8 - 20 s): its floor is dark
+# half a second after a fire ends. Here a splat per flame, radius 30 - 50 (the point's own radius is not in the
+# demo; the flames are 25 - 50 apart), from when its flame lit, in over a second, until 8 - 20 s after the fire's end. Alpha
+# 0.9 - 1 (the soft splat's own alpha is at most 0.7): at 0.6 - 0.8 the soot was hard to see where CS2's floor is
+# plainly dark.
+FIRE_SCORCH = {"radius": (30.0, 50.0), "alpha": (0.9, 1.0), "depth": 8.0, "after": (8.0, 20.0),
+               "fade_in": (0.8, 1.2)}
+# Flames lit within this many ticks of each other share their soot's material instance.
+SOOT_TICKS = 16
 # A splat's opacity at the demo tick (times the texture's alpha).
 SCORCH_HLSL = r"""
 float age = (Tick - FirstTick) / TicksPerSecond;
@@ -689,49 +777,104 @@ def scorch_material():
     return material
 
 
-def place_scorches(replay, replay_path, effects, blasts, spawn):
-    """The scorch an HE blast leaves (SCORCH) as decal actors, one per splat, each with its instance of
-    SCORCH_MATERIAL in the round's folder: for the agents manifest's `blasts` whose ground lies within SCORCH's reach
-    below them, on that ground, projected into it along its normal. Returns the number of splats."""
-    scorch = next((e for e in effects if e["role"] == "scorch"), None)
-    reached = [b for b in blasts if b.get("ground") and b["position"][2] - b["ground"]["z"] <= SCORCH["reach"]]
-    if scorch is None or not reached:
-        return 0
-    texture = smoke_volumes.import_png(replay_path, scorch["file"], FOLDER)
+def splat_instance(folder, name, material, texture, values):
+    """An instance of SCORCH_MATERIAL (`name`, in `folder`) holding `texture` and `values` (SCORCH_SCALARS)."""
+    instance = smoke_volumes.material_instance(folder, name, material)
+    for param, value in values.items():
+        mel.set_material_instance_scalar_parameter_value(instance, param, float(value))
+    mel.set_material_instance_texture_parameter_value(instance, "Tex", texture)
+    assets.save_loaded_asset(instance)
+    return instance
+
+
+def place_splat(spawn, label, at, normal, roll, radius, depth, instance):
+    """One splat of soot as a decal actor at `at` (Source units) projected into the surface of `normal`, rolled `roll`
+    degrees, `radius` and `depth` units each way, drawn by `instance` (splat_instance). A decal projects along its X
+    axis: into the surface, against its normal (Unreal's y is CS2's -y)."""
+    nx, ny, nz = normal
+    facing = unreal.MathLibrary.make_rot_from_x(unreal.Vector(-nx, ny, -nz))
+    actor = spawn(unreal.DecalActor, label, (at[0] * UNITS_TO_CM, -at[1] * UNITS_TO_CM, at[2] * UNITS_TO_CM))
+    actor.set_actor_rotation(unreal.Rotator(roll=roll, pitch=facing.pitch, yaw=facing.yaw), False)
+    component = actor.get_editor_property("decal")
+    component.set_editor_property("decal_size", unreal.Vector(depth * UNITS_TO_CM, radius * UNITS_TO_CM,
+                                                              radius * UNITS_TO_CM))
+    component.set_decal_material(instance)
+
+
+def splat_texture(replay_path, effects, role):
+    """The effect texture of `role` from the agents manifest's `effects`, imported, or None when it has none."""
+    effect = next((e for e in effects if e["role"] == role), None)
+    if effect is None:
+        return None
+    texture = smoke_volumes.import_png(replay_path, effect["file"], FOLDER)
     assets.save_loaded_asset(texture)
+    return texture
+
+
+def place_scorches(replay, replay_path, effects, blasts, spawn):
+    """The scorch an HE blast leaves (SCORCH), a decal actor per splat (place_splat), for the agents manifest's
+    `blasts` whose ground lies within SCORCH's reach below them: on that ground. Returns the number of splats."""
+    reached = [b for b in blasts if b.get("ground") and b["position"][2] - b["ground"]["z"] <= SCORCH["reach"]]
+    texture = splat_texture(replay_path, effects, "scorch") if reached else None
+    if texture is None:
+        return 0
     material = scorch_material()
     folder = smoke_volumes.round_folder(FOLDER, replay)
     placed = 0
     for blast in reached:
         x, y, _ = blast["position"]
-        z = blast["ground"]["z"]
-        nx, ny, nz = blast["ground"]["normal"]
         entity, tick = blast["entity"], blast["tick"]
         rng = random.Random(entity * 7727 + tick)
-        # A decal projects along its X axis: into the ground, against its normal (Unreal's y is CS2's -y).
-        facing = unreal.MathLibrary.make_rot_from_x(unreal.Vector(-nx, ny, -nz))
         for k in range(SCORCH["count"]):
             angle = rng.uniform(0.0, 2.0 * math.pi)
             away = rng.uniform(*SCORCH["offset"])
-            at = (x + math.cos(angle) * away, y + math.sin(angle) * away, z)
-            actor = spawn(unreal.DecalActor, "scorch #%d at %d (%d)" % (entity, tick, k),
-                          (at[0] * UNITS_TO_CM, -at[1] * UNITS_TO_CM, at[2] * UNITS_TO_CM))
-            actor.set_actor_rotation(unreal.Rotator(roll=rng.uniform(0.0, 360.0), pitch=facing.pitch,
-                                                    yaw=facing.yaw), False)
-            radius = rng.uniform(*SCORCH["radius"]) * UNITS_TO_CM
-            instance = smoke_volumes.material_instance(folder, "MI_Scorch_%d_%d_%d" % (entity, tick, k), material)
+            at = (x + math.cos(angle) * away, y + math.sin(angle) * away, blast["ground"]["z"])
+            # Drawn in this order since the scorches were checked in Unreal (2026-10-24): roll, radius, then the rest.
+            roll, radius = rng.uniform(0.0, 360.0), rng.uniform(*SCORCH["radius"])
             values = {"TicksPerSecond": tick_rate_of(replay), "FirstTick": tick, "Life": rng.uniform(*SCORCH["life"]),
                       "Alpha": rng.uniform(*SCORCH["alpha"]), "FadeIn": rng.uniform(*SCORCH["fade_in"]),
                       "FadeOut": SCORCH["fade_out"]}
-            for name, value in values.items():
-                mel.set_material_instance_scalar_parameter_value(instance, name, float(value))
-            mel.set_material_instance_texture_parameter_value(instance, "Tex", texture)
-            assets.save_loaded_asset(instance)
-            component = actor.get_editor_property("decal")
-            component.set_editor_property("decal_size", unreal.Vector(SCORCH["depth"] * UNITS_TO_CM, radius, radius))
-            component.set_decal_material(instance)
+            instance = splat_instance(folder, "MI_Scorch_%d_%d_%d" % (entity, tick, k), material, texture, values)
+            place_splat(spawn, "scorch #%d at %d (%d)" % (entity, tick, k), at, blast["ground"]["normal"], roll,
+                        radius, SCORCH["depth"], instance)
             placed += 1
     log("scorches: %d splats under %d blasts" % (placed, len(reached)))
+    return placed
+
+
+def place_fire_scorches(replay, replay_path, effects, spawn):
+    """The soot a fire leaves where it burned (FIRE_SCORCH): a decal actor per flame (place_splat), on the surface
+    it burns on, darkening from when the flame lit. The splats of flames that lit within SOOT_TICKS of each other
+    share an instance (an instance per splat made a round's import minutes slower; one per fire darkened the floor
+    before the fire spread there, up to 2 s after it started). Returns the number of splats."""
+    fires = [f for f in replay.get("fires", []) if f["flames"]]
+    texture = splat_texture(replay_path, effects, "fire_scorch") if fires else None
+    if texture is None:
+        return 0
+    material = scorch_material()
+    folder = smoke_volumes.round_folder(FOLDER, replay)
+    placed = 0
+    tick_rate = tick_rate_of(replay)
+    for fire in fires:
+        entity, start = fire["entity"], fire["start_tick"]
+        rng = random.Random(entity * 6151 + start)
+        by_start = {}
+        for k, flame in enumerate(fire["flames"]):
+            lit = start + (flame["first_tick"] - start) // SOOT_TICKS * SOOT_TICKS
+            if lit not in by_start:
+                # From then to 8 - 20 s after the fire's end, fading out over the second half of that time after.
+                after = rng.uniform(*FIRE_SCORCH["after"])
+                life = (fire["end_tick"] - lit) / tick_rate + after
+                values = {"TicksPerSecond": tick_rate, "FirstTick": lit, "Life": life,
+                          "Alpha": rng.uniform(*FIRE_SCORCH["alpha"]), "FadeIn": rng.uniform(*FIRE_SCORCH["fade_in"]),
+                          "FadeOut": 0.5 * after / life}
+                by_start[lit] = splat_instance(folder, "MI_Soot_%d_%d_%d" % (entity, start, lit - start), material,
+                                               texture, values)
+            place_splat(spawn, "soot #%d at %d (%d)" % (entity, start, k), flame["position"], flame["normal"],
+                        rng.uniform(0.0, 360.0), rng.uniform(*FIRE_SCORCH["radius"]), FIRE_SCORCH["depth"],
+                        by_start[lit])
+            placed += 1
+    log("fire soot: %d splats under %d fires" % (placed, len(fires)))
     return placed
 
 
@@ -841,7 +984,9 @@ def place_effects(sequence, replay, replay_path, end_frame, agents, cameras, spa
     if (replay.get("fires") or bursts_of(replay)) and not instances:
         log("fires and blasts: no sprite textures in the agents manifest (export with --players): lights only")
     mesh = sprite_mesh()
-    place_fires(sequence, replay, end_frame, instances, mesh, spawn)
+    walls = {(f["entity"], f["start_tick"]): f["walls"] for f in agents.get("fires", [])}
+    place_fires(sequence, replay, end_frame, instances, mesh, walls, spawn)
     place_bursts(sequence, replay, end_frame, instances, mesh, {(b["entity"], b["tick"]): b for b in blasts}, spawn)
     place_scorches(replay, replay_path, effects, blasts, spawn)
+    place_fire_scorches(replay, replay_path, effects, spawn)
     flash_cameras(replay, cameras)
