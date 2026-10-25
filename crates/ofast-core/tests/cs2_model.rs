@@ -467,6 +467,7 @@ fn ragdolls_and_world_collision_read() {
                 triangles: t,
                 min,
                 max,
+                ..
             } => {
                 meshes += 1;
                 triangles += t.len();

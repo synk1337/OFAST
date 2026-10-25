@@ -180,13 +180,17 @@ pub fn key_places(shown: &[Place]) -> Vec<(Place, bool)> {
 }
 
 /// A weapon model's frames: its `weapon` bone in model space (where the agent's `wpn` goes), and its
-/// `weapon_holster_center` attachment relative to that bone. `None` for a model without a `weapon` bone.
+/// `weapon_holster_center` and `muzzle_flash` attachments relative to that bone. `None` for a model without a
+/// `weapon` bone.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WeaponFrames {
     /// The `weapon` bone at bind pose, in the weapon model's space.
     pub weapon_bone: Affine,
     /// `weapon_holster_center` in the `weapon` bone's frame (`None`: the model has none; it is not shown holstered).
     pub holster_center: Option<Affine>,
+    /// `muzzle_flash` in the `weapon` bone's frame: where a shot leaves the barrel, its x axis along the barrel
+    /// (`None`: knives, grenades, the C4).
+    pub muzzle: Option<Affine>,
 }
 
 impl WeaponFrames {
@@ -194,15 +198,18 @@ impl WeaponFrames {
     pub fn of(model: &Model) -> Option<Self> {
         let world = model.skeleton.world_transforms();
         let weapon_bone = world[model.skeleton.find("weapon")?];
-        let holster_center = model
-            .attachment("weapon_holster_center")
-            .and_then(|a| a.on_bone(&model.skeleton))
-            .map(|(bone, offset)| {
-                compose(&invert_rigid(&weapon_bone), &compose(&world[bone], &offset))
-            });
+        let on_weapon_bone = |name: &str| {
+            model
+                .attachment(name)
+                .and_then(|a| a.on_bone(&model.skeleton))
+                .map(|(bone, offset)| {
+                    compose(&invert_rigid(&weapon_bone), &compose(&world[bone], &offset))
+                })
+        };
         Some(Self {
             weapon_bone,
-            holster_center,
+            holster_center: on_weapon_bone("weapon_holster_center"),
+            muzzle: on_weapon_bone("muzzle_flash"),
         })
     }
 }
@@ -456,6 +463,7 @@ mod tests {
         let frames = WeaponFrames {
             weapon_bone: affine([0.0, 0.0, 0.0, 1.0], [0.0; 3]),
             holster_center: Some(affine([0.0, 0.0, 0.0, 1.0], [2.0, 0.0, 0.0])),
+            muzzle: None,
         };
         let world = [
             affine([0.0, 0.0, 0.0, 1.0], [5.0, 0.0, 0.0]),

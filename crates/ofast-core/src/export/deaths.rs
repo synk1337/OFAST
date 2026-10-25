@@ -67,7 +67,7 @@ impl DeathSummary {
 
 /// The transform Unreal gives the player's actor at a sample: the feet's position, turned by the body yaw about z
 /// (Source axes, inches).
-fn actor(p: &PlayerSample) -> Affine {
+pub(crate) fn actor(p: &PlayerSample) -> Affine {
     let half = p.rig.body_yaw.to_radians() / 2.0;
     affine([0.0, 0.0, half.sin(), half.cos()], p.position)
 }

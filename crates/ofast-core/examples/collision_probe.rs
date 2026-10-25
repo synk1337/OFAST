@@ -36,6 +36,16 @@ fn main() {
             a.interact_as.join(",")
         );
     }
+    // The surface properties the shapes name (`m_surfacePropertyHashes`), with how many shapes name each.
+    for (i, hash) in world.surfaces.iter().enumerate() {
+        let count = world
+            .parts
+            .iter()
+            .flat_map(|p| &p.shapes)
+            .filter(|s| s.surface == i)
+            .count();
+        println!("surface {i}: hash {hash}, {count} shapes");
+    }
     // What the solver sees: a 4-inch sphere at a few heights around the point.
     let collision = ofast_core::physics::ragdoll::WorldCollision::from_physics(&world);
     for dz in [8.0, 4.0, 2.0, 0.0, -2.0, -4.0, -8.0] {
@@ -75,6 +85,7 @@ fn main() {
                 max,
                 triangles,
                 vertices,
+                ..
             } if near(min, max) => {
                 // Its vertices nearest the point (horizontally), to see the surface there.
                 let mut nearest: Vec<[f32; 3]> = vertices.clone();

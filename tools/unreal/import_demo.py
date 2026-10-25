@@ -49,6 +49,9 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
   per flame, driven by the same demo tick, and a flickering point light; per HE grenade and flashbang going off, its
   fireball, smoke or flare sprites and a light pulse; a white flash over a blinded player's POV camera
   (grenade_effects.py; the sprites need the agents manifest's `effects`, written by `--players`);
+- per gun shot (the agents manifest's `shots`), its muzzle flash and light, its tracer when it draws one, and each
+  bullet's impact where it met the world (sprites by the surface's family, a bullet hole) or a player (blood)
+  (shot_effects.py);
 - a camera cut track that follows the killer of each kill in turn (from the previous kill until half a second after
   this one), the way fragmovie editors cut a round;
 - marked frames: freeze time end, every kill ("attacker > victim (weapon, HS)") and bomb events.
@@ -71,6 +74,7 @@ import unreal
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gltf_specular  # noqa: E402
 import grenade_effects  # noqa: E402
+import shot_effects  # noqa: E402
 import smoke_volumes  # noqa: E402
 
 REPLAY_PATH = os.environ["OFAST_REPLAY"]
@@ -444,10 +448,10 @@ def place_keyed_models(sequence, replay, end_frame, stretches, mesh_of, label_of
 def animate_doors(sequence, replay, end_frame):
     """The map's rotating doors swung as the demo has them (the replay's `doors`). Each door is the map import's own
     actor whose origin is the door's closed position (its hinge, the map entity's origin) and whose rotation is its
-    closed rotation; it is keyed with the demo's rotation on the ticks it swung, keeping its location and scale.
-    Every stretch with the same closed position drives the same actor. A door an HE grenade blew apart is hidden from
-    then on (broken_doors). A door that never swings nor breaks is left as the map has it. Returns the number of
-    keys."""
+    closed rotation; it is keyed with the demo's rotation on the ticks it swung, keeping its location and scale, and
+    takes no decals. Every stretch with the same closed position drives the same actor. A door an HE grenade blew
+    apart is hidden from then on (broken_doors). A door that never swings nor breaks is left as the map has it.
+    Returns the number of keys."""
     doors = replay.get("doors", [])
     if not doors:
         return 0
@@ -485,6 +489,9 @@ def animate_doors(sequence, replay, end_frame):
         frames = [p[0] - tick0 for p in points]
         rotations = euler_filter([(p[6], -p[4], -p[5]) for p in points])
         for actor in matches:
+            # No decals: the bullets are traced without the doors, and a decal marks whatever lies in its box, so a
+            # hole or scorch on a surface behind a door that swings would mark the door (CS2 marks the surface hit).
+            actor.static_mesh_component.set_editor_property("receives_decals", False)
             binding = sequence.add_possessable(actor)
             if not still:
                 location = actor.get_actor_location()
@@ -799,6 +806,8 @@ def build(replay):
     sequence.set_playback_end(end_frame)
 
     cameras = {}
+    # Each player's body visibility (frame, visible) changes: their muzzle flashes follow it (shot_effects).
+    body_visibility = {}
     started = time.monotonic()
     keys = 0
     cuts = camera_cut_plan(replay, {p["controller"] for p in replay["players"]}, end_frame, fps)
@@ -840,6 +849,7 @@ def build(replay):
         # Frames shown through this player's eyes by the POV screenshots: hide the body there too.
         own_view += [(t - tick0, t - tick0 + 1) for t, who in POV_SHOTS if who == player["controller"]]
         changes = visibility_changes(frames, alive, own_view)
+        body_visibility[player["controller"]] = changes
         for actor in [body] + attached:
             key_visibility(sequence.add_possessable(actor) if actor is not body else binding, changes, end_frame)
         camera = spawn_pov_camera(player)
@@ -868,6 +878,9 @@ def build(replay):
     manifest = agents_manifest(replay)
     grenade_effects.place_effects(sequence, replay, REPLAY_PATH, end_frame, manifest[2] if manifest else {},
                                   {controller: camera for controller, (camera, _) in cameras.items()}, spawn_tagged)
+    shot_effects.place_shots(sequence, replay, REPLAY_PATH, end_frame, manifest[2] if manifest else {}, spawn_tagged,
+                             lambda binding, controller: key_visibility(binding, body_visibility.get(controller, []),
+                                                                        end_frame))
     keys += animate_doors(sequence, replay, end_frame)
     log("sequence %s: %d players (%d animated agents, %d viewmodels), %d frames at %d fps, %d keys in %.0f s"
         % (path, len(replay["players"]), len(agents), len(viewmodels), end_frame, fps, keys,

@@ -39,8 +39,9 @@ use super::entity::{Entity, ServerClass, handle_to_index};
 use super::events::GameEvent;
 use super::fieldpath::FieldPath;
 use super::grenades::{FireSample, GrenadePaths, GrenadeSample, SmokeLog, origin};
-use super::parser::{DemoError, DemoParser};
+use super::parser::{DemoError, DemoParser, RawMessage};
 use super::serializer::Serializers;
+use super::shots::{self, PlayerHit, Shot};
 
 /// Width of one position grid cell, in world units.
 pub const CELL_WIDTH: f32 = 512.0;
@@ -350,6 +351,16 @@ pub struct RoundTrack {
     pub events: Vec<GameEvent>,
     /// Each smoke's voxel log, a snapshot each time it changed, in order of the smokes' first snapshot.
     pub smoke_logs: Vec<SmokeLog>,
+    /// The round's gun shots, oldest first, each with the shooter's controller entity index (see [`super::shots`]).
+    pub shots: Vec<(u32, Shot)>,
+    /// Where the round's bullets met players (from effect dispatches; a few are other effects, matching no shot:
+    /// [`super::shots::hit_of`]).
+    pub player_hits: Vec<PlayerHit>,
+    /// Every shot of the demo before the round (warmup and earlier rounds), oldest first: CS2's clients keep the
+    /// bullet holes they left from round to round.
+    pub earlier_shots: Vec<Shot>,
+    /// Where those shots' bullets met players.
+    pub earlier_hits: Vec<PlayerHit>,
 }
 
 /// Where one round is in the demo.
@@ -759,6 +770,9 @@ struct TickView<'p, 'd> {
     current: Option<RoundInfo>,
     /// Game events read since the previous call (they can be from earlier ticks without entity changes).
     events: &'p [GameEvent],
+    /// The shot and effect messages read since the previous call ([`shots::FIRE_BULLETS`],
+    /// [`shots::EFFECT_DISPATCH`]), likewise.
+    messages: &'p [RawMessage],
 }
 
 /// Calls `on_tick` after every tick that changed entities; it returns `false` to stop reading.
@@ -767,11 +781,14 @@ fn walk_rounds(
     mut on_tick: impl FnMut(TickView<'_, '_>) -> bool,
 ) -> Result<Option<RoundInfo>, TrackError> {
     let mut parser = DemoParser::new(data)?;
+    parser.keep_messages(&[shots::FIRE_BULLETS, shots::EFFECT_DISPATCH]);
     let mut paths: Option<Paths> = None;
     let mut detector = RoundDetector::default();
     let mut events = Vec::new();
+    let mut messages = Vec::new();
     while let Some(frame) = parser.next_frame()? {
         events.extend(parser.take_events());
+        messages.extend(parser.take_messages());
         let (Some(tick), true) = (frame.tick, frame.entities_changed) else {
             continue;
         };
@@ -791,8 +808,10 @@ fn walk_rounds(
             rounds: &rounds,
             current: detector.current,
             events: &events,
+            messages: &messages,
         });
         events.clear();
+        messages.clear();
         if !go_on {
             return Ok(None);
         }
@@ -820,6 +839,8 @@ pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
     let mut track: Option<RoundTrack> = None;
     // Each smoke's voxel update counter when its log was last read.
     let mut read_at: HashMap<(u32, u32), i64> = HashMap::new();
+    // The shot and effect messages read before the round starts.
+    let mut earlier: Vec<RawMessage> = Vec::new();
     walk_rounds(data, |view| {
         let TickView {
             parser,
@@ -828,6 +849,7 @@ pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
             rounds,
             current,
             events,
+            messages,
         } = view;
         if let Some(done) = rounds.iter().find_map(|e| match e {
             RoundEvent::Ended(info) if info.round == round => Some(*info),
@@ -838,24 +860,57 @@ pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
                 track
                     .events
                     .extend(events.iter().filter(|e| e.tick <= done.end_tick).cloned());
+                let late: Vec<RawMessage> = messages
+                    .iter()
+                    .filter(|m| m.tick <= done.end_tick)
+                    .cloned()
+                    .collect();
+                add_shots(track, &late, parser, paths);
             }
             return false; // our round is complete
         }
+        // Before the round: every shot and hit, for the bullet holes they left (CS2 keeps them from round to round).
+        if track.is_none() {
+            earlier.extend(messages.iter().cloned());
+        }
         if current.is_some_and(|c| c.round == round) {
-            let track = track.get_or_insert_with(|| RoundTrack {
-                round,
-                start_tick: tick,
-                end_tick: tick,
-                tick_interval: parser.tick_interval().unwrap_or(1.0 / 64.0),
-                map_name: parser.header().map_name().to_owned(),
-                samples: Vec::new(),
-                events: Vec::new(),
-                smoke_logs: Vec::new(),
-            });
+            if track.is_none() {
+                let mut new = RoundTrack {
+                    round,
+                    start_tick: tick,
+                    end_tick: tick,
+                    tick_interval: parser.tick_interval().unwrap_or(1.0 / 64.0),
+                    map_name: parser.header().map_name().to_owned(),
+                    samples: Vec::new(),
+                    events: Vec::new(),
+                    smoke_logs: Vec::new(),
+                    shots: Vec::new(),
+                    player_hits: Vec::new(),
+                    earlier_shots: Vec::new(),
+                    earlier_hits: Vec::new(),
+                };
+                for m in earlier.drain(..).filter(|m| m.tick < tick) {
+                    if m.kind == shots::FIRE_BULLETS {
+                        new.earlier_shots
+                            .extend(shots::decode_fire_bullets(m.tick, &m.body));
+                    } else if m.kind == shots::EFFECT_DISPATCH {
+                        new.earlier_hits
+                            .extend(shots::decode_player_hit(m.tick, &m.body));
+                    }
+                }
+                track = Some(new);
+            }
+            let track = track.as_mut().expect("set above");
             let start = track.start_tick;
             track
                 .events
                 .extend(events.iter().filter(|e| e.tick >= start).cloned());
+            let current: Vec<RawMessage> = messages
+                .iter()
+                .filter(|m| m.tick >= start)
+                .cloned()
+                .collect();
+            add_shots(track, &current, parser, paths);
             let sample = TickSample {
                 tick,
                 players: read_players(parser, paths),
@@ -906,6 +961,35 @@ pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
         true
     })?;
     track.ok_or(TrackError::RoundNotFound(round))
+}
+
+/// Adds the shots and player hits among `messages` to `track`; a shot's pawn is turned into its controller with the
+/// pawns' controllers at this tick (looked up only when there is a shot; a shot whose pawn has no controller is left
+/// out).
+fn add_shots(
+    track: &mut RoundTrack,
+    messages: &[RawMessage],
+    parser: &DemoParser<'_>,
+    paths: &Paths,
+) {
+    let controllers = if messages.iter().any(|m| m.kind == shots::FIRE_BULLETS) {
+        pawn_controllers(parser, paths)
+    } else {
+        HashMap::new()
+    };
+    for m in messages {
+        if m.kind == shots::FIRE_BULLETS {
+            if let Some(shot) = shots::decode_fire_bullets(m.tick, &m.body)
+                && let Some(&controller) = controllers.get(&shot.pawn)
+            {
+                track.shots.push((controller, shot));
+            }
+        } else if m.kind == shots::EFFECT_DISPATCH
+            && let Some(hit) = shots::decode_player_hit(m.tick, &m.body)
+        {
+            track.player_hits.push(hit);
+        }
+    }
 }
 
 fn read_rules(parser: &DemoParser<'_>, paths: &Paths) -> Option<RulesState> {

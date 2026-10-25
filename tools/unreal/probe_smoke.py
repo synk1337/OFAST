@@ -6,7 +6,8 @@ volumes and their material instances):
 
 It rebuilds the smoke material from smoke_volumes.py (in place: the instances keep it), sets every smoke instance's
 parameters from the replay again, rebuilds the sprite materials and layer instances of grenade_effects.py (fires,
-blasts, flashes: their look, not the sprites' per-instance data, which only an import places), then for each
+blasts, flashes: their look, not the sprites' per-instance data, which only an import places) and shot_effects.py
+(the shots' layers and bullet holes; the muzzle lights are moved and lit as the sequence keys them), then for each
 "tick:controller" of OFAST_NAME sets MPC_Replay.ReplayTick to the tick, the effects' lights to what the sequence keys
 there, and screenshots through that player's eyes (feet + eye height, CS2's 90 degrees at 4:3), the way the sequence's POV
 cameras see it. A view can also be "tick:x:y:z:pitch:yaw" (Source units, degrees, as CS2's getpos prints it).
@@ -26,6 +27,7 @@ import unreal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import grenade_effects  # noqa: E402
+import shot_effects  # noqa: E402
 import smoke_volumes  # noqa: E402
 
 SHOT_DIR = os.environ["OFAST_SHOT"]
@@ -154,11 +156,18 @@ def main():
     # The fires' material and layers too, from grenade_effects.py and the agents manifest's flipbooks.
     manifest_path = os.path.join(os.path.dirname(REPLAY_PATH), "%s_r%d.agents.json" % (replay["demo"],
                                                                                       replay["round"]))
+    agents = {}
     if os.path.exists(manifest_path):
         with open(manifest_path, encoding="utf-8") as f:
-            effects = json.load(f).get("effects", [])
+            agents = json.load(f)
+        effects = agents.get("effects", [])
         layers = grenade_effects.update_layers(replay, REPLAY_PATH, effects)
+        # The shots' layers and bullet holes too (shot_effects.py; their look, not where they are).
+        layers.update(grenade_effects.update_layers(replay, REPLAY_PATH, effects, shot_effects.shot_layers(), False))
+        shot_effects.hole_instances(REPLAY_PATH, agents.get("decals", {}))
         log("fire material rebuilt; %d layers updated" % len(layers))
+    muzzle_keys = shot_effects.light_frames(agents.get("shots", []), 0, 10 ** 9)
+    names = {p["controller"]: p["name"] for p in replay["players"]}
 
     lights = {a.get_actor_label(): a for a in actors.get_all_level_actors() if isinstance(a, unreal.PointLight)}
     cameras = [view_camera(replay, view) for view in VIEWS]
@@ -230,6 +239,18 @@ def main():
                 pulse = grenade_effects.BURSTS[grenade["kind"]][1]
                 light.get_editor_property("light_component").set_editor_property(
                     "intensity", grenade_effects.pulse_intensity(pulse, at - grenade["detonation"]["tick"]))
+        # The muzzle lights where and as bright as the sequence keys them at that tick (its keys are in ticks here).
+        for controller, keys in muzzle_keys.items():
+            light = lights.get("muzzle light %s" % names.get(controller, controller))
+            if light is None:
+                continue
+            earlier = [k for k in sorted(keys, key=lambda k: k[0]) if k[0] <= at]
+            place = next((p for _, p, _ in reversed(earlier) if p), None)
+            if place is not None:
+                light.set_actor_location(unreal.Vector(place[0] * UNITS_TO_CM, -place[1] * UNITS_TO_CM,
+                                                       place[2] * UNITS_TO_CM), False, False)
+            light.get_editor_property("light_component").set_editor_property(
+                "intensity", earlier[-1][2] if earlier and earlier[-1][0] == at else 0.0)
         if test is not None:
             test[0].set_material(0, test[1])
         state["set_at"] = state["ticks"]

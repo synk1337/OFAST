@@ -167,6 +167,10 @@ struct WorldHull {
     planes: Vec<(V3, f32)>,
     min: V3,
     max: V3,
+    /// The physics shape it came from ([`RayHit::shape`]).
+    shape: u32,
+    /// Its surface property ([`RayHit::surface`]).
+    surface: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -174,7 +178,29 @@ struct WorldTriangle {
     corners: [V3; 3],
     min: V3,
     max: V3,
+    /// The physics shape it came from ([`RayHit::shape`]).
+    shape: u32,
+    /// Its surface property: its own in a mesh with one per triangle, else its shape's ([`RayHit::surface`]).
+    surface: u32,
 }
+
+/// Where a ray met the world ([`WorldCollision::ray_hit`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RayHit {
+    /// Distance along the ray (inches).
+    pub distance: f32,
+    /// The surface's unit normal, facing back at the ray.
+    pub normal: V3,
+    /// The physics shape met: its index among all the shapes of the world's parts, in order (part by part)
+    /// ([`WorldCollision::from_physics_where`]); [`NO_SHAPE`] for shapes added by hand.
+    pub shape: u32,
+    /// The surface property met: an index into the world's [`super::PhysicsData::surfaces`] (a mesh triangle's own,
+    /// else its shape's); [`NO_SHAPE`] for shapes added by hand.
+    pub surface: u32,
+}
+
+/// [`RayHit::shape`] of a hull or triangle added by hand ([`WorldCollision::add_hull`], `add_triangle`, `add_box`).
+pub const NO_SHAPE: u32 = u32::MAX;
 
 /// `true` when a sphere at `center` with `radius` cannot reach the box `min`–`max`.
 fn outside(center: V3, radius: f32, min: V3, max: V3) -> bool {
@@ -203,22 +229,37 @@ impl WorldCollision {
     /// ([`super::CollisionAttribute::stops_bodies`]: solid world, grates, glass; not the player, NPC and grenade
     /// clips).
     pub fn from_physics(world: &PhysicsData) -> Self {
+        Self::from_physics_where(world, super::CollisionAttribute::stops_bodies)
+    }
+
+    /// The shapes of a world's physics whose collision attribute `keep` accepts (bullets:
+    /// [`super::CollisionAttribute::stops_bullets`]). A shape without an attribute is left out.
+    pub fn from_physics_where(
+        world: &PhysicsData,
+        keep: impl Fn(&super::CollisionAttribute) -> bool,
+    ) -> Self {
         let mut out = Self::default();
-        for shape in world.parts.iter().flat_map(|p| &p.shapes) {
-            if !world.attribute(shape).is_some_and(|a| a.stops_bodies()) {
+        for (index, shape) in world.parts.iter().flat_map(|p| &p.shapes).enumerate() {
+            if !world.attribute(shape).is_some_and(&keep) {
                 continue;
             }
+            let index = index as u32;
+            let surface = shape.surface as u32;
             match &shape.kind {
                 ShapeKind::Hull {
                     planes, min, max, ..
-                } if !planes.is_empty() => out.add_hull(planes.clone(), *min, *max),
+                } if !planes.is_empty() => {
+                    out.push_hull(planes.clone(), *min, *max, index, surface)
+                }
                 ShapeKind::Mesh {
                     vertices,
                     triangles,
+                    materials,
                     ..
                 } => {
-                    for t in triangles {
-                        out.add_triangle(t.map(|i| vertices[i as usize]));
+                    for (k, t) in triangles.iter().enumerate() {
+                        let own = materials.get(k).copied().unwrap_or(surface);
+                        out.push_triangle(t.map(|i| vertices[i as usize]), index, own);
                     }
                 }
                 _ => {}
@@ -229,14 +270,28 @@ impl WorldCollision {
 
     /// Adds a convex hull (outward planes: inside when `normal · p − offset < 0` for all).
     pub fn add_hull(&mut self, planes: Vec<(V3, f32)>, min: V3, max: V3) {
+        self.push_hull(planes, min, max, NO_SHAPE, NO_SHAPE);
+    }
+
+    fn push_hull(&mut self, planes: Vec<(V3, f32)>, min: V3, max: V3, shape: u32, surface: u32) {
         let id = self.hulls.len() as u32;
-        self.hulls.push(WorldHull { planes, min, max });
+        self.hulls.push(WorldHull {
+            planes,
+            min,
+            max,
+            shape,
+            surface,
+        });
         self.insert(Item::Hull(id), min, max);
     }
 
     /// Adds a triangle. One without area (two corners on the same point, or all three in a line) is left out: its
     /// edges belong to its neighbours, and its closest point would divide by zero.
     pub fn add_triangle(&mut self, corners: [V3; 3]) {
+        self.push_triangle(corners, NO_SHAPE, NO_SHAPE);
+    }
+
+    fn push_triangle(&mut self, corners: [V3; 3], shape: u32, surface: u32) {
         let [a, b, c] = corners;
         let area = length(cross(sub(b, a), sub(c, a)));
         if area.is_nan() || area <= 1e-6 {
@@ -245,7 +300,13 @@ impl WorldCollision {
         let id = self.triangles.len() as u32;
         let min = std::array::from_fn(|k| corners.iter().map(|c| c[k]).fold(f32::MAX, f32::min));
         let max = std::array::from_fn(|k| corners.iter().map(|c| c[k]).fold(f32::MIN, f32::max));
-        self.triangles.push(WorldTriangle { corners, min, max });
+        self.triangles.push(WorldTriangle {
+            corners,
+            min,
+            max,
+            shape,
+            surface,
+        });
         self.insert(Item::Triangle(id), min, max);
     }
 
@@ -298,6 +359,138 @@ impl WorldCollision {
             .into_iter()
             .filter_map(|item| self.contact(item, center, radius))
             .max_by(|a, b| a.0.total_cmp(&b.0))
+    }
+
+    /// Where a ray from `from` along the unit `direction` first meets the world within `reach` inches (a bullet's
+    /// path). The grid is walked cell by cell along the ray (Amanatides and Woo, "A Fast Voxel Traversal Algorithm
+    /// for Ray Tracing", 1987), each shape tested once: a hull by clipping the ray against its planes, a triangle
+    /// both ways round (Möller and Trumbore, "Fast, Minimum Storage Ray/Triangle Intersection", 1997). A ray that
+    /// starts inside a hull is not stopped by it.
+    pub fn ray_hit(&self, from: V3, direction: V3, reach: f32) -> Option<RayHit> {
+        let mut best: Option<RayHit> = None;
+        let mut tested = std::collections::HashSet::new();
+        let mut test = |item: Item, best: &mut Option<RayHit>| {
+            if tested.insert(item)
+                && let Some(hit) = self.ray_item(item, from, direction, reach)
+                && best.is_none_or(|b| hit.distance < b.distance)
+            {
+                *best = Some(hit);
+            }
+        };
+        for &item in &self.large {
+            test(item, &mut best);
+        }
+        let mut cell = cell_of(from);
+        let step: [i32; 3] = direction.map(|d| {
+            if d > 0.0 {
+                1
+            } else if d < 0.0 {
+                -1
+            } else {
+                0
+            }
+        });
+        // Distance along the ray to the next cell boundary on each axis, and between boundaries.
+        let mut next: V3 = std::array::from_fn(|k| match step[k] {
+            1 => ((cell[k] + 1) as f32 * CELL - from[k]) / direction[k],
+            -1 => (cell[k] as f32 * CELL - from[k]) / direction[k],
+            _ => f32::INFINITY,
+        });
+        let delta: V3 = direction.map(|d| {
+            if d == 0.0 {
+                f32::INFINITY
+            } else {
+                CELL / d.abs()
+            }
+        });
+        // A ray across the whole map passes a few hundred cells; the bound only guards against a broken direction.
+        for _ in 0..100_000 {
+            if let Some(items) = self.grid.get(&cell) {
+                for &item in items {
+                    test(item, &mut best);
+                }
+            }
+            let axis = (0..3)
+                .min_by(|&a, &b| next[a].total_cmp(&next[b]))
+                .unwrap_or(0);
+            let leave = next[axis];
+            // Every hit nearer than where the ray leaves this cell lies in a cell already walked.
+            if best.is_some_and(|b| b.distance <= leave) || leave > reach || !leave.is_finite() {
+                break;
+            }
+            cell[axis] += step[axis];
+            next[axis] += delta[axis];
+        }
+        best
+    }
+
+    /// Where a ray meets one shape ([`WorldCollision::ray_hit`]).
+    fn ray_item(&self, item: Item, from: V3, direction: V3, reach: f32) -> Option<RayHit> {
+        match item {
+            Item::Hull(h) => {
+                let hull = &self.hulls[h as usize];
+                let (mut enter, mut leave, mut normal) = (0.0f32, reach, None);
+                for &(n, offset) in &hull.planes {
+                    let towards = dot(n, direction);
+                    // Positive outside the plane.
+                    let outside = dot(n, from) - offset;
+                    if towards.abs() < 1e-9 {
+                        if outside > 0.0 {
+                            return None;
+                        }
+                        continue;
+                    }
+                    let t = -outside / towards;
+                    if towards < 0.0 {
+                        if t > enter {
+                            enter = t;
+                            normal = Some(n);
+                        }
+                    } else if t < leave {
+                        leave = t;
+                    }
+                    if enter > leave {
+                        return None;
+                    }
+                }
+                // No entering plane ahead: the ray starts inside the hull (or misses it).
+                normal.map(|normal| RayHit {
+                    distance: enter,
+                    normal,
+                    shape: hull.shape,
+                    surface: hull.surface,
+                })
+            }
+            Item::Triangle(t) => {
+                let triangle = &self.triangles[t as usize];
+                let [a, b, c] = triangle.corners;
+                let (e1, e2) = (sub(b, a), sub(c, a));
+                let p = cross(direction, e2);
+                let det = dot(e1, p);
+                if det.abs() < 1e-9 {
+                    return None;
+                }
+                let s = sub(from, a);
+                let u = dot(s, p) / det;
+                let q = cross(s, e1);
+                let v = dot(direction, q) / det;
+                let distance = dot(e2, q) / det;
+                if u < 0.0 || v < 0.0 || u + v > 1.0 || distance <= 1e-4 || distance > reach {
+                    return None;
+                }
+                let n = normalized(cross(e1, e2))?;
+                Some(RayHit {
+                    distance,
+                    normal: if dot(n, direction) > 0.0 {
+                        scale(n, -1.0)
+                    } else {
+                        n
+                    },
+                    shape: triangle.shape,
+                    surface: triangle.surface,
+                })
+            }
+        }
     }
 
     /// The shapes whose cells meet the box `min`–`max` (and the shapes too large for the grid), without repeats.
@@ -1201,6 +1394,7 @@ mod tests {
             angular_drag: 0.0,
             shapes: vec![Shape {
                 attribute: 0,
+                surface: 0,
                 kind: ShapeKind::Capsule { a, b, radius },
             }],
         }
@@ -1432,6 +1626,116 @@ mod tests {
                 .len()
                 <= 65
         );
+    }
+
+    #[test]
+    fn rays_stop_at_the_nearest_surface() {
+        let mut world = WorldCollision::default();
+        // A wall 2000 inches away (many cells along the ray) and a nearer one behind which it hides.
+        world.add_box([2000.0, -50.0, -50.0], [2010.0, 50.0, 50.0]);
+        world.add_box([500.0, -50.0, -50.0], [510.0, 50.0, 50.0]);
+        // A floor triangle, crossed from above.
+        world.add_triangle([
+            [-100.0, -100.0, -20.0],
+            [100.0, -100.0, -20.0],
+            [0.0, 100.0, -20.0],
+        ]);
+        let hit = world
+            .ray_hit([0.0; 3], [1.0, 0.0, 0.0], 8192.0)
+            .expect("hits");
+        assert!((hit.distance - 500.0).abs() < 1e-3, "{hit:?}");
+        assert_eq!(hit.normal, [-1.0, 0.0, 0.0]);
+        assert_eq!(hit.shape, NO_SHAPE);
+        // Past the near wall (starting inside it does not stop the ray), the far one.
+        let hit = world
+            .ray_hit([505.0, 0.0, 0.0], [1.0, 0.0, 0.0], 8192.0)
+            .expect("hits");
+        assert!((hit.distance - 1495.0).abs() < 1e-3, "{hit:?}");
+        // Out of reach: nothing.
+        assert!(world.ray_hit([0.0; 3], [1.0, 0.0, 0.0], 400.0).is_none());
+        // Down onto the triangle, its normal turned to face the ray; backwards, nothing.
+        let down = world
+            .ray_hit([0.0, 0.0, 0.0], [0.0, 0.0, -1.0], 100.0)
+            .expect("floor");
+        assert!((down.distance - 20.0).abs() < 1e-4 && down.normal == [0.0, 0.0, 1.0]);
+        let up = world
+            .ray_hit([0.0, 0.0, -40.0], [0.0, 0.0, 1.0], 100.0)
+            .expect("floor");
+        assert!((up.distance - 20.0).abs() < 1e-4 && up.normal == [0.0, 0.0, -1.0]);
+        assert!(world.ray_hit([0.0; 3], [-1.0, 0.0, 0.0], 8192.0).is_none());
+        // A slanted ray crossing cell corners still finds the far wall.
+        let d = normalized([1.0, 0.01, 0.005]).expect("direction");
+        let hit = world
+            .ray_hit([600.0, 0.0, 0.0], d, 8192.0)
+            .expect("far wall");
+        assert!((hit.distance * d[0] - 1400.0).abs() < 1e-2, "{hit:?}");
+    }
+
+    #[test]
+    fn rays_name_the_surface_they_meet() {
+        // A world mesh of two floor triangles, its own surface 1, its triangles' 2 and 3.
+        let mesh = Shape {
+            attribute: 0,
+            surface: 1,
+            kind: ShapeKind::Mesh {
+                vertices: vec![
+                    [0.0, 0.0, 0.0],
+                    [10.0, 0.0, 0.0],
+                    [0.0, 10.0, 0.0],
+                    [10.0, 10.0, 0.0],
+                ],
+                triangles: vec![[0, 1, 2], [1, 3, 2]],
+                materials: vec![2, 3],
+                min: [0.0; 3],
+                max: [10.0, 10.0, 0.0],
+            },
+        };
+        let world = PhysicsData {
+            parts: vec![Part {
+                mass: 0.0,
+                inertia_scale: 1.0,
+                linear_damping: 0.0,
+                angular_damping: 0.0,
+                linear_drag: 0.0,
+                angular_drag: 0.0,
+                shapes: vec![mesh],
+            }],
+            attributes: vec![super::super::CollisionAttribute {
+                group: "Default".into(),
+                interact_as: vec![],
+            }],
+            surfaces: vec![10, 11, 12, 13],
+            ..Default::default()
+        };
+        let collision = WorldCollision::from_physics_where(&world, |a| a.stops_bullets());
+        let down = [0.0, 0.0, -1.0];
+        let first = collision
+            .ray_hit([2.0, 2.0, 5.0], down, 100.0)
+            .expect("first triangle");
+        let second = collision
+            .ray_hit([8.0, 8.0, 5.0], down, 100.0)
+            .expect("second triangle");
+        assert_eq!((first.shape, first.surface), (0, 2));
+        assert_eq!((second.shape, second.surface), (0, 3));
+    }
+
+    #[test]
+    fn bullets_go_through_grates_and_glass() {
+        let solid = super::super::CollisionAttribute {
+            group: "Default".into(),
+            interact_as: vec![],
+        };
+        let grate = super::super::CollisionAttribute {
+            group: "ConditionallySolid".into(),
+            interact_as: vec!["passbullets".into()],
+        };
+        let glass = super::super::CollisionAttribute {
+            group: "Default".into(),
+            interact_as: vec!["window".into()],
+        };
+        assert!(solid.stops_bullets());
+        assert!(grate.stops_bodies() && !grate.stops_bullets());
+        assert!(glass.stops_bodies() && !glass.stops_bullets());
     }
 
     #[test]

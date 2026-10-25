@@ -126,7 +126,15 @@ part's bind transform, a row-major 3 × 4 matrix), `m_joints` (`m_nType` 4 = con
 `m_Frame1` / `m_Frame2` as position, scale, quaternion, `m_SwingLimit` / `m_TwistLimit` with their enable flags,
 `m_flFriction`) and `m_collisionAttributes` (`m_CollisionGroupString`, `m_InteractAsStrings`). Hulls keep their
 vertices (`m_VertexPositions`, or `m_Vertices` before late 2023) and face planes (`m_Planes`: normal and offset,
-inside when `normal · p − offset < 0`) as binary blobs; meshes their vertices and triangles (three `i32`).
+inside when `normal · p − offset < 0`) as binary blobs; meshes their vertices and triangles (three `i32`). Each
+shape names its surface property with `m_nSurfacePropertyIndex`, an index into the block's
+`m_surfacePropertyHashes`: the names' MurmurHash2 (lower-cased, seed `0x31415926`; `default` = 1977497166), the
+`m_nameHash` of `surfaceproperties/surfaceproperties.vsurf`, whose entries also name their base
+(`m_baseNameHash`: `metal` → `solidmetal` → `default`). A mesh can give each triangle its own instead
+(`m_Mesh.m_Materials`, one index per triangle): a map's world meshes do. de_nuke's collision lists 27 surface
+properties, 11 of which no shape names (only triangles do); its first mesh, named " [gravel]", has the shape's
+surface 1 (`metal`) and triangles of surface 7. Read as the shape's alone, 101 of round 5's 109 bullets on the
+world hit `metal`; by triangle, 32 concrete, 26 metal, 19 metal vents and others.
 - **An agent's ragdoll**: 15 capsule parts (`pelvis`, `spine_2`, `head_0`, upper and lower arms, hands, thighs,
   shins, `ankle_l` / `_r`), 14 conical joints. On all 80 agents the parts' bind poses equal the skeleton's (to
   0.0009) and every joint's two frames meet at its pivot (`tests/cs2_model.rs` `ragdolls_and_world_collision_read`).

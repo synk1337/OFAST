@@ -159,10 +159,15 @@ SOFT_EDGE_CM = 30.0
 # A sprite's half-size is SPRITE_SIZE x the particle's radius: CS2's radii read as half-sizes drew flames twice as
 # tall as CS2's (a molotov on de_nuke at the same tick, 2026-10-24).
 SPRITE_SIZE = 0.5
-# What a layer without these keys has: no flight, no streak, every sheet sequence, no ground.
+# What a layer without these keys has: no flight, no streak, every sheet sequence, no ground; fading in over its first
+# tenth and out over its last third; born at its centre; no least width. `up` is along the instance's axis (CUSTOM_DATA;
+# straight up for fires and blasts), `speed` across it; `along` (units) where along the axis a particle is born;
+# `fade_in`, `fade_out` shares of its life (0: none); `min_width` the least half-width of a streak with a reach (a
+# tracer) as a share of its distance from the camera.
 LAYER_DEFAULTS = {"size": SPRITE_SIZE, "lift": 0.6, "speed": (0.0, 0.0), "up": (0.0, 0.0), "gravity": 0.0,
                   "drag": 0.0, "stretch": 0.0, "max_length": 0.0, "sequence": None, "floor": False,
-                  "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False, "end_fade": 0.0}
+                  "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False, "end_fade": 0.0, "fade_in": 0.1,
+                  "fade_out": 0.33, "along": (0.0, 0.0), "min_width": 0.0}
 # CS2's particle drag takes a share of the velocity per simulation step; OFAST reads it as per 1/30 s (an assumption:
 # the step is not in the files) and turns it into a rate per second, -30 ln(1 - drag): 0.025 -> 0.76, 0.1 -> 3.2.
 DRAG_STEPS_PER_SECOND = 30.0
@@ -172,8 +177,14 @@ NO_FLOOR_CM = -1.0e7
 FALLBACK_DROP = 128.0
 # Per-instance data: centre x, y, z (cm), first and last tick particles may be born, phase (0 - 1 of LifeMax: where in
 # its first lifetime a slot starts, so a flame's slots do not all respawn together; 0 for a one-shot, born on its
-# tick), seed (0 - 100: small, so the shaders' sin() hashes keep their precision), the floor (cm) a particle dies at.
-CUSTOM_DATA = ["CenterX", "CenterY", "CenterZ", "FirstTick", "LastTick", "Phase", "Seed", "FloorZ"]
+# tick), seed (0 - 100: small, so the shaders' sin() hashes keep their precision), the floor (cm) a particle dies at,
+# the axis its particles fly along (Unreal axes; up for a fire's or a blast's, a surface's normal for a bullet's
+# impact, the barrel for a muzzle flash, the bullet's way for a tracer) and its reach (units along the axis it dies
+# past: a tracer's way to what its bullet met; 0: none).
+CUSTOM_DATA = ["CenterX", "CenterY", "CenterZ", "FirstTick", "LastTick", "Phase", "Seed", "FloorZ", "AxisX", "AxisY",
+               "AxisZ", "Reach"]
+# What a per-instance value an instance does not set reads (one written before the value existed).
+CUSTOM_DEFAULTS = {"FloorZ": NO_FLOOR_CM, "AxisZ": 1.0}
 # A fire's light: colour, intensity (candela) with LIGHT_FLAMES flames burning (the most a fire had in round 5 on
 # de_nuke), reach (units), keyed every this many ticks.
 LIGHT_COLOR = (1.0, 0.55, 0.22)
@@ -209,12 +220,14 @@ def log(message):
     unreal.log("OFAST: " + message)
 
 
-# The particle a slot shows at the demo tick: its age, normalised age, eight hashes (0 - 1) of the slot's seed and the
+# The particle a slot shows at the demo tick: its age, normalised age, nine hashes (0 - 1) of the slot's seed and the
 # respawn count, where its flight has taken it (cm) and whether it is alive. Shared by the vertex and pixel shaders (a
 # Custom node cannot define functions). Half a tick of slack: a one-shot's particle is born exactly on its first and
-# last tick. The flight: out along a random heading at Speed and up at Up (units/s), slowed by Drag (a rate per
+# last tick. The flight, in the frame of the instance's axis (straight up unless it says otherwise): born Along units
+# up the axis, out along a random heading across it at Speed and along it at Up (units/s), slowed by Drag (a rate per
 # second: v' = -Drag v) and pulled down by Gravity; without drag the plain parabola (the drag formulas lose their
-# precision as Drag goes to 0). A particle below FloorZ has hit the ground and is gone.
+# precision as Drag goes to 0). A particle below FloorZ has hit the ground and is gone; one with a Reach is gone past
+# it (drawn as a streak, once its tail is: `head` and `tail` are its streak's ends along the axis, units).
 SPRITE_STATE = r"""
 float t = (Tick - FirstTick) / TicksPerSecond;
 float cycle = floor((t + Phase * LifeMax) / LifeMax);
@@ -229,23 +242,35 @@ float h5 = frac(sin(dot(key, float2(91.211, 13.917))) * 12345.6789);
 float h6 = frac(sin(dot(key, float2(19.773, 83.517))) * 54321.9876);
 float h7 = frac(sin(dot(key, float2(45.164, 94.673))) * 21345.4321);
 float h8 = frac(sin(dot(key, float2(68.721, 31.297))) * 45231.7654);
+float h9 = frac(sin(dot(key, float2(53.871, 26.413))) * 37192.8355);
 float life = lerp(LifeMin, LifeMax, h1);
 float norm = age / life;
 float heading = h3 * 6.2831853;
-float2 flat = float2(cos(heading), sin(heading));
+float3 axis = float3(AxisX, AxisY, AxisZ);
+axis = length(axis) > 0.001 ? normalize(axis) : float3(0.0, 0.0, 1.0);
+float3 side = abs(axis.z) < 0.999 ? normalize(cross(axis, float3(0.0, 0.0, 1.0))) : float3(1.0, 0.0, 0.0);
+float3 outward = side * cos(heading) + cross(axis, side) * sin(heading);
 float speed = lerp(SpeedMin, SpeedMax, h7);
 float upward = lerp(UpMin, UpMax, h8);
 bool drags = Drag > 0.01;
 float slow = drags ? (1.0 - exp(-Drag * age)) / Drag : age;
 float fall = drags ? (age - slow) / Drag : 0.5 * age * age;
+float along = lerp(AlongMin, AlongMax, h9);
+float axial = along + upward * slow;
 float3 place = float3(CenterX, CenterY, CenterZ)
-    + float3(flat * (sqrt(h4) * Spread + speed * slow), upward * slow - Gravity * fall) * 2.54;
+    + (outward * (sqrt(h4) * Spread + speed * slow) + axis * axial - float3(0.0, 0.0, 1.0) * Gravity * fall) * 2.54;
+float head = Reach > 0.0 ? min(axial, Reach) : axial;
+// A streak with a reach (a tracer) grows to its length over its first Stretch seconds, as CS2's trails do: one tick
+// after a shot CS2 shows only the part of the tracer near its head, not a line back to the muzzle.
+float trail = min(abs(upward) * Stretch, MaxLength) * (Reach > 0.0 ? saturate(age / max(Stretch, 0.001)) : 1.0);
+float tail = max(axial - trail, along);
+bool reached = Reach > 0.0 && (Stretch > 0.0 ? tail >= Reach : axial > Reach);
 // A layer with EndFade (s) dies out that fast after the slot's last tick, whatever its age: a fire's flames go out
 // with the fire, CS2's system being stopped then; without, a particle lives out its life.
 float ending = (LastTick + EndFade * TicksPerSecond - Tick) / max(EndFade * TicksPerSecond, 0.001);
 float end_fade = EndFade > 0.0 ? saturate(ending) : 1.0;
 bool alive = Tick >= FirstTick && born >= FirstTick - 0.5 && born <= LastTick + 0.5 && norm <= 1.0
-    && place.z >= FloorZ && end_fade > 0.0;
+    && place.z >= FloorZ && end_fade > 0.0 && !reached;
 """
 # Vertex shader: the world position offset putting the quad's corner where the particle's camera-facing sprite has it.
 SPRITE_WPO = SPRITE_STATE + r"""
@@ -261,13 +286,26 @@ forward = length(forward) > 0.001 ? normalize(forward) : float3(1.0, 0.0, 0.0);
 float3 right = cross(forward, float3(0.0, 0.0, 1.0));
 right = length(right) > 0.001 ? normalize(right) : float3(0.0, 1.0, 0.0);
 float3 up = cross(right, forward);
+if (Stretch > 0.0 && Reach > 0.0)
+{
+    // A streak with a reach (a tracer): from its tail to its head up the axis, as wide as its radius and at least
+    // MinWidth of its distance from the camera (CS2 keeps its tracers a pixel or so wide however far they are).
+    float3 origin = float3(CenterX, CenterY, CenterZ);
+    float3 middle = origin + axis * (head + tail) * 0.5 * 2.54;
+    float3 seen_from = normalize(CameraPos - middle);
+    float3 across = cross(seen_from, axis);
+    across = length(across) > 0.001 ? normalize(across) : right;
+    float width = alive ? max(radius, MinWidth * length(CameraPos - middle)) : 0.0;
+    float half_length = alive ? (head - tail) * 0.5 * 2.54 : 0.0;
+    return middle + axis * corner.y * half_length + across * corner.x * width - WorldPos;
+}
 if (Stretch > 0.0)
 {
     // A streak along its flight as the camera sees it: as long as Stretch seconds of the flight (MaxLength units at
     // most), as wide as its radius; the sheet's frame stands along it.
     float decay = drags ? exp(-Drag * age) : 1.0;
-    float rising = drags ? (upward + Gravity / Drag) * decay - Gravity / Drag : upward - Gravity * age;
-    float3 velocity = float3(flat * speed * decay, rising) * 2.54;
+    float sinking = drags ? Gravity / Drag * (1.0 - decay) : Gravity * age;
+    float3 velocity = ((outward * speed + axis * upward) * decay - float3(0.0, 0.0, 1.0) * sinking) * 2.54;
     float3 sideways = velocity - dot(velocity, forward) * forward;
     float seen = length(sideways);
     float3 along = seen > 0.001 ? sideways / seen : up;
@@ -277,8 +315,9 @@ if (Stretch > 0.0)
 }
 return centre + (right * corner.x + up * corner.y) * radius - WorldPos;
 """
-# Pixel shader: the sequence's frame at the particle's age, faded in over its first tenth and out over its last
-# third; (colour x tint x brightness, opacity) in a float4.
+# Pixel shader: the sequence's frame at the particle's age, faded in over the FadeIn share of its life and out over the
+# FadeOut share (a tenth and a third unless the layer says otherwise); (colour x tint x brightness, opacity) in a
+# float4.
 SPRITE_PIXEL = SPRITE_STATE + r"""
 if (!alive) return float4(0.0, 0.0, 0.0, 0.0);
 float sequence = SequenceFirst + min(floor(h6 * Sequences), Sequences - 1.0);
@@ -287,8 +326,9 @@ float cell = sequence * Stride + frame;
 float row = floor((cell + 0.5) / Columns);
 float column = cell - row * Columns;
 float4 texel = Tex.Sample(TexSampler, (float2(column, row) + UV) / float2(Columns, Rows));
-float alpha = lerp(AlphaMin, AlphaMax, h2) * saturate(norm / 0.1) * saturate((1.0 - norm) / 0.33) * texel.a
-    * end_fade;
+float fade_in = FadeIn > 0.0 ? saturate(norm / FadeIn) : 1.0;
+float fade_out = FadeOut > 0.0 ? saturate((1.0 - norm) / FadeOut) : 1.0;
+float alpha = lerp(AlphaMin, AlphaMax, h2) * fade_in * fade_out * texel.a * end_fade;
 // Born Hot (rgb), cooling to Tint over the share of its life in Hot.a (a blast's smoke is lit by its own fire at
 // first); Hot.a = 0: Tint all along.
 float3 colour = lerp(Hot.rgb, Tint, saturate(norm / max(Hot.a, 0.0001)));
@@ -298,7 +338,7 @@ return float4(texel.rgb * colour * Bright, alpha);
 SPRITE_SCALARS = ["TicksPerSecond", "LifeMin", "LifeMax", "RadiusMin", "RadiusMax", "ScaleStart", "ScaleEnd", "Roll",
                   "Spread", "Rise", "AlphaMin", "AlphaMax", "Bright", "Sequences", "SequenceFirst", "Frames", "Stride",
                   "Columns", "Rows", "Lift", "SpeedMin", "SpeedMax", "UpMin", "UpMax", "Gravity", "Drag", "Stretch",
-                  "MaxLength", "EndFade"]
+                  "MaxLength", "EndFade", "FadeIn", "FadeOut", "AlongMin", "AlongMax", "MinWidth"]
 
 
 def sprite_material(translucent):
@@ -351,9 +391,9 @@ def sprite_material(translucent):
         node = mel.create_material_expression(material, unreal.MaterialExpressionPerInstanceCustomData, -1200,
                                               -300 + 60 * index)
         node.set_editor_property("data_index", index)
-        # A level imported before FloorZ existed has no such value: no floor, not one at z = 0.
-        if name == "FloorZ":
-            node.set_editor_property("const_default_value", NO_FLOOR_CM)
+        # A level imported before a value existed has none: no floor (not one at z = 0), straight up.
+        if name in CUSTOM_DEFAULTS:
+            node.set_editor_property("const_default_value", CUSTOM_DEFAULTS[name])
         connect(node, name, wpo, pixel)
     for index, name in enumerate(SPRITE_SCALARS):
         node = mel.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -900,
@@ -421,15 +461,20 @@ def layer_name(layer):
 def instance_scale(layer):
     """The scale of a layer's instances: SPRITE_INSTANCE_SCALE, or more for one whose particles fly further from their
     centre than its bounds reach (SPRITE_MESH's ±50 cm sideways and up to SPRITE_BOUNDS_UP, times the scale): out as
-    far as the fastest flies in the longest life (or stops, slowed by drag), plus where it was born and its size."""
-    speed = option(layer, "speed")[1]
+    far as the fastest flies in the longest life (or stops, slowed by drag), plus where it was born and its size. A
+    flight along an instance's own axis (a surface's normal, a barrel) may go sideways too: up to `up` and `along`
+    count both ways."""
     drag = option(layer, "drag")
     rate = -DRAG_STEPS_PER_SECOND * math.log(1.0 - drag) if drag > 0.0 else 0.0
-    flight = min(speed * layer["life"][1], speed / rate) if rate > 0.0 else speed * layer["life"][1]
+
+    def flight(speed):
+        return min(speed * layer["life"][1], speed / rate) if rate > 0.0 else speed * layer["life"][1]
+
     size = max(layer["radius"]) * option(layer, "size") * max(layer["scale"])
-    out = (layer["spread"] + flight + size) * UNITS_TO_CM / 50.0
+    axial = flight(option(layer, "up")[1]) + option(layer, "along")[1]
+    out = (layer["spread"] + flight(option(layer, "speed")[1]) + axial + size) * UNITS_TO_CM / 50.0
     lifted = size * (1.0 + option(layer, "lift"))
-    up = (option(layer, "up")[1] * layer["life"][1] + layer["rise"] + lifted) * UNITS_TO_CM / SPRITE_BOUNDS_UP
+    up = (axial + layer["rise"] + lifted) * UNITS_TO_CM / SPRITE_BOUNDS_UP
     return max(SPRITE_INSTANCE_SCALE, out, up)
 
 
@@ -462,6 +507,9 @@ def layer_instance(layer, effect, texture, material, tick_rate):
         "Drag": -DRAG_STEPS_PER_SECOND * math.log(1.0 - drag) if drag > 0.0 else 0.0,
         "Stretch": option(layer, "stretch"), "MaxLength": option(layer, "max_length"),
         "EndFade": option(layer, "end_fade"),
+        "FadeIn": option(layer, "fade_in"), "FadeOut": option(layer, "fade_out"),
+        "AlongMin": option(layer, "along")[0], "AlongMax": option(layer, "along")[1],
+        "MinWidth": option(layer, "min_width"),
     }
     for param, value in values.items():
         mel.set_material_instance_scalar_parameter_value(instance, param, float(value))
@@ -474,16 +522,24 @@ def layer_instance(layer, effect, texture, material, tick_rate):
     return instance
 
 
-def update_layers(replay, replay_path, effects):
-    """Rebuilds the sprite materials and updates every layer's instance from the layer tables and the manifest's
-    `effects` (the level's effects keep them: probe_smoke.py's quick look at a change). Returns layer name -> instance
-    for the layers whose texture the export wrote."""
+def grenade_layers():
+    """Every layer of the grenades' effects."""
+    return FIRE_LAYERS + WALL_LAYERS + SMOKE_LAYERS + WALL_SMOKE_LAYERS + BLAST_LAYERS + FLASH_LAYERS
+
+
+def update_layers(replay, replay_path, effects, layers=None, rebuild=True):
+    """Rebuilds the sprite materials (unless `rebuild` is false: built already in this run) and updates the instance of
+    every layer of `layers` (the grenades' unless given) from the layer tables and the manifest's `effects` (the
+    level's effects keep them: probe_smoke.py's quick look at a change). Returns layer name -> instance for the layers
+    whose texture the export wrote."""
     by_role = {e["role"]: e for e in effects}
-    materials = {translucent: sprite_material(translucent) for translucent in (False, True)}
+    materials = {translucent: (sprite_material(translucent) if rebuild
+                               else assets.load_asset(SPRITE_MATERIALS[translucent]))
+                 for translucent in (False, True)}
     tick_rate = tick_rate_of(replay)
     textures = {}
     out = {}
-    for layer in FIRE_LAYERS + WALL_LAYERS + SMOKE_LAYERS + WALL_SMOKE_LAYERS + BLAST_LAYERS + FLASH_LAYERS:
+    for layer in grenade_layers() if layers is None else layers:
         role = layer["role"]
         effect = by_role.get(role)
         if effect is None:
@@ -513,23 +569,38 @@ def add_component(actor, cls, name):
 
 
 def add_sprites(actor, layer, instance, mesh, slots, rng, floor_cm=NO_FLOOR_CM):
-    """One instanced mesh of `layer` on `actor`: an instance per (centre in Source units, first tick, last tick) of
-    `slots`, times the layer's slots; its particles die below `floor_cm` (Unreal z)."""
+    """One instanced mesh of `layer` on `actor`: an instance per slot of `slots`, times the layer's slots; its
+    particles die below `floor_cm` (Unreal z). A slot is (centre in Source units, first tick, last tick), or with
+    (axis, reach) after them: the direction its particles fly along (Source axes, unit) and how far along it they
+    may go (units; 0: no limit): an instance with a reach covers it with its bounds (centred halfway along)."""
     ism = add_component(actor, unreal.InstancedStaticMeshComponent, "sprites_" + layer_name(layer))
     ism.set_static_mesh(mesh)
     ism.set_material(0, instance)
     ism.set_editor_property("cast_shadow", False)
     ism.set_num_custom_data_floats(len(CUSTOM_DATA))
-    scale = unreal.Vector(*[instance_scale(layer)] * 3)
-    for (sx, sy, sz), first, last in slots:
+    layer_scale = instance_scale(layer)
+    for slot in slots:
+        (sx, sy, sz), first, last = slot[:3]
+        (ax, ay, az), reach = slot[3:5] if len(slot) >= 5 else ((0.0, 0.0, 1.0), 0.0)
         position = unreal.Vector(sx * UNITS_TO_CM, -sy * UNITS_TO_CM, sz * UNITS_TO_CM)
+        # Scaled up so the instance's bounds hold the sprites the shader draws around it (instance_scale); one with
+        # a reach is put halfway along it, its bounds reaching both ends (SPRITE_MESH: ±50 cm across).
+        bounds_at, scale = position, layer_scale
+        if reach > 0.0:
+            # A particle with a reach never goes past it: its path decides the bounds, not the layer's flight (a
+            # tracer layer's 20 500 units/s over its 1 s life would give every tracer bounds half a kilometre across).
+            half = reach * 0.5
+            bounds_at = unreal.Vector((sx + ax * half) * UNITS_TO_CM, -(sy + ay * half) * UNITS_TO_CM,
+                                      (sz + az * half) * UNITS_TO_CM)
+            scale = max(SPRITE_INSTANCE_SCALE, half * UNITS_TO_CM / 50.0 * 1.1)
         for _ in range(layer["slots"]):
-            # Scaled up so the instance's bounds hold the sprites the shader draws around it (instance_scale).
-            index = ism.add_instance(unreal.Transform(position, unreal.Rotator(0.0, 0.0, 0.0), scale), True)
+            index = ism.add_instance(unreal.Transform(bounds_at, unreal.Rotator(0.0, 0.0, 0.0),
+                                                      unreal.Vector(scale, scale, scale)), True)
             # A one-shot's particle is born on its tick: a phase would put its birth up to a lifetime before or
             # after it, outside the half tick the shader allows, and it would never show.
             phase = rng.random() if last > first else 0.0
-            values = [position.x, position.y, position.z, first, last, phase, rng.uniform(0.0, 100.0), floor_cm]
+            values = [position.x, position.y, position.z, first, last, phase, rng.uniform(0.0, 100.0), floor_cm,
+                      ax, -ay, az, reach]
             for k, value in enumerate(values):
                 ism.set_custom_data_value(index, k, float(value), k == len(values) - 1)
 

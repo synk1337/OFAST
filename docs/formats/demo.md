@@ -690,6 +690,51 @@ pawn's duration changes to a new value above 0, a value seen first or after the 
 (`demo::players::flash_starts`: the replay's `blindings` and the animation's flinch); in round 5, 21 blindings of
 0.15 – 4.83 s, all at alpha 255. How CS2 draws them: [replay.md](replay.md#in-unreal-import_demopy) ("Flashed views").
 
+## Shots
+
+A demo records no bullet impacts on the world, and no `bullet_impact` events. For every gun shot the server sends
+each client a **fire-bullets message**, packet message 452 (Valve's `CMsgTEFireBullets`, `GE_FireBulletsId`), with
+the shooter's aim and a random seed; every client then traces the bullets itself to draw tracers, impacts and bullet
+holes. OFAST bundles no definition of this message: its fields were read from the demos (`demo_inspect … raw 452`)
+and checked against the shots' `weapon_fire` events (same ticks and shooters: 1,884 messages against 2,263
+`weapon_fire` on the de_nuke pro demo, whose extra events are knives and grenades). `demo::shots` decodes it with a
+hand-written prost message:
+
+| Field | What |
+|---|---|
+| 1 `origin` | the shooter's eyes (feet + 64 standing): where the bullets start |
+| 2 `angles` | pitch, yaw, roll (degrees): where the bullets go before the spread, the recoil's aim punch included |
+| 3 `weapon` | the weapon's entity handle |
+| 4 `mode` | the fire mode: 1 the secondary (a silenced USP-S or M4A1-S, a burst Glock or FAMAS) |
+| 5 `seed` | the spread's random seed |
+| 6 `player` | the shooter's pawn handle (fixed32; its low 14 bits the pawn's entity index) |
+| 7 `inaccuracy`, 9 `spread` | the shot's inaccuracy (moving, jumping, firing fast) and the weapon's own spread, radians |
+| 8 `recoil_index` | shots into the spray, fractional |
+| 11 `item_def_index` | the weapon's item (7 AK-47, 4 Glock-18, 61 USP-S…) |
+| 13 | the shooter's feet; 14: bullets left in the magazine after the shot; 19: the shot's server tick |
+
+The rest (10 a sound type, 12 a sound effect, 15 an attack type) is not read. A bullet's direction
+(`demo::shots::spread_offset`, `bullet_direction`): Valve's uniform random stream (Park–Miller with a 32-entry
+Bays–Durham shuffle: Numerical Recipes' `ran1`, `demo::shots::UniformRandom`), seeded with the shot's seed + 1 + the
+bullet's number, draws a fraction of the inaccuracy, its angle, the spread's angle and a fraction of the spread; the
+two offsets add up as tangents along the aim's right and up vectors (Source's `AngleVectors`).
+
+Two kinds of message show where bullets really went, and checked the rule (`examples/shot_spread.rs`,
+`examples/shot_traces.rs`):
+
+- **Glass a bullet breaks** (message 423) holds the point the bullet met the pane (field 11) and its direction (12).
+  On the de_nuke pro demo 82 of 83 panes lie on the path OFAST rebuilds to 0.001 milliradian (the other is another
+  bullet's); on the local match demo all 17. Other seeds or orders of the draws miss by 1 – 100 milliradians (the
+  CS:GO-era order, the spread's fraction before its angle, misses by 1.2 on average, most where the spread is
+  largest).
+- **A hit on a player** is an effect dispatch (message 400, `CMsgEffectData`): field 1 where the bullet met the
+  player, 2 the shooter's eyes, equal to the shot's `origin` to the last bit. All 302 hits of the pro demo lie on
+  their bullet's line to a thousandth of an inch, and 423 of the local demo's 424.
+
+Not yet checked: shotguns' bullets after the first (seeded + 1 each, as CS:GO did), the R8 Revolver's and the
+Negev's own rules. Where the bullets stop is traced through the map's collision
+([replay.md](replay.md#agents-manifest-demo_rroundagentsjson), `shots`).
+
 ## Models
 
 What each player looks like and carries, read per tick into `PlayerSample::appearance` and `PlayerSample::weapons`
@@ -751,7 +796,7 @@ allocation. Limits, each far above what a real CS2 match uses (measured on the d
 
 ## Not implemented yet
 
-Grenades and their trajectories, user commands, `userinfo` decoding, animation data frames, alternate
+User commands, `userinfo` decoding, animation data frames, alternate
 baselines (`"12:3"` keys), seeking via full packets, the `coord_size_params` overrides in the serializer message
 (absent in the CS2 demo checked, so the bit sizes above apply).
 

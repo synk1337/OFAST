@@ -24,6 +24,7 @@ pub mod loadout;
 pub mod map;
 pub mod players;
 pub mod replay;
+pub mod shots;
 pub mod sky;
 pub mod smoke;
 mod tint;

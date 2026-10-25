@@ -14,8 +14,10 @@
 //! points, `m_flRadius`); a convex hull `m_Hull` with `m_VertexPositions` (or `m_Vertices` in files compiled before
 //! late 2023) as `f32` triples and `m_Planes` as 16-byte planes (normal, offset: a point `p` is inside when
 //! `normal · p − offset < 0` for every plane), both binary blobs, and `m_Bounds`; a triangle mesh `m_Mesh` with
-//! `m_Vertices` (`f32` triples) and `m_Triangles` (three `i32` per triangle; or objects with `m_nIndex`), and
-//! `m_vMin` / `m_vMax`.
+//! `m_Vertices` (`f32` triples), `m_Triangles` (three `i32` per triangle; or objects with `m_nIndex`), `m_Materials`
+//! (each triangle's surface property, when it has its own) and `m_vMin` / `m_vMax`. A shape's surface property is
+//! `m_nSurfacePropertyIndex`, an index into the block's `m_surfacePropertyHashes` (the names' hashes:
+//! [`surface_hash`]); a map's world meshes give each triangle its own instead.
 //!
 //! An agent's ragdoll (`ctm_sas`): 15 capsules, masses 35 (pelvis) down to the hands, 14 conical joints with swing
 //! cones of 15° – 69° and twist ranges such as −73° … 36°. A map's `maps/<map>/world_physics.vmdl_c` (de_nuke: 4.7
@@ -68,6 +70,8 @@ pub struct Part {
 pub struct Shape {
     /// Index into [`PhysicsData::attributes`].
     pub attribute: usize,
+    /// `m_nSurfacePropertyIndex`: index into [`PhysicsData::surfaces`].
+    pub surface: usize,
     /// The geometry.
     pub kind: ShapeKind,
 }
@@ -108,6 +112,10 @@ pub enum ShapeKind {
         vertices: Vec<[f32; 3]>,
         /// Vertex indices, three per triangle.
         triangles: Vec<[u32; 3]>,
+        /// `m_Materials`: each triangle's surface, an index into [`PhysicsData::surfaces`] like
+        /// [`Shape::surface`] (de_nuke's first world mesh, named `" [gravel]"`, has the shape's surface 1, `metal`, and
+        /// its triangles' 7); empty when the mesh has none (then [`Shape::surface`] is every triangle's).
+        materials: Vec<u32>,
         /// Bounding box minimum.
         min: [f32; 3],
         /// Bounding box maximum.
@@ -167,6 +175,19 @@ impl CollisionAttribute {
     }
 }
 
+impl CollisionAttribute {
+    /// Stops a bullet: what stops a falling body ([`CollisionAttribute::stops_bodies`]) except the shapes tagged
+    /// `passbullets` (grates and floor panels bullets go through) and glass (`window`: a bullet breaks it and goes
+    /// on, the demo then sends the breaking glass on its own).
+    pub fn stops_bullets(&self) -> bool {
+        self.stops_bodies()
+            && !self
+                .interact_as
+                .iter()
+                .any(|tag| matches!(tag.as_str(), "passbullets" | "window"))
+    }
+}
+
 /// A model's physics: its parts, joints and collision attributes.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PhysicsData {
@@ -180,6 +201,16 @@ pub struct PhysicsData {
     pub joints: Vec<Joint>,
     /// Collision attributes the shapes refer to.
     pub attributes: Vec<CollisionAttribute>,
+    /// `m_surfacePropertyHashes`: the surface properties the shapes refer to, each the hash of its name
+    /// ([`surface_hash`]).
+    pub surfaces: Vec<u32>,
+}
+
+/// The hash a surface property is named by in physics data (`m_surfacePropertyHashes`) and in
+/// `surfaceproperties.vsurf` (`m_nameHash`): MurmurHash2 of the lower-cased name, seed `0x31415926`, as bones'
+/// ([`crate::anim::constraints::bone_hash`]). `default` hashes to 1977497166.
+pub fn surface_hash(name: &str) -> u32 {
+    crate::anim::constraints::bone_hash(name)
 }
 
 impl PhysicsData {
@@ -254,13 +285,26 @@ impl PhysicsData {
                     .collect(),
             })
             .collect();
+        let surfaces = phys
+            .get("m_surfacePropertyHashes")
+            .and_then(Value::as_array)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|v| v.as_i64().and_then(|h| u32::try_from(h).ok()))
+            .collect();
         Ok(Self {
             bones,
             bind_pose,
             parts,
             joints,
             attributes,
+            surfaces,
         })
+    }
+
+    /// The surface property hash of `shape` ([`surface_hash`]), if its index is in range.
+    pub fn surface(&self, shape: &Shape) -> Option<u32> {
+        self.surfaces.get(shape.surface).copied()
     }
 
     /// The attribute of `shape`, if it exists.
@@ -380,17 +424,20 @@ fn part(definition: &Value) -> Result<Part, PhysicsError> {
             .and_then(Value::as_array)
             .unwrap_or_default()
     };
-    let attribute = |s: &Value| {
-        s.get("m_nCollisionAttributeIndex")
+    let index = |s: &Value, key: &str| {
+        s.get(key)
             .and_then(Value::as_i64)
             .and_then(|a| usize::try_from(a).ok())
             .unwrap_or(0)
     };
+    let attribute = |s: &Value| index(s, "m_nCollisionAttributeIndex");
+    let surface = |s: &Value| index(s, "m_nSurfacePropertyIndex");
     let mut shapes = Vec::new();
     for s in list("m_spheres") {
         let sphere = s.get("m_Sphere");
         shapes.push(Shape {
             attribute: attribute(s),
+            surface: surface(s),
             kind: ShapeKind::Sphere {
                 center: vector(sphere.and_then(|c| c.get("m_vCenter"))),
                 radius: number(sphere.and_then(|c| c.get("m_flRadius"))).unwrap_or(0.0),
@@ -405,6 +452,7 @@ fn part(definition: &Value) -> Result<Part, PhysicsError> {
         };
         shapes.push(Shape {
             attribute: attribute(s),
+            surface: surface(s),
             kind: ShapeKind::Capsule {
                 a,
                 b,
@@ -440,6 +488,7 @@ fn part(definition: &Value) -> Result<Part, PhysicsError> {
         let bounds = field("m_Bounds");
         shapes.push(Shape {
             attribute: attribute(s),
+            surface: surface(s),
             kind: ShapeKind::Hull {
                 vertices,
                 planes,
@@ -479,10 +528,23 @@ fn part(definition: &Value) -> Result<Part, PhysicsError> {
         {
             return Err(malformed("a mesh triangle names a vertex it does not have"));
         }
+        // Each triangle's own surface, when the mesh has them (a map's world meshes do).
+        let materials: Vec<u32> = field("m_Materials")
+            .and_then(Value::as_array)
+            .unwrap_or_default()
+            .iter()
+            .map(|m| m.as_i64().and_then(|i| u32::try_from(i).ok()).unwrap_or(0))
+            .collect();
         shapes.push(Shape {
             attribute: attribute(s),
+            surface: surface(s),
             kind: ShapeKind::Mesh {
                 vertices,
+                materials: if materials.len() == triangles.len() {
+                    materials
+                } else {
+                    Vec::new()
+                },
                 triangles,
                 min: vector(field("m_vMin")),
                 max: vector(field("m_vMax")),
@@ -548,11 +610,13 @@ mod tests {
                            m_Bounds = {{ m_vMinBounds = [ 0.0, 0.0, 0.0 ] m_vMaxBounds = [ 1.0, 1.0, 1.0 ] }}
                            m_VertexPositions = #[ {} ]
                            m_Planes = #[ {} ] }} }} ]
-                       m_meshes = [ {{ m_nCollisionAttributeIndex = 0 m_Mesh = {{
+                       m_meshes = [ {{ m_nCollisionAttributeIndex = 0 m_nSurfacePropertyIndex = 1 m_Mesh = {{
                            m_vMin = [ 0.0, 0.0, 0.0 ] m_vMax = [ 1.0, 1.0, 0.0 ]
+                           m_Materials = [ 2 ]
                            m_Vertices = #[ {} ]
                            m_Triangles = #[ {} ] }} }} ] }} }}
                 ]
+                m_surfacePropertyHashes = [ 1977497166, 417707814, 2858402244 ]
                 m_joints = [ {{ m_nType = 4 m_nBody1 = 0 m_nBody2 = 1
                     m_Frame1 = [ -3.7, 0.87, 3.7, 1.0, 0.0, 0.0, 0.0, 1.0 ]
                     m_Frame2 = [ 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.70710677, 0.70710677 ]
@@ -612,12 +676,21 @@ mod tests {
         let ShapeKind::Mesh {
             vertices,
             triangles,
+            materials,
             ..
         } = &world.shapes[2].kind
         else {
             panic!("mesh");
         };
         assert_eq!((vertices.len(), triangles[0]), (3, [0, 1, 2]));
+        // The mesh's own surface and its triangle's: indices into the hashes.
+        assert_eq!(
+            (world.shapes[2].surface, materials.as_slice()),
+            (1, &[2][..])
+        );
+        assert_eq!(physics.surface(&world.shapes[2]), Some(417_707_814));
+        assert_eq!(physics.surface(&world.shapes[0]), Some(1_977_497_166));
+        assert_eq!(surface_hash("default"), 1_977_497_166);
         let joint = &physics.joints[0];
         assert_eq!((joint.kind, joint.body1, joint.body2), (4, 0, 1));
         assert_eq!(joint.swing, Some((0.0, 0.26)));

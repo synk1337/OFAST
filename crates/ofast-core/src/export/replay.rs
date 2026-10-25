@@ -885,6 +885,10 @@ mod tests {
                 },
             ],
             smoke_logs: Vec::new(),
+            shots: Vec::new(),
+            player_hits: Vec::new(),
+            earlier_shots: Vec::new(),
+            earlier_hits: Vec::new(),
         };
         let replay = replay_json(&track, "demo");
         assert_eq!(replay["samples"]["ticks"], json!([100, 101, 102]));

@@ -16,7 +16,7 @@
 //! before entity updates, because an entity created in a packet may need a baseline that arrives in that same
 //! packet (demoinfocs-golang orders them the same way).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use prost::Message;
 
@@ -101,6 +101,17 @@ pub struct FrameInfo {
     pub entities_changed: bool,
 }
 
+/// A network message kept for the caller ([`DemoParser::keep_messages`]): its protobuf body, undecoded.
+#[derive(Debug, Clone)]
+pub struct RawMessage {
+    /// Tick of the frame that carried it.
+    pub tick: u32,
+    /// Packet message id.
+    pub kind: i32,
+    /// The protobuf-encoded message.
+    pub body: Vec<u8>,
+}
+
 /// Reads a demo frame by frame and maintains the game state (entities, string tables, classes).
 #[derive(Debug)]
 pub struct DemoParser<'a> {
@@ -120,6 +131,12 @@ pub struct DemoParser<'a> {
     event_descriptors: EventDescriptors,
     /// Game events read since the last [`DemoParser::take_events`].
     events: Vec<GameEvent>,
+    /// How many network messages of each type ordinary packets carried so far (see [`DemoParser::message_counts`]).
+    message_counts: BTreeMap<i32, usize>,
+    /// Message types whose bodies are kept for the caller ([`DemoParser::keep_messages`]).
+    kept_kinds: Vec<i32>,
+    /// Bodies of those messages read since the last [`DemoParser::take_messages`].
+    kept: Vec<RawMessage>,
     warnings: Vec<String>,
     warning_count: usize,
 }
@@ -148,6 +165,9 @@ impl<'a> DemoParser<'a> {
             server_tick: None,
             event_descriptors: EventDescriptors::default(),
             events: Vec::new(),
+            message_counts: BTreeMap::new(),
+            kept_kinds: Vec::new(),
+            kept: Vec::new(),
             warnings: Vec::new(),
             warning_count: 0,
         })
@@ -239,6 +259,25 @@ impl<'a> DemoParser<'a> {
     /// before that tick's entity updates. See [`super::events`].
     pub fn take_events(&mut self) -> Vec<GameEvent> {
         std::mem::take(&mut self.events)
+    }
+
+    /// How many network messages of each type (the packet's message id: `SVC_Messages`, `NET_Messages`, game event and
+    /// user message ids…) the ordinary packets read so far carried, read or not. Full packets (seeking snapshots) are
+    /// not counted. A developer's view of what a demo holds (`demo_inspect … messages`).
+    pub fn message_counts(&self) -> &BTreeMap<i32, usize> {
+        &self.message_counts
+    }
+
+    /// Keeps the bodies of the network messages of these types (packet message ids) from now on, for messages the
+    /// parser does not read itself (e.g. CS2's `CMsgTEFireBullets`, id 452: [`super::shots`]). Collect them with
+    /// [`DemoParser::take_messages`]. Ordinary packets only, like the game events.
+    pub fn keep_messages(&mut self, kinds: &[i32]) {
+        self.kept_kinds.extend_from_slice(kinds);
+    }
+
+    /// The kept messages ([`DemoParser::keep_messages`]) read since the last call, oldest first.
+    pub fn take_messages(&mut self) -> Vec<RawMessage> {
+        std::mem::take(&mut self.kept)
     }
 
     /// Class name of an entity.
@@ -356,6 +395,16 @@ impl<'a> DemoParser<'a> {
         // Pass 1: everything except entities (string tables must be up to date before entities are created).
         for (kind, body) in &messages {
             let kind = *kind as i32;
+            if !full_packet {
+                *self.message_counts.entry(kind).or_default() += 1;
+                if self.kept_kinds.contains(&kind) {
+                    self.kept.push(RawMessage {
+                        tick: self.tick.unwrap_or(0),
+                        kind,
+                        body: body.to_vec(),
+                    });
+                }
+            }
             if kind == SvcMessages::SvcServerInfo as i32 {
                 let msg: CsvcMsgServerInfo = decode("CSVCMsg_ServerInfo", body)?;
                 self.tick_interval = msg.tick_interval;

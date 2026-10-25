@@ -247,7 +247,14 @@ player and round.
   shooting up them; soot darkening under a fire as it burns; when it goes out its flames end with it and it leaves
   5 s of near-black wisps (CS2 has no smoke on a burning fire).
 - [ ] A blast's heat haze, embers and model debris; a fire's outline flames.
-- [ ] Shots: muzzle flashes, tracers, impacts.
+- [x] **Shots** (decision 018): each bullet rebuilt from its shot's random seed, exactly as CS2's clients do (99 of
+  the 100 panes of glass and 725 of the 726 hits on players the two demos record lie on the rebuilt path), traced
+  through the map's collision, up to the weapon's range, to the triangle it met and that
+  surface's impact and bullet-hole decal; through a wall into a player the demo shows hit; third-person muzzle flashes at
+  the barrel the agents show, with a light; tracers as fast as CS2's; dust, flecks and sparks by surface; blood; bullet
+  holes, the earlier rounds' too (CS2 keeps them). Checked against CS2 through three players' eyes and a chase camera.
+- [ ] Shots, the rest: first-person muzzle flashes, brass, bullets through walls and players (penetration), the
+  tracer counter and timing confirmed.
 
 ## Hard problems we know about
 

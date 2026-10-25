@@ -43,6 +43,7 @@ use super::loadout::{
     AgentMounts, Place, Slot, WeaponFrames, WeaponLook, carried_places, hide_changes, key_places,
     skeleton_with_slots, slot_target,
 };
+use super::shots::{ShotData, earlier_holes_json, export_decals, shots_json};
 use super::viewmodel::{export_viewmodel_look, load_viewmodel_rig};
 use crate::anim::aim::AimBones;
 use crate::anim::bake::{
@@ -60,8 +61,8 @@ use crate::content::Content;
 use crate::demo::players::{COUNTER_TERRORISTS, PlayerSample, RoundTrack};
 use crate::items::{item_names, item_values};
 use crate::model::{Affine, Model, compose, invert_rigid};
-use crate::physics::PhysicsData;
 use crate::physics::ragdoll::WorldCollision;
+use crate::physics::{CollisionAttribute, PhysicsData};
 use crate::resource::Resource;
 
 /// Agent model of Counter-Terrorists whose own is unknown.
@@ -155,22 +156,23 @@ struct Round<'a> {
     fps: f32,
     /// For each animation frame: its demo tick and sample index.
     frames: Vec<(f32, usize)>,
-    /// The map's solid collision, for the bodies of the dead (`None` when it could not be read).
+    /// The map's world physics (`None` when it could not be read).
+    world: Option<PhysicsData>,
+    /// Its solid collision, for the bodies of the dead.
     collision: Option<WorldCollision>,
 }
 
-/// The solid collision of `map` (`maps/<map>/world_physics.vmdl`), or why it cannot be read (the map's archive is
-/// not open, or the file is broken).
-fn load_world_collision(content: &Content, map: &str) -> Result<WorldCollision, String> {
+/// The world physics of `map` (`maps/<map>/world_physics.vmdl`), or why it cannot be read (the map's archive is not
+/// open, or the file is broken).
+fn load_world_physics(content: &Content, map: &str) -> Result<PhysicsData, String> {
     let path = format!("maps/{map}/world_physics.vmdl");
     let bytes = content
         .read_resource(&path)
         .map_err(|e| format!("{path}: {e} (is the map's archive open?)"))?;
     let resource = Resource::parse(&bytes).map_err(|e| format!("{path}: {e}"))?;
-    let physics = PhysicsData::from_resource(&resource)
+    PhysicsData::from_resource(&resource)
         .map_err(|e| format!("{path}: {e}"))?
-        .ok_or_else(|| format!("{path}: no PHYS block"))?;
-    Ok(WorldCollision::from_physics(&physics))
+        .ok_or_else(|| format!("{path}: no PHYS block"))
 }
 
 /// An agent's ragdoll (its `PHYS` block); `None` when it has none.
@@ -269,14 +271,15 @@ pub fn export_players(
         .as_deref()
         .map(|text| item_values(text, "model_world"))
         .unwrap_or_default();
-    let collision = load_world_collision(content, &track.map_name)
+    let world = load_world_physics(content, &track.map_name)
         .inspect_err(|e| {
             warnings.push(format!(
-                "no collision for {}: {e}: the dead fall onto a floor where they last stood",
+                "no collision for {}: {e}: the dead fall onto a floor where they last stood, bullets meet no walls",
                 track.map_name
             ))
         })
         .ok();
+    let collision = world.as_ref().map(WorldCollision::from_physics);
     let round = Round {
         content,
         track,
@@ -287,6 +290,7 @@ pub fn export_players(
         models: content.resource_paths("vmdl"),
         fps: animation_fps(track),
         frames: frame_samples(track, animation_fps(track)),
+        world,
         collision,
     };
 
@@ -352,6 +356,7 @@ pub fn export_players(
         warnings,
     };
     let mut manifest = Vec::new();
+    let mut muzzles: Vec<Muzzle> = Vec::new();
     for (look, players) in &groups {
         let mut name = format!(
             "{demo_name}_r{}_{}_{}",
@@ -362,7 +367,9 @@ pub fn export_players(
         if let Some(gloves) = &look.gloves {
             name = format!("{name}_{}", stem(gloves));
         }
-        let (written, weapons, falls) = export_look(&round, look, players, out_dir, &name)?;
+        let (written, weapons, falls, look_muzzles) =
+            export_look(&round, look, players, out_dir, &name)?;
+        muzzles.extend(look_muzzles);
         report.deaths += falls.len();
         // Each player's baked deaths: the ticks of their first and last frames.
         let mut ragdolls: BTreeMap<String, Vec<[f32; 2]>> = BTreeMap::new();
@@ -420,6 +427,27 @@ pub fn export_players(
     let effects = export_effect_textures(content, out_dir, &mut report.warnings);
     let blasts = blasts_json(track, round.collision.as_ref());
     let fire_walls = fire_walls_json(track, round.collision.as_ref());
+    let bullet_collision = round
+        .world
+        .as_ref()
+        .map(|w| WorldCollision::from_physics_where(w, CollisionAttribute::stops_bullets));
+    let shot_data = ShotData::load(content, items_text.as_deref(), &mut report.warnings);
+    let (shots, decal_groups) = shots_json(
+        track,
+        bullet_collision.as_ref(),
+        round.world.as_ref(),
+        &muzzles,
+        &shot_data,
+    );
+    let (earlier_holes, earlier_groups) = earlier_holes_json(
+        track,
+        bullet_collision.as_ref(),
+        round.world.as_ref(),
+        &shot_data,
+    );
+    let decal_groups: std::collections::BTreeSet<String> =
+        decal_groups.union(&earlier_groups).cloned().collect();
+    let decals = export_decals(content, &decal_groups, out_dir, &mut report.warnings);
     std::fs::write(
         &report.manifest,
         serde_json::to_string_pretty(&json!({
@@ -434,6 +462,9 @@ pub fn export_players(
             "effects": effects,
             "blasts": blasts,
             "fires": fire_walls,
+            "shots": shots,
+            "earlier_holes": earlier_holes,
+            "decals": decals,
         }))
         .expect("JSON serializes"),
     )?;
@@ -621,13 +652,43 @@ fn export_dropped(
     entries
 }
 
-/// What [`export_look`] returns: the glTF export's report, the weapon slots it holds, and each death baked as a
-/// ragdoll (the player's controller, the fall).
+/// What [`export_look`] returns: the glTF export's report, the weapon slots it holds, each death baked as a
+/// ragdoll (the player's controller, the fall), and where the barrel was at each of the players' shots.
 type LookExport = (
     super::gltf::ExportReport,
     Vec<Slot>,
     Vec<(u32, super::deaths::DeathSummary)>,
+    Vec<Muzzle>,
 );
+
+/// Where a shot left the barrel of the gun in the shooter's hand, as the exported agent shows it at the shot's tick
+/// (third person: the weapon's world model, its `muzzle_flash` attachment).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Muzzle {
+    /// The shooter's controller.
+    pub controller: u32,
+    /// The shot's tick.
+    pub tick: u32,
+    /// The muzzle (Source axes, inches).
+    pub position: [f32; 3],
+    /// Along the barrel (unit).
+    pub direction: [f32; 3],
+}
+
+/// The muzzle of the gun in hand at one frame: `world` is the agent's posed bones (model space), `carried` the
+/// frame's weapons and their places, `actor` the player's actor transform. `None` without a gun in hand.
+fn muzzle_at(
+    world: &[Affine],
+    carried: Option<&Vec<(Slot, Place)>>,
+    mounts: &AgentMounts,
+    weapon_models: &BTreeMap<String, (Model, WeaponFrames)>,
+    actor: &Affine,
+) -> Option<Affine> {
+    let (slot, _) = carried?.iter().find(|(_, place)| *place == Place::Hand)?;
+    let (_, frames) = weapon_models.get(&slot.look.model)?;
+    let weapon_bone = slot_target(world, mounts, frames, Place::Hand)?;
+    Some(compose(actor, &compose(&weapon_bone, &frames.muzzle?)))
+}
 
 /// Writes one look's glTF ([`LookExport`]).
 fn export_look(
@@ -764,6 +825,7 @@ fn export_look(
     // One animation per player: the agent's bones, then the weapon bones.
     let mut animations = Vec::new();
     let mut falls = Vec::new();
+    let mut muzzles = Vec::new();
     for ((&controller, poses), carried) in players.iter().zip(bodies).zip(&places) {
         let poses = hold_gaps(poses, &round.clip_skeleton.reference);
         let mut worlds: Vec<Vec<Affine>> = poses
@@ -793,6 +855,34 @@ fn export_look(
                 for world in &mut worlds[summary.first_frame..summary.end_frame] {
                     constraints.apply(world);
                 }
+            }
+        }
+        // Each shot: where the barrel was in the frame of its tick.
+        for (_, shot) in track.shots.iter().filter(|(c, _)| *c == controller) {
+            let Some(k) = round
+                .frames
+                .iter()
+                .position(|&(tick, _)| tick >= shot.tick as f32 - 0.5)
+            else {
+                continue;
+            };
+            let sample = round.frames[k].1;
+            let Some(player) = track.samples[sample]
+                .players
+                .iter()
+                .find(|p| p.controller == controller && p.alive)
+            else {
+                continue;
+            };
+            let actor = super::deaths::actor(player);
+            if let Some(m) = muzzle_at(&worlds[k], carried.get(k), &mounts, &weapon_models, &actor)
+            {
+                muzzles.push(Muzzle {
+                    controller,
+                    tick: shot.tick,
+                    position: [m[0][3], m[1][3], m[2][3]],
+                    direction: [m[0][0], m[1][0], m[2][0]],
+                });
             }
         }
         // Each weapon bone, frame by frame: where it is keyed (relative to the root) and whether it shows.
@@ -868,7 +958,7 @@ fn export_look(
         file_name,
     )?;
     written.warnings.extend(warnings);
-    Ok((written, slots, falls))
+    Ok((written, slots, falls, muzzles))
 }
 
 /// Where `slot`'s weapon is in one frame's list (hidden when the player does not carry it).

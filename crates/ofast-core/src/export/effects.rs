@@ -76,6 +76,26 @@ pub const EFFECT_TEXTURES: &[(&str, &str)] = &[
         "scorch",
         "materials/effects/fluidsplat_a_noisy_trans_tga_c46d6803.vtex_c",
     ),
+    // particles/unified_weapon_fx/uweapon_muzflsh_ak47_primaryflash.vpcf (and the other guns' flashes): the burst of
+    // flame a shot leaves the barrel with (4 sequences of 34 – 35 frames).
+    (
+        "muzzle_flash",
+        "materials/particle/fire_gas/fire_gas_batch_b_top.vtex_c",
+    ),
+    // …_gen_smoke.vpcf: the puff of smoke after it.
+    (
+        "muzzle_smoke",
+        "materials/particle/smoke/smokeburst/smokeloop_i_0_sc_hardedge.vtex_c",
+    ),
+    // particles/impact_fx/impact_concrete.vpcf (and the other surfaces'): the dust a bullet raises.
+    (
+        "impact_smoke",
+        "materials/particle/smoke/smokeburst/smokeloop_i_0_sc.vtex_c",
+    ),
+    // particles/impact_fx/impact_metal.vpcf: the glow of a bullet striking metal.
+    ("impact_glow", "materials/effects/yellowflare.vtex_c"),
+    // particles/blood_impact/blood_impact_mist1.vpcf: the mist of blood a hit on a player raises.
+    ("blood", "materials/effects/blood_core.vtex_c"),
 ];
 
 /// How far below an HE grenade's detonation [`blasts_json`] looks for the ground, units.
@@ -515,6 +535,10 @@ mod tests {
                 ],
             }],
             smoke_logs: Vec::new(),
+            shots: Vec::new(),
+            player_hits: Vec::new(),
+            earlier_shots: Vec::new(),
+            earlier_hits: Vec::new(),
         };
 
         // The flame 20 units from the wall meets it straight ahead and on the two diagonals (18 units to each side,
