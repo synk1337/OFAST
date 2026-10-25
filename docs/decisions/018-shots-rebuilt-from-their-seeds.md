@@ -102,7 +102,8 @@ collision triangle its surface property (`world_physics`), per weapon model its 
   though making grates, railings and glass walls changed no count on the 13 demos), each gun's own muzzle flash
   (every gun draws the AK's two flames: CS2's `ak47_primaryflash` and `_alt`, one per shot as its chooser picks,
   without the compensator's side flashes and sparks), a tracer's trail (one tick after molodoy's shot at 40813 CS2's
-  still reaches back to his gun where OFAST's has gone), a player's depth from their hitboxes (8 inches meanwhile),
+  still reaches back to his gun where OFAST's has gone; in YEKINDAR's own view at 37702 too, where OFAST's own
+  tracer, on the line from his viewmodel's barrel, is a short streak near the crosshair), a player's depth from their hitboxes (8 inches meanwhile),
   bullet holes on doors (moving with them), shotguns' pellets after the first, the R8's and Negev's own spread rules, the limit on how
   many bullet holes CS2 keeps and which (four round-3 holes on de_nuke's open A-site door, whose collision is a static
   hull, do not show in CS2 in round 5), hiding the blood of a hit on the player the camera looks through (the hits
