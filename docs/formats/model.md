@@ -58,6 +58,17 @@ influence of weight 1 (`Attachment::on_bone`). What players use them for:
 Weapon models have a root bone `weapon` (with `weapon_offset` on it, then `bolt`, `clip`, `trigger`, and the hand
 guide `ag1_hand_r`); how weapons sit on agents is in [animation.md](animation.md#weapons-in-hand-and-holstered).
 
+## Hitboxes
+
+What bullets hit on a player, in each mesh's `MDAT` → `m_hitboxsets` (every mesh of an agent repeats them;
+`Model::hitboxes`): a list of `{ key, value }`, each value a set (`m_name`, `m_HitBoxes`). Each hitbox: `m_name`,
+`m_sBoneName` (it follows that bone, in its frame), `m_nShapeType` (0 a box from `m_vMinBounds` to `m_vMaxBounds`,
+1 a sphere at `m_vMinBounds`, 2 a capsule: the points within `m_flShapeRadius` of the segment from `m_vMinBounds` to
+`m_vMaxBounds`), `m_nGroupId` (the hit group `player_hurt` reports: 1 head, 2 chest, 3 stomach, 4 / 5 left / right
+arm, 6 / 7 left / right leg, 8 neck), `m_sSurfaceProperty` (`playerflesh`). CS2's agents (`agents/models/…`) have one
+set, `cstrike`: 19 capsules, the head 4.3 inches round, the pelvis and spine 5 – 6.5, the hands 2.3
+(`tests/cs2_model.rs`). The small `characters/models/…` stubs have none.
+
 ## `CTRL → embedded_meshes[]` (current layout)
 
 ```text

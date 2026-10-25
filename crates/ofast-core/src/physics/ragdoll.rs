@@ -285,6 +285,103 @@ impl WorldCollision {
         out
     }
 
+    /// Adds the shapes of a model's physics that `keep` accepts, placed in the world by `place` (the model's space to
+    /// the world's: rotation, scale, translation; a part that follows a bone first by its bind pose). Each hull and
+    /// triangle reports `shape` ([`RayHit::shape`]) and its surface index plus `surface_base` ([`RayHit::surface`]),
+    /// so several models' surfaces can share one table. Spheres and capsules are left out, as
+    /// [`WorldCollision::from_physics_where`] leaves them.
+    pub fn add_placed(
+        &mut self,
+        physics: &PhysicsData,
+        keep: impl Fn(&super::CollisionAttribute) -> bool,
+        place: &Affine,
+        shape: u32,
+        surface_base: u32,
+    ) {
+        for (index, part) in physics.parts.iter().enumerate() {
+            let to_world = match physics.bind_pose.get(index) {
+                Some(bind) if !physics.bones.is_empty() => compose(place, bind),
+                _ => *place,
+            };
+            let point = |p: V3| -> V3 {
+                std::array::from_fn(|i| {
+                    (0..3).map(|k| to_world[i][k] * p[k]).sum::<f32>() + to_world[i][3]
+                })
+            };
+            // Normals turn by the inverse transpose of the linear part: its cofactors, signed by its determinant.
+            let m = |i: usize, k: usize| to_world[i][k];
+            let cofactor = |i: usize, k: usize| {
+                let (r, s) = ((i + 1) % 3, (i + 2) % 3);
+                let (c, d) = ((k + 1) % 3, (k + 2) % 3);
+                m(r, c) * m(s, d) - m(r, d) * m(s, c)
+            };
+            let det: f32 = (0..3).map(|k| m(0, k) * cofactor(0, k)).sum();
+            let normal = |n: V3| -> V3 {
+                let turned: V3 = std::array::from_fn(|i| {
+                    (0..3).map(|k| cofactor(i, k) * n[k]).sum::<f32>() * det.signum()
+                });
+                let l = length(turned);
+                if l > 0.0 {
+                    turned.map(|c| c / l)
+                } else {
+                    turned
+                }
+            };
+            for s in &part.shapes {
+                if !physics.attribute(s).is_some_and(&keep) {
+                    continue;
+                }
+                let surface = surface_base + s.surface as u32;
+                match &s.kind {
+                    ShapeKind::Hull {
+                        planes, min, max, ..
+                    } if !planes.is_empty() => {
+                        let planes = planes
+                            .iter()
+                            .map(|&(n, offset)| {
+                                // A point on the plane, moved, fixes its offset.
+                                let on = n.map(|c| c * offset / dot(n, n).max(f32::MIN_POSITIVE));
+                                let turned = normal(n);
+                                (turned, dot(turned, point(on)))
+                            })
+                            .collect();
+                        // The bounds: the moved corners of the hull's own box.
+                        let moved: Vec<V3> = (0..8)
+                            .map(|c| {
+                                point(std::array::from_fn(|k| {
+                                    if c >> k & 1 == 0 { min[k] } else { max[k] }
+                                }))
+                            })
+                            .collect();
+                        let lo = std::array::from_fn(|k| {
+                            moved.iter().map(|v| v[k]).fold(f32::MAX, f32::min)
+                        });
+                        let hi = std::array::from_fn(|k| {
+                            moved.iter().map(|v| v[k]).fold(f32::MIN, f32::max)
+                        });
+                        self.push_hull(planes, lo, hi, shape, surface);
+                    }
+                    ShapeKind::Mesh {
+                        vertices,
+                        triangles,
+                        materials,
+                        ..
+                    } => {
+                        let moved: Vec<V3> = vertices.iter().map(|&v| point(v)).collect();
+                        for (k, t) in triangles.iter().enumerate() {
+                            let own = materials.get(k).map_or(surface, |&m| surface_base + m);
+                            // A mirroring placement turns the winding over: keep it facing out.
+                            let [a, b, c] = t.map(|i| moved[i as usize]);
+                            let corners = if det < 0.0 { [a, c, b] } else { [a, b, c] };
+                            self.push_triangle(corners, shape, own);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// Adds a convex hull (outward planes: inside when `normal · p − offset < 0` for all).
     pub fn add_hull(&mut self, planes: Vec<(V3, f32)>, min: V3, max: V3) {
         self.push_hull(planes, min, max, NO_SHAPE, NO_SHAPE);
@@ -1817,6 +1914,94 @@ mod tests {
             .expect("second triangle");
         assert_eq!((first.shape, first.surface), (0, 2));
         assert_eq!((second.shape, second.surface), (0, 3));
+    }
+
+    #[test]
+    fn placed_models_are_crossed_where_they_stand() {
+        let solid = super::super::CollisionAttribute {
+            group: "Default".into(),
+            interact_as: vec![],
+        };
+        let part = |shapes: Vec<Shape>| Part {
+            mass: 0.0,
+            inertia_scale: 1.0,
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            linear_drag: 0.0,
+            angular_drag: 0.0,
+            shapes,
+        };
+        // A box hull 10 long (x), 10 wide (y), 20 high (z), its surface 1.
+        let hull = Shape {
+            attribute: 0,
+            surface: 1,
+            kind: ShapeKind::Hull {
+                vertices: vec![],
+                planes: vec![
+                    ([1.0, 0.0, 0.0], 10.0),
+                    ([-1.0, 0.0, 0.0], 0.0),
+                    ([0.0, 1.0, 0.0], 5.0),
+                    ([0.0, -1.0, 0.0], 5.0),
+                    ([0.0, 0.0, 1.0], 20.0),
+                    ([0.0, 0.0, -1.0], 0.0),
+                ],
+                min: [0.0, -5.0, 0.0],
+                max: [10.0, 5.0, 20.0],
+            },
+        };
+        let model = PhysicsData {
+            parts: vec![part(vec![hull])],
+            attributes: vec![solid.clone()],
+            surfaces: vec![10, 11],
+            ..Default::default()
+        };
+        // Turned 90° (its x along the world's y), twice its size, at (100, 0, 0): x 90 – 110, y 0 – 20, z 0 – 40.
+        let place = crate::map::entity_transform([100.0, 0.0, 0.0], [0.0, 90.0, 0.0], [2.0; 3]);
+        let mut placed = WorldCollision::default();
+        placed.add_placed(&model, |a| a.stops_bullets(), &place, 7, 4);
+        let crossings = placed.ray_crossings([100.0, -50.0, 10.0], [0.0, 1.0, 0.0], 200.0);
+        assert_eq!(crossings.len(), 2, "{crossings:?}");
+        let (into, out) = (crossings[0], crossings[1]);
+        assert!(into.entering && !out.entering);
+        assert!((into.distance - 50.0).abs() < 1e-3 && (out.distance - 70.0).abs() < 1e-3);
+        assert!(
+            length(sub(into.normal, [0.0, -1.0, 0.0])) < 1e-5,
+            "{into:?}"
+        );
+        assert!(length(sub(out.normal, [0.0, 1.0, 0.0])) < 1e-5, "{out:?}");
+        // Its shape as given, its surface past the base.
+        assert_eq!((into.shape, into.surface), (7, 5));
+        // Beside it, nothing.
+        assert!(
+            placed
+                .ray_crossings([80.0, -50.0, 10.0], [0.0, 1.0, 0.0], 200.0)
+                .is_empty()
+        );
+
+        // A mirroring placement keeps a mesh's front facing out: a floor seen from above is gone into.
+        let floor = Shape {
+            attribute: 0,
+            surface: 0,
+            kind: ShapeKind::Mesh {
+                vertices: vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 0.0]],
+                triangles: vec![[0, 1, 2]],
+                materials: vec![],
+                min: [0.0; 3],
+                max: [10.0, 10.0, 0.0],
+            },
+        };
+        let model = PhysicsData {
+            parts: vec![part(vec![floor])],
+            attributes: vec![solid],
+            surfaces: vec![10],
+            ..Default::default()
+        };
+        let mirror = crate::map::entity_transform([0.0; 3], [0.0; 3], [-1.0, 1.0, 1.0]);
+        let mut placed = WorldCollision::default();
+        placed.add_placed(&model, |a| a.stops_bullets(), &mirror, 0, 0);
+        let down = placed.ray_crossings([-2.0, 2.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+        assert_eq!(down.len(), 1, "{down:?}");
+        assert!(down[0].entering, "{down:?}");
     }
 
     #[test]

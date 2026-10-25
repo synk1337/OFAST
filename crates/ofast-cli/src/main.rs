@@ -222,6 +222,9 @@ fn run(cli: Cli) -> Result<(), String> {
                 for fall in &report.falls {
                     println!("  death: {fall}");
                 }
+                for check in &report.checks {
+                    println!("  check: {check}");
+                }
                 for warning in &report.warnings {
                     println!("warning: {warning}");
                 }

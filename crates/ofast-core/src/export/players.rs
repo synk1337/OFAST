@@ -44,7 +44,9 @@ use super::loadout::{
     AgentMounts, Place, Slot, WeaponFrames, WeaponLook, carried_places, hide_changes, key_places,
     skeleton_with_slots, slot_target,
 };
-use super::shots::{Doors, ShotData, earlier_holes_json, export_decals, shots_json};
+use super::shots::{
+    Body, Capsule, Doors, ShotData, earlier_holes_json, export_decals, hitbox_check, shots_json,
+};
 use super::viewmodel::{export_viewmodel_look, load_viewmodel_rig};
 use crate::anim::aim::AimBones;
 use crate::anim::bake::{
@@ -61,7 +63,7 @@ use crate::anim::{
 use crate::content::Content;
 use crate::demo::players::{COUNTER_TERRORISTS, PlayerSample, RoundTrack};
 use crate::items::{item_names, item_values};
-use crate::model::{Affine, Model, compose, invert_rigid};
+use crate::model::{Affine, HitboxShape, Model, compose, invert_rigid};
 use crate::physics::ragdoll::WorldCollision;
 use crate::physics::{CollisionAttribute, PhysicsData};
 use crate::resource::Resource;
@@ -97,6 +99,8 @@ pub struct PlayersReport {
     pub viewmodels: usize,
     /// One line per death: who, when, how far the body went and when it lay still.
     pub falls: Vec<String>,
+    /// How the export fits what the demo recorded (one line each: the hitboxes against the hits, [`hitbox_check`]).
+    pub checks: Vec<String>,
     /// Key rate of the animations ([`animation_fps`]).
     pub fps: f32,
     /// Frames per animation.
@@ -352,12 +356,14 @@ pub fn export_players(
         dropped: 0,
         viewmodels: 0,
         falls: Vec::new(),
+        checks: Vec::new(),
         fps: round.fps,
         frames: round.frames.len(),
         warnings,
     };
     let mut manifest = Vec::new();
     let mut muzzles: Vec<Muzzle> = Vec::new();
+    let mut bodies: Vec<Body> = Vec::new();
     for (look, players) in &groups {
         let mut name = format!(
             "{demo_name}_r{}_{}_{}",
@@ -368,9 +374,10 @@ pub fn export_players(
         if let Some(gloves) = &look.gloves {
             name = format!("{name}_{}", stem(gloves));
         }
-        let (written, weapons, falls, look_muzzles) =
+        let (written, weapons, falls, look_muzzles, look_bodies) =
             export_look(&round, look, players, out_dir, &name)?;
         muzzles.extend(look_muzzles);
+        bodies.extend(look_bodies);
         report.deaths += falls.len();
         // Each player's baked deaths: the ticks of their first and last frames.
         let mut ragdolls: BTreeMap<String, Vec<[f32; 2]>> = BTreeMap::new();
@@ -434,16 +441,20 @@ pub fn export_players(
         .as_ref()
         .map(|w| WorldCollision::from_physics_where(w, CollisionAttribute::stops_bullets));
     let shot_data = ShotData::load(content, items_text.as_deref(), &mut report.warnings);
+    // By tick, as the bullets look them up.
+    bodies.sort_by_key(|b| b.tick);
     let doors = Doors::load(content, track, &round.models, &mut report.warnings);
     let (shots, decal_groups) = shots_json(
         track,
         bullet_collision.as_ref(),
         round.world.as_ref(),
         Some(&doors),
+        &bodies,
         &muzzles,
         &view_muzzles,
         &shot_data,
     );
+    report.checks.push(hitbox_check(track, &bodies));
     let (earlier_holes, earlier_groups) = earlier_holes_json(
         track,
         bullet_collision.as_ref(),
@@ -707,13 +718,60 @@ fn export_dropped(
 }
 
 /// What [`export_look`] returns: the glTF export's report, the weapon slots it holds, each death baked as a
-/// ragdoll (the player's controller, the fall), and where the barrel was at each of the players' shots.
+/// ragdoll (the player's controller, the fall), where the barrel was at each of the players' shots, and the
+/// players' hitboxes on the ticks of the round's hits near them.
 type LookExport = (
     super::gltf::ExportReport,
     Vec<Slot>,
     Vec<(u32, super::deaths::DeathSummary)>,
     Vec<Muzzle>,
+    Vec<Body>,
 );
+
+/// How near a hit (inches) a player's origin must be, on the tick their hitboxes are posed for it
+/// ([`HIT_POSE_TICKS`] before the hit), for them to be posed ([`Body`]): a player's height and then some.
+const BODY_REACH: f32 = 150.0;
+
+/// The hitbox set bullets hit on CS2's agents ([`crate::model::Hitbox::set`]).
+const HITBOX_SET: &str = "cstrike";
+
+/// How many ticks before a hit's tick its player's hitboxes are posed ([`Body`]): the shot is fired about a tick
+/// before its message ([`crate::demo::shots::shot_times`]), and CS2's server checks it against the victim where the
+/// shooter saw them, earlier still (its lag compensation). Fitted on the demos' hits (`hitbox_check`, the export's
+/// `check:` line) over 10 rounds of 8 demos: posed 3 ticks back, 351 of 505 hit points lie within an inch of a
+/// hitbox's surface (2 back 336, on the hit's own tick 172 of the 413 with a body near), and where a bullet went
+/// through a body its way out lies within 3 inches of the next hit's start for 32 of 40 (the 8 inches of
+/// [`super::shots::PLAYER_DEPTH`]: 22).
+const HIT_POSE_TICKS: f32 = 3.0;
+
+/// A player's hitboxes in the world on frame `world` (the agent's posed bones, model space) with the player's
+/// actor transform `actor`: each of `hitboxes` (bone index, shape) on its bone.
+fn posed_hitboxes(
+    world: &[Affine],
+    actor: &Affine,
+    hitboxes: &[(usize, HitboxShape)],
+) -> Vec<Capsule> {
+    let apply = |m: &Affine, p: [f32; 3]| -> [f32; 3] {
+        std::array::from_fn(|i| (0..3).map(|k| m[i][k] * p[k]).sum::<f32>() + m[i][3])
+    };
+    hitboxes
+        .iter()
+        .filter_map(|&(bone, shape)| {
+            let on = compose(actor, world.get(bone)?);
+            let (a, b, radius) = match shape {
+                HitboxShape::Capsule { a, b, radius } => (a, b, radius),
+                HitboxShape::Sphere { center, radius } => (center, center, radius),
+                // A box as the capsule round its long axis would be another shape: none of CS2's agents has one.
+                HitboxShape::Box { .. } => return None,
+            };
+            Some(Capsule {
+                a: apply(&on, a),
+                b: apply(&on, b),
+                radius,
+            })
+        })
+        .collect()
+}
 
 /// Where a shot left the barrel of the gun in the shooter's hand at the shot's tick: the weapon model's
 /// `muzzle_flash` attachment as the exported agent shows it (third person, in the world) or as their viewmodel does
@@ -889,10 +947,33 @@ fn export_look(
         None => mesh_groups = with_own_gloves(&agent, mesh_groups),
     }
 
+    // The agent's hitboxes on their bones, and the bullets' hit points by tick with the frame their hitboxes are
+    // posed in (HIT_POSE_TICKS before; the other effect dispatches, impacts and knives, start where they end).
+    let hitboxes: Vec<(usize, HitboxShape)> = agent
+        .hitboxes(HITBOX_SET)
+        .into_iter()
+        .filter_map(|h| Some((agent.skeleton.find(&h.bone)?, h.shape)))
+        .collect();
+    let mut hits: BTreeMap<u32, Vec<[f32; 3]>> = BTreeMap::new();
+    for hit in track.player_hits.iter().filter(|h| h.start != h.point) {
+        hits.entry(hit.tick).or_default().push(hit.point);
+    }
+    let hits: Vec<(u32, usize, Vec<[f32; 3]>)> = hits
+        .into_iter()
+        .filter(|_| !hitboxes.is_empty())
+        .filter_map(|(tick, points)| {
+            let k = round
+                .frames
+                .partition_point(|&(t, _)| t < tick as f32 - HIT_POSE_TICKS - 0.5);
+            (k < round.frames.len()).then_some((tick, k, points))
+        })
+        .collect();
+
     // One animation per player: the agent's bones, then the weapon bones.
     let mut animations = Vec::new();
     let mut falls = Vec::new();
     let mut muzzles = Vec::new();
+    let mut hit_bodies = Vec::new();
     for ((&controller, poses), carried) in players.iter().zip(bodies).zip(&places) {
         let poses = hold_gaps(poses, &round.clip_skeleton.reference);
         let mut worlds: Vec<Vec<Affine>> = poses
@@ -956,6 +1037,29 @@ fn export_look(
                     position: [m[0][3], m[1][3], m[2][3]],
                     direction: [m[0][0], m[1][0], m[2][0]],
                     eject: std::array::from_fn(|d| at(k + d).and_then(|(_, e)| e)),
+                });
+            }
+        }
+        // Each tick with hits near the living player: their hitboxes as the shooter saw them (HIT_POSE_TICKS).
+        for &(tick, k, ref points) in &hits {
+            let Some(player) = track.samples[round.frames[k].1]
+                .players
+                .iter()
+                .find(|p| p.controller == controller && p.alive)
+            else {
+                continue;
+            };
+            let near = points.iter().any(|p| {
+                (0..3)
+                    .map(|i| (p[i] - player.position[i]).powi(2))
+                    .sum::<f32>()
+                    < BODY_REACH * BODY_REACH
+            });
+            if near && let Some(world) = worlds.get(k) {
+                hit_bodies.push(Body {
+                    controller,
+                    tick,
+                    hitboxes: posed_hitboxes(world, &super::deaths::actor(player), &hitboxes),
                 });
             }
         }
@@ -1032,7 +1136,7 @@ fn export_look(
         file_name,
     )?;
     written.warnings.extend(warnings);
-    Ok((written, slots, falls, muzzles))
+    Ok((written, slots, falls, muzzles, hit_bodies))
 }
 
 /// Where `slot`'s weapon is in one frame's list (hidden when the player does not carry it).

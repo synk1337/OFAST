@@ -203,6 +203,56 @@ pub struct Mesh {
     /// The mesh's own bones (`MDAT` → `m_skeleton.m_bones`): name and inverse bind pose (model space → the bone),
     /// what CS2 skins the vertices with. Empty for a mesh drawn rigid as stored (de_inferno's breakable door).
     pub skin_bones: Vec<(String, Affine)>,
+    /// The shapes bullets hit on a player (`MDAT` → `m_hitboxsets`), every set's.
+    pub hitboxes: Vec<Hitbox>,
+}
+
+/// A shape on a bone that bullets hit (`MDAT` → `m_hitboxsets[].value.m_HitBoxes[]`). CS2's agents have one set,
+/// `cstrike`: 19 capsules (head, neck, pelvis, the spine's four, the arms' and legs' upper and lower parts, hands and
+/// feet).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Hitbox {
+    /// The set it belongs to (`cstrike`).
+    pub set: String,
+    /// Its name (`head_0`).
+    pub name: String,
+    /// The bone it follows, in its frame.
+    pub bone: String,
+    /// `m_nGroupId`: the hit group a bullet in it counts as (`player_hurt`'s: 1 head, 2 chest, 3 stomach, 4 / 5
+    /// arms, 6 / 7 legs, 8 neck).
+    pub group: u32,
+    /// Its shape, in the bone's frame (inches).
+    pub shape: HitboxShape,
+    /// `m_sSurfaceProperty` (`playerflesh`).
+    pub surface: String,
+}
+
+/// The geometry of a [`Hitbox`] (`m_nShapeType`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HitboxShape {
+    /// 0: a box from `min` to `max`.
+    Box {
+        /// One corner.
+        min: [f32; 3],
+        /// The opposite corner.
+        max: [f32; 3],
+    },
+    /// 1: a sphere.
+    Sphere {
+        /// Its centre (`m_vMinBounds`).
+        center: [f32; 3],
+        /// `m_flShapeRadius`.
+        radius: f32,
+    },
+    /// 2: the points within `radius` of the segment `a`–`b` (`m_vMinBounds`, `m_vMaxBounds`).
+    Capsule {
+        /// One end.
+        a: [f32; 3],
+        /// The other end.
+        b: [f32; 3],
+        /// `m_flShapeRadius`.
+        radius: f32,
+    },
 }
 
 /// A named point that follows bones: `weapon` on an agent's `wpn` bone, `pistol` on its right thigh,
@@ -432,6 +482,21 @@ impl Model {
             .find(|a| a.name == name)
     }
 
+    /// The hitboxes of the set named `set` (`cstrike` on CS2's agents), from the first mesh that has them: every mesh
+    /// of an agent repeats them.
+    pub fn hitboxes(&self, set: &str) -> Vec<&Hitbox> {
+        self.meshes
+            .iter()
+            .map(|m| {
+                m.hitboxes
+                    .iter()
+                    .filter(|h| h.set == set)
+                    .collect::<Vec<_>>()
+            })
+            .find(|h| !h.is_empty())
+            .unwrap_or_default()
+    }
+
     /// Meshes shown with the mesh groups `mask` (bit per [`Self::mesh_groups`] entry, as an entity's
     /// `m_MeshGroupMask` names them), in the most detailed LOD.
     pub fn meshes_in_groups(&self, mask: u64) -> impl Iterator<Item = &Mesh> {
@@ -552,6 +617,7 @@ fn read_embedded_mesh(resource: &Resource<'_>, entry: &Value) -> Result<Mesh, Mo
         draw_calls: read_draw_calls(&mesh_data),
         attachments: read_attachments(&mesh_data),
         skin_bones: read_skin_bones(&mesh_data),
+        hitboxes: read_hitboxes(&mesh_data),
         bone_weight_count: mesh_data
             .get("m_skeleton")
             .and_then(|s| s.get("m_nBoneWeightCount"))
@@ -585,6 +651,75 @@ fn read_skin_bones(mesh_data: &Value) -> Vec<(String, Affine)> {
             })
         })
         .collect()
+}
+
+/// The hitboxes of a mesh (`MDAT` → `m_hitboxsets`: a list of `{ key, value }`, the value a set with its name and
+/// `m_HitBoxes`). A hitbox of a shape type other than 0 – 2 is left out.
+fn read_hitboxes(mesh_data: &Value) -> Vec<Hitbox> {
+    let vector = |v: Option<&Value>| -> [f32; 3] {
+        let mut out = Vec::new();
+        if let Some(v) = v {
+            crate::map::numbers(v, &mut out);
+        }
+        std::array::from_fn(|k| out.get(k).copied().unwrap_or(0.0))
+    };
+    let text = |v: &Value, key: &str| -> String {
+        v.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let mut out = Vec::new();
+    for entry in mesh_data
+        .get("m_hitboxsets")
+        .and_then(Value::as_array)
+        .unwrap_or_default()
+    {
+        let Some(set) = entry.get("value") else {
+            continue;
+        };
+        let set_name = text(set, "m_name");
+        for hitbox in set
+            .get("m_HitBoxes")
+            .and_then(Value::as_array)
+            .unwrap_or_default()
+        {
+            let (min, max) = (
+                vector(hitbox.get("m_vMinBounds")),
+                vector(hitbox.get("m_vMaxBounds")),
+            );
+            let radius = hitbox
+                .get("m_flShapeRadius")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0) as f32;
+            let shape = match hitbox.get("m_nShapeType").and_then(Value::as_i64) {
+                Some(0) => HitboxShape::Box { min, max },
+                Some(1) => HitboxShape::Sphere {
+                    center: min,
+                    radius,
+                },
+                Some(2) => HitboxShape::Capsule {
+                    a: min,
+                    b: max,
+                    radius,
+                },
+                _ => continue,
+            };
+            out.push(Hitbox {
+                set: set_name.clone(),
+                name: text(hitbox, "m_name"),
+                bone: text(hitbox, "m_sBoneName"),
+                group: hitbox
+                    .get("m_nGroupId")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0)
+                    .max(0) as u32,
+                shape,
+                surface: text(hitbox, "m_sSurfaceProperty"),
+            });
+        }
+    }
+    out
 }
 
 /// The attachments of a mesh (`MDAT` → `m_attachments`: a list of `{ key, value }`, the value holding up to three

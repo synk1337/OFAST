@@ -213,6 +213,37 @@ fn sampled_models_decode_completely() {
     assert!(failures.is_empty(), "{} failures", failures.len());
 }
 
+/// An agent's hitboxes: the `cstrike` set's 19 capsules on its skeleton's bones, the head 4.3 inches round in hit
+/// group 1.
+#[test]
+fn agents_have_their_hitboxes() {
+    use ofast_core::model::HitboxShape;
+    let data = vpk()
+        .read_path("agents/models/ctm_sas/ctm_sas.vmdl_c")
+        .expect("agent reads");
+    let agent = Model::parse(&Resource::parse(&data).unwrap()).unwrap();
+    let hitboxes = agent.hitboxes("cstrike");
+    assert_eq!(hitboxes.len(), 19, "{hitboxes:?}");
+    for hitbox in &hitboxes {
+        assert_eq!(hitbox.set, "cstrike");
+        assert!(
+            matches!(hitbox.shape, HitboxShape::Capsule { .. }),
+            "{hitbox:?}"
+        );
+        assert!(
+            agent.skeleton.find(&hitbox.bone).is_some(),
+            "{} on a bone the skeleton lacks",
+            hitbox.bone
+        );
+    }
+    let head = hitboxes.iter().find(|h| h.name == "head_0").expect("head");
+    assert_eq!((head.bone.as_str(), head.group), ("head_0", 1));
+    let HitboxShape::Capsule { radius, .. } = head.shape else {
+        panic!("head capsule");
+    };
+    assert!((radius - 4.3).abs() < 1e-5);
+}
+
 /// Agents carry their weapons on attachments: `weapon` on the `wpn` bone with no offset, the holsters on body bones.
 /// Weapons carry a `weapon` root bone and a `weapon_holster_center` attachment (`export::loadout`). Glove models are
 /// bone-merged onto agents by name, so their bones' bind poses must be the agents' — checked here for every glove

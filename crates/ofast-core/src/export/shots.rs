@@ -14,18 +14,21 @@
 //! The demo's hits on players ([`crate::demo::shots::PlayerHit`]: the blood's effect dispatch) are the truth along
 //! the way: a hit after a wall starts where the bullet came out of it, so a wall before a hit is gone through
 //! whatever the rule says, a wall traced between a hit's start and its point is not there for CS2, and a later hit
-//! starting just past a player is where the bullet came out of them (else [`PLAYER_DEPTH`] on). Checked
+//! starting just past a player is where the bullet came out of them (else where its line leaves their hitboxes as
+//! the exported agent shows them, [`Body`], else [`PLAYER_DEPTH`] on). Checked
 //! (`examples/shot_penetration.rs`, 13 demos of 6 maps): 456 of the 545 hits after a wall start within half an inch
 //! of where the trace comes out of one; the damage CS2 recorded for 289 of the 314 non-lethal hits through walls is
 //! the rule's exactly, 6 more within 1 (10 of the others are on one de_inferno demo's plaster walls, where that
 //! build of CS2 took plaster's distance modifier as 0.5, not the current 0.7). The rotating doors are walls too, as
 //! the demo has them standing ([`Doors`]: their own models, not in the world's collision), without bullet holes (a
-//! door moves). Not traced: what else has a model of its own: `prop_dynamic` (de_nuke's silo doors), brush entities
-//! (a retake blocker of de_nuke's B site stopped bullets in a tournament demo), and a railing tagged `passbullets`
-//! whose far side a hit started on; a bullet the demo does not show past one goes on through it. Of the 81 hits after
-//! something the trace does not have (the other 8 of the 89 start away from the traced way out), de_nuke's 9: 3 came
-//! out of a player, 2 out of the blocker, 3 out of a silo door and what lay behind it, 1 out of the railing. (These
-//! counts are of the world's collision alone, [`walls_on`]: the doors explain none of them.)
+//! door moves); no hit of the 13 demos has a door on its line before it, so the demos neither confirm nor refute
+//! them. The map's other model entities are not walls: with its `func_brush`, `prop_dynamic` and `func_breakable`
+//! models placed as the entity lump has them, 33 of the 40 bullets that crossed a visible one still hit a player
+//! straight from the eyes, and the damages through walls came out worse (40 off, against 19); the disabled ones
+//! (other game modes' blockers and props: `[PR#]retake.bsite`, de_nuke's `[PR#]props.2v2` silo doors, not
+//! networked) far worse (184 off). CS2 networks most of its `prop_dynamic` props without the `solid` interaction
+//! layer (de_nuke: 7 of 9 interact as window, block sound and touch all only). What the other 81 hits after
+//! something came out of is not known yet (the other 8 of the 89 start away from the traced way out).
 //!
 //! Written to the agents manifest as `shots` (it needs the map's collision and the baked agents):
 //!
@@ -609,12 +612,18 @@ pub fn walls_through(mut crossings: Vec<(Crossing, u32)>, data: &ShotData) -> Ve
 const GRAZE: f32 = 1e-3;
 
 /// What a bullet's line meets ([`bullet_json`]): the world's collision (`None`: nothing), its surface property hashes
-/// by index, and the doors as `track` has them standing.
+/// by index, the doors as `track` has them standing, and the players' bodies on the ticks of their hits (sorted by
+/// tick).
 struct Obstacles<'a> {
     world: Option<&'a WorldCollision>,
     surfaces: &'a [u32],
     doors: Option<(&'a Doors, &'a RoundTrack)>,
+    bodies: &'a [Body],
 }
+
+/// How far (inches) a hit's point may lie from a body's hitbox surface for the hit to be on that body ([`body_hit`]),
+/// and how far ahead of the hit along the bullet's line its stretch through the body may start ([`way_through`]).
+pub const BODY_MATCH: f32 = 4.0;
 
 impl Obstacles<'_> {
     /// The walls on the line from `from` along `direction` within `reach` on `tick` ([`walls_through`]).
@@ -643,6 +652,55 @@ impl Obstacles<'_> {
         }
         walls_through(crossings, data)
     }
+
+    /// Where the line from `from` along `direction` comes out of the player that `shooter`'s bullet met `hit` inches
+    /// along it on `tick`: the way out of the body hit there ([`body_hit`], [`way_through`]); `None` without one.
+    fn body_exit(
+        &self,
+        tick: u32,
+        shooter: Option<u32>,
+        from: [f32; 3],
+        direction: [f32; 3],
+        hit: f32,
+    ) -> Option<f32> {
+        let point = std::array::from_fn(|k| from[k] + direction[k] * hit);
+        let body = body_hit(self.bodies, tick, point, shooter)?;
+        way_through(body, from, direction, hit).map(|(_, out)| out)
+    }
+}
+
+/// The body a bullet met at `point` on `tick`: of `bodies` (sorted by tick) posed on that tick, not the `shooter`'s,
+/// the one with a hitbox surface nearest the point, within [`BODY_MATCH`].
+pub fn body_hit(
+    bodies: &[Body],
+    tick: u32,
+    point: [f32; 3],
+    shooter: Option<u32>,
+) -> Option<&Body> {
+    let first = bodies.partition_point(|b| b.tick < tick);
+    bodies[first..]
+        .iter()
+        .take_while(|b| b.tick == tick)
+        .filter(|b| Some(b.controller) != shooter)
+        .map(|b| (b, b.surface_distance(point)))
+        .filter(|(_, d)| *d <= BODY_MATCH)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(b, _)| b)
+}
+
+/// The stretch of the line from `from` along `direction` inside `body` that a bullet meeting it `hit` inches along
+/// went through ([`Body::spans`]): the one holding the hit, else the nearest that goes in ahead of it within
+/// [`BODY_MATCH`]; `None` when none does (a stretch that ends before the hit is not it).
+pub fn way_through(
+    body: &Body,
+    from: [f32; 3],
+    direction: [f32; 3],
+    hit: f32,
+) -> Option<(f32, f32)> {
+    body.spans(from, direction)
+        .into_iter()
+        .filter(|s| s.1 > hit && s.0 - hit <= BODY_MATCH)
+        .min_by(|a, b| a.0.max(hit).total_cmp(&b.0.max(hit)))
 }
 
 /// The round's rotating doors as bullets meet them (CS2's `prop_door_rotating`: models of their own, not in the
@@ -756,6 +814,201 @@ impl Doors {
     }
 }
 
+/// The points within `radius` of the segment `a`–`b`, in the world (a hitbox, [`Body`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Capsule {
+    /// One end of the segment.
+    pub a: [f32; 3],
+    /// The other end.
+    pub b: [f32; 3],
+    /// The radius (inches).
+    pub radius: f32,
+}
+
+/// A player's hitboxes on one tick as the exported agent shows them ([`super::players`]: the agent model's
+/// `cstrike` set, [`crate::model::Hitbox`], on its posed bones): what a bullet goes through when it goes through
+/// the player.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Body {
+    /// The player's controller.
+    pub controller: u32,
+    /// The tick.
+    pub tick: u32,
+    /// The hitboxes, in the world.
+    pub hitboxes: Vec<Capsule>,
+}
+
+impl Body {
+    /// The stretches of the line from `from` along the unit `direction` that lie inside the body: each hitbox's
+    /// ([`capsule_span`]), those that overlap or touch merged, nearest first.
+    pub fn spans(&self, from: [f32; 3], direction: [f32; 3]) -> Vec<(f32, f32)> {
+        let mut spans: Vec<(f32, f32)> = self
+            .hitboxes
+            .iter()
+            .filter_map(|c| capsule_span(c, from, direction))
+            .collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut merged: Vec<(f32, f32)> = Vec::new();
+        for (start, end) in spans {
+            match merged.last_mut() {
+                Some(last) if start <= last.1 => last.1 = last.1.max(end),
+                _ => merged.push((start, end)),
+            }
+        }
+        merged
+    }
+
+    /// How far `point` lies from the nearest hitbox's surface (inches, inside or out); infinite without hitboxes.
+    pub fn surface_distance(&self, point: [f32; 3]) -> f32 {
+        self.hitboxes
+            .iter()
+            .map(|c| (segment_distance(point, c.a, c.b) - c.radius).abs())
+            .fold(f32::INFINITY, f32::min)
+    }
+}
+
+/// How well `bodies` (the players' hitboxes on the ticks of their hits, sorted by tick) fit the demo's hits on
+/// `track`, as one line, choosing bodies as the bullets do ([`body_hit`], [`way_through`]): for each hit, how far its
+/// point lies from the body's hitbox surface, and along its line how far the body's way in lies from the point; where
+/// a later hit on the same line starts just past a player (where the bullet came out of them), how far the body's
+/// way out lies from that start, against [`PLAYER_DEPTH`]'s.
+pub fn hitbox_check(track: &RoundTrack, bodies: &[Body]) -> String {
+    let (mut surfaces, mut ins, mut outs, mut depths) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let hits: Vec<&PlayerHit> = track
+        .player_hits
+        .iter()
+        .filter(|h| h.start != h.point)
+        .collect();
+    for hit in &hits {
+        let v: [f32; 3] = std::array::from_fn(|k| hit.point[k] - hit.start[k]);
+        let at = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if at <= 0.0 {
+            continue;
+        }
+        let direction = v.map(|c| c / at);
+        let Some(body) = body_hit(bodies, hit.tick, hit.point, None) else {
+            continue;
+        };
+        surfaces.push(body.surface_distance(hit.point));
+        let Some((into, out)) = way_through(body, hit.start, direction, at) else {
+            continue;
+        };
+        ins.push((into - at).abs());
+        // A later hit on this line starting just past this one: where the bullet came out.
+        let next = hits
+            .iter()
+            .filter(|h| h.tick == hit.tick)
+            .filter_map(|h| {
+                let w: [f32; 3] = std::array::from_fn(|k| h.start[k] - hit.start[k]);
+                let t: f32 = (0..3).map(|k| w[k] * direction[k]).sum();
+                let off = (0..3)
+                    .map(|k| (w[k] - direction[k] * t).powi(2))
+                    .sum::<f32>();
+                (off.sqrt() < ON_THE_LINE && t > at && t < at + MAX_BODY).then_some(t)
+            })
+            .min_by(f32::total_cmp);
+        if let Some(next) = next {
+            outs.push((out - next).abs());
+            depths.push((at + PLAYER_DEPTH - next).abs());
+        }
+    }
+    let summary = |mut offs: Vec<f32>| {
+        offs.sort_by(f32::total_cmp);
+        let within = |d: f32| offs.iter().filter(|&&o| o <= d).count();
+        format!(
+            "{} within 1 in, {} within 3, median {:.1} in",
+            within(1.0),
+            within(3.0),
+            offs.get(offs.len() / 2).copied().unwrap_or(f32::NAN)
+        )
+    };
+    format!(
+        "hitboxes: {} of {} hits on a posed body; the point against its surface: {}; its way in against the point \
+         ({}): {}; {} bodies a bullet went through: its way out against the next hit's start: {} (8 inches deep: {})",
+        surfaces.len(),
+        hits.len(),
+        summary(surfaces),
+        ins.len(),
+        summary(ins),
+        outs.len(),
+        summary(outs),
+        summary(depths),
+    )
+}
+
+/// The distance from `p` to the segment `a`–`b`.
+fn segment_distance(p: [f32; 3], a: [f32; 3], b: [f32; 3]) -> f32 {
+    let ab: [f32; 3] = std::array::from_fn(|k| b[k] - a[k]);
+    let ap: [f32; 3] = std::array::from_fn(|k| p[k] - a[k]);
+    let length2: f32 = ab.iter().map(|c| c * c).sum();
+    let t = if length2 > 0.0 {
+        ((0..3).map(|k| ap[k] * ab[k]).sum::<f32>() / length2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (0..3)
+        .map(|k| (ap[k] - ab[k] * t).powi(2))
+        .sum::<f32>()
+        .sqrt()
+}
+
+/// Where the line from `from` along the unit `direction` is inside `capsule`: the distances it goes in and comes out
+/// at (either may be behind `from`); `None` when it misses. A capsule is convex, so the line's stretch inside it is
+/// the union of its stretches in the two end spheres and the cylinder between them.
+pub fn capsule_span(capsule: &Capsule, from: [f32; 3], direction: [f32; 3]) -> Option<(f32, f32)> {
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let sub = |a: [f32; 3], b: [f32; 3]| -> [f32; 3] { std::array::from_fn(|k| a[k] - b[k]) };
+    let r2 = capsule.radius * capsule.radius;
+    let sphere = |center: [f32; 3]| {
+        let v = sub(from, center);
+        let b = dot(v, direction);
+        let disc = b * b - (dot(v, v) - r2);
+        (disc >= 0.0).then(|| (-b - disc.sqrt(), -b + disc.sqrt()))
+    };
+    let axis = sub(capsule.b, capsule.a);
+    let length = dot(axis, axis).sqrt();
+    let cylinder = (length > 1e-6)
+        .then(|| {
+            let u = axis.map(|c| c / length);
+            let w = sub(from, capsule.a);
+            let (wu, du) = (dot(w, u), dot(direction, u));
+            let w_side = sub(w, u.map(|c| c * wu));
+            let d_side = sub(direction, u.map(|c| c * du));
+            let (qa, qb, qc) = (
+                dot(d_side, d_side),
+                2.0 * dot(w_side, d_side),
+                dot(w_side, w_side) - r2,
+            );
+            // Within the infinite cylinder…
+            let round = if qa < 1e-9 {
+                (qc <= 0.0).then_some((f32::NEG_INFINITY, f32::INFINITY))
+            } else {
+                let disc = qb * qb - 4.0 * qa * qc;
+                (disc >= 0.0).then(|| {
+                    let s = disc.sqrt();
+                    ((-qb - s) / (2.0 * qa), (-qb + s) / (2.0 * qa))
+                })
+            }?;
+            // …and between its two end planes.
+            let slab = if du.abs() < 1e-9 {
+                (0.0..=length)
+                    .contains(&wu)
+                    .then_some((f32::NEG_INFINITY, f32::INFINITY))
+            } else {
+                let (t0, t1) = (-wu / du, (length - wu) / du);
+                Some((t0.min(t1), t0.max(t1)))
+            }?;
+            let span = (round.0.max(slab.0), round.1.min(slab.1));
+            (span.0 <= span.1).then_some(span)
+        })
+        .flatten();
+    [sphere(capsule.a), sphere(capsule.b), cylinder]
+        .into_iter()
+        .flatten()
+        .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
+}
+
 /// The damage a bullet of `weapon` still does `distance` inches from where it started, past `walls` (those before
 /// `distance`); `None` when it stops in one ([`penetrate`]). It loses its range falloff on the way
 /// ([`WeaponShots::range_modifier`] per 500 inches flown in the open: the inches inside walls cost by the wall's
@@ -808,9 +1061,9 @@ pub const MAX_THROUGH: f32 = 90.0;
 /// two: the damage runs out first).
 pub const MAX_PENETRATIONS: usize = 4;
 
-/// How far a bullet goes through a player's body (inches) when the demo does not show where it came out: the median
-/// of the 11 bodies the checked demos show a bullet through (a later hit on its line starts where it came out: 3.3 –
-/// 9.3 in, an arm to a head). CS2 traces the player's hitboxes, which the export does not have.
+/// How far a bullet goes through a player's body (inches) when neither the demo shows where it came out nor the
+/// player's posed hitboxes do ([`Body`]): about the middle of the bodies the checked demos show a bullet through (a
+/// later hit on its line starts where it came out: 1.7 – 14.8 in over 42 bodies, an arm to a chest).
 pub const PLAYER_DEPTH: f32 = 8.0;
 
 /// How far past a player's hit a later hit's start may lie to be where the bullet came out of that player (inches;
@@ -916,14 +1169,15 @@ pub fn view_tracer_start(
 /// The shots of `track` as the manifest's `shots` (module docs), and the bullet holes' decal groups they use (for
 /// [`export_decals`]). `collision` is the map's collision as bullets see it (`None`: every bullet that met no player
 /// ends in the air) and `physics` the world physics it was built from (the surfaces), `doors` the round's doors'
-/// collision ([`Doors`]), `muzzles` and `view_muzzles` the barrels the agents' and the viewmodels' exports found,
-/// `data` CS2's weapons and surfaces.
+/// collision ([`Doors`]), `bodies` the players' hitboxes on the ticks of their hits (sorted by tick), `muzzles` and
+/// `view_muzzles` the barrels the agents' and the viewmodels' exports found, `data` CS2's weapons and surfaces.
 #[allow(clippy::too_many_arguments)]
 pub fn shots_json(
     track: &RoundTrack,
     collision: Option<&WorldCollision>,
     physics: Option<&PhysicsData>,
     doors: Option<&Doors>,
+    bodies: &[Body],
     muzzles: &[Muzzle],
     view_muzzles: &[Muzzle],
     data: &ShotData,
@@ -933,6 +1187,7 @@ pub fn shots_json(
         // The world's surface property hashes, by index (RayHit::surface).
         surfaces: physics.map_or(&[], |p| p.surfaces.as_slice()),
         doors: doors.map(|d| (d, track)),
+        bodies,
     };
     let by_tick = hits_by_tick(&track.player_hits);
     // The offset from more shots than the round's (a round with few shots); the round's come first.
@@ -953,7 +1208,8 @@ pub fn shots_json(
             let weapon = data.weapon(shot.item);
             let bullets: Vec<Json> = (0..weapon.map_or(1, |w| w.bullets.max(1)))
                 .map(|bullet| {
-                    let json = bullet_json(shot, bullet, &hits, &obstacles, data);
+                    let json =
+                        bullet_json(shot, bullet, Some(*controller), &hits, &obstacles, data);
                     for group in world_hits(&json).filter_map(|at| at["decal"].as_str()) {
                         decals.insert(group.to_owned());
                     }
@@ -1024,6 +1280,7 @@ pub fn earlier_holes_json(
         world: collision,
         surfaces: physics.map_or(&[], |p| p.surfaces.as_slice()),
         doors: None,
+        bodies: &[],
     };
     let by_tick = hits_by_tick(&track.earlier_hits);
     let mut decals = BTreeSet::new();
@@ -1031,7 +1288,7 @@ pub fn earlier_holes_json(
     for shot in &track.earlier_shots {
         let hits = hits_of(shot, &by_tick);
         for bullet in 0..data.weapon(shot.item).map_or(1, |w| w.bullets.max(1)) {
-            let json = bullet_json(shot, bullet, &hits, &obstacles, data);
+            let json = bullet_json(shot, bullet, None, &hits, &obstacles, data);
             // Where it met the world: the walls it went through, both sides, and its end.
             for at in world_hits(&json) {
                 let Some(group) = at["decal"].as_str() else {
@@ -1062,16 +1319,18 @@ fn world_hits(bullet: &Json) -> impl Iterator<Item = &Json> {
         .filter(|at| at["on"] == "world")
 }
 
-/// One bullet of `shot` (module docs), walked from the eyes along its line within the weapon's range: through the
-/// walls `collision` has on it ([`walls_on`]; `surfaces`, the world's surface property hashes by index) and the
-/// players among `hits` (the demo's, whose start and point both lie on its line), each costing it damage
-/// ([`penetrate`]), until one stops it, or into the air. The demo's hits are the truth: a wall or player before one
-/// it shows is gone through (the rule giving less than 1 damage left, a door in the way OFAST cannot see), a wall
-/// traced between a hit's start and its point is not there for CS2, and a later hit starting just past a player is
-/// where the bullet came out of them.
+/// One bullet of `shot` (module docs; `shooter` its shooter's controller, `None` for the earlier rounds' shots),
+/// walked from the eyes along its line within the weapon's range: through the walls `obstacles` has on it (the
+/// world's, [`walls_on`], and the doors') and the players among `hits` (the demo's, whose start and point both lie on
+/// its line), each costing it damage ([`penetrate`]), until one stops it, or into the air. The demo's hits are the
+/// truth: a wall or player before one it shows is gone through (the rule giving less than 1 damage left, a door in
+/// the way OFAST cannot see), a wall traced between a hit's start and its point is not there for CS2, and a later hit
+/// starting just past a player is where the bullet came out of them; else it comes out of the player's hitboxes
+/// where `obstacles`' bodies have them ([`Obstacles::body_exit`]).
 fn bullet_json(
     shot: &Shot,
     bullet: u32,
+    shooter: Option<u32>,
     hits: &[&PlayerHit],
     obstacles: &Obstacles<'_>,
     data: &ShotData,
@@ -1194,14 +1453,15 @@ fn bullet_json(
                 damage = falloff(damage, at, hit);
                 let end = json!({ "on": "player", "end": rounded(point(hit)) });
                 // Where it came out: a later hit's start just past (not past the next wall: that start is the
-                // wall's way out), else a body's depth on; never beyond the next wall's way in, which is the wall's
-                // to charge.
+                // wall's way out), else where the line leaves the player's hitboxes, else a body's depth on; never
+                // beyond the next wall's way in, which is the wall's to charge.
                 let wall_ahead = walls.get(next_wall).map_or(f32::INFINITY, |w| w.distance);
                 let exit = players
                     .iter()
                     .map(|p| p.1)
                     .filter(|&start| start > hit && start < hit + MAX_BODY && start <= wall_ahead)
                     .min_by(f32::total_cmp)
+                    .or_else(|| obstacles.body_exit(shot.tick, shooter, shot.eye, direction, hit))
                     .unwrap_or(hit + PLAYER_DEPTH)
                     .min(wall_ahead)
                     .max(hit);
@@ -1443,6 +1703,7 @@ mod tests {
             Some(&collision),
             None,
             None,
+            &[],
             &muzzles,
             &view_muzzles,
             &data,
@@ -1488,7 +1749,7 @@ mod tests {
         assert_eq!(shots[4]["bullets"].as_array().map(Vec::len), Some(9));
         assert_eq!(decals, BTreeSet::from(["Impact.Concrete".to_owned()]));
         // Without collision every bullet that met no player flies on to its weapon's range.
-        let (open, _) = shots_json(&track, None, None, None, &[], &[], &data);
+        let (open, _) = shots_json(&track, None, None, None, &[], &[], &[], &data);
         assert_eq!(open[0]["bullets"][0]["on"], "air");
         assert_eq!(
             open[0]["bullets"][0]["end"],
@@ -1585,6 +1846,55 @@ mod tests {
             90.0,
         );
         assert!(near(turned, [15.0, 50.0, 61.0]), "{turned:?}");
+    }
+
+    #[test]
+    fn lines_go_through_capsules_and_bodies() {
+        let close = |a: Option<(f32, f32)>, b: (f32, f32)| {
+            a.is_some_and(|a| (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3)
+        };
+        // Upright, 10 inches between its ends' centres, 3 round.
+        let upright = Capsule {
+            a: [0.0, 0.0, 0.0],
+            b: [0.0, 0.0, 10.0],
+            radius: 3.0,
+        };
+        // Across its middle: through the cylinder, 6 inches.
+        let across = capsule_span(&upright, [-10.0, 0.0, 5.0], [1.0, 0.0, 0.0]);
+        assert!(close(across, (7.0, 13.0)), "{across:?}");
+        // Down its axis: from the top of the upper sphere to the bottom of the lower one.
+        let down = capsule_span(&upright, [0.0, 0.0, 20.0], [0.0, 0.0, -1.0]);
+        assert!(close(down, (7.0, 23.0)), "{down:?}");
+        // Across the upper sphere above the segment's end, 2 off its centre: 2·√5 inches.
+        let cap = capsule_span(&upright, [-10.0, 0.0, 12.0], [1.0, 0.0, 0.0]);
+        let half = 5.0f32.sqrt();
+        assert!(close(cap, (10.0 - half, 10.0 + half)), "{cap:?}");
+        // Beside it, nothing.
+        assert_eq!(
+            capsule_span(&upright, [-10.0, 4.0, 5.0], [1.0, 0.0, 0.0]),
+            None
+        );
+        // A body: two capsules that overlap make one stretch, a third apart another.
+        let body = Body {
+            controller: 1,
+            tick: 0,
+            hitboxes: vec![
+                upright,
+                Capsule {
+                    a: [4.0, 0.0, 0.0],
+                    b: [4.0, 0.0, 10.0],
+                    radius: 3.0,
+                },
+                Capsule {
+                    a: [20.0, 0.0, 0.0],
+                    b: [20.0, 0.0, 10.0],
+                    radius: 2.0,
+                },
+            ],
+        };
+        let spans = body.spans([-10.0, 0.0, 5.0], [1.0, 0.0, 0.0]);
+        assert_eq!(spans.len(), 2, "{spans:?}");
+        assert!(close(Some(spans[0]), (7.0, 17.0)) && close(Some(spans[1]), (28.0, 32.0)));
     }
 
     #[test]
@@ -1702,11 +2012,13 @@ mod tests {
             bullet_json(
                 &shot(10, 14, 0, eye, 50),
                 0,
+                None,
                 &hits,
                 &Obstacles {
                     world: Some(&collision),
                     surfaces: &[],
                     doors: None,
+                    bodies: &[],
                 },
                 &data,
             )
@@ -1758,5 +2070,30 @@ mod tests {
         assert_eq!(bullet["through"].as_array().map(Vec::len), Some(1));
         // On through the player (13 left) into the next wall.
         assert_eq!(bullet["end"], json!([700.0, 60.0, 0.0]));
+        // The first player's hitboxes on the shot's tick, 80 inches of them along the line: the bullet stops in them.
+        let thick = [Body {
+            controller: 2,
+            tick: 10,
+            hitboxes: vec![Capsule {
+                a: [230.0, 30.0, 0.0],
+                b: [250.0, 30.0, 0.0],
+                radius: 30.0,
+            }],
+        }];
+        let bullet = bullet_json(
+            &shot(10, 14, 0, [0.0, 30.0, 0.0], 50),
+            0,
+            Some(1),
+            &[&past],
+            &Obstacles {
+                world: Some(&collision),
+                surfaces: &[],
+                doors: None,
+                bodies: &thick,
+            },
+            &data,
+        );
+        assert_eq!(bullet["on"], "player");
+        assert_eq!(bullet["end"], json!([200.0, 30.0, 0.0]));
     }
 }

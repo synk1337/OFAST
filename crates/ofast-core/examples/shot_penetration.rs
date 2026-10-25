@@ -18,7 +18,12 @@
 //!
 //! Needs a demo with `bullet_damage` and `player_hurt` (a local match demo: tournament demos lack `bullet_damage`).
 //! With `OFAST_DOORS=1`, also round by round: how many hits after a wall start where a traced way out is, without
-//! and with the rotating doors posed as the demo has them ([`Doors`]).
+//! and with the rotating doors posed as the demo has them ([`Doors`]), and every hit whose line goes through a door
+//! first, with whether CS2 counted the door (the hit starts past the eyes) or not.
+//!
+//! With `OFAST_FIXTURES=func_brush,prop_dynamic,…`, the map's model entities of those classes are walls too, placed
+//! from its entity lump (`OFAST_HIDDEN=no` leaves out those that start disabled, `=only` keeps only them), and each
+//! hit whose line goes through one is listed: on the 13 demos checked they made the counts worse.
 
 use std::collections::HashMap;
 
@@ -30,10 +35,11 @@ use ofast_core::demo::shots::{
     EFFECT_DISPATCH, FIRE_BULLETS, PlayerHit, Shot, bullet_direction, decode_fire_bullets,
     decode_player_hit, hit_of, spread_offset,
 };
-use ofast_core::export::shots::{Doors, ShotData, Wall, damage_at, walls_on, walls_through};
+use ofast_core::export::shots::{Doors, ShotData, Wall, damage_at, walls_through};
 use ofast_core::game::Cs2Install;
+use ofast_core::map::{Entity, Map, entity_transform};
 use ofast_core::physics::PhysicsData;
-use ofast_core::physics::ragdoll::WorldCollision;
+use ofast_core::physics::ragdoll::{Crossing, WorldCollision};
 use ofast_core::resource::Resource;
 
 fn float(e: &GameEvent, key: &str) -> Option<f32> {
@@ -82,6 +88,37 @@ fn main() {
         .map(|b| String::from_utf8_lossy(&b).into_owned());
     let mut warnings = Vec::new();
     let shot_data = ShotData::load(&content, items.as_deref(), &mut warnings);
+    // OFAST_FIXTURES=func_brush,prop_dynamic,…: the map's model entities of those classes in the bullets' way too;
+    // OFAST_HIDDEN=no leaves out those that start disabled, =only keeps only them.
+    let classes: Vec<String> = std::env::var("OFAST_FIXTURES")
+        .map(|c| c.split(',').map(str::to_owned).collect())
+        .unwrap_or_default();
+    let hidden = std::env::var("OFAST_HIDDEN").unwrap_or_default();
+    let fixtures = if classes.is_empty() {
+        Fixtures::default()
+    } else {
+        let entities = Map::load_entities(&content, &map).expect("entities load");
+        Fixtures::load(
+            &content,
+            &entities,
+            |e| {
+                let off = e.flag("startdisabled") == Some(true);
+                e.class_name()
+                    .is_some_and(|c| classes.iter().any(|k| k == c))
+                    && match hidden.as_str() {
+                        "no" => !off,
+                        "only" => off,
+                        _ => true,
+                    }
+            },
+            &mut warnings,
+        )
+    };
+    let mut census: std::collections::BTreeMap<(String, bool), usize> = Default::default();
+    for f in &fixtures.placed {
+        *census.entry((f.class.clone(), f.hidden)).or_default() += 1;
+    }
+    println!("fixtures (class, hidden): {census:?}");
     for w in &warnings {
         println!("warning: {w}");
     }
@@ -164,6 +201,30 @@ fn main() {
     // A hit's dispatch starts at the shooter's eyes, or where the bullet came out of the last wall it went through;
     // the other dispatches on a bullet's line start where they end (another effect).
     hits.retain(|h| h.start != h.point);
+    // Bullets through a body: a hit whose start lies on an earlier hit's line just past its point (where the bullet
+    // came out of that player).
+    for first in &hits {
+        let v: [f32; 3] = std::array::from_fn(|k| first.point[k] - first.start[k]);
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if l <= 0.0 {
+            continue;
+        }
+        let d = v.map(|c| c / l);
+        for second in hits
+            .iter()
+            .filter(|h| h.tick == first.tick && h.point != first.point)
+        {
+            let v: [f32; 3] = std::array::from_fn(|k| second.start[k] - first.point[k]);
+            let t: f32 = (0..3).map(|k| v[k] * d[k]).sum();
+            let off = (0..3)
+                .map(|k| (v[k] - d[k] * t).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            if off < 0.5 && t > 0.0 && t < 20.0 {
+                println!("through a body: tick {} depth {t:.1}", first.tick);
+            }
+        }
+    }
     let surfaces = world.surfaces.as_slice();
     // The shot and pellet whose line a hit's start and point both lie on: its direction, the distances of both.
     let line_of = |hit: &PlayerHit| {
@@ -198,9 +259,26 @@ fn main() {
         let Some((shot, weapon, direction, start, distance)) = line_of(hit) else {
             continue;
         };
-        let walls = walls_on(
-            &collision, surfaces, &shot_data, shot.eye, direction, distance,
-        );
+        let mut crossings: Vec<_> = collision
+            .ray_crossings(shot.eye, direction, distance)
+            .into_iter()
+            .map(|c| (c, surfaces.get(c.surface as usize).copied().unwrap_or(0)))
+            .collect();
+        let met = fixtures.crossings(shot.eye, direction, distance);
+        let named: Vec<String> = met
+            .iter()
+            .filter_map(|(c, _)| fixtures.fixture_of(c.shape))
+            .map(|f| {
+                format!(
+                    "{} {}{}",
+                    f.class,
+                    f.name,
+                    if f.hidden { " (hidden)" } else { "" }
+                )
+            })
+            .collect();
+        crossings.extend(met);
+        let walls = walls_through(crossings, &shot_data);
         // Where the trace has the bullet come out of the last wall, against where the demo has it (a hit after a
         // wall).
         if !hit_of(shot, hit) {
@@ -229,6 +307,13 @@ fn main() {
                     hit.tick, shot.item
                 );
             }
+        }
+        if !named.is_empty() {
+            println!(
+                "tick {:6}: through fixtures {named:?} (hit after a wall: {})",
+                hit.tick,
+                !hit_of(shot, hit)
+            );
         }
         let tick_events = by_tick.get(&hit.tick).cloned().unwrap_or_default();
         let bullet = tick_events.iter().find(|e| {
@@ -478,6 +563,58 @@ fn doors_check(
         };
         let mut warnings = Vec::new();
         let doors = Doors::load(content, &track, &paths, &mut warnings);
+        // Every hit whose bullet's line goes through a door before the hit's start: whether CS2 counted the door
+        // (the hit starts past the eyes: a penetration) or not (from the eyes).
+        for hit in track.player_hits.iter().filter(|h| h.start != h.point) {
+            for shot in track
+                .shots
+                .iter()
+                .map(|(_, s)| s)
+                .filter(|s| s.tick == hit.tick)
+            {
+                let Some(weapon) = shot_data.weapon(shot.item) else {
+                    continue;
+                };
+                for bullet in 0..weapon.bullets.max(1) {
+                    let d = bullet_direction(
+                        shot.angles,
+                        spread_offset(shot.seed, bullet, shot.inaccuracy, shot.spread),
+                    );
+                    let along = |p: [f32; 3]| -> (f32, f32) {
+                        let v: [f32; 3] = std::array::from_fn(|k| p[k] - shot.eye[k]);
+                        let t: f32 = (0..3).map(|k| v[k] * d[k]).sum();
+                        let off = (0..3).map(|k| (v[k] - d[k] * t).powi(2)).sum::<f32>();
+                        (t, off.sqrt())
+                    };
+                    let ((start, start_off), (point, point_off)) =
+                        (along(hit.start), along(hit.point));
+                    if start_off > 0.5 || point_off > 0.5 || point <= start {
+                        continue;
+                    }
+                    let through = walls_through(
+                        doors.crossings(&track, shot.tick, shot.eye, d, point),
+                        shot_data,
+                    );
+                    let Some(door) = through.first() else {
+                        continue;
+                    };
+                    let from_eyes = hit_of(shot, hit);
+                    println!(
+                        "  door on the line: round {} tick {} door at {:.1}, {:.1} thick; the hit starts at {start:.1}, \
+                         point {point:.1}: {}",
+                        info.round,
+                        hit.tick,
+                        door.distance,
+                        door.thickness,
+                        if from_eyes {
+                            "from the eyes (no penetration)"
+                        } else {
+                            "past the eyes (penetration)"
+                        }
+                    );
+                }
+            }
+        }
         for hit in track.player_hits.iter().filter(|h| h.start != h.point) {
             for (_, shot) in track
                 .shots
@@ -596,4 +733,112 @@ fn doors_check(
         "\ndoors: {after} hits start past the eyes; a traced way out within 0.5 in of the start: {world_only} without \
          the doors, {with_doors} with them"
     );
+}
+
+/// [`Crossing::shape`] of the first fixture ([`Fixtures`]): fixture `i` crosses as `FIXTURE_SHAPES + i`.
+const FIXTURE_SHAPES: u32 = 1 << 31;
+
+/// One of the map's model entities placed in the bullets' way ([`Fixtures`]).
+#[derive(Debug, Clone, PartialEq)]
+struct Fixture {
+    /// Its class (`func_brush`, `prop_dynamic`…).
+    class: String,
+    /// Its `targetname` (empty without one).
+    name: String,
+    /// It starts disabled (`startdisabled`): not drawn (another game mode's prop or blocker).
+    hidden: bool,
+}
+
+/// The map's model entities as walls (`OFAST_FIXTURES`): `func_brush` blockers, `prop_dynamic` props and the like,
+/// models of their own, not in `world_physics`, each placed where the map's entity lump puts it (`origin`, `angles`,
+/// `scales`: [`ofast_core::map::entity_transform`]) with its model's collision as bullets see it, all baked into one
+/// collision in the world's space ([`WorldCollision::add_placed`]). Measured on the 13 demos, they are not walls to
+/// CS2's bullets (docs/decisions/018): the export leaves them out, this tool keeps them to show it again.
+#[derive(Debug, Default)]
+struct Fixtures {
+    collision: WorldCollision,
+    /// The surface property hashes of every placed model, one table ([`WorldCollision::add_placed`]'s base).
+    surfaces: Vec<u32>,
+    /// What was placed, by index ([`Fixtures::fixture_of`]).
+    placed: Vec<Fixture>,
+}
+
+impl Fixtures {
+    /// Places the `entities` that `keep` accepts and whose model has collision that stops bullets; a model that
+    /// cannot be read is left out with a warning, and so is an entity with a parent (`parentname`).
+    fn load(
+        content: &Content,
+        entities: &[Entity],
+        keep: impl Fn(&Entity) -> bool,
+        warnings: &mut Vec<String>,
+    ) -> Self {
+        let mut out = Fixtures::default();
+        let mut models: HashMap<String, Option<(PhysicsData, u32)>> = HashMap::new();
+        for entity in entities {
+            let Some(model) = entity.string("model") else {
+                continue;
+            };
+            if !keep(entity) || entity.string("parentname").is_some_and(|p| !p.is_empty()) {
+                continue;
+            }
+            let loaded = models.entry(model.to_owned()).or_insert_with(|| {
+                let physics = content
+                    .read_resource(model)
+                    .map_err(|e| e.to_string())
+                    .and_then(|bytes| {
+                        let resource = Resource::parse(&bytes).map_err(|e| e.to_string())?;
+                        PhysicsData::from_resource(&resource).map_err(|e| e.to_string())
+                    });
+                match physics {
+                    Ok(Some(physics)) => {
+                        let base = out.surfaces.len() as u32;
+                        out.surfaces.extend(&physics.surfaces);
+                        Some((physics, base))
+                    }
+                    Ok(None) => None,
+                    Err(e) => {
+                        warnings.push(format!("{model}: {e}: bullets pass it"));
+                        None
+                    }
+                }
+            });
+            let Some((physics, base)) = loaded else {
+                continue;
+            };
+            let before = out.collision.counts();
+            let place = entity_transform(entity.origin(), entity.angles(), entity.scales());
+            let shape = FIXTURE_SHAPES + out.placed.len() as u32;
+            out.collision
+                .add_placed(physics, |a| a.stops_bullets(), &place, shape, *base);
+            if out.collision.counts() == before {
+                continue;
+            }
+            out.placed.push(Fixture {
+                class: entity.class_name().unwrap_or_default().to_owned(),
+                name: entity.string("targetname").unwrap_or_default().to_owned(),
+                hidden: entity.flag("startdisabled") == Some(true),
+            });
+        }
+        out
+    }
+
+    /// Where a line from `from` along the unit `direction` crosses the fixtures within `reach`: each crossing, with
+    /// its surface property's hash ([`walls_through`]).
+    fn crossings(&self, from: [f32; 3], direction: [f32; 3], reach: f32) -> Vec<(Crossing, u32)> {
+        self.collision
+            .ray_crossings(from, direction, reach)
+            .into_iter()
+            .map(|c| {
+                let hash = self.surfaces.get(c.surface as usize).copied().unwrap_or(0);
+                (c, hash)
+            })
+            .collect()
+    }
+
+    /// The fixture a crossing's [`Crossing::shape`] is of, when it is one's.
+    fn fixture_of(&self, shape: u32) -> Option<&Fixture> {
+        shape
+            .checked_sub(FIXTURE_SHAPES)
+            .and_then(|i| self.placed.get(i as usize))
+    }
 }

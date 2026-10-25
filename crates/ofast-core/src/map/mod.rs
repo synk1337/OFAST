@@ -141,31 +141,15 @@ impl Map {
                 map.nodes.push(parse_world_node(&root));
             }
         }
-
-        // Entity lumps can reference child lumps; load them all (breadth first, each once).
-        let mut pending: Vec<String> = array(world.get("m_entityLumps"))
-            .iter()
-            .filter_map(|v| v.as_str().map(str::to_owned))
-            .collect();
-        let mut seen = std::collections::BTreeSet::new();
-        while let Some(lump) = pending.pop() {
-            if !seen.insert(lump.clone()) {
-                continue;
-            }
-            let data = content.read_resource(&lump)?;
-            let root = Resource::parse(&data)?.kv3(BlockKind::DATA)?.root;
-            for child in array(root.get("m_childLumps")) {
-                if let Some(child) = child.as_str() {
-                    pending.push(child.to_owned());
-                }
-            }
-            for entity in array(root.get("m_entityKeyValues")) {
-                if let Some(entity) = Entity::from_lump_entry(entity) {
-                    map.entities.push(entity);
-                }
-            }
-        }
+        map.entities = entity_lumps(content, &world)?;
         Ok(map)
+    }
+
+    /// Only the entities of `maps/<name>/world.vwrld_c` ([`Map::load`] without the world nodes' geometry).
+    pub fn load_entities(content: &Content, name: &str) -> Result<Vec<Entity>, MapError> {
+        let world_data = content.read(&format!("maps/{name}/world.vwrld_c"))?;
+        let world = Resource::parse(&world_data)?.kv3(BlockKind::DATA)?.root;
+        entity_lumps(content, &world)
     }
 
     /// Entities of a class (`"light_environment"`, `"info_player_counterterrorist"`, …).
@@ -367,6 +351,34 @@ fn parse_world_node(root: &Value) -> WorldNode {
         });
     }
     node
+}
+
+/// The entities of a world's entity lumps (`m_entityLumps`), child lumps included (each once).
+fn entity_lumps(content: &Content, world: &Value) -> Result<Vec<Entity>, MapError> {
+    let mut entities = Vec::new();
+    let mut pending: Vec<String> = array(world.get("m_entityLumps"))
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect();
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(lump) = pending.pop() {
+        if !seen.insert(lump.clone()) {
+            continue;
+        }
+        let data = content.read_resource(&lump)?;
+        let root = Resource::parse(&data)?.kv3(BlockKind::DATA)?.root;
+        for child in array(root.get("m_childLumps")) {
+            if let Some(child) = child.as_str() {
+                pending.push(child.to_owned());
+            }
+        }
+        for entity in array(root.get("m_entityKeyValues")) {
+            if let Some(entity) = Entity::from_lump_entry(entity) {
+                entities.push(entity);
+            }
+        }
+    }
+    Ok(entities)
 }
 
 /// Multiplies two 3×4 transforms (`a` applied after `b`).

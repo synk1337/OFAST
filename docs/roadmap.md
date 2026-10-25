@@ -264,8 +264,13 @@ player and round.
 - [x] The shooter's own tracer from their viewmodel's barrel; the rotating doors in the bullets' way; cases thrown at
   the shot's true moment (CS2's first-person case crosses the view as a left-handed player's mirrored viewmodel
   throws it, and so does OFAST's).
-- [ ] Shots, the rest: each gun's own muzzle flash, bullets through `prop_dynamic` models and brush entities, bullet
-  holes that move with doors, a player's depth from their hitboxes.
+- [x] A player's depth from their hitboxes (the agent's 19 capsules on its posed bones, where CS2's server checks
+  the shot); the map's `prop_dynamic` models and brush entities checked and left out: CS2's bullets go through them
+  (on 13 demos they made every count worse).
+- [ ] Shots, the rest: each gun's own muzzle flash, bullet holes that move with doors, what the hits after walls
+  that the trace does not explain came out of.
+- [ ] The map's physics props as the demo moves them (`CPhysicsPropMultiplayer`: de_nuke's hanging hard hats and
+  mugs, 25 of them; CS2 shows the A site's hats on the floor by round 5 where OFAST keeps them on their rack).
 - [ ] **Effects rework**: every effect so far is a first pass. They are in the right place, at the right size and
   time, but their look is far from good. All of them get reworked: smokes, fires and their smoke, HE blasts,
   flashbangs, muzzle flashes, tracers, impacts, blood and holes. When the rework starts, each effect's gaps get

@@ -35,7 +35,9 @@ collision triangle its surface property (`world_physics`), per weapon model its 
   (CS2's world meshes face outward: 99.3 – 100 % of the bullets from the eyes meet a front first), makes the walls on
   a bullet's line; each costs it damage by CS:GO's rule as its players documented it, with CS2's own values
   (`m_flPenetration`, `m_flRangeModifier`, `m_nDamage` in `weapons.vdata`; each surface's
-  `bulletPenetrationDistanceModifier` in `surfaceproperties_game.txt`), and a player as flesh, until it stops. The
+  `bulletPenetrationDistanceModifier` in `surfaceproperties_game.txt`), and a player as flesh as deep as the line
+  runs through their hitboxes (added 2026-10-25: the agent model's `cstrike` capsules on the exported agent's bones,
+  posed 3 ticks before the hit, where CS2's server checks the shot), until it stops. The
   rule is checked, not assumed: a hit after a wall starts where the bullet came out of it (the demo's effect
   dispatch), and on 13 demos of 6 maps 456 of 545 such hits start within half an inch of OFAST's traced way out,
   while the damage CS2 recorded for 289 of 314 non-lethal hits through walls is the rule's exactly. The demo's hits
@@ -90,6 +92,17 @@ collision triangle its surface property (`world_physics`), per weapon model its 
   the AK, but CS2 drew one on shots that count would skip, in first and third person.
 - **The shot on its message's tick**: one tick after a shot, CS2's tracer was further along than OFAST's, and on
   the message's own tick CS2's is already in flight.
+- **The map's model entities as walls** (dead end, 2026-10-25): `func_brush`, `prop_dynamic` and `func_breakable`
+  models placed as the entity lump has them (`origin`, `angles`, `scales`), their collision as bullets see it. Two
+  of de_nuke's hits after a wall had seemed to come out of a disabled retake blocker and three out of disabled silo
+  doors (wingman props); measured, those hits start 10 inches past the blocker, and on the 13 demos the entities
+  made every count worse: 33 of the 40 bullets that crossed a visible one still hit a player straight from the eyes
+  (no penetration), the damages through walls came out further off (40 against 19), and with the disabled ones
+  (not networked to the demo, so not drawn, but in the entity lump) 184 off. The demo's own entities say why: CS2
+  networks most `prop_dynamic` props without the `solid` interaction layer (de_nuke: 7 of 9 interact as window,
+  block sound and touch all only), and the `func_brush` blockers it networks interact as "touch all" alone. The
+  check stays in `examples/shot_penetration.rs` (`OFAST_FIXTURES`), the placing in
+  `WorldCollision::add_placed`.
 
 ## Consequences
 
@@ -97,13 +110,12 @@ collision triangle its surface property (`world_physics`), per weapon model its 
   (`examples/shot_spread.rs`, `examples/shot_traces.rs`), and with the damage of its hits
   (`examples/shot_penetration.rs`).
 - A bullet going through a wall leaves an impact and a hole on both sides; one going through a player goes on.
-- Not yet: what else has a model of its own (`prop_dynamic`: de_nuke's silo doors; brush entities: a retake blocker
-  of de_nuke's B site stopped bullets in a tournament demo; a railing tagged `passbullets` a hit started behind,
-  though making grates, railings and glass walls changed no count on the 13 demos), each gun's own muzzle flash
+- Not yet: what 81 of the 545 hits after a wall came out of (the trace has no way out there: not the map's model
+  entities, above; making grates, railings and glass walls changed no count either), each gun's own muzzle flash
   (every gun draws the AK's two flames: CS2's `ak47_primaryflash` and `_alt`, one per shot as its chooser picks,
   without the compensator's side flashes and sparks), a tracer's trail (one tick after molodoy's shot at 40813 CS2's
   still reaches back to his gun where OFAST's has gone; in YEKINDAR's own view at 37702 too, where OFAST's own
-  tracer, on the line from his viewmodel's barrel, is a short streak near the crosshair), a player's depth from their hitboxes (8 inches meanwhile),
+  tracer, on the line from his viewmodel's barrel, is a short streak near the crosshair),
   bullet holes on doors (moving with them), shotguns' pellets after the first, the R8's and Negev's own spread rules, the limit on how
   many bullet holes CS2 keeps and which (four round-3 holes on de_nuke's open A-site door, whose collision is a static
   hull, do not show in CS2 in round 5), hiding the blood of a hit on the player the camera looks through (the hits

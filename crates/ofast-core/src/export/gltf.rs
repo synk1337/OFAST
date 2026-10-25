@@ -3102,6 +3102,7 @@ mod tests {
             bone_weight_count: 0,
             attachments: Vec::new(),
             skin_bones: Vec::new(),
+            hitboxes: Vec::new(),
         };
         let content = Content::new();
         let dir = temp_folder("draw-tint");
