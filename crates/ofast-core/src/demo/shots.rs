@@ -46,7 +46,7 @@ impl MsgVector {
 }
 
 /// CS2's fire-bullets message, the fields OFAST reads (the others: 10 the sound type, 12 a sound effect, 15 the
-/// attack type, 19 the server tick of the shot).
+/// attack type).
 #[derive(Clone, PartialEq, Message)]
 pub struct FireBullets {
     /// The shooter's eyes (feet + view offset), where the bullets start.
@@ -83,9 +83,34 @@ pub struct FireBullets {
     /// The shooter's feet.
     #[prost(message, optional, tag = "13")]
     pub feet: Option<MsgVector>,
-    /// Bullets left in the magazine after the shot.
+    /// The bullets in the magazine as the shot is fired.
     #[prost(uint32, optional, tag = "14")]
     pub bullets_left: Option<u32>,
+    /// When the shot was fired (local demos only; [`ShotTiming`]).
+    #[prost(message, optional, tag = "16")]
+    pub timing: Option<ShotTiming>,
+    /// The server tick the shot was taken on.
+    #[prost(uint32, optional, tag = "19")]
+    pub server_tick: Option<u32>,
+}
+
+/// When a shot was fired, the fields OFAST reads of the fire-bullets message's field 16 (the same as the
+/// `bullet_damage` event's `attack_tick_count` … keys; the others: 1 the aim punch, 6 / 7 the inaccuracy from moving
+/// and from being in the air, 8 a type).
+#[derive(Clone, PartialEq, Message)]
+pub struct ShotTiming {
+    /// The game tick of the attack.
+    #[prost(int32, optional, tag = "2")]
+    pub attack_tick: Option<i32>,
+    /// The fraction of the tick interval at which the player fired.
+    #[prost(float, optional, tag = "3")]
+    pub attack_fraction: Option<f32>,
+    /// The tick the shooter's screen showed then (interpolated a few ticks behind).
+    #[prost(int32, optional, tag = "4")]
+    pub render_tick: Option<i32>,
+    /// Its fraction.
+    #[prost(float, optional, tag = "5")]
+    pub render_fraction: Option<f32>,
 }
 
 /// One shot, from its fire-bullets message.
@@ -111,8 +136,13 @@ pub struct Shot {
     pub spread: f32,
     /// Recoil index.
     pub recoil_index: f32,
-    /// Bullets left after the shot.
+    /// The bullets in the magazine as the shot is fired (30 on a full AK-47's first shot).
     pub bullets_left: u32,
+    /// The server tick the shot was taken on (game ticks: the demo's ticks plus an offset, [`shot_times`]).
+    pub server_tick: Option<u32>,
+    /// The attack's game tick and the fraction of its tick interval at which the player fired (CS2's sub-tick
+    /// input); `None` in tournament demos, which leave it out.
+    pub attack: Option<(u32, f32)>,
 }
 
 /// An effect dispatch's effect, the fields OFAST reads (`CMsgEffectData`; 3 a normal, 4 angles, 5 the entity…).
@@ -121,7 +151,8 @@ pub struct EffectData {
     /// Where the effect happens: for a bullet, where it met the player.
     #[prost(message, optional, tag = "1")]
     pub origin: Option<MsgVector>,
-    /// Where it comes from: for a bullet, the shooter's eyes (the shot's [`Shot::eye`], to the last bit).
+    /// Where it comes from: for a bullet, the shooter's eyes (the shot's [`Shot::eye`], to the last bit), or where it
+    /// came out of the wall or player it went through before.
     #[prost(message, optional, tag = "2")]
     pub start: Option<MsgVector>,
 }
@@ -139,14 +170,16 @@ pub struct EffectDispatch {
 pub struct PlayerHit {
     /// Demo tick of the frame that carried it (the shot's).
     pub tick: u32,
-    /// The shooter's eyes: [`Shot::eye`] of the shot whose bullet it was.
+    /// Where that stretch of the bullet's flight started: the shooter's eyes ([`Shot::eye`] of the shot whose bullet
+    /// it was, [`hit_of`]), or, past a wall or a player it went through, where it came out of them (on its line).
     pub start: [f32; 3],
     /// Where the bullet met the player.
     pub point: [f32; 3],
 }
 
 /// Decodes an effect dispatch (`body`) read at `tick` as a possible bullet hit; `None` without both ends. Other
-/// effects (a knife's hit, a grenade's) decode too: [`PlayerHit::start`] matches no shot's eyes for them.
+/// effects (a knife's hit, a grenade's) decode too: [`PlayerHit::start`] lies on no bullet's line for them, and the
+/// impacts dispatched on a bullet's line start where they end.
 pub fn decode_player_hit(tick: u32, body: &[u8]) -> Option<PlayerHit> {
     let effect = EffectDispatch::decode(body).ok()?.effect?;
     Some(PlayerHit {
@@ -156,7 +189,8 @@ pub fn decode_player_hit(tick: u32, body: &[u8]) -> Option<PlayerHit> {
     })
 }
 
-/// Whether `hit` is a hit of a bullet of `shot`: same tick, starting at its eyes.
+/// Whether `hit` is a hit of a bullet of `shot` from its eyes: same tick, starting there (a hit after a wall or a
+/// player starts further along the bullet's line: `export::shots` matches those by the line).
 pub fn hit_of(shot: &Shot, hit: &PlayerHit) -> bool {
     hit.tick == shot.tick && hit.start == shot.eye
 }
@@ -165,6 +199,12 @@ pub fn hit_of(shot: &Shot, hit: &PlayerHit) -> bool {
 /// none: an invalid handle) or the aim.
 pub fn decode_fire_bullets(tick: u32, body: &[u8]) -> Option<Shot> {
     let m = FireBullets::decode(body).ok()?;
+    let attack = m.timing.as_ref().and_then(|t| {
+        Some((
+            u32::try_from(t.attack_tick?).ok()?,
+            t.attack_fraction.unwrap_or(0.0),
+        ))
+    });
     Some(Shot {
         tick,
         pawn: super::entity::handle_to_index(u64::from(m.player?))?,
@@ -177,7 +217,44 @@ pub fn decode_fire_bullets(tick: u32, body: &[u8]) -> Option<Shot> {
         spread: m.spread.unwrap_or(0.0),
         recoil_index: m.recoil_index.unwrap_or(0.0),
         bullets_left: m.bullets_left.unwrap_or(0),
+        server_tick: m.server_tick,
+        attack,
     })
+}
+
+/// When each of `shots` was fired, in demo ticks to a fraction (the order of `shots`; [`Shot::server_tick`],
+/// [`Shot::attack`]). A tick's commands are the input of the tick interval before it, and CS2 fires a shot at the
+/// moment within it the player clicked: tick − 1 + the attack's fraction, on the server tick turned into demo
+/// ticks by the offset most of the shots' messages have (a few arrive a tick early: on the local match demo 78 of
+/// 2361). Without the attack's fraction (tournament demos) the shot is at the start of its tick interval; without the
+/// server tick, at its message's tick.
+pub fn shot_times<'a>(shots: impl IntoIterator<Item = &'a Shot> + Clone) -> Vec<f64> {
+    let mut offsets: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
+    for shot in shots.clone() {
+        if let Some(server) = shot.server_tick {
+            *offsets
+                .entry(i64::from(server) - i64::from(shot.tick))
+                .or_default() += 1;
+        }
+    }
+    let offset = offsets
+        .into_iter()
+        .max_by_key(|&(offset, n)| (n, -offset))
+        .map(|(offset, _)| offset);
+    shots
+        .into_iter()
+        .map(|shot| {
+            let (tick, fraction) = match (shot.attack, shot.server_tick, offset) {
+                (Some((attack, fraction)), _, Some(offset)) => {
+                    (i64::from(attack) - offset, fraction)
+                }
+                (None, Some(server), Some(offset)) => (i64::from(server) - offset, 0.0),
+                _ => return f64::from(shot.tick),
+            };
+            // In f64: f32 keeps only a 64th of a tick at demo ticks past 131 072.
+            tick as f64 - 1.0 + f64::from(fraction)
+        })
+        .collect()
 }
 
 /// Valve's uniform random stream (`CUniformRandomStream`): Park and Miller's minimal standard generator with a
@@ -371,6 +448,13 @@ mod tests {
             item_def_index: Some(7),
             feet: None,
             bullets_left: Some(29),
+            timing: Some(ShotTiming {
+                attack_tick: Some(2502),
+                attack_fraction: Some(0.25),
+                render_tick: Some(2496),
+                render_fraction: Some(0.5),
+            }),
+            server_tick: Some(2502),
         };
         let shot = decode_fire_bullets(100, &message.encode_to_vec()).expect("decodes");
         assert_eq!(shot.pawn, 363);
@@ -380,5 +464,37 @@ mod tests {
             (shot.item, shot.mode, shot.seed, shot.bullets_left),
             (7, 0, 42, 29)
         );
+        assert_eq!(
+            (shot.server_tick, shot.attack),
+            (Some(2502), Some((2502, 0.25)))
+        );
+    }
+
+    #[test]
+    fn shots_are_timed_within_their_tick() {
+        let shot = |tick: u32, server: Option<u32>, attack: Option<(u32, f32)>| Shot {
+            tick,
+            pawn: 1,
+            item: 7,
+            mode: 0,
+            eye: [0.0; 3],
+            angles: [0.0; 3],
+            seed: 0,
+            inaccuracy: 0.0,
+            spread: 0.0,
+            recoil_index: 0.0,
+            bullets_left: 0,
+            server_tick: server,
+            attack,
+        };
+        let shots = [
+            // Offset 2400 twice; a message a tick early once.
+            shot(100, Some(2500), Some((2500, 0.25))),
+            shot(110, Some(2510), None),
+            shot(119, Some(2520), Some((2520, 0.5))),
+            // Neither: its message's tick.
+            shot(130, None, None),
+        ];
+        assert_eq!(shot_times(&shots), vec![99.25, 109.0, 119.5, 130.0]);
     }
 }

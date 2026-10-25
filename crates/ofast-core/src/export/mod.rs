@@ -14,7 +14,10 @@
 //! - [`viewmodel`]: the players' first-person arms and weapons (one glTF per agent and glove skin).
 //! - [`smoke`]: each smoke's simulated cloud, every step, as one grayscale atlas texture.
 //! - [`effects`]: CS2's sprite sheets for the grenades' effects (flames, fireballs, flares) as PNGs with their sequences.
+//! - [`shots`]: each bullet of a round traced through the map, walls and players, with what it met.
+//! - [`brass`]: the cases the guns throw out, flown as CS2's casing particles fly.
 
+pub mod brass;
 pub mod deaths;
 pub mod effects;
 mod environment;

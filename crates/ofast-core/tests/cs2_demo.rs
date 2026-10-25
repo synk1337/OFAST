@@ -1341,12 +1341,12 @@ fn glove_skins_merge_onto_the_agent() {
     }
     let out = std::env::temp_dir().join("ofast_gloves_test");
     let report = export_players(&content, &track, "demo", &out).expect("players export");
-    // The agents' files (the export also writes the dropped weapons' models: `…_dropped_…`).
-    for file in report
-        .files
-        .iter()
-        .filter(|f| !f.to_string_lossy().contains("_dropped_"))
-    {
+    // The agents' files (the export also writes the dropped weapons' models, `…_dropped_…`, and the cases',
+    // `…_case_…`).
+    for file in report.files.iter().filter(|f| {
+        let name = f.to_string_lossy();
+        !name.contains("_dropped_") && !name.contains("_case_")
+    }) {
         let gltf: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(file).expect("glTF reads"))
                 .expect("JSON");

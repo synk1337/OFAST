@@ -199,6 +199,23 @@ pub struct RayHit {
     pub surface: u32,
 }
 
+/// Where a ray crosses a surface of the world ([`WorldCollision::ray_crossings`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Crossing {
+    /// Distance along the ray (inches).
+    pub distance: f32,
+    /// The surface's outward unit normal: facing back at the ray where it goes in, along it where it comes out.
+    pub normal: V3,
+    /// Whether the ray goes into the solid here (else it comes out). A hull's is exact; a mesh triangle's is the side
+    /// its winding faces, which is outward on CS2's world meshes (`examples/shot_penetration.rs`: bullets from the
+    /// players' eyes meet a front first).
+    pub entering: bool,
+    /// The physics shape crossed ([`RayHit::shape`]).
+    pub shape: u32,
+    /// Its surface property ([`RayHit::surface`]).
+    pub surface: u32,
+}
+
 /// [`RayHit::shape`] of a hull or triangle added by hand ([`WorldCollision::add_hull`], `add_triangle`, `add_box`).
 pub const NO_SHAPE: u32 = u32::MAX;
 
@@ -369,16 +386,81 @@ impl WorldCollision {
     pub fn ray_hit(&self, from: V3, direction: V3, reach: f32) -> Option<RayHit> {
         let mut best: Option<RayHit> = None;
         let mut tested = std::collections::HashSet::new();
-        let mut test = |item: Item, best: &mut Option<RayHit>| {
-            if tested.insert(item)
-                && let Some(hit) = self.ray_item(item, from, direction, reach)
-                && best.is_none_or(|b| hit.distance < b.distance)
-            {
-                *best = Some(hit);
+        self.walk(from, direction, reach, |items, leave| {
+            for &item in items {
+                if tested.insert(item)
+                    && let Some(hit) = self.ray_item(item, from, direction, reach)
+                    && best.is_none_or(|b| hit.distance < b.distance)
+                {
+                    best = Some(hit);
+                }
             }
-        };
-        for &item in &self.large {
-            test(item, &mut best);
+            // Every hit nearer than where the ray leaves this cell lies in a cell already walked.
+            best.is_some_and(|b| b.distance <= leave)
+        });
+        best
+    }
+
+    /// Every place a ray from `from` along the unit `direction` crosses the world's surfaces within `reach` inches,
+    /// nearest first: where it goes into a solid and where it comes out of it (a bullet going through a wall, CS2's
+    /// penetration). A hull is crossed where the ray clipped against its planes starts and ends (not at `from` when
+    /// the ray starts inside it, nor at `reach` when it ends inside it); a mesh triangle once, going in when the ray
+    /// meets its front (the side its winding faces: [`Crossing::entering`]).
+    pub fn ray_crossings(&self, from: V3, direction: V3, reach: f32) -> Vec<Crossing> {
+        let mut out = Vec::new();
+        let mut tested = std::collections::HashSet::new();
+        self.walk(from, direction, reach, |items, _| {
+            for &item in items.iter().filter(|&&item| tested.insert(item)) {
+                match item {
+                    Item::Hull(h) => {
+                        let hull = &self.hulls[h as usize];
+                        let Some((enter, leave)) = hull_span(hull, from, direction, reach) else {
+                            continue;
+                        };
+                        let crossing = |(distance, normal): (f32, V3), entering| Crossing {
+                            distance,
+                            normal,
+                            entering,
+                            shape: hull.shape,
+                            surface: hull.surface,
+                        };
+                        out.extend(enter.1.map(|n| crossing((enter.0, n), true)));
+                        out.extend(leave.1.map(|n| crossing((leave.0, n), false)));
+                    }
+                    Item::Triangle(t) => {
+                        let triangle = &self.triangles[t as usize];
+                        if let Some((distance, normal)) =
+                            triangle_hit(triangle, from, direction, reach)
+                        {
+                            out.push(Crossing {
+                                distance,
+                                normal,
+                                entering: dot(normal, direction) < 0.0,
+                                shape: triangle.shape,
+                                surface: triangle.surface,
+                            });
+                        }
+                    }
+                }
+            }
+            false
+        });
+        out.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+        out
+    }
+
+    /// Walks the grid along a ray from `from` (unit `direction`) out to `reach`, cell by cell (Amanatides and Woo),
+    /// handing `visit` each cell's shapes (the shapes too large for the grid first, on their own) and the distance at
+    /// which the ray leaves that cell; `visit` returns `true` to stop. Shapes in several cells come several times.
+    fn walk(
+        &self,
+        from: V3,
+        direction: V3,
+        reach: f32,
+        mut visit: impl FnMut(&[Item], f32) -> bool,
+    ) {
+        if visit(&self.large, 0.0) {
+            return;
         }
         let mut cell = cell_of(from);
         let step: [i32; 3] = direction.map(|d| {
@@ -405,23 +487,17 @@ impl WorldCollision {
         });
         // A ray across the whole map passes a few hundred cells; the bound only guards against a broken direction.
         for _ in 0..100_000 {
-            if let Some(items) = self.grid.get(&cell) {
-                for &item in items {
-                    test(item, &mut best);
-                }
-            }
             let axis = (0..3)
                 .min_by(|&a, &b| next[a].total_cmp(&next[b]))
                 .unwrap_or(0);
             let leave = next[axis];
-            // Every hit nearer than where the ray leaves this cell lies in a cell already walked.
-            if best.is_some_and(|b| b.distance <= leave) || leave > reach || !leave.is_finite() {
+            let items = self.grid.get(&cell).map_or(&[][..], Vec::as_slice);
+            if visit(items, leave) || leave > reach || !leave.is_finite() {
                 break;
             }
             cell[axis] += step[axis];
             next[axis] += delta[axis];
         }
-        best
     }
 
     /// Where a ray meets one shape ([`WorldCollision::ray_hit`]).
@@ -429,33 +505,10 @@ impl WorldCollision {
         match item {
             Item::Hull(h) => {
                 let hull = &self.hulls[h as usize];
-                let (mut enter, mut leave, mut normal) = (0.0f32, reach, None);
-                for &(n, offset) in &hull.planes {
-                    let towards = dot(n, direction);
-                    // Positive outside the plane.
-                    let outside = dot(n, from) - offset;
-                    if towards.abs() < 1e-9 {
-                        if outside > 0.0 {
-                            return None;
-                        }
-                        continue;
-                    }
-                    let t = -outside / towards;
-                    if towards < 0.0 {
-                        if t > enter {
-                            enter = t;
-                            normal = Some(n);
-                        }
-                    } else if t < leave {
-                        leave = t;
-                    }
-                    if enter > leave {
-                        return None;
-                    }
-                }
                 // No entering plane ahead: the ray starts inside the hull (or misses it).
+                let ((distance, normal), _) = hull_span(hull, from, direction, reach)?;
                 normal.map(|normal| RayHit {
-                    distance: enter,
+                    distance,
                     normal,
                     shape: hull.shape,
                     surface: hull.surface,
@@ -463,22 +516,7 @@ impl WorldCollision {
             }
             Item::Triangle(t) => {
                 let triangle = &self.triangles[t as usize];
-                let [a, b, c] = triangle.corners;
-                let (e1, e2) = (sub(b, a), sub(c, a));
-                let p = cross(direction, e2);
-                let det = dot(e1, p);
-                if det.abs() < 1e-9 {
-                    return None;
-                }
-                let s = sub(from, a);
-                let u = dot(s, p) / det;
-                let q = cross(s, e1);
-                let v = dot(direction, q) / det;
-                let distance = dot(e2, q) / det;
-                if u < 0.0 || v < 0.0 || u + v > 1.0 || distance <= 1e-4 || distance > reach {
-                    return None;
-                }
-                let n = normalized(cross(e1, e2))?;
+                let (distance, n) = triangle_hit(triangle, from, direction, reach)?;
                 Some(RayHit {
                     distance,
                     normal: if dot(n, direction) > 0.0 {
@@ -559,6 +597,68 @@ impl WorldCollision {
             }
         }
     }
+}
+
+/// The stretch of a ray (`from` + t·`direction`, 0 ≤ t ≤ `reach`) inside a convex hull, clipped against its planes:
+/// where it goes in and where it comes out, each with its plane's outward normal (`None` where the stretch starts at
+/// `from`, the ray starting inside, or ends at `reach`); `None` when the ray misses the hull.
+#[allow(clippy::type_complexity)]
+fn hull_span(
+    hull: &WorldHull,
+    from: V3,
+    direction: V3,
+    reach: f32,
+) -> Option<((f32, Option<V3>), (f32, Option<V3>))> {
+    let (mut enter, mut leave) = ((0.0f32, None), (reach, None));
+    for &(n, offset) in &hull.planes {
+        let towards = dot(n, direction);
+        // Positive outside the plane.
+        let outside = dot(n, from) - offset;
+        if towards.abs() < 1e-9 {
+            if outside > 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = -outside / towards;
+        if towards < 0.0 {
+            if t > enter.0 {
+                enter = (t, Some(n));
+            }
+        } else if t < leave.0 {
+            leave = (t, Some(n));
+        }
+        if enter.0 > leave.0 {
+            return None;
+        }
+    }
+    Some((enter, leave))
+}
+
+/// Where a ray meets a triangle (Möller and Trumbore), from either side: the distance along it and the triangle's
+/// unit normal as its winding gives it (`(b − a) × (c − a)`); `None` past `reach` or within 1e-4 of `from`.
+fn triangle_hit(
+    triangle: &WorldTriangle,
+    from: V3,
+    direction: V3,
+    reach: f32,
+) -> Option<(f32, V3)> {
+    let [a, b, c] = triangle.corners;
+    let (e1, e2) = (sub(b, a), sub(c, a));
+    let p = cross(direction, e2);
+    let det = dot(e1, p);
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    let s = sub(from, a);
+    let u = dot(s, p) / det;
+    let q = cross(s, e1);
+    let v = dot(direction, q) / det;
+    let distance = dot(e2, q) / det;
+    if u < 0.0 || v < 0.0 || u + v > 1.0 || distance <= 1e-4 || distance > reach {
+        return None;
+    }
+    Some((distance, normalized(cross(e1, e2))?))
 }
 
 /// The point of triangle `a b c` nearest `p` (Ericson, "Real-Time Collision Detection", 5.1.5).

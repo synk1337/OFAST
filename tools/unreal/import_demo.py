@@ -50,8 +50,11 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
   fireball, smoke or flare sprites and a light pulse; a white flash over a blinded player's POV camera
   (grenade_effects.py; the sprites need the agents manifest's `effects`, written by `--players`);
 - per gun shot (the agents manifest's `shots`), its muzzle flash (in the world, and in first person on the shooter's
-  viewmodel) and light, its tracer when it draws one, and each bullet's impact where it met the world (sprites by the
-  surface's family, a bullet hole) or a player (blood) (shot_effects.py);
+  viewmodel) and light, its tracer when it draws one, and each bullet's impacts where it met the world (sprites by
+  the surface's family, a bullet hole: both sides of each wall it went through) or a player (blood)
+  (shot_effects.py);
+- per shot of a gun that throws one, its case (the agents manifest's `brass` and `cases`): flown in the world from
+  the agent's gun, and on the shooter's viewmodel for their own view (place_brass);
 - a camera cut track that follows the killer of each kill in turn (from the previous kill until half a second after
   this one), the way fragmovie editors cut a round;
 - marked frames: freeze time end, every kill ("attacker > victim (weapon, HS)") and bomb events.
@@ -61,6 +64,7 @@ Rotator(pitch=-pitch, yaw=-yaw). Keys that a straight line through their neighbo
 (standing still, running straight), which keeps the sequence light; the tolerance is far below what shows.
 """
 
+import bisect
 import json
 import math
 import os
@@ -106,6 +110,9 @@ DOOR_BLAST_REACH = 128.0
 DOOR_BLAST_TICKS = 4
 # Camera cuts: how long after a kill the killer's view stays on.
 CUT_AFTER_KILL_S = 0.5
+# How long a case thrown in the world is hidden in its shooter's own view, where the first-person case flies instead
+# (export::brass::VIEW_LIFE): after that it lies in the world for every view.
+CASE_VIEW_FLIGHT_S = 1.0
 WARM_UP_TICKS = 300
 SHOT_DELAY_S = 6.0  # as import_map.SHOT_DELAY_S: lets Lumen settle after each cut
 SHOT_TIMEOUT_TICKS = 3000  # editor ticks a screenshot may take before it is given up
@@ -390,6 +397,107 @@ def import_dropped_weapons(replay):
     if meshes:
         log("dropped weapons: %d models" % len(meshes))
     return meshes
+
+
+def import_cases(replay):
+    """Imports the case models the round's brass throws (the agents manifest's `cases`, one glTF per model). Returns
+    model path -> mesh."""
+    loaded = agents_manifest(replay)
+    if loaded is None:
+        return {}
+    folder, base, manifest = loaded
+    pipelines = static_pipelines()
+    meshes = {}
+    for entry in manifest.get("cases", []):
+        path = os.path.join(folder, entry["file"])
+        look = entry["file"][len(base) + 1:-len(".gltf")]  # case_<model file stem>
+        objects = import_gltf(replay, path, look, pipelines)
+        mesh = next((o for o in objects if isinstance(o, unreal.StaticMesh)), None)
+        if mesh is None:
+            log("case %s: no mesh in %s" % (entry["model"], path))
+            continue
+        meshes[entry["model"]] = mesh
+    return meshes
+
+
+def case_in_world(own_view, first, last, flight_end):
+    """(frame, visible) of a case in the world: shown from frame `first` to `last`, but not before `flight_end` while
+    `own_view` (the shooter's viewmodel visibility changes: shown while the camera looks through their eyes) shows —
+    there the first-person case flies instead. A case lying on the floor shows in every view, the shooter's own and
+    after their death too."""
+    frames = [f for f, _ in own_view]
+
+    def watching(frame):
+        k = bisect.bisect_right(frames, frame) - 1
+        return own_view[k][1] if k >= 0 else False
+
+    points = [first] + frames[bisect.bisect_right(frames, first):bisect.bisect_left(frames, flight_end)]
+    out = [(0, False)] if first > 0 else []
+    out += [(f, not watching(f)) for f in points if f <= last]
+    if flight_end <= last:
+        out.append((flight_end, True))
+    out.append((last + 1, False))
+    return out
+
+
+def windowed(changes, first, last):
+    """(frame, visible) `changes` shown only from frame `first` to `last` as well: hidden before and after."""
+    frames = [f for f, _ in changes]
+    at = bisect.bisect_right(frames, first) - 1
+    out = [(0, False)] if first > 0 else []
+    out.append((first, changes[at][1] if at >= 0 else False))
+    out += changes[bisect.bisect_right(frames, first):bisect.bisect_right(frames, last)]
+    out.append((last + 1, False))
+    return out
+
+
+def place_brass(sequence, replay, meshes, end_frame, viewmodel_actors, viewmodel_visibility):
+    """One actor per case the round's guns threw (the agents manifest's `brass`, written by export::brass), its model
+    keyed as the export flew it and shown from leaving the port to the end of its life (`still`: it lies at its last
+    key). A case thrown from the gun the agent holds (`view` false) is in the world (case_in_world: hidden in flight
+    while the camera looks through its shooter's eyes, where CS2 draws the first-person one). One thrown from the
+    viewmodel (`view` true) rides on the shooter's viewmodel actor, keyed in its space, drawn with Unreal's
+    first-person rendering and shown only with the viewmodel. Movable, as Unreal attaches only movable components to
+    a moving actor and Movie Render Queue needs them to move. Returns the number of keys."""
+    loaded = agents_manifest(replay)
+    if loaded is None:
+        return 0
+    tick0 = replay["start_tick"]
+    fps = round(1.0 / replay["tick_interval"])
+    keys = placed = 0
+    keep = unreal.AttachmentRule.KEEP_RELATIVE
+    for case in loaded[2].get("brass", []):
+        mesh = meshes.get(case["model"])
+        controller = case["controller"]
+        parent = viewmodel_actors.get(controller) if case["view"] else None
+        first, last = case["first_tick"] - tick0, case["last_tick"] - tick0
+        if mesh is None or (case["view"] and parent is None) or last < 0 or first >= end_frame:
+            continue
+        actor = spawn_tagged(mesh, "%s case %d at %d" % ("view" if case["view"] else "world", controller,
+                                                         case["tick"]))
+        component = actor.static_mesh_component
+        component.set_mobility(unreal.ComponentMobility.MOVABLE)
+        component.set_editor_property("cast_shadow", False)
+        if parent is not None:
+            actor.attach_to_actor(parent, "", keep, keep, keep, False)
+            component.set_editor_property("first_person_primitive_type", unreal.FirstPersonPrimitiveType.FIRST_PERSON)
+        binding = sequence.add_possessable(actor)
+        points = case["keys"]
+        frames = [k[0] - tick0 for k in points]
+        locations = [to_unreal(k[1:4]) for k in points]
+        # Source (pitch, yaw, roll) -> Rotator(roll=roll, pitch=-pitch, yaw=-yaw), as the dropped weapons'.
+        rotations = euler_filter([(k[6], -k[4], -k[5]) for k in points])
+        keys += key_transform(binding, frames, locations, rotations, (1.0, 1.0, 1.0), end_frame)
+        own_view = viewmodel_visibility.get(controller, [])
+        if case["view"]:
+            changes = windowed(own_view, first, last)
+        else:
+            changes = case_in_world(own_view, first, last, first + round(CASE_VIEW_FLIGHT_S * fps))
+        key_visibility(binding, changes, end_frame)
+        placed += 1
+    if placed:
+        log("brass: %d cases, %d keys" % (placed, keys))
+    return keys
 
 
 def place_dropped_weapons(sequence, replay, meshes, end_frame):
@@ -889,6 +997,7 @@ def build(replay):
                                                                         end_frame), viewmodel_actors,
                              lambda binding, controller: key_visibility(
                                  binding, viewmodel_visibility.get(controller, []), end_frame))
+    keys += place_brass(sequence, replay, import_cases(replay), end_frame, viewmodel_actors, viewmodel_visibility)
     keys += animate_doors(sequence, replay, end_frame)
     log("sequence %s: %d players (%d animated agents, %d viewmodels), %d frames at %d fps, %d keys in %.0f s"
         % (path, len(replay["players"]), len(agents), len(viewmodels), end_frame, fps, keys,

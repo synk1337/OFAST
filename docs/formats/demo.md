@@ -711,9 +711,15 @@ hand-written prost message:
 | 7 `inaccuracy`, 9 `spread` | the shot's inaccuracy (moving, jumping, firing fast) and the weapon's own spread, radians |
 | 8 `recoil_index` | shots into the spray, fractional |
 | 11 `item_def_index` | the weapon's item (7 AK-47, 4 Glock-18, 61 USP-S…) |
-| 13 | the shooter's feet; 14: bullets left in the magazine after the shot; 19: the shot's server tick |
+| 13 | the shooter's feet; 14: the bullets in the magazine as the shot is fired (30 on a full AK-47's first shot of a spray, 29 on the next) |
+| 16 | when it was fired (local demos only; tournament demos leave it out): 2 the attack's game tick, 3 the fraction of the tick interval at which the player clicked (CS2's sub-tick input), 4 and 5 the tick and fraction the shooter's screen showed then, 1 the aim punch, 6 and 7 the inaccuracy from moving and from being in the air; the same as the `bullet_damage` event's `attack_tick_count` … keys |
+| 19 | the shot's server tick: the message's demo tick plus a fixed offset on 97 % of shots (2402 on the local match demo, 56104 on the de_nuke pro demo), the rest arriving a tick early |
 
-The rest (10 a sound type, 12 a sound effect, 15 an attack type) is not read. A bullet's direction
+The rest (10 a sound type, 12 a sound effect, 15 an attack type) is not read. **When** a shot was fired
+(`demo::shots::shot_times`): a tick's commands are the input of the tick interval before it, so the shot is at the
+attack tick − 1 + its fraction, in demo ticks by the offset most messages have; without the fraction (tournament
+demos) at the start of that interval. Checked in CS2: YEKINDAR's tracer is already in flight on the very tick of his
+shot's message (de_nuke pro demo, round 5, tick 37683), so the shot is before it. A bullet's direction
 (`demo::shots::spread_offset`, `bullet_direction`): Valve's uniform random stream (Park–Miller with a 32-entry
 Bays–Durham shuffle: Numerical Recipes' `ran1`, `demo::shots::UniformRandom`), seeded with the shot's seed + 1 + the
 bullet's number, draws a fraction of the inaccuracy, its angle, the spread's angle and a fraction of the spread; the
@@ -728,8 +734,18 @@ Two kinds of message show where bullets really went, and checked the rule (`exam
   CS:GO-era order, the spread's fraction before its angle, misses by 1.2 on average, most where the spread is
   largest).
 - **A hit on a player** is an effect dispatch (message 400, `CMsgEffectData`): field 1 where the bullet met the
-  player, 2 the shooter's eyes, equal to the shot's `origin` to the last bit. All 302 hits of the pro demo lie on
-  their bullet's line to a thousandth of an inch, and 423 of the local demo's 424.
+  player, 2 where that stretch of its flight started: the shooter's eyes, equal to the shot's `origin` to the last
+  bit, or, for a bullet that went through a wall or another player first, **where it came out of it** (on the line,
+  past the eyes). All 302 hits from the eyes of the pro demo lie on their bullet's line to a thousandth of an inch,
+  and 423 of the local demo's 424. Of the 545 hits starting past the eyes on 13 demos of 6 maps, 456 start within
+  half an inch of where OFAST's trace comes out of a wall (`examples/shot_penetration.rs`), 81 where the trace
+  meets nothing (a prop or door it does not have, or a player: a later hit starting 3 – 9 inches past another's), 8
+  elsewhere. Other effects dispatched on a bullet's line start where they end.
+- **The damage a hit did** (`player_hurt`'s `dmg_health`, `dmg_armor`, `hitgroup`; on local demos `bullet_damage`'s
+  `num_penetrations` and `distance`, from where the stretch started) checks the penetration rule
+  ([replay.md](replay.md#agents-manifest-demo_rroundagentsjson), `shots`): without walls 2,860 non-lethal hits
+  of those 13 demos are exactly the weapon's damage after its range falloff, hit group and armour (most of the 42
+  others hit a teammate: CS2 cuts friendly bullets to a third), through walls 288 of 314.
 
 Not yet checked: shotguns' bullets after the first (seeded + 1 each, as CS:GO did), the R8 Revolver's and the
 Negev's own rules. Where the bullets stop is traced through the map's collision

@@ -5,22 +5,34 @@
 //! direction from the seed ([`crate::demo::shots::spread_offset`]: on the de_nuke pro demo 82 of the 83 bullets a
 //! pane of glass shows lie on it, the other being another bullet's), traced from the shooter's eyes through the
 //! map's collision as bullets see it ([`crate::physics::CollisionAttribute::stops_bullets`]: not grates, not glass) up
-//! to the weapon's range ([`WeaponShots::range`]). A bullet the demo shows meeting a player
-//! ([`crate::demo::shots::PlayerHit`]: the blood's effect dispatch) ends on that player; a wall it went through first
-//! (CS2's penetration) is its `wall`. Not traced (yet): bullets going on through walls the demo does not show them
-//! passing, and through players, and props and doors (they are not in the world's collision).
+//! to the weapon's range ([`WeaponShots::range`]).
+//!
+//! **Penetration.** A bullet goes through walls ([`walls_on`]: where its line goes into the world's solids and comes
+//! out) and players, each costing it damage ([`penetrate`]: CS:GO's rule, which CS2 keeps, with each surface's
+//! `bulletPenetrationDistanceModifier` from `scripts/surfaceproperties_game.txt`, [`ShotData::through`]), until one
+//! stops it (less than 1 damage left, a wall thicker than [`MAX_THROUGH`], or [`MAX_PENETRATIONS`] gone through).
+//! The demo's hits on players ([`crate::demo::shots::PlayerHit`]: the blood's effect dispatch) are the truth along
+//! the way: a hit after a wall starts where the bullet came out of it, so a wall before a hit is gone through
+//! whatever the rule says, a wall traced between a hit's start and its point is not there for CS2, and a later hit
+//! starting just past a player is where the bullet came out of them (else [`PLAYER_DEPTH`] on). Checked
+//! (`examples/shot_penetration.rs`, 13 demos of 6 maps): 456 of the 545 hits after a wall start within half an inch
+//! of where the trace comes out of one; the damage CS2 recorded for 288 of the 314 non-lethal hits through walls is
+//! the rule's exactly, 6 more within 1 (10 of the others are on one de_inferno demo's plaster walls, where that
+//! build of CS2 took plaster's distance modifier as 0.5, not the current 0.7). Not traced: props and doors (not in
+//! the world's collision), so a bullet the demo does not show past one goes on through it.
 //!
 //! Written to the agents manifest as `shots` (it needs the map's collision and the baked agents):
 //!
 //! | Key | What |
 //! |---|---|
-//! | `tick`, `controller` | the shot's tick and shooter |
+//! | `tick`, `controller` | the shot's tick (its message's) and shooter |
+//! | `time` | when it was fired, demo ticks to a thousandth ([`crate::demo::shots::shot_times`]: CS2 fires between ticks) |
 //! | `item`, `weapon`, `mode`, `silenced` | the weapon's item definition index and name (`weapon_ak47`); the fire mode (1: secondary); whether the weapon's silencer is on (its secondary mode) |
 //! | `tracer` | the weapon's tracer system's stem when this shot draws one ([`draws_tracer`]), else `null` |
 //! | `eye` | where the bullets start: the shooter's eyes (Source axes, inches) |
 //! | `muzzle`, `muzzle_direction` | where they left the barrel as the exported agent shows it (third person), and along the barrel; `null` when the agent shows no gun in hand then |
 //! | `view_muzzle`, `view_muzzle_direction` | the same as the shooter's viewmodel shows it (first person), in the viewmodel rig's model space: Source axes (x forward, y left, z up), inches (in Unreal the viewmodel's component space: the camera, before the player's viewmodel offsets and the left hand's mirroring); `null` without a viewmodel then |
-//! | `bullets` | per bullet (shotguns fire several): `end` (where it stopped), `on` (`"world"`, `"player"` or `"air"`: nothing within range), `normal` (of the surface met, facing the shooter; `null` on a player or in the air), `surface` (the world surface's property name, `null` when unknown), `impact` (the surface's impact system, [`Impact::effect`]) and `decal` (its bullet-hole decal group); on a player, `wall`: the wall it went through first (`end`, `normal`, `surface`, `impact`, `decal`), or `null` |
+//! | `bullets` | per bullet (shotguns fire several): `end` (where it stopped), `on` (`"world"`, `"player"` or `"air"`: nothing within range), `normal` (of the surface met, facing the shooter; `null` on a player or in the air), `surface` (the world surface's property name, `null` when unknown), `impact` (the surface's impact system, [`Impact::effect`]), `decal` (its bullet-hole decal group) and, on the world, `thickness` (of the wall it stopped in, `null` when the trace finds no way out of it); `through`: what it went through before, in order: each wall's way in and way out (`on` `"world"`, `end`, `normal`: facing back at the bullet going in, along it coming out, `surface`, `impact`, `decal`, `thickness`) and each player (`on` `"player"`, `end`: where it met them) |
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -31,7 +43,7 @@ use super::gltf::write_png;
 use super::players::Muzzle;
 use crate::content::Content;
 use crate::demo::players::RoundTrack;
-use crate::demo::shots::{PlayerHit, Shot, bullet_direction, hit_of, spread_offset};
+use crate::demo::shots::{PlayerHit, Shot, bullet_direction, shot_times, spread_offset};
 use crate::items::item_names;
 use crate::kv3::Value;
 use crate::physics::PhysicsData;
@@ -44,8 +56,9 @@ use crate::texture::Texture;
 pub struct WeaponShots {
     /// `m_nNumBullets`: bullets per shot (the Nova 9, the XM1014 6, the MAG-7 and Sawed-Off 8, every other gun 1).
     pub bullets: u32,
-    /// `m_nTracerFrequency`: one shot in this many draws a tracer, in the normal and the secondary mode (0: none; a
-    /// single value is both). The M4A1-S and the USP-S: none with the silencer on (their secondary mode).
+    /// `m_nTracerFrequency`, in the normal and the secondary mode (a single value is both): 0 draws no tracer (the
+    /// M4A1-S and the USP-S with the silencer on, their secondary mode); any other value one on every shot, as CS2
+    /// draws them ([`draws_tracer`]), not one in that many.
     pub tracer_frequency: [u32; 2],
     /// `m_szTracerParticle`'s file stem: `weapon_tracers_assrifle`, `_rifle` (the snipers), `_pistol`, `_shot`,
     /// `_smg`…
@@ -55,6 +68,21 @@ pub struct WeaponShots {
     /// `m_flRange`: how far its bullets go (units; rifles and snipers 8192, the Glock 4096, the MAG-7 1400). In
     /// Source's bullets (CS:GO), the trace ends there and a wall further away is not hit.
     pub range: f32,
+    /// `m_nDamage`: a bullet's damage as it leaves the barrel (the AK-47 36, the AWP 115, the Glock 30).
+    pub damage: f32,
+    /// `m_flPenetration`: its power through walls (1 the pistols, SMGs and shotguns; 2 the rifles, machine guns and
+    /// Desert Eagle; 2.5 the snipers).
+    pub penetration: f32,
+    /// `m_flRangeModifier`: the share of its damage a bullet keeps per 500 units it flies (the AK-47 0.98, the MAG-7
+    /// 0.45).
+    pub range_modifier: f32,
+    /// `m_flHeadshotMultiplier` (4 on most guns).
+    pub headshot_multiplier: f32,
+    /// `m_flArmorRatio`: how much of a hit on armour still goes to health (halved: the AK-47's 1.55 lets 77.5 %).
+    pub armor_ratio: f32,
+    /// `m_szWorldModel`: the gun's model (`weapons/models/ak47/weapon_rif_ak47.vmdl`; CS2's viewmodels draw it
+    /// too), whose shoot sequence throws its cases ([`super::brass`]).
+    pub model: Option<String>,
 }
 
 /// What a bullet does to a surface, from `scripts/surfaceproperties_impact_effects.txt`.
@@ -79,10 +107,37 @@ pub struct ShotData {
     pub surfaces: HashMap<u32, (String, u32)>,
     /// Lower-cased surface name → its impact.
     pub impacts: HashMap<String, Impact>,
+    /// Lower-cased surface name → what bullets going through it lose, as `scripts/surfaceproperties_game.txt` sets
+    /// it (a surface sets only what differs from its base: [`ShotData::through`]).
+    pub game: HashMap<String, SurfaceGame>,
+}
+
+/// A surface's game properties for bullets (`scripts/surfaceproperties_game.txt`); `None` where the file leaves it to
+/// the surface's base.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SurfaceGame {
+    /// `bulletPenetrationDistanceModifier`: how easily bullets go through (concrete's `default` 0.5, `solidmetal`
+    /// 0.27, `Wood` 0.9, `metalgrate` 0.95).
+    pub distance: Option<f32>,
+    /// `bulletPenetrationDamageModifier` (`default` 0.5, `solidmetal` 0.3, `Wood` 0.6).
+    pub damage: Option<f32>,
+    /// `gamematerial`: the surface's material letter (`C` concrete, `M` metal, `W` wood, `G` grate…).
+    pub material: Option<String>,
+}
+
+/// [`SurfaceGame`] with every value found: what a bullet loses going through a surface ([`ShotData::through`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Through {
+    /// [`SurfaceGame::distance`].
+    pub distance: f32,
+    /// [`SurfaceGame::damage`].
+    pub damage: f32,
+    /// [`SurfaceGame::material`] (concrete's `C` when no surface up the chain sets one).
+    pub material: String,
 }
 
 /// The `DATA` block of a compiled resource.
-fn data_root(content: &Content, path: &str) -> Result<Value, String> {
+pub(super) fn data_root(content: &Content, path: &str) -> Result<Value, String> {
     let bytes = content
         .read_resource(path)
         .map_err(|e| format!("{path}: {e}"))?;
@@ -118,17 +173,57 @@ impl ShotData {
             Ok(root) => data.surfaces = surfaces_of(&root),
             Err(e) => warnings.push(format!("{e}: impacts are concrete's")),
         }
-        let path = "scripts/surfaceproperties_impact_effects.txt";
-        match content
-            .read(path)
-            .map_err(|e| e.to_string())
-            .and_then(|bytes| {
-                crate::kv3::text::parse(&String::from_utf8_lossy(&bytes)).map_err(|e| e.to_string())
-            }) {
-            Ok(file) => data.impacts = impacts_of(&file.root),
-            Err(e) => warnings.push(format!("{path}: {e}: impacts are concrete's")),
+        let text_root = |path: &str| {
+            content
+                .read(path)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| {
+                    crate::kv3::text::parse(&String::from_utf8_lossy(&bytes))
+                        .map_err(|e| e.to_string())
+                })
+                .map(|file| file.root)
+                .map_err(|e| format!("{path}: {e}"))
+        };
+        match text_root("scripts/surfaceproperties_impact_effects.txt") {
+            Ok(root) => data.impacts = impacts_of(&root),
+            Err(e) => warnings.push(format!("{e}: impacts are concrete's")),
+        }
+        match text_root("scripts/surfaceproperties_game.txt") {
+            Ok(root) => data.game = games_of(&root),
+            Err(e) => warnings.push(format!("{e}: every wall stops bullets as concrete does")),
         }
         data
+    }
+
+    /// What a bullet loses going through the surface named by `hash`: each value the nearest up its base chain sets
+    /// (`metal` sets its distance modifier, 0.4, and takes its damage modifier and material from `solidmetal`), else
+    /// `default`'s, else concrete's as CS2 sets it (0.5, 0.5, `C`).
+    pub fn through(&self, hash: u32) -> Through {
+        let (mut distance, mut damage, mut material) = (None, None, None);
+        let mut at = hash;
+        let mut chain = Vec::new();
+        // The chains are a few long; the bound only guards against a loop.
+        for _ in 0..16 {
+            let Some((surface, base)) = self.surfaces.get(&at) else {
+                break;
+            };
+            chain.push(surface.to_ascii_lowercase());
+            if *base == 0 {
+                break;
+            }
+            at = *base;
+        }
+        chain.push("default".to_owned());
+        for game in chain.iter().filter_map(|name| self.game.get(name)) {
+            distance = distance.or(game.distance);
+            damage = damage.or(game.damage);
+            material = material.or_else(|| game.material.clone());
+        }
+        Through {
+            distance: distance.unwrap_or(0.5),
+            damage: damage.unwrap_or(0.5),
+            material: material.unwrap_or_else(|| "C".to_owned()),
+        }
     }
 
     /// The shots of the weapon with item definition index `item`.
@@ -180,6 +275,12 @@ fn weapons_of(root: &Value) -> HashMap<String, WeaponShots> {
         .iter()
         .filter(|(name, _)| name.starts_with("weapon_"))
         .map(|(name, _)| {
+            // A number field (an integer or a float), else `default`.
+            let number = |key: &str, default: f32| {
+                field(name, key)
+                    .and_then(Value::as_f64)
+                    .map_or(default, |n| n as f32)
+            };
             let tracer_frequency = match field(name, "m_nTracerFrequency") {
                 Some(v) => match v.as_array() {
                     Some(modes) => {
@@ -203,6 +304,15 @@ fn weapons_of(root: &Value) -> HashMap<String, WeaponShots> {
                 range: field(name, "m_flRange")
                     .and_then(Value::as_f64)
                     .map_or(REACH, |r| r as f32),
+                damage: number("m_nDamage", 0.0),
+                penetration: number("m_flPenetration", 1.0),
+                range_modifier: number("m_flRangeModifier", 1.0),
+                headshot_multiplier: number("m_flHeadshotMultiplier", 4.0),
+                armor_ratio: number("m_flArmorRatio", 1.0),
+                model: field(name, "m_szWorldModel")
+                    .and_then(Value::as_str)
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_owned),
             };
             (name.to_owned(), shots)
         })
@@ -246,6 +356,28 @@ fn impacts_of(root: &Value) -> HashMap<String, Impact> {
                     .map(str::to_owned),
             };
             Some((name, impact))
+        })
+        .collect()
+}
+
+/// [`ShotData::game`] from `surfaceproperties_game.txt`'s root (`SurfacePropertiesList`).
+fn games_of(root: &Value) -> HashMap<String, SurfaceGame> {
+    let number = |s: &Value, key: &str| s.get(key).and_then(Value::as_f64).map(|v| v as f32);
+    root.get("SurfacePropertiesList")
+        .and_then(Value::as_array)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|s| {
+            let name = s.get("surfacePropertyName")?.as_str()?.to_ascii_lowercase();
+            let game = SurfaceGame {
+                distance: number(s, "bulletPenetrationDistanceModifier"),
+                damage: number(s, "bulletPenetrationDamageModifier"),
+                material: s
+                    .get("gamematerial")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            };
+            Some((name, game))
         })
         .collect()
 }
@@ -353,21 +485,211 @@ fn export_decal(content: &Content, material: &str, out_dir: &Path) -> Result<Jso
 /// (`m_flRange` 8192 on rifles and snipers).
 pub const REACH: f32 = 8192.0;
 
-/// The player hits the demo sent, by tick (a shot's hits are among its tick's: [`hit_of`]).
+/// A solid a bullet's line goes through ([`walls_on`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Wall {
+    /// Where the line goes in (inches from where the bullet started).
+    pub distance: f32,
+    /// How far it goes through (inches); infinite when it does not come out within the line's reach.
+    pub thickness: f32,
+    /// The surface it goes in by, facing back at the bullet; and its surface property's hash
+    /// ([`crate::physics::surface_hash`]; 0 unknown).
+    pub enter_normal: [f32; 3],
+    /// [`Wall::enter_normal`]'s surface property hash.
+    pub enter_surface: u32,
+    /// The surface it comes out by, facing along the bullet ([`Wall::thickness`] finite).
+    pub exit_normal: [f32; 3],
+    /// [`Wall::exit_normal`]'s surface property hash.
+    pub exit_surface: u32,
+    /// What the bullet loses going in ([`ShotData::through`]).
+    pub enter: Through,
+    /// What it loses coming out.
+    pub exit: Through,
+}
+
+/// Two solids whose surfaces are closer than this (inches) along a bullet's line are one wall to it (a wall built of
+/// two hulls side by side).
+const TOUCHING: f32 = 0.1;
+
+/// The solids of `collision` the line from `from` along the unit `direction` goes through within `reach`
+/// ([`WorldCollision::ray_crossings`]): a wall begins where the line goes into a solid while outside every solid and
+/// ends where it comes out of the last one it is in (solids that overlap or touch are one wall). A way out met
+/// outside every solid (the eyes inside one, a one-sided surface seen from behind: 0 – 0.7 % of bullets from the
+/// eyes on the demos checked) is passed through; a way in never matched by a way out (an open mesh) makes a wall
+/// with no end, which stops the bullet. `surfaces`: the world's surface property hashes by index
+/// ([`PhysicsData::surfaces`]).
+pub fn walls_on(
+    collision: &WorldCollision,
+    surfaces: &[u32],
+    data: &ShotData,
+    from: [f32; 3],
+    direction: [f32; 3],
+    reach: f32,
+) -> Vec<Wall> {
+    let hash = |index: u32| surfaces.get(index as usize).copied().unwrap_or(0);
+    let mut walls: Vec<Wall> = Vec::new();
+    let mut depth = 0usize;
+    let mut previous: Option<(f32, bool)> = None;
+    for crossing in collision.ray_crossings(from, direction, reach) {
+        // A line through the edge two triangles of one face share crosses both at one point: one crossing.
+        let twice = previous.is_some_and(|(distance, entering): (f32, bool)| {
+            crossing.distance - distance < GRAZE && crossing.entering == entering
+        });
+        previous = Some((crossing.distance, crossing.entering));
+        if twice {
+            continue;
+        }
+        if crossing.entering {
+            depth += 1;
+            if depth > 1 {
+                continue;
+            }
+            match walls.last_mut() {
+                // Into a solid touching the last one's way out: the same wall.
+                Some(last) if crossing.distance - (last.distance + last.thickness) < TOUCHING => {
+                    last.thickness = f32::INFINITY;
+                }
+                _ => {
+                    let surface = hash(crossing.surface);
+                    walls.push(Wall {
+                        distance: crossing.distance,
+                        thickness: f32::INFINITY,
+                        enter_normal: crossing.normal,
+                        enter_surface: surface,
+                        exit_normal: [0.0; 3],
+                        exit_surface: 0,
+                        enter: data.through(surface),
+                        exit: data.through(surface),
+                    });
+                }
+            }
+        } else if depth > 0 {
+            depth -= 1;
+            if depth == 0
+                && let Some(wall) = walls.last_mut()
+            {
+                wall.thickness = crossing.distance - wall.distance;
+                wall.exit_normal = crossing.normal;
+                wall.exit_surface = hash(crossing.surface);
+                wall.exit = data.through(wall.exit_surface);
+            }
+        }
+    }
+    // A line through an edge where a solid's faces meet goes in and out at one point: no wall (on de_anubis CS2's
+    // damage shows a bullet there lost nothing).
+    walls.retain(|w| w.thickness > GRAZE);
+    walls
+}
+
+/// A wall thinner than this (inches) is a line grazing an edge ([`walls_on`]).
+const GRAZE: f32 = 1e-3;
+
+/// The damage a bullet of `weapon` still does `distance` inches from where it started, past `walls` (those before
+/// `distance`); `None` when it stops in one ([`penetrate`]). It loses its range falloff on the way
+/// ([`WeaponShots::range_modifier`] per 500 inches flown in the open: the inches inside walls cost by the wall's
+/// rule only, which is what fits CS2's damage).
+pub fn damage_at(weapon: &WeaponShots, walls: &[Wall], distance: f32) -> Option<f32> {
+    let mut damage = weapon.damage;
+    let mut at = 0.0;
+    for wall in walls.iter().filter(|w| w.distance < distance) {
+        damage *= weapon.range_modifier.powf((wall.distance - at) / 500.0);
+        damage = penetrate(weapon, wall, damage)?;
+        at = wall.distance + wall.thickness;
+    }
+    Some(damage * weapon.range_modifier.powf((distance - at).max(0.0) / 500.0))
+}
+
+/// The damage a bullet with `damage` left keeps after going through `wall`; `None` when it stops in it (less than 1
+/// left, or the wall thicker than [`MAX_THROUGH`]). CS:GO's rule as its players have written it down, which CS2
+/// still follows: with `m` the mean of the wall's two sides' distance modifiers ([`Through::distance`]; 3 when both
+/// are wood or cardboard, `gamematerial` `W`, `U`; 2 both plastic, `L`), the bullet loses 16 % of its damage, `3.75 / penetration × 3 / m`
+/// ([`WeaponShots::penetration`]) and `thickness² / (24 m)`. A player is a wall of flesh ([`PLAYER_DEPTH`]).
+/// Checked on CS2's own record of the hits (`examples/shot_penetration.rs`: a hit after a wall starts where the
+/// bullet came out of it, the damage is in `player_hurt`; the module docs give the counts). Through a player, flesh
+/// (0.9) and the body's depth: a Glock bullet 8.1 inches through a head did the 18 damage the rule gives to the head
+/// behind it (local match demo, tick 2825).
+pub fn penetrate(weapon: &WeaponShots, wall: &Wall, damage: f32) -> Option<f32> {
+    if !wall.thickness.is_finite() || wall.thickness > MAX_THROUGH {
+        return None;
+    }
+    // The same material on both sides: wood and cardboard 3, plastic 2 (CS:GO's; wood checked on CS2's damage).
+    let modifier = match (
+        wall.enter.material.as_str(),
+        wall.enter.material == wall.exit.material,
+    ) {
+        ("W" | "U", true) => 3.0,
+        ("L", true) => 2.0,
+        _ => (wall.enter.distance + wall.exit.distance) / 2.0,
+    };
+    let per_modifier = if modifier > 0.0 { 1.0 / modifier } else { 0.0 };
+    let lost = damage * 0.16
+        + (3.0 / weapon.penetration * 1.25).max(0.0) * per_modifier * 3.0
+        + per_modifier * wall.thickness * wall.thickness / 24.0;
+    let left = damage - lost.max(0.0);
+    (left >= 1.0).then_some(left)
+}
+
+/// The thickest wall a bullet can go through (inches): CS:GO's search for a way out of a solid stops 90 units in.
+pub const MAX_THROUGH: f32 = 90.0;
+
+/// How many walls and players a bullet goes through at most (CS:GO's four; the demos checked never show more than
+/// two: the damage runs out first).
+pub const MAX_PENETRATIONS: usize = 4;
+
+/// How far a bullet goes through a player's body (inches) when the demo does not show where it came out: the median
+/// of the 11 bodies the checked demos show a bullet through (a later hit on its line starts where it came out: 3.3 –
+/// 9.3 in, an arm to a head). CS2 traces the player's hitboxes, which the export does not have.
+pub const PLAYER_DEPTH: f32 = 8.0;
+
+/// How far past a player's hit a later hit's start may lie to be where the bullet came out of that player (inches;
+/// [`PLAYER_DEPTH`]).
+const MAX_BODY: f32 = 20.0;
+
+/// The damage a hit of `damage` on hit group `hitgroup` (`player_hurt`'s: 1 head, 2 chest, 3 stomach, 4 / 5 arms,
+/// 6 / 7 legs) does to a player with `armor`, and to the armour: the hit group's multiplier (the weapon's
+/// [`WeaponShots::headshot_multiplier`], the stomach 1.25, the legs 0.75), then armour (not on the legs, nor on the
+/// head without a `helmet`) lets [`WeaponShots::armor_ratio`] / 2 through and takes half the rest.
+pub fn to_health(
+    weapon: &WeaponShots,
+    damage: f32,
+    hitgroup: u32,
+    armor: f32,
+    helmet: bool,
+) -> (f32, f32) {
+    let damage = damage
+        * match hitgroup {
+            1 => weapon.headshot_multiplier,
+            3 => 1.25,
+            6 | 7 => 0.75,
+            _ => 1.0,
+        };
+    let armoured = armor > 0.0 && !matches!(hitgroup, 6 | 7) && (hitgroup != 1 || helmet);
+    if !armoured {
+        return (damage.floor(), 0.0);
+    }
+    let health = damage * weapon.armor_ratio * 0.5;
+    let taken = (damage - health) * 0.5;
+    if taken > armor {
+        return ((damage - armor * 2.0).floor(), armor.floor());
+    }
+    (health.floor(), taken.floor())
+}
+
+/// The player hits the demo sent, by tick (a shot's hits are among its tick's: [`hits_of`]). The other effects
+/// dispatched there, which start where they end, are left out.
 fn hits_by_tick(hits: &[PlayerHit]) -> HashMap<u32, Vec<&PlayerHit>> {
     let mut out: HashMap<u32, Vec<&PlayerHit>> = HashMap::new();
-    for hit in hits {
+    for hit in hits.iter().filter(|h| h.start != h.point) {
         out.entry(hit.tick).or_default().push(hit);
     }
     out
 }
 
-/// The hits of `shot` among `by_tick` ([`hits_by_tick`]).
+/// The hits that may be `shot`'s among `by_tick` ([`hits_by_tick`]): its tick's. A hit starts at the shooter's eyes
+/// ([`crate::demo::shots::hit_of`]) or, after a wall or a player, where the bullet came out of it; [`bullet_json`] keeps a bullet's own,
+/// those whose start and point both lie on its line.
 fn hits_of<'a>(shot: &Shot, by_tick: &HashMap<u32, Vec<&'a PlayerHit>>) -> Vec<&'a PlayerHit> {
-    by_tick
-        .get(&shot.tick)
-        .map(|hits| hits.iter().copied().filter(|h| hit_of(shot, h)).collect())
-        .unwrap_or_default()
+    by_tick.get(&shot.tick).cloned().unwrap_or_default()
 }
 
 /// How far `shot`'s bullets are traced: its weapon's range ([`WeaponShots::range`]), else [`REACH`].
@@ -383,11 +705,14 @@ fn range_of(shot: &Shot, data: &ShotData) -> f32 {
 /// 423 of the local match demo's 424; `examples/shot_traces.rs`), so only rounding is allowed for.
 const ON_THE_LINE: f32 = 0.5;
 
-/// Whether a shot draws a tracer: one in `frequency` does ([`WeaponShots::tracer_frequency`] for its mode), counted
-/// on the magazine: the shots that leave a multiple of `frequency` bullets in it (an inference: CS2's counter is
-/// not in its files; this one is the same for every viewer and spaces tracers as the frequency says).
-pub fn draws_tracer(frequency: u32, bullets_left: u32) -> bool {
-    frequency > 0 && bullets_left.is_multiple_of(frequency)
+/// Whether a shot draws a tracer: every shot of a weapon whose tracer frequency for its mode is not 0
+/// ([`WeaponShots::tracer_frequency`]: 0 for the silenced M4A1-S and USP-S, the MP5-SD, and what is not a gun).
+/// CS2 does not space them as the frequency (3 on the AK-47, the M4s, most SMGs) says: on the Aurora vs FURIA de_nuke
+/// demo, YEKINDAR's view showed a tracer leave his AK on each of four shots in a row (round 5, ticks 37683 – 37702),
+/// and soulfly's view one from molodoy's AK on shots that left 28, 26 and 25 rounds in the magazine (40813 – 40833),
+/// where one in three counted on the magazine would draw none.
+pub fn draws_tracer(frequency: u32) -> bool {
+    frequency > 0
 }
 
 /// The shots of `track` as the manifest's `shots` (module docs), and the bullet holes' decal groups they use (for
@@ -405,20 +730,26 @@ pub fn shots_json(
     // The world's surface property hashes, by index (RayHit::surface).
     let surfaces: &[u32] = physics.map_or(&[], |p| p.surfaces.as_slice());
     let by_tick = hits_by_tick(&track.player_hits);
+    // The offset from more shots than the round's (a round with few shots); the round's come first.
+    let times = shot_times(
+        track
+            .shots
+            .iter()
+            .map(|(_, s)| s)
+            .chain(&track.earlier_shots),
+    );
     let mut decals = BTreeSet::new();
     let shots = track
         .shots
         .iter()
-        .map(|(controller, shot)| {
+        .zip(times)
+        .map(|((controller, shot), time)| {
             let hits = hits_of(shot, &by_tick);
             let weapon = data.weapon(shot.item);
             let bullets: Vec<Json> = (0..weapon.map_or(1, |w| w.bullets.max(1)))
                 .map(|bullet| {
                     let json = bullet_json(shot, bullet, &hits, collision, surfaces, data);
-                    for group in [&json["decal"], &json["wall"]["decal"]]
-                        .into_iter()
-                        .filter_map(Json::as_str)
-                    {
+                    for group in world_hits(&json).filter_map(|at| at["decal"].as_str()) {
                         decals.insert(group.to_owned());
                     }
                     json
@@ -429,10 +760,11 @@ pub fn shots_json(
             let view_muzzle = view_muzzles.iter().find(of_shot);
             let mode = (shot.mode as usize).min(1);
             let tracer = weapon
-                .filter(|w| draws_tracer(w.tracer_frequency[mode], shot.bullets_left))
+                .filter(|w| draws_tracer(w.tracer_frequency[mode]))
                 .and_then(|w| w.tracer.clone());
             json!({
                 "tick": shot.tick,
+                "time": (time * 1000.0).round() / 1000.0,
                 "controller": controller,
                 "item": shot.item,
                 "weapon": data.items.get(&shot.item),
@@ -453,8 +785,9 @@ pub fn shots_json(
 
 /// The bullet holes the shots before the round left (`track.earlier_shots`): CS2's clients keep them from round to
 /// round (a hole on de_nuke's A site in round 5 is an AWP bullet's from round 3, tick 19909, where OFAST's trace ends
-/// within 5 units of it). As the manifest's `earlier_holes`: `tick`, `end`, `normal` and `decal` of every bullet
-/// that met the world where its surface keeps a hole; and the decal groups they use. Arguments as [`shots_json`].
+/// within 5 units of it). As the manifest's `earlier_holes`: `tick`, `end`, `normal` and `decal` of every place a
+/// bullet met the world where its surface keeps a hole (both sides of a wall it went through); and the decal groups
+/// they use. Arguments as [`shots_json`].
 pub fn earlier_holes_json(
     track: &RoundTrack,
     collision: Option<&WorldCollision>,
@@ -469,8 +802,8 @@ pub fn earlier_holes_json(
         let hits = hits_of(shot, &by_tick);
         for bullet in 0..data.weapon(shot.item).map_or(1, |w| w.bullets.max(1)) {
             let json = bullet_json(shot, bullet, &hits, collision, surfaces, data);
-            // Where it met the world: its end, or the wall it went through on its way to a player.
-            for at in [&json, &json["wall"]] {
+            // Where it met the world: the walls it went through, both sides, and its end.
+            for at in world_hits(&json) {
                 let Some(group) = at["decal"].as_str() else {
                     continue;
                 };
@@ -480,6 +813,7 @@ pub fn earlier_holes_json(
                     "end": at["end"],
                     "normal": at["normal"],
                     "decal": group,
+                    "thickness": at["thickness"],
                 }));
             }
         }
@@ -487,9 +821,24 @@ pub fn earlier_holes_json(
     (holes, decals)
 }
 
-/// One bullet of `shot` (module docs): on the player hit whose point lies on its line (a wall `collision` puts
-/// before it is the bullet's `wall`: it went through), else where `collision` stops it within the weapon's range
-/// (with the surface met: `surfaces`, the world's surface property hashes by index), else in the air at that range.
+/// Where a bullet's JSON ([`bullet_json`]) met the world: each wall's way in and out it went through, and where it
+/// stopped when that is the world.
+fn world_hits(bullet: &Json) -> impl Iterator<Item = &Json> {
+    bullet["through"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(std::iter::once(bullet))
+        .filter(|at| at["on"] == "world")
+}
+
+/// One bullet of `shot` (module docs), walked from the eyes along its line within the weapon's range: through the
+/// walls `collision` has on it ([`walls_on`]; `surfaces`, the world's surface property hashes by index) and the
+/// players among `hits` (the demo's, whose start and point both lie on its line), each costing it damage
+/// ([`penetrate`]), until one stops it, or into the air. The demo's hits are the truth: a wall or player before one
+/// it shows is gone through (the rule giving less than 1 damage left, a door in the way OFAST cannot see), a wall
+/// traced between a hit's start and its point is not there for CS2, and a later hit starting just past a player is
+/// where the bullet came out of them.
 fn bullet_json(
     shot: &Shot,
     bullet: u32,
@@ -503,6 +852,7 @@ fn bullet_json(
         spread_offset(shot.seed, bullet, shot.inaccuracy, shot.spread),
     );
     let range = range_of(shot, data);
+    let weapon = data.weapon(shot.item);
     let along = |point: [f32; 3]| -> (f32, f32) {
         let v: [f32; 3] = std::array::from_fn(|k| point[k] - shot.eye[k]);
         let t = v[0] * direction[0] + v[1] * direction[1] + v[2] * direction[2];
@@ -512,56 +862,133 @@ fn bullet_json(
             (off[0] * off[0] + off[1] * off[1] + off[2] * off[2]).sqrt(),
         )
     };
-    let world = collision.and_then(|c| c.ray_hit(shot.eye, direction, range));
-    let on_player = hits
+    let point = |t: f32| -> [f32; 3] { std::array::from_fn(|k| shot.eye[k] + direction[k] * t) };
+    // This bullet's hits: (the point's distance along the line, the start's), nearest first; one dispatched twice is
+    // one.
+    let mut players: Vec<(f32, f32)> = hits
         .iter()
-        .map(|h| (h, along(h.point)))
-        .filter(|(_, (t, off))| *t > 0.0 && *off < ON_THE_LINE)
-        .min_by(|a, b| a.1.0.total_cmp(&b.1.0));
+        .filter_map(|h| {
+            let ((start, start_off), (at, off)) = (along(h.start), along(h.point));
+            (start_off < ON_THE_LINE && off < ON_THE_LINE && start > -ON_THE_LINE && at > start)
+                .then_some((at, start))
+        })
+        .collect();
+    players.sort_by(|a, b| a.0.total_cmp(&b.0));
+    players.dedup_by(|later, kept| later.0 - kept.0 < ON_THE_LINE);
+    let shown = players.last().map_or(0.0, |p| p.0);
+    let walls: Vec<Wall> = collision
+        .map(|c| walls_on(c, surfaces, data, shot.eye, direction, range))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|w| {
+            !players
+                .iter()
+                .any(|&(at, start)| w.distance > start + ON_THE_LINE && w.distance < at)
+        })
+        .collect();
     // What a bullet met on the world: where, the surface's normal, its name, impact and bullet hole.
-    let on_world = |w: &crate::physics::ragdoll::RayHit| {
-        let end: [f32; 3] = std::array::from_fn(|k| shot.eye[k] + direction[k] * w.distance);
-        let (surface, impact) = match surfaces.get(w.surface as usize) {
-            Some(&hash) => data.impact(hash),
-            None => (None, data.impacts.get("default")),
-        };
+    let on_world = |t: f32, normal: [f32; 3], hash: u32| {
+        let (surface, impact) = data.impact(hash);
         json!({
-            "end": rounded(end),
-            "normal": unit(w.normal),
+            "on": "world",
+            "end": rounded(point(t)),
+            "normal": unit(normal),
             "surface": surface,
             "impact": impact.map(|i| i.effect.as_str()),
             "decal": impact.and_then(|i| i.decal.as_deref()),
         })
     };
-    if let Some((hit, (t, _))) = on_player {
-        // The demo says it met the player: a wall before them it went through (CS2's penetration).
-        let wall = world.filter(|w| w.distance < t - 1.0).map(|w| on_world(&w));
-        return json!({
-            "end": rounded(hit.point),
-            "on": "player",
-            "normal": null,
-            "surface": null,
-            "impact": null,
-            "decal": null,
-            "wall": wall,
-        });
-    }
-    match world {
-        Some(w) => {
-            let mut out = on_world(&w);
-            out["on"] = json!("world");
-            out
+    let stopped = |mut end: Json, through: Vec<Json>| {
+        for key in ["normal", "surface", "impact", "decal"] {
+            if end.get(key).is_none() {
+                end[key] = Json::Null;
+            }
         }
-        None => {
-            let end: [f32; 3] = std::array::from_fn(|k| shot.eye[k] + direction[k] * range);
-            json!({
-                "end": rounded(end),
-                "on": "air",
-                "normal": null,
-                "surface": null,
-                "impact": null,
-                "decal": null,
-            })
+        end["through"] = Json::Array(through);
+        end
+    };
+    let flesh = data.through(crate::physics::surface_hash("flesh"));
+    let falloff = |damage: f32, from: f32, to: f32| {
+        weapon.map_or(damage, |w| {
+            damage * w.range_modifier.powf((to - from).max(0.0) / 500.0)
+        })
+    };
+    let mut through = Vec::new();
+    let mut damage = weapon.map_or(0.0, |w| w.damage);
+    let (mut at, mut gone) = (0.0f32, 0usize);
+    let (mut next_wall, mut next_player) = (0, 0);
+    loop {
+        let player = players.get(next_player);
+        match walls.get(next_wall) {
+            Some(wall) if player.is_none_or(|p| wall.distance < p.0) => {
+                next_wall += 1;
+                damage = falloff(damage, at, wall.distance);
+                // How thick the wall is (`null`: no way out found), for a bullet hole not to show through it.
+                let thickness = if wall.thickness.is_finite() {
+                    json!((f64::from(wall.thickness) * 100.0).round() / 100.0)
+                } else {
+                    Json::Null
+                };
+                let mut entry = on_world(wall.distance, wall.enter_normal, wall.enter_surface);
+                entry["thickness"] = thickness.clone();
+                let left = weapon
+                    .filter(|_| gone < MAX_PENETRATIONS)
+                    .and_then(|w| penetrate(w, wall, damage));
+                if left.is_none() && shown <= wall.distance {
+                    return stopped(entry, through);
+                }
+                damage = left.unwrap_or(1.0);
+                through.push(entry);
+                at = wall.distance;
+                if wall.thickness.is_finite() {
+                    at += wall.thickness;
+                    let mut exit = on_world(at, wall.exit_normal, wall.exit_surface);
+                    exit["thickness"] = thickness;
+                    through.push(exit);
+                }
+                gone += 1;
+            }
+            _ => {
+                let Some(&(hit, _)) = player else {
+                    let end = json!({ "on": "air", "end": rounded(point(range)) });
+                    return stopped(end, through);
+                };
+                next_player += 1;
+                damage = falloff(damage, at, hit);
+                let end = json!({ "on": "player", "end": rounded(point(hit)) });
+                // Where it came out: a later hit's start just past (not past the next wall: that start is the
+                // wall's way out), else a body's depth on; never beyond the next wall's way in, which is the wall's
+                // to charge.
+                let wall_ahead = walls.get(next_wall).map_or(f32::INFINITY, |w| w.distance);
+                let exit = players
+                    .iter()
+                    .map(|p| p.1)
+                    .filter(|&start| start > hit && start < hit + MAX_BODY && start <= wall_ahead)
+                    .min_by(f32::total_cmp)
+                    .unwrap_or(hit + PLAYER_DEPTH)
+                    .min(wall_ahead)
+                    .max(hit);
+                let body = Wall {
+                    distance: hit,
+                    thickness: exit - hit,
+                    enter_normal: [0.0; 3],
+                    enter_surface: 0,
+                    exit_normal: [0.0; 3],
+                    exit_surface: 0,
+                    enter: flesh.clone(),
+                    exit: flesh.clone(),
+                };
+                let left = weapon
+                    .filter(|_| gone < MAX_PENETRATIONS)
+                    .and_then(|w| penetrate(w, &body, damage));
+                if left.is_none() && shown <= hit {
+                    return stopped(end, through);
+                }
+                damage = left.unwrap_or(1.0);
+                through.push(end);
+                at = exit;
+                gone += 1;
+            }
         }
     }
 }
@@ -636,6 +1063,7 @@ mod tests {
             .collect(),
             surfaces: surfaces_of(&surfaces),
             impacts: impacts_of(&impacts),
+            game: HashMap::new(),
         }
     }
 
@@ -687,11 +1115,9 @@ mod tests {
 
     #[test]
     fn tracers_follow_the_frequency() {
-        // One in three, on the magazine's count; none at frequency 0.
-        let drawn: Vec<u32> = (0..10).filter(|&left| draws_tracer(3, left)).collect();
-        assert_eq!(drawn, vec![0, 3, 6, 9]);
-        assert!((0..10).all(|left| !draws_tracer(0, left)));
-        assert!((0..10).all(|left| draws_tracer(1, left)));
+        // Every shot, whatever the frequency; none at frequency 0.
+        assert!(draws_tracer(3) && draws_tracer(1));
+        assert!(!draws_tracer(0));
     }
 
     fn shot(tick: u32, item: u32, mode: u32, eye: [f32; 3], bullets_left: u32) -> Shot {
@@ -707,6 +1133,8 @@ mod tests {
             spread: 0.0,
             recoil_index: 0.0,
             bullets_left,
+            server_tick: None,
+            attack: None,
         }
     }
 
@@ -732,7 +1160,8 @@ mod tests {
                 (3, shot(40, 7, 0, [0.0, 0.0, 0.0], 25)),
                 (3, shot(50, 35, 0, [0.0, 0.0, 0.0], 7)),
             ],
-            // The second shot met a player 200 inches out, before the wall; the fourth one 600 out, through it.
+            // The second shot met a player 200 inches out, before the wall; the fourth one 600 out, through it (its
+            // hit starts where it came out of the wall).
             player_hits: vec![
                 PlayerHit {
                     tick: 20,
@@ -741,7 +1170,7 @@ mod tests {
                 },
                 PlayerHit {
                     tick: 40,
-                    start: [0.0, 0.0, 0.0],
+                    start: [510.0, 0.0, 0.0],
                     point: [600.0, 0.0, 0.0],
                 },
             ],
@@ -761,12 +1190,14 @@ mod tests {
             tick: 10,
             position: [30.0, -5.0, -5.0],
             direction: [1.0, 0.0, 0.0],
+            eject: [None; 4],
         }];
         let view_muzzles = [Muzzle {
             controller: 2,
             tick: 10,
             position: [28.0, -6.0, -4.0],
             direction: [0.0, 0.999_999_9, 0.0],
+            eject: [None; 4],
         }];
         let (shots, decals) = shots_json(
             &track,
@@ -790,23 +1221,29 @@ mod tests {
         assert_eq!(shots[0]["view_muzzle_direction"], json!([0.0, 1.0, 0.0]));
         assert_eq!(shots[0]["tracer"], "weapon_tracers_assrifle");
         assert_eq!(shots[0]["weapon"], "weapon_ak47");
-        // On the player, before the wall; 26 left: no tracer; no muzzle known.
+        // On the player, before the wall; a tracer like every shot; no muzzle known.
         let hit = &shots[1]["bullets"][0];
         assert_eq!(
             (hit["on"].as_str(), hit["end"].clone()),
             (Some("player"), json!([200.0, 50.0, 0.0]))
         );
-        assert!(shots[1]["tracer"].is_null() && shots[1]["muzzle"].is_null());
+        assert_eq!(shots[1]["tracer"], "weapon_tracers_assrifle");
+        assert!(shots[1]["muzzle"].is_null());
         assert!(shots[1]["view_muzzle"].is_null());
         // The silenced M4A1-S: silenced, and no tracer in that mode.
         assert_eq!(shots[2]["silenced"], true);
         assert!(shots[2]["tracer"].is_null());
-        // Through the wall into the player behind it: blood there, the wall its `wall`.
+        // Through the wall into the player behind it (the demo shows it there, though the test's AK does no
+        // damage): blood there, the wall's way in and out on the way.
         let through = &shots[3]["bullets"][0];
         assert_eq!(through["on"], "player");
         assert_eq!(through["end"], json!([600.0, 0.0, 0.0]));
-        assert_eq!(through["wall"]["end"], json!([500.0, 0.0, 0.0]));
-        assert_eq!(through["wall"]["decal"], "Impact.Concrete");
+        assert_eq!(through["through"][0]["end"], json!([500.0, 0.0, 0.0]));
+        assert_eq!(through["through"][0]["normal"], json!([-1.0, 0.0, 0.0]));
+        assert_eq!(through["through"][1]["end"], json!([510.0, 0.0, 0.0]));
+        assert_eq!(through["through"][1]["normal"], json!([1.0, 0.0, 0.0]));
+        assert_eq!(through["through"][1]["decal"], "Impact.Concrete");
+        assert!(wall["through"].as_array().is_some_and(Vec::is_empty));
         // The Nova: 9 pellets, each to the wall.
         assert_eq!(shots[4]["bullets"].as_array().map(Vec::len), Some(9));
         assert_eq!(decals, BTreeSet::from(["Impact.Concrete".to_owned()]));
@@ -826,5 +1263,146 @@ mod tests {
         assert_eq!(holes[0]["end"], json!([500.0, -20.0, 0.0]));
         assert_eq!(holes[0]["decal"], "Impact.Concrete");
         assert_eq!(groups.len(), 1);
+    }
+
+    /// A rifle as CS2's AK-47: 36 damage, penetration 2, 0.98 kept per 500 units.
+    fn rifle() -> WeaponShots {
+        WeaponShots {
+            bullets: 1,
+            tracer_frequency: [0, 0],
+            tracer: None,
+            silencer: false,
+            range: REACH,
+            damage: 36.0,
+            penetration: 2.0,
+            range_modifier: 0.98,
+            headshot_multiplier: 4.0,
+            armor_ratio: 1.55,
+            model: None,
+        }
+    }
+
+    fn concrete(distance: f32, thickness: f32) -> Wall {
+        let side = Through {
+            distance: 0.5,
+            damage: 0.5,
+            material: "C".into(),
+        };
+        Wall {
+            distance,
+            thickness,
+            enter_normal: [-1.0, 0.0, 0.0],
+            enter_surface: 0,
+            exit_normal: [1.0, 0.0, 0.0],
+            exit_surface: 0,
+            enter: side.clone(),
+            exit: side,
+        }
+    }
+
+    #[test]
+    fn walls_cost_what_cs2_takes() {
+        let rifle = rifle();
+        // 10 inches of concrete 500 inches out: 36 × 0.98 = 35.28 there, less 16 %, 3.75 / 2 × 3 × 2 and 2 × 10² /
+        // 24.
+        let wall = concrete(500.0, 10.0);
+        let left = penetrate(&rifle, &wall, 35.28).expect("goes through");
+        assert!(
+            (left - (35.28 * 0.84 - 11.25 - 200.0 / 24.0)).abs() < 1e-4,
+            "{left}"
+        );
+        assert!(penetrate(&rifle, &concrete(500.0, 30.0), 35.28).is_none());
+        // Wood on both sides: 3, whatever the surfaces' own modifiers.
+        let mut wood = wall.clone();
+        wood.enter.material = "W".into();
+        wood.exit.material = "W".into();
+        let through_wood = penetrate(&rifle, &wood, 35.28).expect("goes through");
+        assert!((through_wood - (35.28 * 0.84 - 1.875 - 100.0 / 72.0)).abs() < 1e-4);
+        // Range falloff before, through and after the wall.
+        let at = damage_at(&rifle, &[wall], 600.0).expect("reaches");
+        assert!(
+            (at - left * 0.98f32.powf(90.0 / 500.0)).abs() < 1e-4,
+            "{at}"
+        );
+        // A hit's damage: the stomach × 1.25; on armour 77.5 % of it, the armour half the rest.
+        assert_eq!(to_health(&rifle, 20.0, 3, 0.0, false), (25.0, 0.0));
+        assert_eq!(to_health(&rifle, 20.0, 2, 100.0, true), (15.0, 2.0));
+        // Legs have no armour; a head without a helmet neither.
+        assert_eq!(to_health(&rifle, 20.0, 6, 100.0, true), (15.0, 0.0));
+        assert_eq!(to_health(&rifle, 20.0, 1, 100.0, false), (80.0, 0.0));
+    }
+
+    #[test]
+    fn bullets_go_through_walls_and_players() {
+        let mut data = data();
+        data.weapons.insert("weapon_m249".into(), rifle());
+        data.items.insert(14, "weapon_m249".into());
+        let mut collision = WorldCollision::default();
+        collision.add_box([500.0, -100.0, -100.0], [510.0, 100.0, 100.0]);
+        collision.add_box([700.0, -100.0, -100.0], [710.0, 100.0, 100.0]);
+        // Two boxes side by side are one wall.
+        collision.add_box([800.0, -100.0, -100.0], [802.0, 100.0, 100.0]);
+        collision.add_box([802.0, -100.0, -100.0], [804.0, 100.0, 100.0]);
+        let walls = walls_on(&collision, &[], &data, [0.0; 3], [1.0, 0.0, 0.0], REACH);
+        let spans: Vec<_> = walls.iter().map(|w| (w.distance, w.thickness)).collect();
+        assert_eq!(spans, vec![(500.0, 10.0), (700.0, 10.0), (800.0, 4.0)]);
+        let fire = |eye: [f32; 3], hits: &[PlayerHit]| {
+            let hits: Vec<&PlayerHit> = hits.iter().collect();
+            bullet_json(
+                &shot(10, 14, 0, eye, 50),
+                0,
+                &hits,
+                Some(&collision),
+                &[],
+                &data,
+            )
+        };
+        // Through the first wall (10 left), not the second.
+        let bullet = fire([0.0; 3], &[]);
+        assert_eq!(bullet["on"], "world");
+        assert_eq!(bullet["end"], json!([700.0, 0.0, 0.0]));
+        let through: Vec<_> = bullet["through"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|t| (t["on"].clone(), t["end"][0].clone()))
+            .collect();
+        assert_eq!(
+            through,
+            vec![
+                (json!("world"), json!(500.0)),
+                (json!("world"), json!(510.0))
+            ]
+        );
+        // Through a player 200 out (8 inches of flesh: 13 left), stopped by the wall.
+        let past = PlayerHit {
+            tick: 10,
+            start: [0.0, 30.0, 0.0],
+            point: [200.0, 30.0, 0.0],
+        };
+        let bullet = fire([0.0, 30.0, 0.0], &[past]);
+        assert_eq!(bullet["through"][0]["on"], "player");
+        assert_eq!(bullet["end"], json!([500.0, 30.0, 0.0]));
+        // A second player the demo shows behind the wall: the bullet got there.
+        let behind = PlayerHit {
+            tick: 10,
+            start: [510.0, 30.0, 0.0],
+            point: [600.0, 30.0, 0.0],
+        };
+        let bullet = fire([0.0, 30.0, 0.0], &[past, behind]);
+        assert_eq!(bullet["on"], "player");
+        assert_eq!(bullet["end"], json!([600.0, 30.0, 0.0]));
+        assert_eq!(bullet["through"].as_array().map(Vec::len), Some(3));
+        // A hit that starts at the eyes beyond a traced wall: the wall is not there for CS2.
+        let clear = PlayerHit {
+            tick: 10,
+            start: [0.0, 60.0, 0.0],
+            point: [600.0, 60.0, 0.0],
+        };
+        let bullet = fire([0.0, 60.0, 0.0], &[clear]);
+        assert_eq!(bullet["through"][0]["on"], "player");
+        assert_eq!(bullet["through"].as_array().map(Vec::len), Some(1));
+        // On through the player (13 left) into the next wall.
+        assert_eq!(bullet["end"], json!([700.0, 60.0, 0.0]));
     }
 }

@@ -180,8 +180,8 @@ pub fn key_places(shown: &[Place]) -> Vec<(Place, bool)> {
 }
 
 /// A weapon model's frames: its `weapon` bone in model space (where the agent's `wpn` goes), and its
-/// `weapon_holster_center` and `muzzle_flash` attachments relative to that bone. `None` for a model without a
-/// `weapon` bone.
+/// `weapon_holster_center`, `muzzle_flash` and `shell_eject` attachments relative to that bone. `None` for a model
+/// without a `weapon` bone.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WeaponFrames {
     /// The `weapon` bone at bind pose, in the weapon model's space.
@@ -191,6 +191,9 @@ pub struct WeaponFrames {
     /// `muzzle_flash` in the `weapon` bone's frame: where a shot leaves the barrel, its x axis along the barrel
     /// (`None`: knives, grenades, the C4).
     pub muzzle: Option<Affine>,
+    /// `shell_eject` in the `weapon` bone's frame: the ejection port, the frame a fired case is thrown in
+    /// ([`super::brass`]; `None`: guns that keep their cases, the revolver, and what is not a gun).
+    pub shell_eject: Option<Affine>,
 }
 
 impl WeaponFrames {
@@ -210,6 +213,7 @@ impl WeaponFrames {
             weapon_bone,
             holster_center: on_weapon_bone("weapon_holster_center"),
             muzzle: on_weapon_bone("muzzle_flash"),
+            shell_eject: on_weapon_bone("shell_eject"),
         })
     }
 }
@@ -464,6 +468,7 @@ mod tests {
             weapon_bone: affine([0.0, 0.0, 0.0, 1.0], [0.0; 3]),
             holster_center: Some(affine([0.0, 0.0, 0.0, 1.0], [2.0, 0.0, 0.0])),
             muzzle: None,
+            shell_eject: None,
         };
         let world = [
             affine([0.0, 0.0, 0.0, 1.0], [5.0, 0.0, 0.0]),

@@ -256,8 +256,13 @@ player and round.
 - [x] First-person muzzle flashes: on the viewmodel's barrel, CS2's flash made smaller as its `_fps` systems do, in
   Unreal's first-person rendering, with its own light; the AK's second flame (`_alt`, wispy tongues) picked per shot
   as CS2 picks it. Fitted to CS2's flash through two players' eyes.
-- [ ] Shots, the rest: each gun's own muzzle flash, brass, bullets through walls and players (penetration), the
-  tracer counter and timing confirmed.
+- [x] **Penetration, brass, tracers**: bullets go through walls and players by CS:GO's penetration rule with CS2's
+  values (the demo's hits after walls start where OFAST's trace comes out of them, 456 of 545 to half an inch; CS2's
+  damage through walls is the rule's on 288 of 314 hits), impacts and holes on both sides; each gun's case thrown from
+  its `shell_eject` as its casing system flies it; a tracer on every shot, from the moment it was fired (checked in
+  CS2 through YEKINDAR's and soulfly's eyes).
+- [ ] Shots, the rest: each gun's own muzzle flash, bullets through props and doors, the first-person case's way
+  out, a player's depth from their hitboxes.
 - [ ] **Effects rework**: every effect so far is a first pass. They are in the right place, at the right size and
   time, but their look is far from good. All of them get reworked: smokes, fires and their smoke, HE blasts,
   flashbangs, muzzle flashes, tracers, impacts, blood and holes. When the rework starts, each effect's gaps get

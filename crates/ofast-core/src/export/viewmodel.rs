@@ -187,6 +187,8 @@ struct Slot {
     /// The model's `muzzle_flash` attachment: the model's bone it hangs on and its frame on that bone (`None`:
     /// knives, grenades, the C4).
     muzzle: Option<(usize, Affine)>,
+    /// Its `shell_eject` attachment, the same way (`None`: what throws no cases).
+    eject: Option<(usize, Affine)>,
 }
 
 /// What [`export_viewmodel_look`] wrote: the glTF export's report, the weapon looks it holds, and where the barrel of
@@ -338,12 +340,16 @@ pub fn export_viewmodel_look(
         let muzzle = model
             .attachment("muzzle_flash")
             .and_then(|a| a.on_bone(&model.skeleton));
+        let eject = model
+            .attachment("shell_eject")
+            .and_then(|a| a.on_bone(&model.skeleton));
         slots.push(Slot {
             look,
             model,
             first,
             retarget,
             muzzle,
+            eject,
         });
     }
 
@@ -468,11 +474,20 @@ pub fn export_viewmodel_look(
             };
             let world = posed(&skeleton, &keys[k]);
             let m = compose(&world[slot.first + bone], &offset);
+            // The port on the shot's frame and the next few, while the same weapon is in hand.
+            let eject_at = |j: usize| {
+                let (bone, offset) = slot.eject?;
+                let same =
+                    frames.get(j).is_some_and(Option::is_some) && looks.get(j) == Some(&looks[k]);
+                let world = posed(&skeleton, keys.get(j).filter(|_| same)?);
+                Some(compose(&world[slot.first + bone], &offset))
+            };
             muzzles.push(Muzzle {
                 controller: *controller,
                 tick: shot.tick,
                 position: [m[0][3], m[1][3], m[2][3]],
                 direction: [m[0][0], m[1][0], m[2][0]],
+                eject: std::array::from_fn(|d| eject_at(k + d)),
             });
         }
         animations.push(BoneAnimation {

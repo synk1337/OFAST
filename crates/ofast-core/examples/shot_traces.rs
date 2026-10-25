@@ -25,6 +25,55 @@ use ofast_core::resource::Resource;
 /// How far a bullet is traced (inches): CS2's rifles reach 8192.
 const REACH: f32 = 8192.0;
 
+/// A protobuf message's fields as text, `tag:value`, without its schema: varints as integers, fixed32 as an integer
+/// and a float, length-delimited fields as their bytes' length (nested messages decoded the same way when they parse).
+fn wire_fields(body: &[u8]) -> String {
+    fn varint(b: &[u8], at: &mut usize) -> Option<u64> {
+        let mut v = 0u64;
+        for shift in (0..64).step_by(7) {
+            let byte = *b.get(*at)?;
+            *at += 1;
+            v |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some(v);
+            }
+        }
+        None
+    }
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < body.len() {
+        let Some(key) = varint(body, &mut at) else {
+            break;
+        };
+        let (tag, kind) = (key >> 3, key & 7);
+        let value = match kind {
+            0 => varint(body, &mut at).map(|v| v.to_string()),
+            5 => body.get(at..at + 4).map(|b| {
+                at += 4;
+                let bits = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                format!("{bits}/{}", f32::from_bits(bits))
+            }),
+            1 => body.get(at..at + 8).map(|b| {
+                at += 8;
+                format!("{:?}", b)
+            }),
+            2 => varint(body, &mut at).and_then(|n| {
+                let n = n as usize;
+                let inner = body.get(at..at + n)?;
+                at += n;
+                Some(format!("{{{}}}", wire_fields(inner)))
+            }),
+            _ => None,
+        };
+        match value {
+            Some(v) => out.push(format!("{tag}:{v}")),
+            None => break,
+        }
+    }
+    out.join(" ")
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let data = std::fs::read(args.first().expect("demo path")).expect("demo reads");
@@ -43,9 +92,18 @@ fn main() {
 
     parser.keep_messages(&[FIRE_BULLETS, EFFECT_DISPATCH]);
     let (mut shots, mut hits) = (Vec::new(), Vec::new());
+    // OFAST_RAW=n: every field of the first n fire-bullets messages, as the wire has them.
+    let mut raw: usize = std::env::var("OFAST_RAW")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
     while parser.next_frame().expect("frame").is_some() {
         parser.take_events();
         for m in parser.take_messages() {
+            if m.kind == FIRE_BULLETS && raw > 0 {
+                raw -= 1;
+                println!("tick {}: {}", m.tick, wire_fields(&m.body));
+            }
             if m.kind == FIRE_BULLETS {
                 shots.extend(decode_fire_bullets(m.tick, &m.body));
             } else if let Some(hit) = decode_player_hit(m.tick, &m.body) {

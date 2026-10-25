@@ -6,7 +6,8 @@
 //! ```
 //!
 //! KV3 blocks are printed with the text writer (truncated to `max_lines` lines per block, default 200), binary
-//! blocks as their size plus the first bytes in hex. Set `OFAST_MAP=de_mirage` to also search that map's archive.
+//! blocks as their size plus the first bytes in hex; a file that is not a compiled resource (a plain-text script) as
+//! it is. Set `OFAST_MAP=de_mirage` to also search that map's archive.
 
 use ofast_core::content::Content;
 use ofast_core::game::Cs2Install;
@@ -41,7 +42,18 @@ fn main() {
         .expect("usage: resource_dump <path> [max_lines] | find <substring>");
     let max_lines: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(200);
     let data = content.read(path).expect("file reads");
-    let resource = Resource::parse(&data).expect("resource parses");
+    // Not every file is a compiled resource: `scripts/*.txt` are plain text, printed as they are.
+    let Ok(resource) = Resource::parse(&data) else {
+        let text = String::from_utf8_lossy(&data);
+        let total = text.lines().count();
+        for line in text.lines().take(max_lines) {
+            println!("{line}");
+        }
+        if total > max_lines {
+            println!("... ({} more lines)", total - max_lines);
+        }
+        return;
+    };
     println!(
         "{path}: {} bytes, header file size {}, version {}",
         data.len(),

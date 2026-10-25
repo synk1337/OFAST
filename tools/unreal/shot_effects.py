@@ -4,16 +4,17 @@ import_demo.py.
 
 CS2 draws these with particle systems: a gun's muzzle flash comes from its shoot clip's particle event
 (particles/unified_weapon_fx/uweapon_muzflsh_*.vpcf on the world model's `muzzle_flash` attachment), its tracer from
-scripts/weapons.vdata (particles/weapons/cs_weapon_fx/weapon_tracers_*.vpcf, one shot in m_nTracerFrequency), an
+scripts/weapons.vdata (particles/weapons/cs_weapon_fx/weapon_tracers_*.vpcf, on every shot whose m_nTracerFrequency
+is not 0: export::shots' `tracer`), an
 impact from the surface met (scripts/surfaceproperties_impact_effects.txt: particles/impact_fx/impact_<surface>.vpcf,
 and a bullet hole from its decal group), a hit on a player is blood (particles/blood_impact/). OFAST rebuilds their
 main layers with grenade_effects' "particle system in a material" (CS2's own sprite sheets, driven by the demo tick):
 
 - One actor for a round's shots ("shots"), one instanced mesh per layer: a slot per shot for its muzzle flash (at its
-  muzzle, flying along its barrel), per tracer (from the muzzle to where its bullet stopped, as fast as CS2's), per
-  bullet that met the world (its surface family's impact, flying out along the surface's normal) or a player (blood,
-  back toward the shooter; and the impact of a wall it went through first). A silenced shot has no flame and no light,
-  only its smoke. A shooter's third-person muzzle flashes are on an actor of their own, hidden while the camera looks
+  muzzle, flying along its barrel), per tracer (from the muzzle to where its bullet stopped, leaving when the shot was
+  fired, as fast as CS2's), per place a bullet met the world (its surface family's impact, flying out along the
+  surface's normal: both sides of each wall it went through, and where it stopped) and per player it met (blood, back
+  toward the shooter). A silenced shot has no flame and no light, only its smoke. A shooter's third-person muzzle flashes are on an actor of their own, hidden while the camera looks
   through their eyes.
 - There, CS2 draws the first-person system instead (particles/unified_weapon_fx/*_fps.vpcf): the same layers smaller,
   on the viewmodel's barrel. Here they are instanced meshes on the shooter's viewmodel actor (shown and hidden with it,
@@ -21,7 +22,8 @@ main layers with grenade_effects' "particle system in a material" (CS2's own spr
 - A point light per shooter, moved to each shot's muzzle and pulsed for a few ticks (CS2's muzzle flashes light the
   world briefly: their `fakelight` child), hidden with the body; and one on the viewmodel for their own view (the
   first-person system has its own).
-- A decal actor per bullet hole: one of its decal group's textures, at the bullet's end, facing the surface; it shows
+- A decal actor per bullet hole: one of its decal group's textures, where the bullet met the world (both sides of a
+  wall it went through), facing the surface; it shows
   from its shot's tick on. The tick rides in the decal's colour (DecalColor's red), read by the material: one material
   instance per texture, not per hole. The holes the shots before the round left (the agents manifest's
   `earlier_holes`) show from the start: CS2's clients keep them from round to round.
@@ -234,6 +236,17 @@ def family_of(bullet):
     return IMPACT_FAMILIES.get(bullet.get("impact") or "", "concrete")
 
 
+def bullet_hits(bullet):
+    """What a bullet met, in order: export::shots' `through` (each wall's way in and out, each player it went
+    through), then where it stopped (the bullet itself): each with `on` ("world", "player" or "air") and `end`, on the
+    world its `normal`, `impact` and `decal`. An export from before penetration has at most one wall on the way to a
+    player (`wall`)."""
+    if "through" in bullet:
+        return list(bullet["through"]) + [bullet]
+    wall = bullet.get("wall")
+    return ([dict(wall, on="world")] if wall else []) + [bullet]
+
+
 def unit(v):
     length = math.sqrt(sum(c * c for c in v))
     return [c / length for c in v] if length > 1e-6 else [0.0, 0.0, 1.0]
@@ -264,6 +277,10 @@ def sprite_slots(shots, alt=True):
             add([view_layer(layer, scale) for layer in layers], (view, tick, tick, view_barrel, 0.0),
                 views.setdefault(shot["controller"], {}))
         start = muzzle or shot["eye"]
+        # A tracer leaves when the shot was fired (export::shots' `time`: CS2 fires between ticks, at the start of the
+        # tick interval in a tournament demo), not on its message's tick: one tick after a shot CS2's is further
+        # along than one born on the tick.
+        fired = shot.get("time", tick)
         for bullet in shot["bullets"]:
             end = bullet["end"]
             if shot.get("tracer"):
@@ -271,18 +288,18 @@ def sprite_slots(shots, alt=True):
                 way = [e - s for e, s in zip(end, start)]
                 reach = math.sqrt(sum(c * c for c in way))
                 if reach > 1.0:
-                    add([tracer_layer(kind)], (start, tick, tick, unit(way), reach), slots)
-            if bullet["on"] == "world" and bullet.get("normal"):
-                add(FAMILY_LAYERS[family_of(bullet)], (end, tick, tick, bullet["normal"], 0.0), slots)
-            elif bullet["on"] == "player":
-                # Back toward the shooter: CS2's mist flies along its effect's own axis, and the shooter sees it in
-                # front of the player hit (molodoy's view at tick 40840 of de_nuke round 5; along the bullet it hid
-                # behind the body).
-                add(BLOOD_LAYERS, (end, tick, tick, unit([s - e for e, s in zip(end, shot["eye"])]), 0.0), slots)
-                # A wall it went through first: its impact there too.
-                wall = bullet.get("wall")
-                if wall and wall.get("normal"):
-                    add(FAMILY_LAYERS[family_of(wall)], (wall["end"], tick, tick, wall["normal"], 0.0), slots)
+                    add([tracer_layer(kind)], (start, fired, fired, unit(way), reach), slots)
+            # An impact on each side of every wall it went through (flying out of the far side along the bullet: the
+            # way out's normal faces along it) and where it stopped; blood on every player it met.
+            for at in bullet_hits(bullet):
+                if at["on"] == "world" and at.get("normal"):
+                    add(FAMILY_LAYERS[family_of(at)], (at["end"], tick, tick, at["normal"], 0.0), slots)
+                elif at["on"] == "player":
+                    # Back toward the shooter: CS2's mist flies along its effect's own axis, and the shooter sees it
+                    # in front of the player hit (molodoy's view at tick 40840 of de_nuke round 5; along the bullet it
+                    # hid behind the body).
+                    hit = at["end"]
+                    add(BLOOD_LAYERS, (hit, tick, tick, unit([s - e for e, s in zip(hit, shot["eye"])]), 0.0), slots)
     return muzzles, views, slots
 
 
@@ -462,9 +479,17 @@ def hole_instances(replay_path, decals):
     return out
 
 
-def place_hole(spawn, label, tick, end, normal, options, rng):
+def hole_depth(at):
+    """How far a hole's decal reaches each way from the surface: HOLE_DEPTH, or less in a wall thinner than twice
+    that (export::shots' `thickness`), so a hole on one face does not show on the other too."""
+    thickness = at.get("thickness")
+    return min(HOLE_DEPTH, thickness * 0.5) if thickness else HOLE_DEPTH
+
+
+def place_hole(spawn, label, tick, end, normal, options, rng, depth=HOLE_DEPTH):
     """One bullet hole: a decal actor at `end` facing the surface of `normal` (Source axes), a random option of its
-    group (`options`: hole_instances' list), size and roll; its decal colour's red is `tick`, from which it shows."""
+    group (`options`: hole_instances' list), size and roll, reaching `depth` units each way (hole_depth); its decal
+    colour's red is `tick`, from which it shows."""
     instance, width, height, _ = rng.choices(options, weights=[o[3] for o in options])[0]
     size = rng.uniform(*HOLE_SIZE)
     nx, ny, nz = normal
@@ -474,7 +499,7 @@ def place_hole(spawn, label, tick, end, normal, options, rng):
     actor.set_actor_rotation(unreal.Rotator(roll=rng.uniform(0.0, 360.0), pitch=facing.pitch, yaw=facing.yaw), False)
     component = actor.get_editor_property("decal")
     component.set_editor_property("decal_size", unreal.Vector(
-        HOLE_DEPTH * UNITS_TO_CM, width * 0.5 * size * UNITS_TO_CM, height * 0.5 * size * UNITS_TO_CM))
+        depth * UNITS_TO_CM, width * 0.5 * size * UNITS_TO_CM, height * 0.5 * size * UNITS_TO_CM))
     component.set_decal_material(instance)
     component.set_decal_color(unreal.LinearColor(r=float(tick), g=0.0, b=0.0, a=1.0))
     # Never faded out by size: Unreal drops a decal under 1 % of the screen by default, and CS2 still shows a hole 11
@@ -483,29 +508,28 @@ def place_hole(spawn, label, tick, end, normal, options, rng):
 
 
 def place_holes(shots, earlier, instances, spawn):
-    """A bullet hole (place_hole) per bullet of `shots` that met the world with a decal group (`instances`:
-    hole_instances), showing from its shot's tick, and per hole of `earlier` (the agents manifest's `earlier_holes`:
-    left by the shots before the round, which CS2 keeps), showing from the round's start. Returns the number
-    placed."""
+    """A bullet hole (place_hole) per place a bullet of `shots` met the world with a decal group (`instances`:
+    hole_instances: both sides of each wall it went through, and where it stopped), showing from its shot's tick, and
+    per hole of `earlier` (the agents manifest's `earlier_holes`: left by the shots before the round, which CS2
+    keeps), showing from the round's start. Returns the number placed."""
     placed = 0
     for shot in shots:
         for k, bullet in enumerate(shot["bullets"]):
-            # Where it met the world: its end, or the wall it went through on its way to a player.
-            at = bullet if bullet["on"] == "world" else bullet.get("wall") or {}
-            options = instances.get(at.get("decal") or "")
-            if not options or not at.get("normal"):
-                continue
-            rng = random.Random(shot["tick"] * 7919 + shot["controller"] * 104729 + k)
-            place_hole(spawn, "bullet hole %d %d.%d" % (shot["controller"], shot["tick"], k), shot["tick"],
-                       at["end"], at["normal"], options, rng)
-            placed += 1
+            for n, at in enumerate(bullet_hits(bullet)):
+                options = instances.get(at.get("decal") or "")
+                if at["on"] != "world" or not options or not at.get("normal"):
+                    continue
+                rng = random.Random(shot["tick"] * 7919 + shot["controller"] * 104729 + k * 31 + n)
+                place_hole(spawn, "bullet hole %d %d.%d.%d" % (shot["controller"], shot["tick"], k, n), shot["tick"],
+                           at["end"], at["normal"], options, rng, hole_depth(at))
+                placed += 1
     for k, hole in enumerate(earlier):
         options = instances.get(hole.get("decal") or "")
         if not options or not hole.get("normal"):
             continue
         rng = random.Random(hole["tick"] * 7919 + k)
         place_hole(spawn, "earlier bullet hole %d.%d" % (hole["tick"], k), hole["tick"], hole["end"], hole["normal"],
-                   options, rng)
+                   options, rng, hole_depth(hole))
         placed += 1
     return placed
 

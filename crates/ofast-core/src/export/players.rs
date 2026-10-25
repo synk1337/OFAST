@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use super::ExportError;
+use super::brass::{brass_json, load_casings};
 use super::deaths::bake_deaths;
 use super::effects::{blasts_json, export_effect_textures, fire_walls_json};
 use super::gltf::{
@@ -450,6 +451,21 @@ pub fn export_players(
     let decal_groups: std::collections::BTreeSet<String> =
         decal_groups.union(&earlier_groups).cloned().collect();
     let decals = export_decals(content, &decal_groups, out_dir, &mut report.warnings);
+    let gun_models: BTreeSet<&str> = track
+        .shots
+        .iter()
+        .filter_map(|(_, s)| shot_data.weapon(s.item)?.model.as_deref())
+        .collect();
+    let casings = load_casings(content, gun_models, &mut report.warnings);
+    let (brass, case_models) = brass_json(
+        track,
+        &muzzles,
+        &view_muzzles,
+        &shot_data,
+        &casings,
+        round.collision.as_ref(),
+    );
+    let cases = export_cases(&round, &case_models, demo_name, out_dir, &mut report);
     std::fs::write(
         &report.manifest,
         serde_json::to_string_pretty(&json!({
@@ -467,6 +483,8 @@ pub fn export_players(
             "shots": shots,
             "earlier_holes": earlier_holes,
             "decals": decals,
+            "brass": brass,
+            "cases": cases,
         }))
         .expect("JSON serializes"),
     )?;
@@ -570,6 +588,35 @@ fn export_viewmodels(
         }
     }
     (entries, muzzles)
+}
+
+/// Writes one glTF per case model the round's brass uses ([`super::brass`]): `<demo>_r<round>_case_<model file
+/// stem>.gltf`, rigid like a dropped weapon's. Returns the manifest's `cases`: file and model path. A model that cannot
+/// be read is left out with a warning (its cases are not drawn).
+fn export_cases(
+    round: &Round<'_>,
+    models: &BTreeSet<String>,
+    demo_name: &str,
+    out_dir: &Path,
+    report: &mut PlayersReport,
+) -> Vec<serde_json::Value> {
+    let mut entries = Vec::new();
+    for path in models {
+        let name = format!("{demo_name}_r{}_case_{}", round.track.round, stem(path));
+        let written = load_model(round.content, path).and_then(|model| {
+            let shown = shown_groups(&model, 0);
+            export_model_static(round.content, &model, shown, out_dir, &name)
+        });
+        match written {
+            Ok(written) => {
+                entries.push(json!({ "file": format!("{name}.gltf"), "model": path }));
+                report.files.push(written.gltf);
+                report.warnings.extend(written.warnings);
+            }
+            Err(e) => report.warnings.push(format!("case {path}: {e}: not shown")),
+        }
+    }
+    entries
 }
 
 /// Writes one glTF per look of the weapons lying in the world during the round (the replay's `dropped_weapons`) and
@@ -679,21 +726,33 @@ pub struct Muzzle {
     pub position: [f32; 3],
     /// Along the barrel (unit).
     pub direction: [f32; 3],
+    /// The gun's ejection port (`shell_eject`) in the same space, where a fired case is thrown from
+    /// ([`super::brass`]), on the shot's tick and each of the [`EJECT_TICKS`] − 1 after it (a case leaves the port
+    /// up to 0.04 s after the shot, and the gun moves meanwhile); `None` when the gun has none (or is not in hand).
+    pub eject: [Option<Affine>; EJECT_TICKS],
 }
 
-/// The muzzle of the gun in hand at one frame: `world` is the agent's posed bones (model space), `carried` the
-/// frame's weapons and their places, `actor` the player's actor transform. `None` without a gun in hand.
+/// How many ticks of a gun's ejection port [`Muzzle::eject`] holds, from the shot's: CS2's casing systems leave the
+/// port 0 (shotguns) or 0.04 s after the shot, 2.56 ticks at 64 per second.
+pub const EJECT_TICKS: usize = 4;
+
+/// The muzzle and the ejection port (if any) of the gun in hand at one frame: `world` is the agent's posed bones
+/// (model space), `carried` the frame's weapons and their places, `actor` the player's actor transform. `None`
+/// without a gun in hand.
 fn muzzle_at(
     world: &[Affine],
     carried: Option<&Vec<(Slot, Place)>>,
     mounts: &AgentMounts,
     weapon_models: &BTreeMap<String, (Model, WeaponFrames)>,
     actor: &Affine,
-) -> Option<Affine> {
+) -> Option<(Affine, Option<Affine>)> {
     let (slot, _) = carried?.iter().find(|(_, place)| *place == Place::Hand)?;
     let (_, frames) = weapon_models.get(&slot.look.model)?;
-    let weapon_bone = slot_target(world, mounts, frames, Place::Hand)?;
-    Some(compose(actor, &compose(&weapon_bone, &frames.muzzle?)))
+    let weapon_bone = compose(actor, &slot_target(world, mounts, frames, Place::Hand)?);
+    Some((
+        compose(&weapon_bone, &frames.muzzle?),
+        frames.shell_eject.map(|e| compose(&weapon_bone, &e)),
+    ))
 }
 
 /// Writes one look's glTF ([`LookExport`]).
@@ -872,22 +931,29 @@ fn export_look(
             else {
                 continue;
             };
-            let sample = round.frames[k].1;
-            let Some(player) = track.samples[sample]
-                .players
-                .iter()
-                .find(|p| p.controller == controller && p.alive)
-            else {
-                continue;
+            // The gun's muzzle and port in frame `k`, with the player's actor there.
+            let at = |k: usize| {
+                let sample = round.frames.get(k)?.1;
+                let player = track.samples[sample]
+                    .players
+                    .iter()
+                    .find(|p| p.controller == controller && p.alive)?;
+                let actor = super::deaths::actor(player);
+                muzzle_at(
+                    worlds.get(k)?,
+                    carried.get(k),
+                    &mounts,
+                    &weapon_models,
+                    &actor,
+                )
             };
-            let actor = super::deaths::actor(player);
-            if let Some(m) = muzzle_at(&worlds[k], carried.get(k), &mounts, &weapon_models, &actor)
-            {
+            if let Some((m, _)) = at(k) {
                 muzzles.push(Muzzle {
                     controller,
                     tick: shot.tick,
                     position: [m[0][3], m[1][3], m[2][3]],
                     direction: [m[0][0], m[1][0], m[2][0]],
+                    eject: std::array::from_fn(|d| at(k + d).and_then(|(_, e)| e)),
                 });
             }
         }
