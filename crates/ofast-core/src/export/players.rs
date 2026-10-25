@@ -44,7 +44,7 @@ use super::loadout::{
     AgentMounts, Place, Slot, WeaponFrames, WeaponLook, carried_places, hide_changes, key_places,
     skeleton_with_slots, slot_target,
 };
-use super::shots::{ShotData, earlier_holes_json, export_decals, shots_json};
+use super::shots::{Doors, ShotData, earlier_holes_json, export_decals, shots_json};
 use super::viewmodel::{export_viewmodel_look, load_viewmodel_rig};
 use crate::anim::aim::AimBones;
 use crate::anim::bake::{
@@ -434,10 +434,12 @@ pub fn export_players(
         .as_ref()
         .map(|w| WorldCollision::from_physics_where(w, CollisionAttribute::stops_bullets));
     let shot_data = ShotData::load(content, items_text.as_deref(), &mut report.warnings);
+    let doors = Doors::load(content, track, &round.models, &mut report.warnings);
     let (shots, decal_groups) = shots_json(
         track,
         bullet_collision.as_ref(),
         round.world.as_ref(),
+        Some(&doors),
         &muzzles,
         &view_muzzles,
         &shot_data,

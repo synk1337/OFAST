@@ -10,15 +10,17 @@ impact from the surface met (scripts/surfaceproperties_impact_effects.txt: parti
 and a bullet hole from its decal group), a hit on a player is blood (particles/blood_impact/). OFAST rebuilds their
 main layers with grenade_effects' "particle system in a material" (CS2's own sprite sheets, driven by the demo tick):
 
-- One actor for a round's shots ("shots"), one instanced mesh per layer: a slot per shot for its muzzle flash (at its
-  muzzle, flying along its barrel), per tracer (from the muzzle to where its bullet stopped, leaving when the shot was
-  fired, as fast as CS2's), per place a bullet met the world (its surface family's impact, flying out along the
-  surface's normal: both sides of each wall it went through, and where it stopped) and per player it met (blood, back
-  toward the shooter). A silenced shot has no flame and no light, only its smoke. A shooter's third-person muzzle flashes are on an actor of their own, hidden while the camera looks
-  through their eyes.
-- There, CS2 draws the first-person system instead (particles/unified_weapon_fx/*_fps.vpcf): the same layers smaller,
-  on the viewmodel's barrel. Here they are instanced meshes on the shooter's viewmodel actor (shown and hidden with it,
-  moved and mirrored with it), drawn with Unreal's first-person rendering as the viewmodel is.
+- Instanced meshes of sprite layers, a slot per particle burst. Per shooter an actor with their muzzle flashes (at
+  the muzzle, flying along the barrel) and tracers (from the muzzle to where the bullet stopped, leaving when the
+  shot was fired, as fast as CS2's), hidden while the camera looks through their eyes; one actor for the rest
+  ("shots"): per place a bullet met the world its surface family's impact (flying out along the surface's normal:
+  both sides of each wall it went through, and where it stopped) and per player it met blood (back toward the
+  shooter). A silenced shot has no flame and no light, only its smoke.
+- In the shooter's own view CS2 draws the first-person system instead (particles/unified_weapon_fx/*_fps.vpcf): the
+  same layers smaller, on the viewmodel's barrel. Here they are instanced meshes on the shooter's viewmodel actor
+  (shown and hidden with it, moved and mirrored with it), drawn with Unreal's first-person rendering as the viewmodel
+  is. Their tracers there leave from where the viewmodel's barrel shows (export::shots' `view_tracer`), on an actor
+  of their own shown with the viewmodel.
 - A point light per shooter, moved to each shot's muzzle and pulsed for a few ticks (CS2's muzzle flashes light the
   world briefly: their `fakelight` child), hidden with the body; and one on the viewmodel for their own view (the
   first-person system has its own).
@@ -252,13 +254,17 @@ def unit(v):
     return [c / length for c in v] if length > 1e-6 else [0.0, 0.0, 1.0]
 
 
-def sprite_slots(shots, alt=True):
+def sprite_slots(shots, alt=True, own_views=None):
     """The sprite slots (grenade_effects.add_sprites) of every shot: (shooter controller -> layer name -> slots of
-    their muzzle flashes (muzzle_layers: `alt` whether MUZZLE_ALT can be drawn), not the silenced shots' flame; the
-    same for their first-person flashes, in the viewmodel rig's space; layer name -> slots of the tracers, impacts by
-    surface family and blood)."""
+    their muzzle flashes (muzzle_layers: `alt` whether MUZZLE_ALT can be drawn), not the silenced shots' flame, and
+    of their tracers from the third-person barrel; the same for their first-person flashes, in the viewmodel rig's
+    space; the same for their tracers as their own view shows them, from the viewmodel's barrel (export::shots'
+    `view_tracer`, in the world; only for the shooters in `own_views`, those with a viewmodel shown in their view,
+    when given); layer name -> slots of the impacts by surface family, blood, and the tracers of shots that have no
+    own-view tracer, seen in every view)."""
     muzzles = {}
     views = {}
+    own = {}
     slots = {}
 
     def add(layers, slot, into):
@@ -285,10 +291,23 @@ def sprite_slots(shots, alt=True):
             end = bullet["end"]
             if shot.get("tracer"):
                 kind = shot["tracer"] if shot["tracer"] in TRACERS else TRACER_DEFAULT
-                way = [e - s for e, s in zip(end, start)]
-                reach = math.sqrt(sum(c * c for c in way))
-                if reach > 1.0:
-                    add([tracer_layer(kind)], (start, fired, fired, unit(way), reach), slots)
+                # From the barrel the body holds (hidden with it in the shooter's own view, where it would leave just
+                # under the eyes), and in that view from where the viewmodel's barrel shows (CS2's first-person
+                # tracer leaves the viewmodel: YEKINDAR's view, de_nuke round 5, ticks 37683 - 37702). A shot without
+                # that (no viewmodel then, an older export, or none imported for the shooter) keeps its tracer in
+                # every view.
+                view_tracer = shot.get("view_tracer")
+                if own_views is not None and shot["controller"] not in own_views:
+                    view_tracer = None
+                world = muzzles if view_tracer else {shot["controller"]: slots}
+                for begin, into in ((start, world), (view_tracer, own)):
+                    if not begin:
+                        continue
+                    way = [e - s for e, s in zip(end, begin)]
+                    reach = math.sqrt(sum(c * c for c in way))
+                    if reach > 1.0:
+                        add([tracer_layer(kind)], (begin, fired, fired, unit(way), reach),
+                            into.setdefault(shot["controller"], {}))
             # An impact on each side of every wall it went through (flying out of the far side along the bullet: the
             # way out's normal faces along it) and where it stopped; blood on every player it met.
             for at in bullet_hits(bullet):
@@ -300,7 +319,7 @@ def sprite_slots(shots, alt=True):
                     # hid behind the body).
                     hit = at["end"]
                     add(BLOOD_LAYERS, (hit, tick, tick, unit([s - e for e, s in zip(hit, shot["eye"])]), 0.0), slots)
-    return muzzles, views, slots
+    return muzzles, views, own, slots
 
 
 def light_frames(shots, tick0, end_frame, key="muzzle"):
@@ -537,12 +556,13 @@ def place_holes(shots, earlier, instances, spawn):
 def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, viewmodels=None,
                 show_first_person=None):
     """Everything above for a round, from the agents manifest `agents` (its `shots`, `earlier_holes`, `effects` and
-    `decals`; without them: nothing): an actor per shooter for their muzzle flashes, hidden with their body
-    (`hide(binding, controller)` keys the body's visibility on a sequence binding: not while the camera looks through
-    their own eyes), their first-person flashes on their viewmodel actor (`viewmodels`: controller -> actor, from
-    import_demo.spawn_viewmodel), their muzzle lights (place_lights; `show_first_person(binding, controller)` keys a
-    binding's visibility as their viewmodel's), one actor ("shots") for the rest, and the bullet holes. Returns the
-    number of shots."""
+    `decals`; without them: nothing): an actor per shooter for their muzzle flashes and tracers, hidden with their
+    body (`hide(binding, controller)` keys the body's visibility on a sequence binding: not while the camera looks
+    through their own eyes), their first-person flashes on their viewmodel actor (`viewmodels`: controller -> actor,
+    from import_demo.spawn_viewmodel), an actor per shooter with a viewmodel for their tracers as their own view
+    shows them, and their muzzle lights (place_lights; `show_first_person(binding, controller)` keys a binding's
+    visibility as their viewmodel's), one actor ("shots") for the impacts, the blood and the tracers seen in every
+    view, and the bullet holes. Returns the number of shots."""
     shots = agents.get("shots", [])
     effects = agents.get("effects", [])
     if not shots:
@@ -561,7 +581,9 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, v
     alt = grenade_effects.layer_name(MUZZLE_ALT) in instances
     if not alt:
         log("effects: no muzzle_alt sheet (export the round again): every shot draws the main flame")
-    muzzles, views, shared = sprite_slots(shots, alt)
+    # Own-view tracers for the shooters whose viewmodel their own view shows.
+    own_views = set((viewmodels or {}).keys()) if show_first_person is not None else set()
+    muzzles, views, own, shared = sprite_slots(shots, alt, own_views)
     drawn = 0
 
     def draw(actor, by_layer):
@@ -578,7 +600,8 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, v
         return count
 
     for controller, by_layer in sorted(muzzles.items()):
-        actor = spawn(unreal.Actor, "muzzle flashes %s" % names.get(controller, controller), (0.0, 0.0, 0.0))
+        actor = spawn(unreal.Actor, "muzzle flashes and tracers %s" % names.get(controller, controller),
+                      (0.0, 0.0, 0.0))
         drawn += draw(actor, by_layer)
         hide(sequence.add_possessable(actor), controller)
     viewmodels = viewmodels or {}
@@ -586,6 +609,12 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, v
     for controller, by_layer in sorted(views.items()):
         if controller in viewmodels:
             first_person += draw(viewmodels[controller], by_layer)
+    # Their tracers as their own view shows them: in the world, from the viewmodel's barrel, shown with the viewmodel.
+    # (sprite_slots put them only for the shooters in own_views: a viewmodel to show them with.)
+    for controller, by_layer in sorted(own.items()):
+        actor = spawn(unreal.Actor, "own tracers %s" % names.get(controller, controller), (0.0, 0.0, 0.0))
+        first_person += draw(actor, by_layer)
+        show_first_person(sequence.add_possessable(actor), controller)
     drawn += first_person + draw(spawn(unreal.Actor, "shots", (0.0, 0.0, 0.0)), shared)
     lights = place_lights(sequence, replay, shots, end_frame, spawn, hide,
                           viewmodels if show_first_person else {}, show_first_person)

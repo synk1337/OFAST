@@ -38,14 +38,20 @@ collision triangle its surface property (`world_physics`), per weapon model its 
   `bulletPenetrationDistanceModifier` in `surfaceproperties_game.txt`), and a player as flesh, until it stops. The
   rule is checked, not assumed: a hit after a wall starts where the bullet came out of it (the demo's effect
   dispatch), and on 13 demos of 6 maps 456 of 545 such hits start within half an inch of OFAST's traced way out,
-  while the damage CS2 recorded for 288 of 314 non-lethal hits through walls is the rule's exactly. The demo's hits
-  stay the truth where the trace cannot see (doors, props, a build whose plaster differed): a wall before a hit is
-  gone through, a wall between a hit's start and its point is not there.
+  while the damage CS2 recorded for 289 of 314 non-lethal hits through walls is the rule's exactly. The demo's hits
+  stay the truth where the trace cannot see (props, a build whose plaster differed): a wall before a hit is gone
+  through, a wall between a hit's start and its point is not there. The rotating doors are walls too: each door
+  model's own collision, the bullet's line turned into its space as the demo has the door standing on that tick
+  (no bullet holes on them: a hole is fixed in the world and a door moves).
 - **A tracer on every shot, from the moment it was fired**: CS2 draws one on each shot of a gun with a tracer system
   (YEKINDAR's view: four in a row; soulfly's: molodoy's AK on shots one in three would skip), whatever
   `m_nTracerFrequency` says (3 on the AK; 0 still means none: the silenced modes). The shot is fired before its
   message's tick: the attack tick − 1 + the sub-tick fraction the fire-bullets message carries on local demos, the
-  start of that tick on tournament demos (CS2 shows YEKINDAR's tracer in flight on his shot's own tick).
+  start of that tick on tournament demos (CS2 shows YEKINDAR's tracer in flight on his shot's own tick). In the
+  shooter's own view it leaves where their viewmodel's barrel shows: the viewmodel muzzle on the camera, its
+  sideways and up offsets scaled by tan(world FOV / 2) / tan(viewmodel FOV / 2) so it lands on the same place of the
+  screen (Source's `FormatViewModelAttachment`), on an actor shown with the viewmodel; the world's tracers, from the
+  barrel the body holds, are hidden with the body there.
 - **Brass from the gun's own casing system**: the weapon model's `shoot` sequence names it (an event on the
   `shell_eject` attachment); its numbers (speed out of the port, gravity, drag, tumble, bounce, stop speed, life)
   fly each case in the core, in the world against the map's collision and, for the shooter's own view, in the
@@ -91,13 +97,13 @@ collision triangle its surface property (`world_physics`), per weapon model its 
   (`examples/shot_spread.rs`, `examples/shot_traces.rs`), and with the damage of its hits
   (`examples/shot_penetration.rs`).
 - A bullet going through a wall leaves an impact and a hole on both sides; one going through a player goes on.
-- Not yet: props and doors (not in the world's collision), each gun's own muzzle flash (every gun draws the AK's two
-  flames: CS2's `ak47_primaryflash` and `_alt`, one per shot as its chooser picks, without the compensator's side
-  flashes and sparks), a tracer starting from the first-person muzzle in the shooter's own view (OFAST's leaves the
-  third-person barrel, just under the eyes, and shrinks to a few pixels at the crosshair there), a tracer's trail
-  (one tick after molodoy's shot at 40813 CS2's still reaches back to his gun where OFAST's has gone), the first-person
-  case (CS2's crosses to the left of the view, OFAST's leaves to the right), a player's depth from their hitboxes
-  (8 inches meanwhile), shotguns' pellets after the first, the R8's and Negev's own spread rules, the limit on how
+- Not yet: what else has a model of its own (`prop_dynamic`: de_nuke's silo doors; brush entities: a retake blocker
+  of de_nuke's B site stopped bullets in a tournament demo; a railing tagged `passbullets` a hit started behind,
+  though making grates, railings and glass walls changed no count on the 13 demos), each gun's own muzzle flash
+  (every gun draws the AK's two flames: CS2's `ak47_primaryflash` and `_alt`, one per shot as its chooser picks,
+  without the compensator's side flashes and sparks), a tracer's trail (one tick after molodoy's shot at 40813 CS2's
+  still reaches back to his gun where OFAST's has gone), a player's depth from their hitboxes (8 inches meanwhile),
+  bullet holes on doors (moving with them), shotguns' pellets after the first, the R8's and Negev's own spread rules, the limit on how
   many bullet holes CS2 keeps and which (four round-3 holes on de_nuke's open A-site door, whose collision is a static
   hull, do not show in CS2 in round 5), hiding the blood of a hit on the player the camera looks through (the hits
   do not name the player hit; CS2 shows none in that view), holes on props and signs (not in the world's collision).

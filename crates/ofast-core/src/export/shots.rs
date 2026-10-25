@@ -16,10 +16,16 @@
 //! whatever the rule says, a wall traced between a hit's start and its point is not there for CS2, and a later hit
 //! starting just past a player is where the bullet came out of them (else [`PLAYER_DEPTH`] on). Checked
 //! (`examples/shot_penetration.rs`, 13 demos of 6 maps): 456 of the 545 hits after a wall start within half an inch
-//! of where the trace comes out of one; the damage CS2 recorded for 288 of the 314 non-lethal hits through walls is
+//! of where the trace comes out of one; the damage CS2 recorded for 289 of the 314 non-lethal hits through walls is
 //! the rule's exactly, 6 more within 1 (10 of the others are on one de_inferno demo's plaster walls, where that
-//! build of CS2 took plaster's distance modifier as 0.5, not the current 0.7). Not traced: props and doors (not in
-//! the world's collision), so a bullet the demo does not show past one goes on through it.
+//! build of CS2 took plaster's distance modifier as 0.5, not the current 0.7). The rotating doors are walls too, as
+//! the demo has them standing ([`Doors`]: their own models, not in the world's collision), without bullet holes (a
+//! door moves). Not traced: what else has a model of its own: `prop_dynamic` (de_nuke's silo doors), brush entities
+//! (a retake blocker of de_nuke's B site stopped bullets in a tournament demo), and a railing tagged `passbullets`
+//! whose far side a hit started on; a bullet the demo does not show past one goes on through it. Of the 81 hits after
+//! something the trace does not have (the other 8 of the 89 start away from the traced way out), de_nuke's 9: 3 came
+//! out of a player, 2 out of the blocker, 3 out of a silo door and what lay behind it, 1 out of the railing. (These
+//! counts are of the world's collision alone, [`walls_on`]: the doors explain none of them.)
 //!
 //! Written to the agents manifest as `shots` (it needs the map's collision and the baked agents):
 //!
@@ -32,7 +38,8 @@
 //! | `eye` | where the bullets start: the shooter's eyes (Source axes, inches) |
 //! | `muzzle`, `muzzle_direction` | where they left the barrel as the exported agent shows it (third person), and along the barrel; `null` when the agent shows no gun in hand then |
 //! | `view_muzzle`, `view_muzzle_direction` | the same as the shooter's viewmodel shows it (first person), in the viewmodel rig's model space: Source axes (x forward, y left, z up), inches (in Unreal the viewmodel's component space: the camera, before the player's viewmodel offsets and the left hand's mirroring); `null` without a viewmodel then |
-//! | `bullets` | per bullet (shotguns fire several): `end` (where it stopped), `on` (`"world"`, `"player"` or `"air"`: nothing within range), `normal` (of the surface met, facing the shooter; `null` on a player or in the air), `surface` (the world surface's property name, `null` when unknown), `impact` (the surface's impact system, [`Impact::effect`]), `decal` (its bullet-hole decal group) and, on the world, `thickness` (of the wall it stopped in, `null` when the trace finds no way out of it); `through`: what it went through before, in order: each wall's way in and way out (`on` `"world"`, `end`, `normal`: facing back at the bullet going in, along it coming out, `surface`, `impact`, `decal`, `thickness`) and each player (`on` `"player"`, `end`: where it met them) |
+//! | `view_tracer` | where the shooter's own view shows the tracer leave, in the world: the viewmodel's muzzle on the shot tick's camera, moved to the world point seen at the same place on the screen ([`view_tracer_start`]); `null` without a viewmodel |
+//! | `bullets` | per bullet (shotguns fire several): `end` (where it stopped), `on` (`"world"`, `"player"` or `"air"`: nothing within range), `normal` (of the surface met, facing the shooter; `null` on a player or in the air), `surface` (the world surface's property name, `null` when unknown), `impact` (the surface's impact system, [`Impact::effect`]), `decal` (its bullet-hole decal group) and, on the world, `thickness` (of the wall it stopped in, `null` when the trace finds no way out of it); `through`: what it went through before, in order: each wall's way in and way out (`on` `"world"`, `end`, `normal`: facing back at the bullet going in, along it coming out, `surface`, `impact`, `decal`, `thickness`; `door` true on a door's side, which takes no bullet hole) and each player (`on` `"player"`, `end`: where it met them) |
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -42,12 +49,12 @@ use serde_json::{Value as Json, json};
 use super::gltf::write_png;
 use super::players::Muzzle;
 use crate::content::Content;
-use crate::demo::players::RoundTrack;
+use crate::demo::players::{RoundTrack, ViewmodelSettings};
 use crate::demo::shots::{PlayerHit, Shot, bullet_direction, shot_times, spread_offset};
 use crate::items::item_names;
 use crate::kv3::Value;
 use crate::physics::PhysicsData;
-use crate::physics::ragdoll::WorldCollision;
+use crate::physics::ragdoll::{Crossing, WorldCollision};
 use crate::resource::{BlockKind, Resource};
 use crate::texture::Texture;
 
@@ -505,7 +512,15 @@ pub struct Wall {
     pub enter: Through,
     /// What it loses coming out.
     pub exit: Through,
+    /// The way in is a door's ([`Doors`]): it moves, so a bullet hole (a decal fixed in the world) would hang in the
+    /// air once it swings: the bullet makes its impact there but no hole.
+    pub door_in: bool,
+    /// The way out is a door's.
+    pub door_out: bool,
 }
+
+/// [`Crossing::shape`] of a door's surface ([`Doors::crossings`]).
+const DOOR_SHAPE: u32 = u32::MAX - 1;
 
 /// Two solids whose surfaces are closer than this (inches) along a bullet's line are one wall to it (a wall built of
 /// two hulls side by side).
@@ -527,18 +542,25 @@ pub fn walls_on(
     reach: f32,
 ) -> Vec<Wall> {
     let hash = |index: u32| surfaces.get(index as usize).copied().unwrap_or(0);
+    let crossings = collision
+        .ray_crossings(from, direction, reach)
+        .into_iter()
+        .map(|c| (c, hash(c.surface)))
+        .collect();
+    walls_through(crossings, data)
+}
+
+/// The walls `crossings` make ([`walls_on`]): each crossing of a line with a surface, with its surface property's
+/// hash (0: unknown), from the world's collision and others (the doors, [`Doors`]); sorted here.
+pub fn walls_through(mut crossings: Vec<(Crossing, u32)>, data: &ShotData) -> Vec<Wall> {
+    crossings.sort_by(|a, b| a.0.distance.total_cmp(&b.0.distance));
     let mut walls: Vec<Wall> = Vec::new();
     let mut depth = 0usize;
-    let mut previous: Option<(f32, bool)> = None;
-    for crossing in collision.ray_crossings(from, direction, reach) {
-        // A line through the edge two triangles of one face share crosses both at one point: one crossing.
-        let twice = previous.is_some_and(|(distance, entering): (f32, bool)| {
-            crossing.distance - distance < GRAZE && crossing.entering == entering
-        });
-        previous = Some((crossing.distance, crossing.entering));
-        if twice {
-            continue;
-        }
+    // Every crossing counts, even two at one point facing the same way: a line through an edge two triangles of a
+    // face share crosses both, but merging those (one crossing) matched CS2 worse on the 13 demos checked (450 hits
+    // after a wall starting at a traced way out, against 456; 284 exact damages through walls, against 289): CS2's
+    // world meshes also hold separate solids' faces at one place.
+    for (crossing, surface) in crossings {
         if crossing.entering {
             depth += 1;
             if depth > 1 {
@@ -550,7 +572,6 @@ pub fn walls_on(
                     last.thickness = f32::INFINITY;
                 }
                 _ => {
-                    let surface = hash(crossing.surface);
                     walls.push(Wall {
                         distance: crossing.distance,
                         thickness: f32::INFINITY,
@@ -560,6 +581,8 @@ pub fn walls_on(
                         exit_surface: 0,
                         enter: data.through(surface),
                         exit: data.through(surface),
+                        door_in: crossing.shape == DOOR_SHAPE,
+                        door_out: false,
                     });
                 }
             }
@@ -570,8 +593,9 @@ pub fn walls_on(
             {
                 wall.thickness = crossing.distance - wall.distance;
                 wall.exit_normal = crossing.normal;
-                wall.exit_surface = hash(crossing.surface);
-                wall.exit = data.through(wall.exit_surface);
+                wall.exit_surface = surface;
+                wall.exit = data.through(surface);
+                wall.door_out = crossing.shape == DOOR_SHAPE;
             }
         }
     }
@@ -583,6 +607,154 @@ pub fn walls_on(
 
 /// A wall thinner than this (inches) is a line grazing an edge ([`walls_on`]).
 const GRAZE: f32 = 1e-3;
+
+/// What a bullet's line meets ([`bullet_json`]): the world's collision (`None`: nothing), its surface property hashes
+/// by index, and the doors as `track` has them standing.
+struct Obstacles<'a> {
+    world: Option<&'a WorldCollision>,
+    surfaces: &'a [u32],
+    doors: Option<(&'a Doors, &'a RoundTrack)>,
+}
+
+impl Obstacles<'_> {
+    /// The walls on the line from `from` along `direction` within `reach` on `tick` ([`walls_through`]).
+    fn walls(
+        &self,
+        tick: u32,
+        from: [f32; 3],
+        direction: [f32; 3],
+        reach: f32,
+        data: &ShotData,
+    ) -> Vec<Wall> {
+        let mut crossings: Vec<(Crossing, u32)> = self
+            .world
+            .map(|c| c.ray_crossings(from, direction, reach))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| {
+                (
+                    c,
+                    self.surfaces.get(c.surface as usize).copied().unwrap_or(0),
+                )
+            })
+            .collect();
+        if let Some((doors, track)) = self.doors {
+            crossings.extend(doors.crossings(track, tick, from, direction, reach));
+        }
+        walls_through(crossings, data)
+    }
+}
+
+/// The round's rotating doors as bullets meet them (CS2's `prop_door_rotating`: models of their own, not in the
+/// world's collision): each door model's collision in its own space, posed on each tick as the demo has the door
+/// ([`Doors::crossings`]; de_nuke's door model has one hull and no bones, so its collision is in the model's space as
+/// the world's is; a door's scale is not read: CS2's maps leave them unscaled). On the 13 demos checked no hit after a
+/// wall came out of a door (the doors change no count of `examples/shot_penetration.rs`, `OFAST_DOORS=1`), but a
+/// closed door in a bullet's way is in it.
+#[derive(Debug, Clone, Default)]
+pub struct Doors {
+    /// Per door model (resource id): its collision as bullets see it, and its surface property hashes by index.
+    models: HashMap<u64, (WorldCollision, Vec<u32>)>,
+}
+
+impl Doors {
+    /// Reads the collision (`PHYS`) of every door model the doors of `track` have, found by resource id in `paths`; a
+    /// model that cannot be read is left out with a warning (its door stops no bullet).
+    pub fn load(
+        content: &Content,
+        track: &RoundTrack,
+        paths: &HashMap<u64, String>,
+        warnings: &mut Vec<String>,
+    ) -> Self {
+        let ids: BTreeSet<u64> = track
+            .samples
+            .iter()
+            .flat_map(|s| &s.doors)
+            .map(|d| d.model)
+            .collect();
+        let mut models = HashMap::new();
+        for id in ids {
+            let Some(path) = paths.get(&id) else {
+                warnings.push(format!(
+                    "door model {id:016x} is not a known model: bullets pass it"
+                ));
+                continue;
+            };
+            let physics = content
+                .read_resource(path)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| {
+                    let resource = Resource::parse(&bytes).map_err(|e| e.to_string())?;
+                    PhysicsData::from_resource(&resource).map_err(|e| e.to_string())
+                });
+            match physics {
+                Ok(Some(physics)) => {
+                    let collision =
+                        WorldCollision::from_physics_where(&physics, |a| a.stops_bullets());
+                    if collision.counts() == (0, 0) {
+                        warnings.push(format!(
+                            "door {path}: no collision stops bullets: bullets pass it"
+                        ));
+                    }
+                    models.insert(id, (collision, physics.surfaces.clone()));
+                }
+                Ok(None) => warnings.push(format!("door {path}: no collision: bullets pass it")),
+                Err(e) => warnings.push(format!("door {path}: {e}: bullets pass it")),
+            }
+        }
+        Doors { models }
+    }
+
+    /// Per door model (resource id): how many hulls and triangles of its collision stop bullets.
+    pub fn counts(&self) -> BTreeMap<u64, (usize, usize)> {
+        self.models
+            .iter()
+            .map(|(&id, (collision, _))| (id, collision.counts()))
+            .collect()
+    }
+
+    /// Where a line from `from` along the unit `direction` crosses the doors within `reach`, as they stand on the
+    /// first sample of `track` at or after `tick`: each crossing, in the world, with its surface property's hash.
+    pub fn crossings(
+        &self,
+        track: &RoundTrack,
+        tick: u32,
+        from: [f32; 3],
+        direction: [f32; 3],
+        reach: f32,
+    ) -> Vec<(Crossing, u32)> {
+        let Some(sample) = track
+            .samples
+            .get(track.samples.partition_point(|s| s.tick < tick))
+        else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for door in &sample.doors {
+            let Some((collision, surfaces)) = self.models.get(&door.model) else {
+                continue;
+            };
+            // The door's axes in the world (Source's angles: x forward, y left, z up), the line in its space.
+            let [forward, right, up] = crate::demo::shots::angle_vectors(door.angles);
+            let axes = [forward, right.map(|c| -c), up];
+            let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+            let offset: [f32; 3] = std::array::from_fn(|k| from[k] - door.position[k]);
+            let local_from = axes.map(|axis| dot(offset, axis));
+            let local_direction = axes.map(|axis| dot(direction, axis));
+            for mut crossing in collision.ray_crossings(local_from, local_direction, reach) {
+                let n = crossing.normal;
+                crossing.normal = std::array::from_fn(|k| (0..3).map(|i| axes[i][k] * n[i]).sum());
+                crossing.shape = DOOR_SHAPE;
+                let hash = surfaces
+                    .get(crossing.surface as usize)
+                    .copied()
+                    .unwrap_or(0);
+                out.push((crossing, hash));
+            }
+        }
+        out
+    }
+}
 
 /// The damage a bullet of `weapon` still does `distance` inches from where it started, past `walls` (those before
 /// `distance`); `None` when it stops in one ([`penetrate`]). It loses its range falloff on the way
@@ -715,20 +887,53 @@ pub fn draws_tracer(frequency: u32) -> bool {
     frequency > 0
 }
 
+/// Where a shooter sees their own tracer leave (Source axes, inches, in the world): the viewmodel's muzzle
+/// `view_muzzle` (the viewmodel rig's space: x forward, y left, z up) placed on the camera at `eye` looking along
+/// `pitch` and `yaw` as the player's `settings` place the viewmodel (mirrored for the left hand, moved by the
+/// offsets), then moved to the world point that shows at the same place on the screen: the viewmodel is drawn at its
+/// own field of view, so its sideways and up offsets are scaled by tan(world FOV / 2) / tan(viewmodel FOV / 2), both
+/// at 4:3 (CS2's world FOV 90). This is what Source's `FormatViewModelAttachment` does for first-person effects
+/// (Source SDK 2013), and what Unreal's first-person rendering shows (its field of view on the viewmodel, the camera's
+/// on the world).
+pub fn view_tracer_start(
+    view_muzzle: [f32; 3],
+    settings: &ViewmodelSettings,
+    eye: [f32; 3],
+    pitch: f32,
+    yaw: f32,
+) -> [f32; 3] {
+    let [right_offset, forward_offset, up_offset] = settings.offset;
+    // The left hand mirrors the viewmodel, its sideways offset with it (import_demo.py's key_viewmodel_hand).
+    let side = if settings.left_handed { -1.0 } else { 1.0 };
+    let squash = 1.0 / (settings.fov.to_radians() * 0.5).tan().max(1e-3);
+    let forward = view_muzzle[0] + forward_offset;
+    let left = side * (view_muzzle[1] - right_offset) * squash;
+    let up = (view_muzzle[2] + up_offset) * squash;
+    let [ahead, right, upward] = crate::demo::shots::angle_vectors([pitch, yaw, 0.0]);
+    std::array::from_fn(|k| eye[k] + ahead[k] * forward - right[k] * left + upward[k] * up)
+}
+
 /// The shots of `track` as the manifest's `shots` (module docs), and the bullet holes' decal groups they use (for
 /// [`export_decals`]). `collision` is the map's collision as bullets see it (`None`: every bullet that met no player
-/// ends in the air) and `physics` the world physics it was built from (the surfaces), `muzzles` and `view_muzzles`
-/// the barrels the agents' and the viewmodels' exports found, `data` CS2's weapons and surfaces.
+/// ends in the air) and `physics` the world physics it was built from (the surfaces), `doors` the round's doors'
+/// collision ([`Doors`]), `muzzles` and `view_muzzles` the barrels the agents' and the viewmodels' exports found,
+/// `data` CS2's weapons and surfaces.
+#[allow(clippy::too_many_arguments)]
 pub fn shots_json(
     track: &RoundTrack,
     collision: Option<&WorldCollision>,
     physics: Option<&PhysicsData>,
+    doors: Option<&Doors>,
     muzzles: &[Muzzle],
     view_muzzles: &[Muzzle],
     data: &ShotData,
 ) -> (Vec<Json>, BTreeSet<String>) {
-    // The world's surface property hashes, by index (RayHit::surface).
-    let surfaces: &[u32] = physics.map_or(&[], |p| p.surfaces.as_slice());
+    let obstacles = Obstacles {
+        world: collision,
+        // The world's surface property hashes, by index (RayHit::surface).
+        surfaces: physics.map_or(&[], |p| p.surfaces.as_slice()),
+        doors: doors.map(|d| (d, track)),
+    };
     let by_tick = hits_by_tick(&track.player_hits);
     // The offset from more shots than the round's (a round with few shots); the round's come first.
     let times = shot_times(
@@ -748,7 +953,7 @@ pub fn shots_json(
             let weapon = data.weapon(shot.item);
             let bullets: Vec<Json> = (0..weapon.map_or(1, |w| w.bullets.max(1)))
                 .map(|bullet| {
-                    let json = bullet_json(shot, bullet, &hits, collision, surfaces, data);
+                    let json = bullet_json(shot, bullet, &hits, &obstacles, data);
                     for group in world_hits(&json).filter_map(|at| at["decal"].as_str()) {
                         decals.insert(group.to_owned());
                     }
@@ -762,6 +967,25 @@ pub fn shots_json(
             let tracer = weapon
                 .filter(|w| draws_tracer(w.tracer_frequency[mode]))
                 .and_then(|w| w.tracer.clone());
+            // Where the shooter's own view shows the tracer leave: their viewmodel's muzzle, from the camera of
+            // the shot's tick (the one Unreal's POV camera has there).
+            let view_tracer = view_muzzle.and_then(|m| {
+                let at = track.samples.partition_point(|s| s.tick < shot.tick);
+                let player = track
+                    .samples
+                    .get(at)?
+                    .players
+                    .iter()
+                    .find(|p| p.controller == *controller)?;
+                let eye = std::array::from_fn(|k| player.position[k] + player.view_offset[k]);
+                Some(view_tracer_start(
+                    m.position,
+                    &player.viewmodel,
+                    eye,
+                    player.pitch,
+                    player.yaw,
+                ))
+            });
             json!({
                 "tick": shot.tick,
                 "time": (time * 1000.0).round() / 1000.0,
@@ -776,6 +1000,7 @@ pub fn shots_json(
                 "muzzle_direction": muzzle.map(|m| unit(m.direction)),
                 "view_muzzle": view_muzzle.map(|m| rounded(m.position)),
                 "view_muzzle_direction": view_muzzle.map(|m| unit(m.direction)),
+                "view_tracer": view_tracer.map(rounded),
                 "bullets": bullets,
             })
         })
@@ -794,14 +1019,19 @@ pub fn earlier_holes_json(
     physics: Option<&PhysicsData>,
     data: &ShotData,
 ) -> (Vec<Json>, BTreeSet<String>) {
-    let surfaces: &[u32] = physics.map_or(&[], |p| p.surfaces.as_slice());
+    // No doors: the earlier rounds' doors are not in this round's samples (a hole there would be on a door anyway).
+    let obstacles = Obstacles {
+        world: collision,
+        surfaces: physics.map_or(&[], |p| p.surfaces.as_slice()),
+        doors: None,
+    };
     let by_tick = hits_by_tick(&track.earlier_hits);
     let mut decals = BTreeSet::new();
     let mut holes = Vec::new();
     for shot in &track.earlier_shots {
         let hits = hits_of(shot, &by_tick);
         for bullet in 0..data.weapon(shot.item).map_or(1, |w| w.bullets.max(1)) {
-            let json = bullet_json(shot, bullet, &hits, collision, surfaces, data);
+            let json = bullet_json(shot, bullet, &hits, &obstacles, data);
             // Where it met the world: the walls it went through, both sides, and its end.
             for at in world_hits(&json) {
                 let Some(group) = at["decal"].as_str() else {
@@ -843,8 +1073,7 @@ fn bullet_json(
     shot: &Shot,
     bullet: u32,
     hits: &[&PlayerHit],
-    collision: Option<&WorldCollision>,
-    surfaces: &[u32],
+    obstacles: &Obstacles<'_>,
     data: &ShotData,
 ) -> Json {
     let direction = bullet_direction(
@@ -876,9 +1105,8 @@ fn bullet_json(
     players.sort_by(|a, b| a.0.total_cmp(&b.0));
     players.dedup_by(|later, kept| later.0 - kept.0 < ON_THE_LINE);
     let shown = players.last().map_or(0.0, |p| p.0);
-    let walls: Vec<Wall> = collision
-        .map(|c| walls_on(c, surfaces, data, shot.eye, direction, range))
-        .unwrap_or_default()
+    let walls: Vec<Wall> = obstacles
+        .walls(shot.tick, shot.eye, direction, range, data)
         .into_iter()
         .filter(|w| {
             !players
@@ -931,6 +1159,14 @@ fn bullet_json(
                 };
                 let mut entry = on_world(wall.distance, wall.enter_normal, wall.enter_surface);
                 entry["thickness"] = thickness.clone();
+                // On a door: no hole (it would stay where the door was).
+                let no_hole = |item: &mut Json, door: bool| {
+                    if door {
+                        item["decal"] = Json::Null;
+                        item["door"] = json!(true);
+                    }
+                };
+                no_hole(&mut entry, wall.door_in);
                 let left = weapon
                     .filter(|_| gone < MAX_PENETRATIONS)
                     .and_then(|w| penetrate(w, wall, damage));
@@ -944,6 +1180,7 @@ fn bullet_json(
                     at += wall.thickness;
                     let mut exit = on_world(at, wall.exit_normal, wall.exit_surface);
                     exit["thickness"] = thickness;
+                    no_hole(&mut exit, wall.door_out);
                     through.push(exit);
                 }
                 gone += 1;
@@ -977,6 +1214,8 @@ fn bullet_json(
                     exit_surface: 0,
                     enter: flesh.clone(),
                     exit: flesh.clone(),
+                    door_in: false,
+                    door_out: false,
                 };
                 let left = weapon
                     .filter(|_| gone < MAX_PENETRATIONS)
@@ -1203,6 +1442,7 @@ mod tests {
             &track,
             Some(&collision),
             None,
+            None,
             &muzzles,
             &view_muzzles,
             &data,
@@ -1248,7 +1488,7 @@ mod tests {
         assert_eq!(shots[4]["bullets"].as_array().map(Vec::len), Some(9));
         assert_eq!(decals, BTreeSet::from(["Impact.Concrete".to_owned()]));
         // Without collision every bullet that met no player flies on to its weapon's range.
-        let (open, _) = shots_json(&track, None, None, &[], &[], &data);
+        let (open, _) = shots_json(&track, None, None, None, &[], &[], &data);
         assert_eq!(open[0]["bullets"][0]["on"], "air");
         assert_eq!(
             open[0]["bullets"][0]["end"],
@@ -1297,7 +1537,118 @@ mod tests {
             exit_surface: 0,
             enter: side.clone(),
             exit: side,
+            door_in: false,
+            door_out: false,
         }
+    }
+
+    #[test]
+    fn own_tracers_leave_where_the_viewmodel_shows_its_muzzle() {
+        let near = |a: [f32; 3], b: [f32; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-3);
+        let muzzle = [30.0, -5.0, -3.0];
+        let settings = |fov: f32, offset: [f32; 3], left_handed: bool| ViewmodelSettings {
+            fov,
+            offset,
+            left_handed,
+        };
+        // At the world's own FOV and no offsets: the muzzle as it is, 5 right and 3 down.
+        let plain = view_tracer_start(muzzle, &settings(90.0, [0.0; 3], false), [0.0; 3], 0.0, 0.0);
+        assert!(near(plain, [30.0, -5.0, -3.0]), "{plain:?}");
+        // A narrower viewmodel FOV draws it nearer the middle: the world point is further out (1 / tan 30°).
+        let narrow =
+            view_tracer_start(muzzle, &settings(60.0, [0.0; 3], false), [0.0; 3], 0.0, 0.0);
+        let s = 1.0 / 30f32.to_radians().tan();
+        assert!(near(narrow, [30.0, -5.0 * s, -3.0 * s]), "{narrow:?}");
+        // Offsets (right, forward, up) move it; the left hand mirrors it and its sideways offset.
+        let moved = view_tracer_start(
+            muzzle,
+            &settings(90.0, [1.0, 2.0, -1.0], false),
+            [0.0; 3],
+            0.0,
+            0.0,
+        );
+        assert!(near(moved, [32.0, -6.0, -4.0]), "{moved:?}");
+        let left = view_tracer_start(
+            muzzle,
+            &settings(90.0, [1.0, 2.0, -1.0], true),
+            [0.0; 3],
+            0.0,
+            0.0,
+        );
+        assert!(near(left, [32.0, 6.0, -4.0]), "{left:?}");
+        // On the camera: looking along +y from (10, 20, 64), its right is +x.
+        let turned = view_tracer_start(
+            muzzle,
+            &settings(90.0, [0.0; 3], false),
+            [10.0, 20.0, 64.0],
+            0.0,
+            90.0,
+        );
+        assert!(near(turned, [15.0, 50.0, 61.0]), "{turned:?}");
+    }
+
+    #[test]
+    fn doors_stand_where_the_demo_has_them() {
+        use crate::demo::players::{DoorSample, TickSample};
+        // A door 4 inches thick and 48 wide in its own space (x 0 – 48 from the hinge, y 0 – 4), swung 90 degrees
+        // about its hinge at (100, 0, 0): it then spans x 96 – 100 across the line y = 20 along +x.
+        let mut leaf = WorldCollision::default();
+        leaf.add_box([0.0, 0.0, 0.0], [48.0, 4.0, 96.0]);
+        let doors = Doors {
+            models: HashMap::from([(7, (leaf, Vec::new()))]),
+        };
+        let door = |yaw: f32| DoorSample {
+            entity: 1,
+            model: 7,
+            closed_position: [100.0, 0.0, 0.0],
+            closed_angles: [0.0; 3],
+            position: [100.0, 0.0, 0.0],
+            angles: [0.0, yaw, 0.0],
+            state: 0,
+        };
+        let sample = |tick: u32, yaw: f32| TickSample {
+            tick,
+            players: Vec::new(),
+            dropped: Vec::new(),
+            doors: vec![door(yaw)],
+            grenades: Vec::new(),
+            fires: Vec::new(),
+        };
+        let track = RoundTrack {
+            round: 1,
+            start_tick: 0,
+            end_tick: 100,
+            tick_interval: 1.0 / 64.0,
+            map_name: "de_test".into(),
+            samples: vec![sample(10, 0.0), sample(20, 90.0)],
+            events: Vec::new(),
+            smoke_logs: Vec::new(),
+            shots: Vec::new(),
+            player_hits: Vec::new(),
+            earlier_shots: Vec::new(),
+            earlier_hits: Vec::new(),
+        };
+        let line =
+            |tick: u32| doors.crossings(&track, tick, [0.0, 20.0, 10.0], [1.0, 0.0, 0.0], REACH);
+        // Closed (along x from the hinge, y 0 – 4): the line at y = 20 passes it.
+        assert!(line(10).is_empty());
+        // Swung open to y 0 – 48 (its x the world's y), 4 thick toward −x: in at x 96, out at x 100.
+        let open = line(20);
+        assert_eq!(open.len(), 2, "{open:?}");
+        assert!((open[0].0.distance - 96.0).abs() < 1e-3 && open[0].0.entering);
+        // A door's: its walls take no bullet hole.
+        assert!(open.iter().all(|(c, _)| c.shape == DOOR_SHAPE));
+        assert!(
+            walls_through(open.clone(), &data())
+                .iter()
+                .all(|w| w.door_in && w.door_out)
+        );
+        assert!(
+            (open[0].0.normal[0] + 1.0).abs() < 1e-3,
+            "{:?}",
+            open[0].0.normal
+        );
+        assert!((open[1].0.distance - 100.0).abs() < 1e-3 && !open[1].0.entering);
     }
 
     #[test]
@@ -1352,8 +1703,11 @@ mod tests {
                 &shot(10, 14, 0, eye, 50),
                 0,
                 &hits,
-                Some(&collision),
-                &[],
+                &Obstacles {
+                    world: Some(&collision),
+                    surfaces: &[],
+                    doors: None,
+                },
                 &data,
             )
         };

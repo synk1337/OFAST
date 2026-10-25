@@ -10,11 +10,13 @@
 //! (`C_OP_BasicMovement`), tumbling about a random axis (`C_OP_RotateVector`), bouncing off the world
 //! (`C_OP_WorldTraceConstraint`: it sticks once slower than its stop speed), faded out at the end of its life.
 //!
-//! OFAST flies each case ([`fly`]) the same way: from the gun's `shell_eject` as the exported agent holds it on the
-//! tick the case leaves it (the shot's, or 3 later for a 0.04 s delay: [`Muzzle::eject`]), against the map's
-//! collision as falling bodies see it; and, for the shooter's own view, from their viewmodel's, in the
-//! viewmodel rig's space with the world's down as the shot's camera had it and no collision (it leaves the screen in
-//! a few frames: [`VIEW_LIFE`]). The random draws are seeded by the shot, so every export flies a case alike.
+//! OFAST flies each case ([`fly`]) the same way, leaving the port the system's delay after the shot was fired (the
+//! shot's `time`, between ticks: [`crate::demo::shots::shot_times`]), from the gun's `shell_eject` as the exported
+//! agent holds it then ([`Muzzle::eject`]), against the map's collision as falling bodies see it; and, for the
+//! shooter's own view, from their viewmodel's, in the viewmodel rig's space with the world's down as the shot's
+//! camera had it and no collision (it leaves the screen in a few frames: [`VIEW_LIFE`]). In Unreal that case rides on
+//! the viewmodel, mirrored with it for a left-handed player as CS2 mirrors the viewmodel and its port. The random
+//! draws are seeded by the shot, so every export flies a case alike.
 //!
 //! Not as CS2 does: the trace constraint's bounce and slide read particle attributes whose values in these systems
 //! are not clear (the roll and the lifetime): their written amounts are used (0.5 and 0.5); how the case model's
@@ -23,8 +25,9 @@
 //!
 //! Seen in CS2 (the de_nuke pro demo, round 5, YEKINDAR's AK): from the chase camera a case flies off to his right,
 //! as OFAST's does (the AK's `shell_eject` turns x to the gun's right, and the system throws along x); through his
-//! own eyes a case crosses the lower left of the view two ticks after each shot, where OFAST's first-person case
-//! leaves to the right (not explained: perhaps CS2 mirrors its viewmodels and not their particles).
+//! own eyes a case crosses the lower left of the view two ticks after each shot: he plays left-handed
+//! (`m_bLeftHanded`), and OFAST's first-person case, on his mirrored viewmodel, goes left too (10 inches in its first
+//! 4 ticks, in Unreal).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,7 +37,7 @@ use super::players::{EJECT_TICKS, Muzzle};
 use super::shots::{ShotData, data_root};
 use crate::content::Content;
 use crate::demo::players::RoundTrack;
-use crate::demo::shots::{UniformRandom, angle_vectors};
+use crate::demo::shots::{UniformRandom, angle_vectors, shot_times};
 use crate::kv3::Value;
 use crate::model::Affine;
 use crate::physics::ragdoll::WorldCollision;
@@ -252,9 +255,58 @@ fn turned(m: [[f32; 3]; 3], axis: [f32; 3], angle: f32) -> [[f32; 3]; 3] {
     std::array::from_fn(|i| std::array::from_fn(|j| (0..3).map(|k| r[i][k] * m[k][j]).sum()))
 }
 
+/// A case in flight ([`fly`]): where it is, how fast it goes, how it is turned.
+struct InFlight<'a> {
+    casing: &'a Casing,
+    gravity: [f32; 3],
+    collision: Option<&'a WorldCollision>,
+    axis: [f32; 3],
+    rate: f32,
+    at: [f32; 3],
+    velocity: [f32; 3],
+    turn: [[f32; 3]; 3],
+}
+
+impl InFlight<'_> {
+    /// Moves it on by `dt` seconds (one substep); `true` when it came to rest.
+    fn step(&mut self, dt: f32) -> bool {
+        let keep = (1.0 - self.casing.drag).max(0.0).powf(dt * 30.0);
+        self.velocity = std::array::from_fn(|k| (self.velocity[k] + self.gravity[k] * dt) * keep);
+        let speed = dot(self.velocity, self.velocity).sqrt();
+        if speed < 1e-6 {
+            return false;
+        }
+        let way = self.velocity.map(|c| c / speed);
+        let step = speed * dt;
+        match self
+            .collision
+            .and_then(|c| c.ray_hit(self.at, way, step + REST_HEIGHT))
+        {
+            Some(hit) => {
+                self.at = std::array::from_fn(|k| {
+                    self.at[k] + way[k] * (hit.distance - REST_HEIGHT).max(0.0)
+                });
+                let into = dot(self.velocity, hit.normal);
+                self.velocity = std::array::from_fn(|k| {
+                    let normal = hit.normal[k] * into;
+                    (self.velocity[k] - normal) * self.casing.slide - normal * self.casing.bounce
+                });
+                if dot(self.velocity, self.velocity).sqrt() < self.casing.stop {
+                    return true;
+                }
+            }
+            None => self.at = std::array::from_fn(|k| self.at[k] + self.velocity[k] * dt),
+        }
+        self.turn = turned(self.turn, self.axis, self.rate * dt);
+        false
+    }
+}
+
 /// Flies one case of `casing` out of `port` (the `shell_eject` frame, in the space it flies in) for `life` seconds
 /// at `fps` frames per second, under `gravity` (that space's), bouncing off `collision` (`None`: nothing to meet);
-/// `seed` picks its speed within the system's range and its tumble.
+/// `seed` picks its speed within the system's range and its tumble. `head_start`: how long (seconds, under a frame)
+/// it has already flown at its first frame (it leaves the port between two frames).
+#[allow(clippy::too_many_arguments)]
 pub fn fly(
     casing: &Casing,
     port: &Affine,
@@ -263,12 +315,11 @@ pub fn fly(
     seed: i32,
     fps: f32,
     life: f32,
+    head_start: f32,
 ) -> Flight {
     let mut random = UniformRandom::new(seed);
     let local: [f32; 3] =
         std::array::from_fn(|k| random.float(casing.speed[0][k], casing.speed[1][k]));
-    let mut velocity: [f32; 3] =
-        std::array::from_fn(|i| (0..3).map(|k| port[i][k] * local[k]).sum());
     let axis = {
         let a: [f32; 3] = std::array::from_fn(|_| random.float(-1.0, 1.0));
         let length = dot(a, a).sqrt();
@@ -279,46 +330,58 @@ pub fn fly(
         }
     };
     let rate = random.float(casing.spin[0], casing.spin[1]).to_radians();
-    let mut at = [port[0][3], port[1][3], port[2][3]];
-    let mut turn: [[f32; 3]; 3] = std::array::from_fn(|i| std::array::from_fn(|j| port[i][j]));
+    let mut case = InFlight {
+        casing,
+        gravity,
+        collision,
+        axis,
+        rate,
+        at: [port[0][3], port[1][3], port[2][3]],
+        velocity: std::array::from_fn(|i| (0..3).map(|k| port[i][k] * local[k]).sum()),
+        turn: std::array::from_fn(|i| std::array::from_fn(|j| port[i][j])),
+    };
     let dt = 1.0 / (fps * SUBSTEPS as f32);
-    let keep = (1.0 - casing.drag).max(0.0).powf(dt * 30.0);
     let frames = (life * fps).ceil().max(1.0) as usize;
     let mut poses = Vec::with_capacity(frames);
+    // Where it is at the first frame, having left the port `head_start` before it (a step of no time could still
+    // meet a surface within the rest height, and bounce off it where it has not moved).
+    let mut still =
+        head_start > 0.0 && (0..SUBSTEPS).any(|_| case.step(head_start / SUBSTEPS as f32));
     for _ in 0..frames {
-        poses.push((at, turn));
-        for _ in 0..SUBSTEPS {
-            velocity = std::array::from_fn(|k| (velocity[k] + gravity[k] * dt) * keep);
-            let speed = dot(velocity, velocity).sqrt();
-            if speed < 1e-6 {
-                continue;
-            }
-            let way = velocity.map(|c| c / speed);
-            let step = speed * dt;
-            match collision.and_then(|c| c.ray_hit(at, way, step + REST_HEIGHT)) {
-                Some(hit) => {
-                    at = std::array::from_fn(|k| {
-                        at[k] + way[k] * (hit.distance - REST_HEIGHT).max(0.0)
-                    });
-                    let into = dot(velocity, hit.normal);
-                    velocity = std::array::from_fn(|k| {
-                        let normal = hit.normal[k] * into;
-                        (velocity[k] - normal) * casing.slide - normal * casing.bounce
-                    });
-                    if dot(velocity, velocity).sqrt() < casing.stop {
-                        // Where it lies, as the next frame's pose.
-                        poses.push((at, turn));
-                        return Flight { poses, still: true };
-                    }
-                }
-                None => at = std::array::from_fn(|k| at[k] + velocity[k] * dt),
-            }
-            turn = turned(turn, axis, rate * dt);
+        poses.push((case.at, case.turn));
+        if still {
+            return Flight { poses, still };
+        }
+        still = (0..SUBSTEPS).any(|_| case.step(dt));
+        if still {
+            // Where it lies, as the next frame's pose.
+            poses.push((case.at, case.turn));
+            return Flight { poses, still };
         }
     }
     Flight {
         poses,
         still: false,
+    }
+}
+
+/// The port at `ticks` after the shot's tick, from its samples on that tick and the [`EJECT_TICKS`] − 1 after it
+/// ([`Muzzle::eject`]): where it is, between the two samples about it (the first before the shot, the last after);
+/// how it is turned, the nearer one's. With one of the two missing (the gun not shown on that tick), the other;
+/// `None` with both.
+fn port_at(eject: &[Option<Affine>; EJECT_TICKS], ticks: f64) -> Option<Affine> {
+    let u = ticks.clamp(0.0, (EJECT_TICKS - 1) as f64);
+    let i = (u.floor() as usize).min(EJECT_TICKS - 2);
+    let t = (u - i as f64) as f32;
+    match (eject[i], eject[i + 1]) {
+        (Some(a), Some(b)) => {
+            let mut port = if t < 0.5 { a } else { b };
+            for ((row, a), b) in port.iter_mut().zip(a).zip(b) {
+                row[3] = a[3] + (b[3] - a[3]) * t;
+            }
+            Some(port)
+        }
+        (one, other) => one.or(other),
     }
 }
 
@@ -362,7 +425,15 @@ pub fn brass_json(
     let fps = 1.0 / track.tick_interval;
     let mut out = Vec::new();
     let mut models = BTreeSet::new();
-    for (controller, shot) in &track.shots {
+    // When each shot was fired (as `shots`' `time`: a tick before its message on a tournament demo).
+    let times = shot_times(
+        track
+            .shots
+            .iter()
+            .map(|(_, s)| s)
+            .chain(&track.earlier_shots),
+    );
+    for ((controller, shot), time) in track.shots.iter().zip(times) {
         let Some(casing) = data
             .weapon(shot.item)
             .and_then(|w| w.model.as_deref())
@@ -398,14 +469,19 @@ pub fn brass_json(
                 VIEW_LIFE.min(casing.life),
             ),
         ];
-        // It leaves the port that many ticks after the shot, from where the port is then.
-        let delay = ((casing.delay * fps).round() as usize).min(EJECT_TICKS - 1);
-        let first = shot.tick + delay as u32;
+        // It leaves the port the system's delay after the shot was fired (CS2's shows two ticks after a tournament
+        // demo's shot message: YEKINDAR's, tick 37685), from where the port is then, keyed from the next tick on.
+        let leaves = time + f64::from(casing.delay) * f64::from(fps);
+        let first = leaves.ceil().max(0.0) as u32;
+        let head_start = ((f64::from(first) - leaves).max(0.0) / f64::from(fps)) as f32;
         for (view, muzzle, gravity, collision, life) in flights {
-            let Some(port) = muzzle.and_then(|m| m.eject[delay]) else {
+            let Some(port) = muzzle.and_then(|m| port_at(&m.eject, leaves - f64::from(shot.tick)))
+            else {
                 continue;
             };
-            let flight = fly(casing, &port, gravity, collision, seed, fps, life);
+            let flight = fly(
+                casing, &port, gravity, collision, seed, fps, life, head_start,
+            );
             let keys: Vec<Json> = flight
                 .poses
                 .iter()
@@ -475,6 +551,7 @@ mod tests {
             1,
             64.0,
             casing.life,
+            0.0,
         );
         assert!(flight.still, "a case on a floor comes to rest");
         let (first, last) = (flight.poses[0].0, flight.poses.last().expect("poses").0);
@@ -491,6 +568,7 @@ mod tests {
             1,
             64.0,
             casing.life,
+            0.0,
         );
         assert_eq!(again, flight);
         let other = fly(
@@ -501,6 +579,7 @@ mod tests {
             2,
             64.0,
             casing.life,
+            0.0,
         );
         assert_ne!(other.poses.last(), flight.poses.last());
         // It tumbles at most at the system's top rate: 1500 degrees per second, 23.4 per frame.
@@ -516,11 +595,69 @@ mod tests {
             "{step}"
         );
         // Without anything to meet it falls on for its whole life.
-        let open = fly(&casing, &port, casing.gravity, None, 1, 64.0, 1.0);
+        let open = fly(&casing, &port, casing.gravity, None, 1, 64.0, 1.0, 0.0);
         assert!(!open.still);
         assert_eq!(open.poses.len(), 64);
         // Slowed by its drag (at most about 390 inches per second), it has fallen over 100 inches from 50 up.
         assert!(open.poses[63].0[2] < -50.0, "{:?}", open.poses[63].0);
+        // Leaving the port half a frame before its first frame, it is half a frame's way out there.
+        let late = fly(
+            &casing,
+            &port,
+            casing.gravity,
+            None,
+            1,
+            64.0,
+            1.0,
+            0.5 / 64.0,
+        );
+        let (out, next) = (late.poses[0].0[1], open.poses[1].0[1]);
+        assert!(out > 0.3 * next && out < 0.7 * next, "{out} of {next}");
+        // A port within the rest height of a surface, the case leaving it on the frame: its first pose is the
+        // port's, not a bounce.
+        let low = affine([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.1]);
+        let on_floor = fly(
+            &casing,
+            &low,
+            casing.gravity,
+            Some(&floor),
+            1,
+            64.0,
+            1.0,
+            0.0,
+        );
+        assert_eq!(on_floor.poses[0].0, [0.0, 0.0, 0.1]);
+    }
+
+    #[test]
+    fn the_port_is_where_the_gun_holds_it_when_the_case_leaves() {
+        let at = |x: f32, turn: [f32; 4]| Some(affine(turn, [x, 0.0, 0.0]));
+        let (straight, half) = (
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.5f32.sqrt(), 0.5f32.sqrt()],
+        );
+        let eject = [
+            at(0.0, straight),
+            at(4.0, straight),
+            at(8.0, half),
+            at(12.0, half),
+        ];
+        // Between two ticks: where it is between them, turned as the nearer.
+        let p = port_at(&eject, 1.25).expect("port");
+        assert!((p[0][3] - 5.0).abs() < 1e-5, "{p:?}");
+        assert_eq!(p[0][0], 1.0);
+        let p = port_at(&eject, 1.75).expect("port");
+        assert!((p[0][3] - 7.0).abs() < 1e-5, "{p:?}");
+        assert!(p[0][0].abs() < 1e-6, "{p:?}");
+        // Before the shot's tick, its first; after the last, its last.
+        assert_eq!(port_at(&eject, -0.5), eject[0]);
+        assert_eq!(port_at(&eject, 5.0), eject[3]);
+        // A missing sample: the other one; both missing: none.
+        let mut gaps = eject;
+        gaps[2] = None;
+        assert_eq!(port_at(&gaps, 1.5), eject[1]);
+        gaps[1] = None;
+        assert_eq!(port_at(&gaps, 1.5), None);
     }
 
     #[test]

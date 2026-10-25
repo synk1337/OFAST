@@ -17,17 +17,20 @@
 //!   range falloff, hit groups and armour; through walls the penetration's losses.
 //!
 //! Needs a demo with `bullet_damage` and `player_hurt` (a local match demo: tournament demos lack `bullet_damage`).
+//! With `OFAST_DOORS=1`, also round by round: how many hits after a wall start where a traced way out is, without
+//! and with the rotating doors posed as the demo has them ([`Doors`]).
 
 use std::collections::HashMap;
 
 use ofast_core::content::Content;
 use ofast_core::demo::DemoParser;
 use ofast_core::demo::events::{EventValue, GameEvent};
+use ofast_core::demo::players::{list_rounds, track_round};
 use ofast_core::demo::shots::{
     EFFECT_DISPATCH, FIRE_BULLETS, PlayerHit, Shot, bullet_direction, decode_fire_bullets,
     decode_player_hit, hit_of, spread_offset,
 };
-use ofast_core::export::shots::{ShotData, Wall, damage_at, walls_on};
+use ofast_core::export::shots::{Doors, ShotData, Wall, damage_at, walls_on, walls_through};
 use ofast_core::game::Cs2Install;
 use ofast_core::physics::PhysicsData;
 use ofast_core::physics::ragdoll::WorldCollision;
@@ -71,6 +74,7 @@ fn main() {
     let world = PhysicsData::from_resource(&Resource::parse(&bytes).expect("parses"))
         .expect("PHYS reads")
         .expect("a PHYS block");
+    // As bullets see it (grates, railings and glass left out: as walls they explained no more of the demos' hits).
     let collision = WorldCollision::from_physics_where(&world, |a| a.stops_bullets());
     let items = content
         .read("scripts/items/items_game.txt")
@@ -450,4 +454,146 @@ fn main() {
             }
         );
     }
+
+    // OFAST_DOORS=1: round by round, the hits after a wall again, with the rotating doors posed as the demo has them.
+    if std::env::var("OFAST_DOORS").is_ok() {
+        doors_check(&data, &content, &collision, surfaces, &shot_data);
+    }
+}
+
+/// The hits that start past the shooter's eyes, round by round: how many start within half an inch of a traced way
+/// out of a wall, without the doors and with them ([`Doors`], posed per tick from the round's samples).
+fn doors_check(
+    data: &[u8],
+    content: &Content,
+    collision: &WorldCollision,
+    surfaces: &[u32],
+    shot_data: &ShotData,
+) {
+    let paths = content.resource_paths("vmdl");
+    let (mut after, mut world_only, mut with_doors) = (0, 0, 0);
+    for info in list_rounds(data).expect("rounds") {
+        let Ok(track) = track_round(data, info.round) else {
+            continue;
+        };
+        let mut warnings = Vec::new();
+        let doors = Doors::load(content, &track, &paths, &mut warnings);
+        for hit in track.player_hits.iter().filter(|h| h.start != h.point) {
+            for (_, shot) in track
+                .shots
+                .iter()
+                .filter(|(_, s)| s.tick == hit.tick && !hit_of(s, hit))
+            {
+                let Some(weapon) = shot_data.weapon(shot.item) else {
+                    continue;
+                };
+                for bullet in 0..weapon.bullets.max(1) {
+                    let d = bullet_direction(
+                        shot.angles,
+                        spread_offset(shot.seed, bullet, shot.inaccuracy, shot.spread),
+                    );
+                    let on = |p: [f32; 3]| {
+                        let v: [f32; 3] = std::array::from_fn(|k| p[k] - shot.eye[k]);
+                        let t: f32 = (0..3).map(|k| v[k] * d[k]).sum();
+                        let off = (0..3)
+                            .map(|k| (v[k] - d[k] * t).powi(2))
+                            .sum::<f32>()
+                            .sqrt();
+                        (t, off)
+                    };
+                    let ((start, start_off), (_, point_off)) = (on(hit.start), on(hit.point));
+                    if start_off > 0.5 || point_off > 0.5 || start <= 0.0 {
+                        continue;
+                    }
+                    after += 1;
+                    let world: Vec<_> = collision
+                        .ray_crossings(shot.eye, d, start + 1.0)
+                        .into_iter()
+                        .map(|c| (c, surfaces.get(c.surface as usize).copied().unwrap_or(0)))
+                        .collect();
+                    let exits = |walls: &[ofast_core::export::shots::Wall]| {
+                        walls
+                            .iter()
+                            .any(|w| (w.distance + w.thickness - start).abs() < 0.5)
+                    };
+                    let mut both = world.clone();
+                    let door_crossings =
+                        doors.crossings(&track, shot.tick, shot.eye, d, start + 1.0);
+                    both.extend(door_crossings.iter().copied());
+                    let found = exits(&walls_through(world, shot_data));
+                    world_only += usize::from(found);
+                    with_doors += usize::from(exits(&walls_through(both, shot_data)));
+                    if !found {
+                        // Where it came out, and the nearest door's hinge.
+                        let at: [f32; 3] = std::array::from_fn(|k| shot.eye[k] + d[k] * start);
+                        let sample = &track.samples[track
+                            .samples
+                            .partition_point(|s| s.tick < shot.tick)
+                            .min(track.samples.len() - 1)];
+                        let nearest = sample
+                            .doors
+                            .iter()
+                            .map(|door| {
+                                (
+                                    (0..3)
+                                        .map(|k| (door.position[k] - at[k]).powi(2))
+                                        .sum::<f32>()
+                                        .sqrt(),
+                                    door.angles,
+                                )
+                            })
+                            .min_by(|a, b| a.0.total_cmp(&b.0));
+                        println!(
+                            "  round {} tick {}: out at {:?}, {} door crossings on the line, nearest door {:?}",
+                            info.round,
+                            hit.tick,
+                            at.map(|c| c.round()),
+                            door_crossings.len(),
+                            nearest
+                        );
+                        // What the world has along the line up to there (distance, in or out).
+                        let along: Vec<String> = collision
+                            .ray_crossings(shot.eye, d, start + 50.0)
+                            .iter()
+                            .map(|c| {
+                                format!("{:.1}{}", c.distance, if c.entering { "+" } else { "-" })
+                            })
+                            .collect();
+                        println!(
+                            "    from the eyes, it starts at {start:.1}; the world's crossings: {along:?}"
+                        );
+                        // As map_raycast's camera (setpos: the eyes 64 below; setang along the bullet).
+                        println!(
+                            "    tick {} start {start:.1} map_raycast camera \"{:.1},{:.1},{:.1},{:.3},{:.3}\"",
+                            hit.tick,
+                            shot.eye[0],
+                            shot.eye[1],
+                            shot.eye[2] - 64.0,
+                            -d[2].asin().to_degrees(),
+                            d[1].atan2(d[0]).to_degrees()
+                        );
+                    }
+                }
+            }
+        }
+        if info.round == 1 {
+            println!(
+                "doors: {:?}, hulls and triangles per model {:?}",
+                warnings,
+                doors.counts()
+            );
+            if let Some(sample) = track.samples.first() {
+                for door in &sample.doors {
+                    println!(
+                        "  door {:016x} at {:?} turned {:?}",
+                        door.model, door.position, door.angles
+                    );
+                }
+            }
+        }
+    }
+    println!(
+        "\ndoors: {after} hits start past the eyes; a traced way out within 0.5 in of the start: {world_only} without \
+         the doors, {with_doors} with them"
+    );
 }

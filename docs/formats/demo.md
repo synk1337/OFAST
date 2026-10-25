@@ -745,7 +745,7 @@ Two kinds of message show where bullets really went, and checked the rule (`exam
   `num_penetrations` and `distance`, from where the stretch started) checks the penetration rule
   ([replay.md](replay.md#agents-manifest-demo_rroundagentsjson), `shots`): without walls 2,860 non-lethal hits
   of those 13 demos are exactly the weapon's damage after its range falloff, hit group and armour (most of the 42
-  others hit a teammate: CS2 cuts friendly bullets to a third), through walls 288 of 314.
+  others hit a teammate: CS2 cuts friendly bullets to a third), through walls 289 of 314.
 
 Not yet checked: shotguns' bullets after the first (seeded + 1 each, as CS:GO did), the R8 Revolver's and the
 Negev's own rules. Where the bullets stop is traced through the map's collision
