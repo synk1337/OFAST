@@ -253,7 +253,10 @@ player and round.
   surface's impact and bullet-hole decal; through a wall into a player the demo shows hit; third-person muzzle flashes at
   the barrel the agents show, with a light; tracers as fast as CS2's; dust, flecks and sparks by surface; blood; bullet
   holes, the earlier rounds' too (CS2 keeps them). Checked against CS2 through three players' eyes and a chase camera.
-- [ ] Shots, the rest: first-person muzzle flashes, brass, bullets through walls and players (penetration), the
+- [x] First-person muzzle flashes: on the viewmodel's barrel, CS2's flash made smaller as its `_fps` systems do, in
+  Unreal's first-person rendering, with its own light; the AK's second flame (`_alt`, wispy tongues) picked per shot
+  as CS2 picks it. Fitted to CS2's flash through two players' eyes.
+- [ ] Shots, the rest: each gun's own muzzle flash, brass, bullets through walls and players (penetration), the
   tracer counter and timing confirmed.
 
 ## Hard problems we know about

@@ -24,7 +24,7 @@ use super::gltf::{
     Binding, BoneAnimation, ExportReport, MergedModel, export_character, load_model, resource_data,
 };
 use super::loadout::{WeaponFrames, WeaponLook};
-use super::players::{shown_groups, stem};
+use super::players::{Muzzle, shown_groups, stem};
 use crate::anim::bake::frame_samples;
 use crate::anim::eval::Library;
 use crate::anim::graph::Graph;
@@ -37,7 +37,7 @@ use crate::anim::{BoneConstraints, Clip, NmSkeleton, Retargeter, matrix_to_quat}
 use crate::content::Content;
 use crate::demo::players::RoundTrack;
 use crate::kv3::Value;
-use crate::model::{Affine, Bone, Model, compose, invert_rigid};
+use crate::model::{Affine, Bone, Model, Skeleton, compose, invert_rigid};
 
 /// The viewmodel clips' skeleton, when the graph does not name it.
 const VIEWMODEL_SKELETON: &str = "animation/skeletons/characters/viewmodel.vnmskel";
@@ -184,10 +184,15 @@ struct Slot {
     first: usize,
     /// The model's bones from the weapon skeleton's poses, when the item has one.
     retarget: Option<(Retargeter, Vec<Option<usize>>)>,
+    /// The model's `muzzle_flash` attachment: the model's bone it hangs on and its frame on that bone (`None`:
+    /// knives, grenades, the C4).
+    muzzle: Option<(usize, Affine)>,
 }
 
-/// What [`export_viewmodel_look`] wrote: the glTF export's report, and the weapon looks it holds.
-pub type ViewmodelExport = (ExportReport, Vec<WeaponLook>);
+/// What [`export_viewmodel_look`] wrote: the glTF export's report, the weapon looks it holds, and where the barrel of
+/// the weapon in hand was at each of the players' shots, in the rig's model space ([`Muzzle`]: Source axes, inches;
+/// in Unreal the viewmodel's component space, at the camera before the player's viewmodel offsets and hand).
+pub type ViewmodelExport = (ExportReport, Vec<WeaponLook>, Vec<Muzzle>);
 
 /// One player's baked frames and the weapon look in hand at each: `(controller, frames, looks)`.
 type Baked = (u32, Vec<Option<ViewmodelFrame>>, Vec<Option<WeaponLook>>);
@@ -330,11 +335,15 @@ pub fn export_viewmodel_look(
                     .collect();
                 (Retargeter::new(&model.skeleton, anim), by_name)
             });
+        let muzzle = model
+            .attachment("muzzle_flash")
+            .and_then(|a| a.on_bone(&model.skeleton));
         slots.push(Slot {
             look,
             model,
             first,
             retarget,
+            muzzle,
         });
     }
 
@@ -374,6 +383,7 @@ pub fn export_viewmodel_look(
         .map(|b| (b.position, b.rotation))
         .collect();
     let mut animations = Vec::new();
+    let mut muzzles = Vec::new();
     for (controller, frames, looks) in &baked {
         let mut keys = Vec::with_capacity(frames.len());
         let mut scales = Vec::with_capacity(frames.len());
@@ -437,6 +447,34 @@ pub fn export_viewmodel_look(
             keys.push(locals);
             scales.push(frame_scales);
         }
+        // Each shot: where the barrel of the weapon in hand was in the frame of its tick (the same frame the third
+        // person's muzzle takes, export::players), from the frame's bones as keyed.
+        for (_, shot) in track.shots.iter().filter(|(c, _)| c == controller) {
+            let Some(k) = frames_at
+                .iter()
+                .position(|&(tick, _)| tick >= shot.tick as f32 - 0.5)
+            else {
+                continue;
+            };
+            let (Some(_), Some(look)) = (&frames[k], &looks[k]) else {
+                continue;
+            };
+            let Some((slot, (bone, offset))) = slots
+                .iter()
+                .find(|s| &s.look == look)
+                .and_then(|s| Some((s, s.muzzle?)))
+            else {
+                continue;
+            };
+            let world = posed(&skeleton, &keys[k]);
+            let m = compose(&world[slot.first + bone], &offset);
+            muzzles.push(Muzzle {
+                controller: *controller,
+                tick: shot.tick,
+                position: [m[0][3], m[1][3], m[2][3]],
+                direction: [m[0][0], m[1][0], m[2][0]],
+            });
+        }
         animations.push(BoneAnimation {
             name: format!("viewmodel_{controller}"),
             frames: keys,
@@ -460,5 +498,19 @@ pub fn export_viewmodel_look(
     )?;
     written.warnings.extend(warnings);
     let looks = slots.into_iter().map(|s| s.look).collect();
-    Ok((written, looks))
+    Ok((written, looks, muzzles))
+}
+
+/// Every bone of `skeleton` in model space for one frame's keys (`(translation, rotation)` relative to the parent,
+/// parents before their children, as the skeleton lists them).
+fn posed(skeleton: &Skeleton, keys: &[([f32; 3], [f32; 4])]) -> Vec<Affine> {
+    let mut world: Vec<Affine> = Vec::with_capacity(keys.len());
+    for (bone, &(t, q)) in skeleton.bones.iter().zip(keys) {
+        let local = crate::model::affine(q, t);
+        world.push(match bone.parent {
+            Some(p) => compose(&world[p], &local),
+            None => local,
+        });
+    }
+    world
 }

@@ -423,7 +423,8 @@ pub fn export_players(
         report.weapons += weapons.len();
     }
     let dropped = export_dropped(&round, demo_name, out_dir, &mut report);
-    let viewmodels = export_viewmodels(&round, &groups, demo_name, out_dir, &mut report);
+    let (viewmodels, view_muzzles) =
+        export_viewmodels(&round, &groups, demo_name, out_dir, &mut report);
     let effects = export_effect_textures(content, out_dir, &mut report.warnings);
     let blasts = blasts_json(track, round.collision.as_ref());
     let fire_walls = fire_walls_json(track, round.collision.as_ref());
@@ -437,6 +438,7 @@ pub fn export_players(
         bullet_collision.as_ref(),
         round.world.as_ref(),
         &muzzles,
+        &view_muzzles,
         &shot_data,
     );
     let (earlier_holes, earlier_groups) = earlier_holes_json(
@@ -472,21 +474,22 @@ pub fn export_players(
 }
 
 /// Writes the players' first-person views ([`super::viewmodel`]): one glTF per agent and glove skin of the looks
-/// in `groups`, `<demo>_r<round>_viewmodel_<agent>[_<gloves>].gltf`. Returns the manifest entries: file, agent,
-/// gloves, players, and the weapon looks it holds. Without the upper-body data (no weapon names) or CS2's viewmodel
-/// files there is none, with a warning; a look that fails is left out with a warning too.
+/// in `groups`, `<demo>_r<round>_viewmodel_<agent>[_<gloves>].gltf`. Returns the manifest entries (file, agent,
+/// gloves, players, and the weapon looks it holds), and where the barrel was at each shot in first person
+/// ([`super::viewmodel::ViewmodelExport`]). Without the upper-body data (no weapon names) or CS2's viewmodel files
+/// there is none, with a warning; a look that fails is left out with a warning too.
 fn export_viewmodels(
     round: &Round<'_>,
     groups: &BTreeMap<Look, Vec<u32>>,
     demo_name: &str,
     out_dir: &Path,
     report: &mut PlayersReport,
-) -> Vec<serde_json::Value> {
+) -> (Vec<serde_json::Value>, Vec<Muzzle>) {
     let Some(upper) = &round.upper else {
         report
             .warnings
             .push("no weapon names: no first-person views".into());
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let mut weapons: Vec<(u32, String, String)> = upper
         .weapons
@@ -500,7 +503,7 @@ fn export_viewmodels(
             report
                 .warnings
                 .push(format!("viewmodel graphs: {e}: no first-person views"));
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
     };
     let arms = match load_model(round.content, ARMS_MODEL) {
@@ -509,7 +512,7 @@ fn export_viewmodels(
             report
                 .warnings
                 .push(format!("{ARMS_MODEL}: {e}: no first-person views"));
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
     };
     // The defuse kit makes no difference in first person: one file per agent and gloves.
@@ -521,6 +524,7 @@ fn export_viewmodels(
             .extend(players);
     }
     let mut entries = Vec::new();
+    let mut muzzles = Vec::new();
     for ((agent, gloves), mut players) in looks {
         players.sort_unstable();
         let mut name = format!(
@@ -544,7 +548,8 @@ fn export_viewmodels(
             out_dir,
             &name,
         ) {
-            Ok((written, weapons)) => {
+            Ok((written, weapons, look_muzzles)) => {
+                muzzles.extend(look_muzzles);
                 entries.push(json!({
                     "file": format!("{name}.gltf"),
                     "model": agent,
@@ -564,7 +569,7 @@ fn export_viewmodels(
                 .push(format!("viewmodel {name}: {e}: not written")),
         }
     }
-    entries
+    (entries, muzzles)
 }
 
 /// Writes one glTF per look of the weapons lying in the world during the round (the replay's `dropped_weapons`) and
@@ -661,15 +666,16 @@ type LookExport = (
     Vec<Muzzle>,
 );
 
-/// Where a shot left the barrel of the gun in the shooter's hand, as the exported agent shows it at the shot's tick
-/// (third person: the weapon's world model, its `muzzle_flash` attachment).
+/// Where a shot left the barrel of the gun in the shooter's hand at the shot's tick: the weapon model's
+/// `muzzle_flash` attachment as the exported agent shows it (third person, in the world) or as their viewmodel does
+/// (first person, in the viewmodel rig's space: [`super::viewmodel::ViewmodelExport`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Muzzle {
     /// The shooter's controller.
     pub controller: u32,
     /// The shot's tick.
     pub tick: u32,
-    /// The muzzle (Source axes, inches).
+    /// The muzzle (Source axes, inches; in the world, or in the viewmodel rig's space).
     pub position: [f32; 3],
     /// Along the barrel (unit).
     pub direction: [f32; 3],

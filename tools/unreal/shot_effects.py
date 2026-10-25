@@ -13,9 +13,14 @@ main layers with grenade_effects' "particle system in a material" (CS2's own spr
   muzzle, flying along its barrel), per tracer (from the muzzle to where its bullet stopped, as fast as CS2's), per
   bullet that met the world (its surface family's impact, flying out along the surface's normal) or a player (blood,
   back toward the shooter; and the impact of a wall it went through first). A silenced shot has no flame and no light,
-  only its smoke.
+  only its smoke. A shooter's third-person muzzle flashes are on an actor of their own, hidden while the camera looks
+  through their eyes.
+- There, CS2 draws the first-person system instead (particles/unified_weapon_fx/*_fps.vpcf): the same layers smaller,
+  on the viewmodel's barrel. Here they are instanced meshes on the shooter's viewmodel actor (shown and hidden with it,
+  moved and mirrored with it), drawn with Unreal's first-person rendering as the viewmodel is.
 - A point light per shooter, moved to each shot's muzzle and pulsed for a few ticks (CS2's muzzle flashes light the
-  world briefly: their `fakelight` child).
+  world briefly: their `fakelight` child), hidden with the body; and one on the viewmodel for their own view (the
+  first-person system has its own).
 - A decal actor per bullet hole: one of its decal group's textures, at the bullet's end, facing the surface; it shows
   from its shot's tick on. The tick rides in the decal's colour (DecalColor's red), read by the material: one material
   instance per texture, not per hole. The holes the shots before the round left (the agents manifest's
@@ -34,22 +39,71 @@ UNITS_TO_CM = grenade_effects.UNITS_TO_CM
 FOLDER = grenade_effects.FOLDER
 BULLET_HOLE_MATERIAL = "/Game/OFAST/Replays/M_BulletHole"
 
-# Sprite layers (grenade_effects' layer tables: CS2's ranges, read 2026-10-25). Muzzle flashes, along the barrel:
-# particles/unified_weapon_fx/uweapon_muzflsh_ak47_primaryflash: 8 sprites of fire_gas_batch_b_top (one of its 4
-# sequences), 0.05 s, born 3 - 20 units along the barrel and flying on at 100 - 150 units/s, colour (198, 131, 80) to
-# (216, 216, 216) of 255 at 4 x overbright, alpha 0.24 - 0.59, radius 1 - 1.5 x a curve of 2.7 - 10 along the flash x
-# 0.5. In full at once (a 0.05 s flash is three ticks: faded in over a tenth of it, its first tick would be dark).
-# ..._gen_smoke: 2 puffs of smokeloop_i_0_sc_hardedge, 0.2 - 0.5 s, alpha 0.15 - 0.3.
-MUZZLE_LAYERS = [
-    {"name": "muzzle_flash", "role": "muzzle_flash", "slots": 8, "life": (0.05, 0.05), "radius": (2.7, 15.0),
-     "scale": (1.0, 1.0), "alpha": (0.24, 0.59), "roll": 180.0, "spread": 0.5, "rise": 0.0, "bright": 4.0,
-     "tint": (0.82, 0.67, 0.55), "size": 0.5, "lift": 0.0, "along": (3.0, 20.0), "up": (100.0, 150.0),
-     "fade_in": 0.0, "fade_out": 0.3},
-    {"name": "muzzle_smoke", "role": "muzzle_smoke", "slots": 2, "life": (0.2, 0.5), "radius": (4.0, 8.0),
-     "scale": (0.6, 1.6), "alpha": (0.15, 0.3), "roll": 180.0, "spread": 1.0, "rise": 2.0, "bright": 1.0,
-     "tint": (0.6, 0.6, 0.6), "translucent": True, "size": 1.0, "lift": 0.0, "along": (2.0, 8.0),
-     "up": (10.0, 30.0)},
-]
+# Sprite layers (grenade_effects' layer tables: CS2's ranges, read 2026-10-25). Muzzle flashes, along the barrel.
+# particles/unified_weapon_fx/uweapon_muzflsh_ak47 plays one flame child per shot (C_OP_ChooseRandomChildrenInGroup,
+# group 1: _primaryflash, _primaryflash_alt listed twice, or an empty one with a beam; here the first two, one in three
+# and two in three, picked by the shot: FLAME_CHOICE), its smoke and its light always.
+# _primaryflash: 8 sprites of fire_gas_batch_b_top (one of its 4 sequences), 0.05 s, born 3 - 20 units along the
+# barrel and flying on at 100 - 150 units/s, colour (198, 131, 80) to (216, 216, 216) of 255 at 4 x overbright, alpha
+# 0.24 - 0.59, radius 1 - 1.5 x a curve of 2.7 - 10 along the flash x 0.5. In full at once (a 0.05 s flash is three
+# ticks: faded in over a tenth of it, its first tick would be dark).
+MUZZLE_FLAME = {"name": "muzzle_flash", "role": "muzzle_flash", "slots": 8, "life": (0.05, 0.05),
+                "radius": (2.7, 15.0), "scale": (1.0, 1.0), "alpha": (0.24, 0.59), "roll": 180.0, "spread": 0.5,
+                "rise": 0.0, "bright": 4.0, "tint": (0.82, 0.67, 0.55), "size": 0.5, "lift": 0.0, "along": (3.0, 20.0),
+                "up": (100.0, 150.0), "fade_in": 0.0, "fade_out": 0.3}
+# _primaryflash_alt: wispy tongues of flame, 6 sprites of wispy_steam_burst_b (one of 4 sequences), 0.05 - 0.095 s,
+# rolled -60 to -120 degrees, thrown out along the barrel at 500 units/s (drag 0.2), alpha 0.71 - 0.78, faded out over
+# its last 0.015 s; the same colours and overbright, times its renderer's colour scale (205, 133, 63) of 255: the grey
+# wisps burn orange, their bright middles yellow-white (without it they were white smoke beside CS2's orange flames).
+# Fitted to CS2's first-person flash (YEKINDAR's and molodoy's AK one tick after a shot, de_nuke round 5, ticks 37950
+# and 40840: its wispy tongues show CS2 drew this flame in both): its radius, 3.2 - 9.7 (0.35 of it in first person),
+# where its initializers read as 0.75 - 1 x 0.35 - 0.8 (by particle) of the default radius 5, which drew the tongues
+# at 0.4 of CS2's size; and twice
+# CS2's overbright: the sheet is white with a faint alpha (median 0.15), and at 4 its tongues were a beige haze where
+# CS2's are bright flames (its renderer adds the texture's own colour too, m_flAddSelfAmount 1, which the sprite
+# material does not model).
+MUZZLE_ALT = {"name": "muzzle_alt", "role": "muzzle_alt", "slots": 6, "life": (0.05, 0.095), "radius": (3.2, 9.7),
+              "scale": (1.0, 1.0), "alpha": (0.71, 0.78), "roll": 30.0, "roll_base": -90.0, "spread": 0.5,
+              "rise": 0.0, "bright": 8.0, "tint": (0.66, 0.35, 0.14), "size": 1.0, "lift": 0.0, "along": (0.0, 1.0),
+              "up": (500.0, 500.0), "drag": 0.2, "fade_in": 0.0, "fade_out": 0.2}
+# _gen_smoke: 2 puffs of smokeloop_i_0_sc_hardedge, 0.2 - 0.5 s, alpha 0.15 - 0.3.
+MUZZLE_SMOKE = {"name": "muzzle_smoke", "role": "muzzle_smoke", "slots": 2, "life": (0.2, 0.5), "radius": (4.0, 8.0),
+                "scale": (0.6, 1.6), "alpha": (0.15, 0.3), "roll": 180.0, "spread": 1.0, "rise": 2.0, "bright": 1.0,
+                "tint": (0.6, 0.6, 0.6), "translucent": True, "size": 1.0, "lift": 0.0, "along": (2.0, 8.0),
+                "up": (10.0, 30.0)}
+MUZZLE_LAYERS = [MUZZLE_FLAME, MUZZLE_ALT, MUZZLE_SMOKE]
+# The share of shots drawing _primaryflash rather than _primaryflash_alt (1 of the 3 flames the chooser has).
+FLAME_CHOICE = 1.0 / 3.0
+# First person: each weapon's `_fps` system (m_nViewModelEffect) has its third-person system as its child and, in its
+# "game" configuration, puts control point 5 at (scale, 1, 1), which the children's C_INIT_GlobalScale reads (read
+# 2026-10-25: uweapon_muzflsh_ak47_fps 0.35, _riffle_fps 0.5 — the M4A4's). The layers above are the AK's, so other
+# weapons take the AK's scale too (their own systems are not rebuilt yet). Every length of a layer is scaled (its
+# sizes, where its particles are born, how far they fly): C_INIT_GlobalScale's switches are left at their defaults in
+# the files, which do not say what they are; with the sizes left whole, the main flame filled a fifth of the screen in
+# first person.
+VIEW_SCALES = {"weapon_ak47": 0.35, "weapon_m4a1": 0.5}
+VIEW_SCALE_DEFAULT = 0.35
+
+
+def view_layer(layer, scale):
+    """A muzzle layer as first person draws it (VIEW_SCALES): on the viewmodel (`local`), every length times
+    `scale`."""
+    option = grenade_effects.option
+    out = dict(layer, name="%s_fp%d" % (grenade_effects.layer_name(layer), round(scale * 100)), local=True)
+    out["radius"] = tuple(r * scale for r in layer["radius"])
+    for key in ("along", "up", "speed"):
+        out[key] = tuple(v * scale for v in option(layer, key))
+    out["spread"] = layer["spread"] * scale
+    out["rise"] = layer["rise"] * scale
+    return out
+
+
+def view_scale(shot):
+    return VIEW_SCALES.get(shot.get("weapon") or "", VIEW_SCALE_DEFAULT)
+
+
+VIEW_LAYERS = [view_layer(layer, scale) for scale in sorted(set(VIEW_SCALES.values()) | {VIEW_SCALE_DEFAULT})
+               for layer in MUZZLE_LAYERS]
 # Tracers (particles/weapons/cs_weapon_fx/weapon_tracers_*): one particle flying from the muzzle to where the bullet
 # stopped (C_INIT_MoveBetweenPoints) at the tracer's speed (units/s), drawn as a trail of sparks.vtex's streak
 # (sequence 4) as long as 0.085 - 0.1 s of its flight, at most `max_length` units, its colour (255, 68, 21) to
@@ -161,10 +215,19 @@ def log(message):
 
 def shot_layers():
     """Every sprite layer of the shots."""
-    layers = MUZZLE_LAYERS + TRACER_LAYERS + BLOOD_LAYERS
+    layers = MUZZLE_LAYERS + VIEW_LAYERS + TRACER_LAYERS + BLOOD_LAYERS
     for family_layers in FAMILY_LAYERS.values():
         layers += family_layers
     return layers
+
+
+def muzzle_layers(shot, alt=True):
+    """The muzzle layers a shot draws: its flame (MUZZLE_FLAME or MUZZLE_ALT, picked by the shot as CS2's chooser
+    picks one: FLAME_CHOICE; MUZZLE_FLAME always without `alt`; none when silenced) and its smoke."""
+    if shot.get("silenced"):
+        return [MUZZLE_SMOKE]
+    pick = random.Random(shot["tick"] * 7919 + shot["controller"] * 104729).random()
+    return [MUZZLE_FLAME if pick < FLAME_CHOICE or not alt else MUZZLE_ALT, MUZZLE_SMOKE]
 
 
 def family_of(bullet):
@@ -176,11 +239,13 @@ def unit(v):
     return [c / length for c in v] if length > 1e-6 else [0.0, 0.0, 1.0]
 
 
-def sprite_slots(shots):
+def sprite_slots(shots, alt=True):
     """The sprite slots (grenade_effects.add_sprites) of every shot: (shooter controller -> layer name -> slots of
-    their muzzle flashes, not the silenced shots' flame; layer name -> slots of the tracers, impacts by surface family
-    and blood)."""
+    their muzzle flashes (muzzle_layers: `alt` whether MUZZLE_ALT can be drawn), not the silenced shots' flame; the
+    same for their first-person flashes, in the viewmodel rig's space; layer name -> slots of the tracers, impacts by
+    surface family and blood)."""
     muzzles = {}
+    views = {}
     slots = {}
 
     def add(layers, slot, into):
@@ -189,10 +254,15 @@ def sprite_slots(shots):
 
     for shot in shots:
         tick = shot["tick"]
+        layers = muzzle_layers(shot, alt)
         muzzle, barrel = shot.get("muzzle"), shot.get("muzzle_direction")
         if muzzle and barrel:
-            layers = MUZZLE_LAYERS[1:] if shot.get("silenced") else MUZZLE_LAYERS
             add(layers, (muzzle, tick, tick, barrel, 0.0), muzzles.setdefault(shot["controller"], {}))
+        view, view_barrel = shot.get("view_muzzle"), shot.get("view_muzzle_direction")
+        if view and view_barrel:
+            scale = view_scale(shot)
+            add([view_layer(layer, scale) for layer in layers], (view, tick, tick, view_barrel, 0.0),
+                views.setdefault(shot["controller"], {}))
         start = muzzle or shot["eye"]
         for bullet in shot["bullets"]:
             end = bullet["end"]
@@ -213,18 +283,19 @@ def sprite_slots(shots):
                 wall = bullet.get("wall")
                 if wall and wall.get("normal"):
                     add(FAMILY_LAYERS[family_of(wall)], (wall["end"], tick, tick, wall["normal"], 0.0), slots)
-    return muzzles, slots
+    return muzzles, views, slots
 
 
-def light_frames(shots, tick0, end_frame):
+def light_frames(shots, tick0, end_frame, key="muzzle"):
     """Per shooter, the muzzle light's keys, one per frame from the frame before a shot to the end of its pulse:
-    [(frame, position or None, intensity)], for the shots with a muzzle that are not silenced. A frame's intensity is
-    the brightest of the pulses (MUZZLE_LIGHT) of the shooter's shots then, so shots closer together than a pulse
-    (a burst, a Negev) do not cut each other short; the position is keyed on each shot's own frame."""
+    [(frame, position or None, intensity)], for the shots with a muzzle (`key`: "muzzle", in the world, or
+    "view_muzzle", in the viewmodel rig's space) that are not silenced. A frame's intensity is the brightest of the
+    pulses (MUZZLE_LIGHT) of the shooter's shots then, so shots closer together than a pulse (a burst, a Negev) do not
+    cut each other short; the position is keyed on each shot's own frame."""
     by_shooter = {}
     for shot in shots:
-        if shot.get("muzzle") and not shot.get("silenced"):
-            by_shooter.setdefault(shot["controller"], []).append((shot["tick"] - tick0, shot["muzzle"]))
+        if shot.get(key) and not shot.get("silenced"):
+            by_shooter.setdefault(shot["controller"], []).append((shot["tick"] - tick0, shot[key]))
     last = MUZZLE_LIGHT["decay"][-1][0]
     out = {}
     for controller, own in by_shooter.items():
@@ -239,13 +310,47 @@ def light_frames(shots, tick0, end_frame):
     return out
 
 
-def place_lights(sequence, replay, shots, end_frame, spawn, hide):
+def key_light(place, light, keys, end_frame):
+    """Keys a muzzle light from light_frames' `keys`: its location (constant keys at each shot's muzzle, Source axes
+    to Unreal's) on the binding `place`, its intensity on the binding `light` (of its light component)."""
+    constant = unreal.MovieSceneKeyInterpolation.CONSTANT
+    intensity = light.add_track(unreal.MovieSceneFloatTrack)
+    intensity.set_property_name_and_path("Intensity", "Intensity")
+    intensity_section = intensity.add_section()
+    intensity_section.set_range(0, end_frame)
+    channel = intensity_section.get_all_channels()[0]
+    track = place.add_track(unreal.MovieScene3DTransformTrack)
+    section = track.add_section()
+    section.set_range(0, end_frame)
+    location = {str(c.channel_name): c for c in section.get_all_channels()}
+    for axis in ("X", "Y", "Z"):
+        location["Scale." + axis].set_default(1.0)
+    previous = None
+    for frame, position, value in sorted(keys, key=lambda k: k[0]):
+        if frame < 0:
+            continue
+        if position is not None:
+            x, y, z = position
+            for axis, cm in zip(("X", "Y", "Z"), (x * UNITS_TO_CM, -y * UNITS_TO_CM, z * UNITS_TO_CM)):
+                location["Location." + axis].add_key(unreal.FrameNumber(frame), cm, 0.0,
+                                                     unreal.MovieSceneTimeUnit.DISPLAY_RATE, constant)
+        if (frame, value) != previous:
+            grenade_effects.add_key(channel, frame, value)
+            previous = (frame, value)
+
+
+def place_lights(sequence, replay, shots, end_frame, spawn, hide, viewmodels, show_first_person):
     """A muzzle light per shooter (light_frames): movable (a location track on a light that is not is refused in a
     game world, which Movie Render Queue renders), its location keyed (constant) at each shot's muzzle, its intensity
-    pulsed, hidden with the shooter's body (`hide`: see place_shots). Returns the number of lights."""
+    pulsed; hidden with the shooter's body (`hide`: see place_shots). In the shooter's own view their first-person
+    flash has its own light, as CS2's `_fps` system has (its third-person child's `fakelight`): a light component on
+    their viewmodel actor (`viewmodels`), keyed at each shot's `view_muzzle` there, shown only with the viewmodel
+    (`show_first_person(binding, controller)` keys a binding's visibility as the viewmodel's). CS2's lights the door
+    edge in front of YEKINDAR's AK one tick after his shot (de_nuke round 5, tick 37950); the third-person light, low
+    and to the right of his eyes, lit the floor and door frame beside him orange instead. Returns the number of
+    lights."""
     tick0 = replay["start_tick"]
     names = {p["controller"]: p["name"] for p in replay["players"]}
-    constant = unreal.MovieSceneKeyInterpolation.CONSTANT
     lights = light_frames(shots, tick0, end_frame)
     for controller, keys in lights.items():
         first = next((p for _, p, _ in keys if p), None)
@@ -258,31 +363,23 @@ def place_lights(sequence, replay, shots, end_frame, spawn, hide):
         component.set_editor_property("cast_shadows", False)
         # The actor's binding (its location), then its light component's (its intensity), as intensity_channel does.
         binding = sequence.add_possessable(light)
-        intensity = sequence.add_possessable(component).add_track(unreal.MovieSceneFloatTrack)
-        intensity.set_property_name_and_path("Intensity", "Intensity")
-        intensity_section = intensity.add_section()
-        intensity_section.set_range(0, end_frame)
-        channel = intensity_section.get_all_channels()[0]
-        track = binding.add_track(unreal.MovieScene3DTransformTrack)
-        section = track.add_section()
-        section.set_range(0, end_frame)
-        location = {str(c.channel_name): c for c in section.get_all_channels()}
-        for axis in ("X", "Y", "Z"):
-            location["Scale." + axis].set_default(1.0)
-        previous = None
-        for frame, position, intensity in sorted(keys, key=lambda k: k[0]):
-            if frame < 0:
-                continue
-            if position is not None:
-                x, y, z = position
-                for axis, value in zip(("X", "Y", "Z"), (x * UNITS_TO_CM, -y * UNITS_TO_CM, z * UNITS_TO_CM)):
-                    location["Location." + axis].add_key(unreal.FrameNumber(frame), value, 0.0,
-                                                         unreal.MovieSceneTimeUnit.DISPLAY_RATE, constant)
-            if (frame, intensity) != previous:
-                grenade_effects.add_key(channel, frame, intensity)
-                previous = (frame, intensity)
+        key_light(binding, sequence.add_possessable(component), keys, end_frame)
         hide(binding, controller)
-    return len(lights)
+    view_lights = light_frames(shots, tick0, end_frame, "view_muzzle")
+    for controller, keys in view_lights.items():
+        if controller not in viewmodels:
+            continue
+        component = grenade_effects.add_component(viewmodels[controller], unreal.PointLightComponent, "muzzle light")
+        r, g, b = MUZZLE_LIGHT["color"]
+        component.set_light_color(unreal.LinearColor(r=r, g=g, b=b, a=1.0))
+        component.set_editor_property("attenuation_radius", MUZZLE_LIGHT["radius"] * UNITS_TO_CM)
+        component.set_editor_property("intensity", 0.0)
+        component.set_mobility(unreal.ComponentMobility.MOVABLE)
+        component.set_editor_property("cast_shadows", False)
+        binding = sequence.add_possessable(component)
+        key_light(binding, binding, keys, end_frame)
+        show_first_person(binding, controller)
+    return len(lights) + sum(1 for c in view_lights if c in viewmodels)
 
 
 BULLET_HOLE_HLSL = r"""
@@ -413,12 +510,15 @@ def place_holes(shots, earlier, instances, spawn):
     return placed
 
 
-def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide):
+def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, viewmodels=None,
+                show_first_person=None):
     """Everything above for a round, from the agents manifest `agents` (its `shots`, `earlier_holes`, `effects` and
-    `decals`; without them: nothing): an actor per shooter for their muzzle flashes and their muzzle light, hidden
-    with their body (`hide(binding, controller)` keys the body's visibility on a sequence binding: not while the camera
-    looks through their own eyes, where CS2 draws the first-person flash instead), one ("shots") for the rest, and the
-    bullet holes. Returns the number of shots."""
+    `decals`; without them: nothing): an actor per shooter for their muzzle flashes, hidden with their body
+    (`hide(binding, controller)` keys the body's visibility on a sequence binding: not while the camera looks through
+    their own eyes), their first-person flashes on their viewmodel actor (`viewmodels`: controller -> actor, from
+    import_demo.spawn_viewmodel), their muzzle lights (place_lights; `show_first_person(binding, controller)` keys a
+    binding's visibility as their viewmodel's), one actor ("shots") for the rest, and the bullet holes. Returns the
+    number of shots."""
     shots = agents.get("shots", [])
     effects = agents.get("effects", [])
     if not shots:
@@ -429,18 +529,27 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide):
         return 0
     rebuild = not assets.does_asset_exist(grenade_effects.SPRITE_MATERIALS[False])
     instances = grenade_effects.update_layers(replay, replay_path, effects, shot_layers(), rebuild) if effects else {}
-    mesh = grenade_effects.sprite_mesh()
+    meshes = {local: grenade_effects.sprite_mesh(local) for local in (False, True)}
     rng = random.Random(replay["round"] * 7349 + len(shots))
     layers = {grenade_effects.layer_name(layer): layer for layer in shot_layers()}
     names = {p["controller"]: p["name"] for p in replay["players"]}
-    muzzles, shared = sprite_slots(shots)
+    # An export from before the alternate flame's sheet (effects without `muzzle_alt`) draws the main flame always.
+    alt = grenade_effects.layer_name(MUZZLE_ALT) in instances
+    if not alt:
+        log("effects: no muzzle_alt sheet (export the round again): every shot draws the main flame")
+    muzzles, views, shared = sprite_slots(shots, alt)
     drawn = 0
 
     def draw(actor, by_layer):
         count = 0
         for name, slots in sorted(by_layer.items()):
             if name in instances:
-                grenade_effects.add_sprites(actor, layers[name], instances[name], mesh, slots, rng)
+                local = grenade_effects.option(layers[name], "local")
+                ism = grenade_effects.add_sprites(actor, layers[name], instances[name], meshes[local], slots, rng)
+                if local:
+                    # Drawn as the viewmodel is: at its field of view, in front of the world.
+                    ism.set_editor_property("first_person_primitive_type",
+                                            unreal.FirstPersonPrimitiveType.FIRST_PERSON)
                 count += len(slots)
         return count
 
@@ -448,9 +557,16 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide):
         actor = spawn(unreal.Actor, "muzzle flashes %s" % names.get(controller, controller), (0.0, 0.0, 0.0))
         drawn += draw(actor, by_layer)
         hide(sequence.add_possessable(actor), controller)
-    drawn += draw(spawn(unreal.Actor, "shots", (0.0, 0.0, 0.0)), shared)
-    lights = place_lights(sequence, replay, shots, end_frame, spawn, hide)
+    viewmodels = viewmodels or {}
+    first_person = 0
+    for controller, by_layer in sorted(views.items()):
+        if controller in viewmodels:
+            first_person += draw(viewmodels[controller], by_layer)
+    drawn += first_person + draw(spawn(unreal.Actor, "shots", (0.0, 0.0, 0.0)), shared)
+    lights = place_lights(sequence, replay, shots, end_frame, spawn, hide,
+                          viewmodels if show_first_person else {}, show_first_person)
     holes = place_holes(shots, agents.get("earlier_holes", []), hole_instances(replay_path, agents.get("decals", {})),
                         spawn)
-    log("shots: %d (%d sprite slots, %d muzzle lights, %d bullet holes)" % (len(shots), drawn, lights, holes))
+    log("shots: %d (%d sprite slots, %d of them first person; %d muzzle lights, %d bullet holes)"
+        % (len(shots), drawn, first_person, lights, holes))
     return len(shots)

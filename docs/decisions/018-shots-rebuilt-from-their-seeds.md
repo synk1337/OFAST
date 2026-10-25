@@ -33,7 +33,13 @@ collision triangle its surface property (`world_physics`), per weapon model its 
   passes through a player hit the demo sent ends on that player. Each world hit takes the surface property of the
   triangle it met, and from it the impact system and decal group CS2 would use.
 - **Place the muzzle** where the exported agent shows the gun at the shot's tick: the weapon model's `muzzle_flash`
-  attachment on the hand's weapon bone, in the frame Unreal plays. Third person for now.
+  attachment on the hand's weapon bone, in the frame Unreal plays; and where the shooter's viewmodel shows it, on
+  the weapon's own bones in the viewmodel rig's space, for the flash CS2 draws in first person. That one rides on the
+  viewmodel actor in Unreal (moved, mirrored, shown and hidden with it, drawn with Unreal's first-person rendering):
+  the sprite material's slots can be in their component's space (`local`), turned into the world's by the vertex
+  shader. CS2's first-person system is the third-person one made smaller (`*_fps.vpcf`, a global scale of 0.35 for the
+  AK); its size here is fitted to CS2's pictures (what that scale scales is not in the files). It has its own light
+  too, at the viewmodel's barrel: a light component on the viewmodel actor, shown with it.
 - **Draw it in Unreal with the grenades' "particle system in a material"** (decision 017), extended so particles fly
   along an axis of their own (a barrel, a surface's normal, a bullet's path) and a tracer stops at its bullet's end;
   bullet holes as decals that carry their shot's tick in their decal colour (one material instance per texture).
@@ -59,13 +65,15 @@ collision triangle its surface property (`world_physics`), per weapon model its 
 - Impacts and holes land where CS2's do, for every shot the demo has; the checks run on any demo with glass or hits
   (`examples/shot_spread.rs`, `examples/shot_traces.rs`).
 - Not yet: bullets going through walls and players (CS2's penetration: an exit impact and the bullet going on), props
-  and doors (not in the world's collision), first-person muzzle flashes (the viewmodel's `muzzle_flash`, drawn with
-  the viewmodel's field of view; CS2 draws a large one), brass (CS2 throws casings), the tracer counter (inferred: one
-  shot in the frequency, counted on the magazine; in CS2 a tracer showed one tick after molodoy's shot where the rule
-  puts one, none after two of YEKINDAR's where it also does), a tracer's timing (one tick after a shot CS2's is
-  further along than OFAST's), shotguns' pellets after the first, the R8's and Negev's own spread rules, the limit on
-  how many bullet holes CS2 keeps and which (four round-3 holes on de_nuke's open A-site door, whose collision is a
-  static hull, do not show in CS2 in round 5), hiding the blood of a hit on the player the camera looks through (the hits do not
-  name the player hit; CS2 shows none in that view), holes on props and signs (not in the world's collision).
+  and doors (not in the world's collision), each gun's own muzzle flash (every gun draws the AK's two flames: CS2's
+  `ak47_primaryflash` and `_alt`, one per shot as its chooser picks, without the compensator's side flashes and
+  sparks), a tracer starting from the first-person muzzle in the shooter's own view, brass (CS2 throws casings), the
+  tracer counter (inferred: one shot in the frequency, counted on the magazine; in CS2 a tracer showed one tick after
+  molodoy's shot where the rule puts one, none after two of YEKINDAR's where it also does), a tracer's timing (one
+  tick after a shot CS2's is further along than OFAST's), shotguns' pellets after the first, the R8's and Negev's own
+  spread rules, the limit on how many bullet holes CS2 keeps and which (four round-3 holes on de_nuke's open A-site
+  door, whose collision is a static hull, do not show in CS2 in round 5), hiding the blood of a hit on the player the
+  camera looks through (the hits do not name the player hit; CS2 shows none in that view), holes on props and signs
+  (not in the world's collision).
 - The sprite material's per-instance data grew from 8 to 12 floats; levels imported before read the defaults
   (straight up, no reach), so the grenades' effects are unchanged.

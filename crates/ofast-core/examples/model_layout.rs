@@ -4,7 +4,11 @@
 //! cargo run --release --example model_layout -- weapons/models/ak47/weapon_rif_ak47.vmdl_c
 //! cargo run --release --example model_layout -- maps/de_mirage/worldnodes/n0_lr0_c5_s_cb_mesh.vmdl_c de_mirage
 //! cargo run --release --example model_layout -- list de_mirage            # list a map's world models
+//! cargo run --release --example model_layout -- attachments weapons/models/m4a4/weapon_rif_m4a4.vmdl_c
 //! ```
+//!
+//! `attachments` prints a model's attachments: each bone it follows, the offset from that bone and where that puts
+//! it in model space at bind pose (which bone a gun's `muzzle_flash` hangs on, and where).
 
 use ofast_core::content::Content;
 use ofast_core::game::Cs2Install;
@@ -51,6 +55,37 @@ fn main() {
         }
         for ((semantic, index, format), n) in counts {
             println!("{semantic:<14} {index} format {format:>2}: {n} buffers");
+        }
+        return;
+    }
+    if args.first().map(String::as_str) == Some("attachments") {
+        let content = Content::game(&install).expect("archives open");
+        let data = content.read(&args[1]).expect("file reads");
+        let model = Model::parse(&Resource::parse(&data).expect("resource")).expect("model parses");
+        let world = model.skeleton.world_transforms();
+        for attachment in model.meshes.iter().flat_map(|m| &m.attachments) {
+            println!(
+                "{}{}",
+                attachment.name,
+                if attachment.ignore_rotation {
+                    " (position only)"
+                } else {
+                    ""
+                }
+            );
+            for influence in &attachment.influences {
+                let at = model.skeleton.find(&influence.bone).map(|b| {
+                    let m = ofast_core::model::compose(
+                        &world[b],
+                        &ofast_core::model::affine(influence.rotation, influence.offset),
+                    );
+                    [m[0][3], m[1][3], m[2][3]]
+                });
+                println!(
+                    "    on {} x {:.2}: offset {:?}, rotation {:?}; model space {at:?}",
+                    influence.bone, influence.weight, influence.offset, influence.rotation
+                );
+            }
         }
         return;
     }

@@ -49,6 +49,11 @@ SPRITE_MESH = "/Game/OFAST/Replays/Effects/SM_Sprite"
 SPRITE_INSTANCE_SCALE = 6.0
 SPRITE_BOUNDS_UP = 100.0
 SPRITE_BOUNDS_DOWN = 25.0
+# The quad of a layer drawn in its component's space (`local`: a first-person muzzle flash on the viewmodel): its
+# instances stay at the component's origin, unscaled (the component's space is then theirs: see SPRITE_STATE), so its
+# bounds reach SPRITE_VIEW_BOUNDS (cm) every way, past the barrel of any gun held in front of the camera.
+SPRITE_VIEW_MESH = "/Game/OFAST/Replays/Effects/SM_SpriteView"
+SPRITE_VIEW_BOUNDS = 300.0
 FOLDER = "/Game/OFAST/Replays/Effects"
 UNITS_TO_CM = 2.54
 # The layers: the effect texture of that role in the agents manifest, sprite slots (per flame for a fire, per blast or
@@ -160,14 +165,17 @@ SOFT_EDGE_CM = 30.0
 # tall as CS2's (a molotov on de_nuke at the same tick, 2026-10-24).
 SPRITE_SIZE = 0.5
 # What a layer without these keys has: no flight, no streak, every sheet sequence, no ground; fading in over its first
-# tenth and out over its last third; born at its centre; no least width. `up` is along the instance's axis (CUSTOM_DATA;
-# straight up for fires and blasts), `speed` across it; `along` (units) where along the axis a particle is born;
-# `fade_in`, `fade_out` shares of its life (0: none); `min_width` the least half-width of a streak with a reach (a
-# tracer) as a share of its distance from the camera.
+# tenth and out over its last third; born at its centre; no least width; placed in the world. `up` is along the
+# instance's axis (CUSTOM_DATA; straight up for fires and blasts), `speed` across it; `along` (units) where along the
+# axis a particle is born; `fade_in`, `fade_out` shares of its life (0: none); `min_width` the least half-width of a
+# streak with a reach (a tracer) as a share of its distance from the camera; `local`: its slots' centres and axes are in
+# the space of the component it is drawn by (a first-person muzzle flash, on the viewmodel moving with the camera), not
+# the world's (such a layer has no floor: see SPRITE_STATE); `roll_base` (degrees) what its roll (`roll`: +- degrees)
+# is drawn around.
 LAYER_DEFAULTS = {"size": SPRITE_SIZE, "lift": 0.6, "speed": (0.0, 0.0), "up": (0.0, 0.0), "gravity": 0.0,
                   "drag": 0.0, "stretch": 0.0, "max_length": 0.0, "sequence": None, "floor": False,
                   "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False, "end_fade": 0.0, "fade_in": 0.1,
-                  "fade_out": 0.33, "along": (0.0, 0.0), "min_width": 0.0}
+                  "fade_out": 0.33, "along": (0.0, 0.0), "min_width": 0.0, "local": False, "roll_base": 0.0}
 # CS2's particle drag takes a share of the velocity per simulation step; OFAST reads it as per 1/30 s (an assumption:
 # the step is not in the files) and turns it into a rate per second, -30 ln(1 - drag): 0.025 -> 0.76, 0.1 -> 3.2.
 DRAG_STEPS_PER_SECOND = 30.0
@@ -175,9 +183,10 @@ DRAG_STEPS_PER_SECOND = 30.0
 NO_FLOOR_CM = -1.0e7
 # How far below a blast its debris may fall when the agents manifest knows no ground there (units).
 FALLBACK_DROP = 128.0
-# Per-instance data: centre x, y, z (cm), first and last tick particles may be born, phase (0 - 1 of LifeMax: where in
-# its first lifetime a slot starts, so a flame's slots do not all respawn together; 0 for a one-shot, born on its
-# tick), seed (0 - 100: small, so the shaders' sin() hashes keep their precision), the floor (cm) a particle dies at,
+# Per-instance data: centre x, y, z (cm; a `local` layer's in its component's space, as its axis), first and last tick
+# particles may be born, phase (0 - 1 of LifeMax: where in its first lifetime a slot starts, so a flame's slots do not
+# all respawn together; 0 for a one-shot, born on its tick), seed (0 - 100: small, so the shaders' sin() hashes keep
+# their precision), the floor (cm) a particle dies at,
 # the axis its particles fly along (Unreal axes; up for a fire's or a blast's, a surface's normal for a bullet's
 # impact, the barrel for a muzzle flash, the bullet's way for a tracer) and its reach (units along the axis it dies
 # past: a tracer's way to what its bullet met; 0: none).
@@ -227,7 +236,10 @@ def log(message):
 # up the axis, out along a random heading across it at Speed and along it at Up (units/s), slowed by Drag (a rate per
 # second: v' = -Drag v) and pulled down by Gravity; without drag the plain parabola (the drag formulas lose their
 # precision as Drag goes to 0). A particle below FloorZ has hit the ground and is gone; one with a Reach is gone past
-# it (drawn as a streak, once its tail is: `head` and `tail` are its streak's ends along the axis, units).
+# it (drawn as a streak, once its tail is: `head` and `tail` are its streak's ends along the axis, units). A Local
+# layer's centre and axis are in its component's space: the vertex shader is given them in the world's (LocalOrigin,
+# LocalAxis: the material's transform nodes), the pixel shader as they are (it needs no place but for the floor test,
+# and a local layer has no floor).
 SPRITE_STATE = r"""
 float t = (Tick - FirstTick) / TicksPerSecond;
 float cycle = floor((t + Phase * LifeMax) / LifeMax);
@@ -246,7 +258,8 @@ float h9 = frac(sin(dot(key, float2(53.871, 26.413))) * 37192.8355);
 float life = lerp(LifeMin, LifeMax, h1);
 float norm = age / life;
 float heading = h3 * 6.2831853;
-float3 axis = float3(AxisX, AxisY, AxisZ);
+float3 origin = Local > 0.5 ? LocalOrigin : float3(CenterX, CenterY, CenterZ);
+float3 axis = Local > 0.5 ? LocalAxis : float3(AxisX, AxisY, AxisZ);
 axis = length(axis) > 0.001 ? normalize(axis) : float3(0.0, 0.0, 1.0);
 float3 side = abs(axis.z) < 0.999 ? normalize(cross(axis, float3(0.0, 0.0, 1.0))) : float3(1.0, 0.0, 0.0);
 float3 outward = side * cos(heading) + cross(axis, side) * sin(heading);
@@ -257,7 +270,7 @@ float slow = drags ? (1.0 - exp(-Drag * age)) / Drag : age;
 float fall = drags ? (age - slow) / Drag : 0.5 * age * age;
 float along = lerp(AlongMin, AlongMax, h9);
 float axial = along + upward * slow;
-float3 place = float3(CenterX, CenterY, CenterZ)
+float3 place = origin
     + (outward * (sqrt(h4) * Spread + speed * slow) + axis * axial - float3(0.0, 0.0, 1.0) * Gravity * fall) * 2.54;
 float head = Reach > 0.0 ? min(axial, Reach) : axial;
 // A streak with a reach (a tracer) grows to its length over its first Stretch seconds, as CS2's trails do: one tick
@@ -275,7 +288,7 @@ bool alive = Tick >= FirstTick && born >= FirstTick - 0.5 && born <= LastTick + 
 # Vertex shader: the world position offset putting the quad's corner where the particle's camera-facing sprite has it.
 SPRITE_WPO = SPRITE_STATE + r"""
 float2 corner = float2(UV.x * 2.0 - 1.0, 1.0 - UV.y * 2.0);
-float roll = radians((h5 * 2.0 - 1.0) * Roll);
+float roll = radians(RollBase + (h5 * 2.0 - 1.0) * Roll);
 corner = float2(corner.x * cos(roll) - corner.y * sin(roll), corner.x * sin(roll) + corner.y * cos(roll));
 float radius = alive ? lerp(RadiusMin, RadiusMax, h2) * lerp(ScaleStart, ScaleEnd, norm) * 2.54 : 0.0;
 // Lifted by Lift of its size (most of it for flames: the frames' flames sit low in their cells, so the sprite stands
@@ -290,7 +303,6 @@ if (Stretch > 0.0 && Reach > 0.0)
 {
     // A streak with a reach (a tracer): from its tail to its head up the axis, as wide as its radius and at least
     // MinWidth of its distance from the camera (CS2 keeps its tracers a pixel or so wide however far they are).
-    float3 origin = float3(CenterX, CenterY, CenterZ);
     float3 middle = origin + axis * (head + tail) * 0.5 * 2.54;
     float3 seen_from = normalize(CameraPos - middle);
     float3 across = cross(seen_from, axis);
@@ -338,7 +350,10 @@ return float4(texel.rgb * colour * Bright, alpha);
 SPRITE_SCALARS = ["TicksPerSecond", "LifeMin", "LifeMax", "RadiusMin", "RadiusMax", "ScaleStart", "ScaleEnd", "Roll",
                   "Spread", "Rise", "AlphaMin", "AlphaMax", "Bright", "Sequences", "SequenceFirst", "Frames", "Stride",
                   "Columns", "Rows", "Lift", "SpeedMin", "SpeedMax", "UpMin", "UpMax", "Gravity", "Drag", "Stretch",
-                  "MaxLength", "EndFade", "FadeIn", "FadeOut", "AlongMin", "AlongMax", "MinWidth"]
+                  "MaxLength", "EndFade", "FadeIn", "FadeOut", "AlongMin", "AlongMax", "MinWidth", "Local", "RollBase"]
+# A scalar's value in the material itself, where not 1 (what an instance that does not set it reads): a layer is placed
+# in the world, and its roll centred on 0, unless its instance says otherwise.
+SCALAR_DEFAULTS = {"Local": 0.0, "RollBase": 0.0}
 
 
 def sprite_material(translucent):
@@ -351,7 +366,7 @@ def sprite_material(translucent):
     material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
     material.set_editor_property("two_sided", True)
     material.set_editor_property("used_with_instanced_static_meshes", True)
-    shared = ["Tick"] + CUSTOM_DATA + SPRITE_SCALARS
+    shared = ["Tick", "LocalOrigin", "LocalAxis"] + CUSTOM_DATA + SPRITE_SCALARS
     output = unreal.CustomMaterialOutputType
     wpo = smoke_volumes.custom_node(material, SPRITE_WPO, output.CMOT_FLOAT3, ["UV", "WorldPos", "CameraPos"] + shared,
                                     -400, 400)
@@ -387,6 +402,7 @@ def sprite_material(translucent):
     tick.set_editor_property("collection", smoke_volumes.replay_collection())
     tick.set_editor_property("parameter_name", "ReplayTick")
     connect(tick, "Tick", wpo, pixel)
+    data = {}
     for index, name in enumerate(CUSTOM_DATA):
         node = mel.create_material_expression(material, unreal.MaterialExpressionPerInstanceCustomData, -1200,
                                               -300 + 60 * index)
@@ -395,12 +411,42 @@ def sprite_material(translucent):
         if name in CUSTOM_DEFAULTS:
             node.set_editor_property("const_default_value", CUSTOM_DEFAULTS[name])
         connect(node, name, wpo, pixel)
+        data[name] = node
     for index, name in enumerate(SPRITE_SCALARS):
         node = mel.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -900,
                                               -300 + 60 * index)
         node.set_editor_property("parameter_name", name)
-        node.set_editor_property("default_value", 1.0)
+        node.set_editor_property("default_value", SCALAR_DEFAULTS.get(name, 1.0))
         connect(node, name, wpo, pixel)
+
+    # A Local layer's centre and axis in the world's space for the vertex shader (its instances sit unscaled at their
+    # component's origin, so the instance's local space is the component's), as they are for the pixel shader
+    # (SPRITE_STATE).
+    def vector(names, y):
+        xy = mel.create_material_expression(material, unreal.MaterialExpressionAppendVector, -1050, y)
+        mel.connect_material_expressions(data[names[0]], "", xy, "A")
+        mel.connect_material_expressions(data[names[1]], "", xy, "B")
+        xyz = mel.create_material_expression(material, unreal.MaterialExpressionAppendVector, -950, y)
+        mel.connect_material_expressions(xy, "", xyz, "A")
+        mel.connect_material_expressions(data[names[2]], "", xyz, "B")
+        return xyz
+
+    centre = vector(["CenterX", "CenterY", "CenterZ"], 900)
+    axis = vector(["AxisX", "AxisY", "AxisZ"], 1000)
+    placed = mel.create_material_expression(material, unreal.MaterialExpressionTransformPosition, -800, 900)
+    placed.set_editor_property("transform_source_type",
+                               unreal.MaterialPositionTransformSource.TRANSFORMPOSSOURCE_LOCAL)
+    placed.set_editor_property("transform_type", unreal.MaterialPositionTransformSource.TRANSFORMPOSSOURCE_WORLD)
+    turned = mel.create_material_expression(material, unreal.MaterialExpressionTransform, -800, 1000)
+    turned.set_editor_property("transform_source_type", unreal.MaterialVectorCoordTransformSource.TRANSFORMSOURCE_LOCAL)
+    turned.set_editor_property("transform_type", unreal.MaterialVectorCoordTransform.TRANSFORM_WORLD)
+    if not (mel.connect_material_expressions(centre, "", placed, "")
+            and mel.connect_material_expressions(axis, "", turned, "")):
+        raise RuntimeError("sprite material: could not connect the local transforms")
+    connect(placed, "LocalOrigin", wpo)
+    connect(turned, "LocalAxis", wpo)
+    connect(centre, "LocalOrigin", pixel)
+    connect(axis, "LocalAxis", pixel)
     # Soft where the sprite meets the ground or a wall (CS2's particles fade by depth the same way).
     depth_fade = mel.create_material_expression(material, unreal.MaterialExpressionDepthFade, -150, 100)
     depth_fade.set_editor_property("fade_distance_default", SOFT_EDGE_CM)
@@ -434,17 +480,24 @@ def sprite_material(translucent):
     return material
 
 
-def sprite_mesh():
-    """SPRITE_MESH: the engine plane copied once, its bounds extended (see SPRITE_BOUNDS_UP)."""
-    if assets.does_asset_exist(SPRITE_MESH):
-        mesh = assets.load_asset(SPRITE_MESH)
+def sprite_mesh(local=False):
+    """SPRITE_MESH (or SPRITE_VIEW_MESH for `local` layers): the engine plane copied once, its bounds extended (see
+    SPRITE_BOUNDS_UP, SPRITE_VIEW_BOUNDS)."""
+    path = SPRITE_VIEW_MESH if local else SPRITE_MESH
+    if assets.does_asset_exist(path):
+        mesh = assets.load_asset(path)
     else:
-        mesh = assets.duplicate_asset(ENGINE_PLANE, SPRITE_MESH)
-    mesh.set_editor_property("positive_bounds_extension", unreal.Vector(0.0, 0.0, SPRITE_BOUNDS_UP))
-    mesh.set_editor_property("negative_bounds_extension", unreal.Vector(0.0, 0.0, SPRITE_BOUNDS_DOWN))
+        mesh = assets.duplicate_asset(ENGINE_PLANE, path)
+    if local:
+        reach = unreal.Vector(SPRITE_VIEW_BOUNDS, SPRITE_VIEW_BOUNDS, SPRITE_VIEW_BOUNDS)
+        mesh.set_editor_property("positive_bounds_extension", reach)
+        mesh.set_editor_property("negative_bounds_extension", reach)
+    else:
+        mesh.set_editor_property("positive_bounds_extension", unreal.Vector(0.0, 0.0, SPRITE_BOUNDS_UP))
+        mesh.set_editor_property("negative_bounds_extension", unreal.Vector(0.0, 0.0, SPRITE_BOUNDS_DOWN))
     assets.save_loaded_asset(mesh)
     bounds = mesh.get_bounds()
-    log("sprite mesh bounds: extent %s" % bounds.box_extent)
+    log("sprite mesh %s bounds: extent %s" % (path.rsplit("/", 1)[-1], bounds.box_extent))
     return mesh
 
 
@@ -510,6 +563,8 @@ def layer_instance(layer, effect, texture, material, tick_rate):
         "FadeIn": option(layer, "fade_in"), "FadeOut": option(layer, "fade_out"),
         "AlongMin": option(layer, "along")[0], "AlongMax": option(layer, "along")[1],
         "MinWidth": option(layer, "min_width"),
+        "Local": 1.0 if option(layer, "local") else 0.0,
+        "RollBase": option(layer, "roll_base"),
     }
     for param, value in values.items():
         mel.set_material_instance_scalar_parameter_value(instance, param, float(value))
@@ -569,16 +624,19 @@ def add_component(actor, cls, name):
 
 
 def add_sprites(actor, layer, instance, mesh, slots, rng, floor_cm=NO_FLOOR_CM):
-    """One instanced mesh of `layer` on `actor`: an instance per slot of `slots`, times the layer's slots; its
-    particles die below `floor_cm` (Unreal z). A slot is (centre in Source units, first tick, last tick), or with
+    """One instanced mesh of `layer` on `actor`, returned: an instance per slot of `slots`, times the layer's slots;
+    its particles die below `floor_cm` (Unreal z). A slot is (centre in Source units, first tick, last tick), or with
     (axis, reach) after them: the direction its particles fly along (Source axes, unit) and how far along it they
-    may go (units; 0: no limit): an instance with a reach covers it with its bounds (centred halfway along)."""
+    may go (units; 0: no limit): an instance with a reach covers it with its bounds (centred halfway along). A `local`
+    layer's centres and axes are in the space of `actor`'s root component (Source axes there: x forward, y left, z up)
+    and its instances stay at its origin, unscaled (`mesh` is then SPRITE_VIEW_MESH, whose bounds hold them)."""
     ism = add_component(actor, unreal.InstancedStaticMeshComponent, "sprites_" + layer_name(layer))
     ism.set_static_mesh(mesh)
     ism.set_material(0, instance)
     ism.set_editor_property("cast_shadow", False)
     ism.set_num_custom_data_floats(len(CUSTOM_DATA))
     layer_scale = instance_scale(layer)
+    local = option(layer, "local")
     for slot in slots:
         (sx, sy, sz), first, last = slot[:3]
         (ax, ay, az), reach = slot[3:5] if len(slot) >= 5 else ((0.0, 0.0, 1.0), 0.0)
@@ -586,7 +644,9 @@ def add_sprites(actor, layer, instance, mesh, slots, rng, floor_cm=NO_FLOOR_CM):
         # Scaled up so the instance's bounds hold the sprites the shader draws around it (instance_scale); one with
         # a reach is put halfway along it, its bounds reaching both ends (SPRITE_MESH: ±50 cm across).
         bounds_at, scale = position, layer_scale
-        if reach > 0.0:
+        if local:
+            bounds_at, scale = unreal.Vector(0.0, 0.0, 0.0), 1.0
+        elif reach > 0.0:
             # A particle with a reach never goes past it: its path decides the bounds, not the layer's flight (a
             # tracer layer's 20 500 units/s over its 1 s life would give every tracer bounds half a kilometre across).
             half = reach * 0.5
@@ -603,6 +663,7 @@ def add_sprites(actor, layer, instance, mesh, slots, rng, floor_cm=NO_FLOOR_CM):
                       ax, -ay, az, reach]
             for k, value in enumerate(values):
                 ism.set_custom_data_value(index, k, float(value), k == len(values) - 1)
+    return ism
 
 
 def spawn_light(spawn, label, position, color, radius):

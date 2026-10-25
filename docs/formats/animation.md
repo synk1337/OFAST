@@ -486,7 +486,10 @@ the look's players hold on its own copy of its model's bones (`w<n>_<bone>`, the
 model's `weapon` bone is on it, `gltf::Binding::Offset`); per player `viewmodel_<controller>` keyed on every tick:
 the arms retargeted onto the arms model with its twist constraints, the weapon in hand's bones from its secondary
 pose (scales included: the silencer), the other weapons scaled to 0, and the whole rig scaled to 0 while the player
-has no viewmodel. Round 5 of the Aurora vs FURIA demo: 3 files (13 – 16 weapons each). `examples/viewmodel_timeline.rs`
+has no viewmodel. With it, for each of the players' shots, where the barrel of the weapon in hand was at the shot's
+frame (its `muzzle_flash` attachment on the weapon's own bones, in the rig's space: the agents manifest's
+`view_muzzle`, [replay.md](replay.md#agents-manifest-demo_rroundagentsjson)), which the first-person muzzle flashes
+start from. Round 5 of the Aurora vs FURIA demo: 3 files (13 – 16 weapons each). `examples/viewmodel_timeline.rs`
 prints the segments of a round and where the hands and `wpn` are at chosen ticks; `examples/viewmodel_probe.rs`
 prints CS2's data above.
 

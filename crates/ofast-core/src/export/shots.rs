@@ -19,6 +19,7 @@
 //! | `tracer` | the weapon's tracer system's stem when this shot draws one ([`draws_tracer`]), else `null` |
 //! | `eye` | where the bullets start: the shooter's eyes (Source axes, inches) |
 //! | `muzzle`, `muzzle_direction` | where they left the barrel as the exported agent shows it (third person), and along the barrel; `null` when the agent shows no gun in hand then |
+//! | `view_muzzle`, `view_muzzle_direction` | the same as the shooter's viewmodel shows it (first person), in the viewmodel rig's model space: Source axes (x forward, y left, z up), inches (in Unreal the viewmodel's component space: the camera, before the player's viewmodel offsets and the left hand's mirroring); `null` without a viewmodel then |
 //! | `bullets` | per bullet (shotguns fire several): `end` (where it stopped), `on` (`"world"`, `"player"` or `"air"`: nothing within range), `normal` (of the surface met, facing the shooter; `null` on a player or in the air), `surface` (the world surface's property name, `null` when unknown), `impact` (the surface's impact system, [`Impact::effect`]) and `decal` (its bullet-hole decal group); on a player, `wall`: the wall it went through first (`end`, `normal`, `surface`, `impact`, `decal`), or `null` |
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -391,13 +392,14 @@ pub fn draws_tracer(frequency: u32, bullets_left: u32) -> bool {
 
 /// The shots of `track` as the manifest's `shots` (module docs), and the bullet holes' decal groups they use (for
 /// [`export_decals`]). `collision` is the map's collision as bullets see it (`None`: every bullet that met no player
-/// ends in the air) and `physics` the world physics it was built from (the surfaces), `muzzles` the barrels the
-/// agents' export found, `data` CS2's weapons and surfaces.
+/// ends in the air) and `physics` the world physics it was built from (the surfaces), `muzzles` and `view_muzzles`
+/// the barrels the agents' and the viewmodels' exports found, `data` CS2's weapons and surfaces.
 pub fn shots_json(
     track: &RoundTrack,
     collision: Option<&WorldCollision>,
     physics: Option<&PhysicsData>,
     muzzles: &[Muzzle],
+    view_muzzles: &[Muzzle],
     data: &ShotData,
 ) -> (Vec<Json>, BTreeSet<String>) {
     // The world's surface property hashes, by index (RayHit::surface).
@@ -422,9 +424,9 @@ pub fn shots_json(
                     json
                 })
                 .collect();
-            let muzzle = muzzles
-                .iter()
-                .find(|m| m.controller == *controller && m.tick == shot.tick);
+            let of_shot = |m: &&Muzzle| m.controller == *controller && m.tick == shot.tick;
+            let muzzle = muzzles.iter().find(of_shot);
+            let view_muzzle = view_muzzles.iter().find(of_shot);
             let mode = (shot.mode as usize).min(1);
             let tracer = weapon
                 .filter(|w| draws_tracer(w.tracer_frequency[mode], shot.bullets_left))
@@ -440,6 +442,8 @@ pub fn shots_json(
                 "eye": rounded(shot.eye),
                 "muzzle": muzzle.map(|m| rounded(m.position)),
                 "muzzle_direction": muzzle.map(|m| unit(m.direction)),
+                "view_muzzle": view_muzzle.map(|m| rounded(m.position)),
+                "view_muzzle_direction": view_muzzle.map(|m| unit(m.direction)),
                 "bullets": bullets,
             })
         })
@@ -758,7 +762,20 @@ mod tests {
             position: [30.0, -5.0, -5.0],
             direction: [1.0, 0.0, 0.0],
         }];
-        let (shots, decals) = shots_json(&track, Some(&collision), None, &muzzles, &data);
+        let view_muzzles = [Muzzle {
+            controller: 2,
+            tick: 10,
+            position: [28.0, -6.0, -4.0],
+            direction: [0.0, 0.999_999_9, 0.0],
+        }];
+        let (shots, decals) = shots_json(
+            &track,
+            Some(&collision),
+            None,
+            &muzzles,
+            &view_muzzles,
+            &data,
+        );
         assert_eq!(shots.len(), 5);
         // On the wall: its normal faces the shooter; no physics data, so the default surface's impact.
         let wall = &shots[0]["bullets"][0];
@@ -768,6 +785,9 @@ mod tests {
         assert_eq!(wall["impact"], "impact_concrete");
         assert_eq!(wall["decal"], "Impact.Concrete");
         assert_eq!(shots[0]["muzzle"], json!([30.0, -5.0, -5.0]));
+        // In first person too, its direction rounded.
+        assert_eq!(shots[0]["view_muzzle"], json!([28.0, -6.0, -4.0]));
+        assert_eq!(shots[0]["view_muzzle_direction"], json!([0.0, 1.0, 0.0]));
         assert_eq!(shots[0]["tracer"], "weapon_tracers_assrifle");
         assert_eq!(shots[0]["weapon"], "weapon_ak47");
         // On the player, before the wall; 26 left: no tracer; no muzzle known.
@@ -777,6 +797,7 @@ mod tests {
             (Some("player"), json!([200.0, 50.0, 0.0]))
         );
         assert!(shots[1]["tracer"].is_null() && shots[1]["muzzle"].is_null());
+        assert!(shots[1]["view_muzzle"].is_null());
         // The silenced M4A1-S: silenced, and no tracer in that mode.
         assert_eq!(shots[2]["silenced"], true);
         assert!(shots[2]["tracer"].is_null());
@@ -790,7 +811,7 @@ mod tests {
         assert_eq!(shots[4]["bullets"].as_array().map(Vec::len), Some(9));
         assert_eq!(decals, BTreeSet::from(["Impact.Concrete".to_owned()]));
         // Without collision every bullet that met no player flies on to its weapon's range.
-        let (open, _) = shots_json(&track, None, None, &[], &data);
+        let (open, _) = shots_json(&track, None, None, &[], &[], &data);
         assert_eq!(open[0]["bullets"][0]["on"], "air");
         assert_eq!(
             open[0]["bullets"][0]["end"],

@@ -10,7 +10,10 @@ blasts, flashes: their look, not the sprites' per-instance data, which only an i
 (the shots' layers and bullet holes; the muzzle lights are moved and lit as the sequence keys them), then for each
 "tick:controller" of OFAST_NAME sets MPC_Replay.ReplayTick to the tick, the effects' lights to what the sequence keys
 there, and screenshots through that player's eyes (feet + eye height, CS2's 90 degrees at 4:3), the way the sequence's POV
-cameras see it. A view can also be "tick:x:y:z:pitch:yaw" (Source units, degrees, as CS2's getpos prints it).
+cameras see it. A view can also be "tick:x:y:z:pitch:yaw" (Source units, degrees, as CS2's getpos prints it), or
+"tick:controller:seq": through that player's POV camera in the round's sequence, played to that tick, with what the
+sequence shows there (the viewmodel and its first-person muzzle flashes, where the import keyed that player's view:
+a tick of its -PovShots). With such a view, the sequence plays the other views to their ticks too.
 
 `-Only diagnose:<smoke entity>` takes, at the first view, one shot per test material on that smoke's volume instead:
 constant (a constant extinction: does the Heterogeneous Volume draw?), grid (extinction where the smoke material's
@@ -103,6 +106,14 @@ def test_material(name, hlsl):
 
 def view_camera(replay, view):
     """A camera for a view of VIEWS: (tick, camera actor, name)."""
+    if len(view) == 3 and view[2] == "seq":
+        tick, controller = int(view[0]), int(view[1])
+        name = next(p["name"] for p in replay["players"] if p["controller"] == controller)
+        camera = next((a for a in actors.get_all_level_actors()
+                       if isinstance(a, unreal.CameraActor) and a.get_actor_label() == "POV %s" % name), None)
+        if camera is None:
+            raise RuntimeError("no POV camera for %s in the level (run import_demo.py)" % name)
+        return tick, camera, "tick%d_seq%d" % (tick, controller)
     if len(view) == 2:
         tick, controller = int(view[0]), view[1]
         index = replay["samples"]["ticks"].index(tick)
@@ -171,6 +182,11 @@ def main():
 
     lights = {a.get_actor_label(): a for a in actors.get_all_level_actors() if isinstance(a, unreal.PointLight)}
     cameras = [view_camera(replay, view) for view in VIEWS]
+    # Views through the sequence's cameras: the round's sequence open, played to each view's tick.
+    in_sequence = any(len(view) == 3 and view[2] == "seq" for view in VIEWS)
+    if in_sequence:
+        sequence = assets.load_asset("/Game/OFAST/Replays/%s_r%d" % (replay["demo"], replay["round"]))
+        unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(sequence)
     # (file name, tick, camera, material for the diagnosed volume or None)
     shots = [("probe_smoke_%s.png" % name, tick, camera, None) for tick, camera, name in cameras]
     if ONLY.startswith("diagnose:"):
@@ -220,9 +236,15 @@ def main():
         state["index"] = index = index + 1
         if index >= len(shots):
             unreal.unregister_slate_post_tick_callback(handle)
+            if in_sequence:
+                unreal.LevelSequenceEditorBlueprintLibrary.close_level_sequence()
             unreal.SystemLibrary.quit_editor()
             return
         _, at, _, test = shots[index]
+        # With the sequence open, every view is played to its tick (the players stand where they are then).
+        if in_sequence:
+            unreal.LevelSequenceEditorBlueprintLibrary.set_current_time(at - replay["start_tick"])
+            unreal.LevelSequenceEditorBlueprintLibrary.force_update()
         unreal.MaterialLibrary.set_scalar_parameter_value(world, collection, "ReplayTick", float(at))
         # The fires', blasts' and flashes' lights as the sequence keys them at that tick (without the fires' noise).
         for fire in replay.get("fires", []):

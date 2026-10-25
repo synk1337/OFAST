@@ -49,9 +49,9 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
   per flame, driven by the same demo tick, and a flickering point light; per HE grenade and flashbang going off, its
   fireball, smoke or flare sprites and a light pulse; a white flash over a blinded player's POV camera
   (grenade_effects.py; the sprites need the agents manifest's `effects`, written by `--players`);
-- per gun shot (the agents manifest's `shots`), its muzzle flash and light, its tracer when it draws one, and each
-  bullet's impact where it met the world (sprites by the surface's family, a bullet hole) or a player (blood)
-  (shot_effects.py);
+- per gun shot (the agents manifest's `shots`), its muzzle flash (in the world, and in first person on the shooter's
+  viewmodel) and light, its tracer when it draws one, and each bullet's impact where it met the world (sprites by the
+  surface's family, a bullet hole) or a player (blood) (shot_effects.py);
 - a camera cut track that follows the killer of each kill in turn (from the previous kill until half a second after
   this one), the way fragmovie editors cut a round;
 - marked frames: freeze time end, every kill ("attacker > victim (weapon, HS)") and bomb events.
@@ -806,8 +806,11 @@ def build(replay):
     sequence.set_playback_end(end_frame)
 
     cameras = {}
-    # Each player's body visibility (frame, visible) changes: their muzzle flashes follow it (shot_effects).
+    # Each player's body visibility (frame, visible) changes: their muzzle flashes follow it (shot_effects); and their
+    # viewmodel actor and its visibility changes, which their first-person flashes and light follow.
     body_visibility = {}
+    viewmodel_actors = {}
+    viewmodel_visibility = {}
     started = time.monotonic()
     keys = 0
     cuts = camera_cut_plan(replay, {p["controller"] for p in replay["players"]}, end_frame, fps)
@@ -862,12 +865,15 @@ def build(replay):
         viewmodel = viewmodels.get(player["controller"])
         if viewmodel is not None:
             vm = spawn_viewmodel(player, viewmodel[0], camera)
+            viewmodel_actors[player["controller"]] = vm
             vm_binding = sequence.add_possessable(vm)
             key_animation(vm_binding, viewmodel[1], end_frame)
             offset = (player.get("viewmodel") or {}).get("offset", [1.0, 1.0, -1.0])
             key_viewmodel_hand(vm_binding, frames, track.get("left_handed", []), offset, end_frame)
             living = [bool(a) and p is not None for a, p in zip(track["alive"], positions)]
-            key_visibility(vm_binding, visibility_changes(frames, living, own_view, first_person=True), end_frame)
+            vm_changes = visibility_changes(frames, living, own_view, first_person=True)
+            viewmodel_visibility[player["controller"]] = vm_changes
+            key_visibility(vm_binding, vm_changes, end_frame)
     world_models = import_dropped_weapons(replay)
     keys += place_dropped_weapons(sequence, replay, world_models, end_frame)
     keys += place_grenades(sequence, replay, world_models, end_frame)
@@ -880,7 +886,9 @@ def build(replay):
                                   {controller: camera for controller, (camera, _) in cameras.items()}, spawn_tagged)
     shot_effects.place_shots(sequence, replay, REPLAY_PATH, end_frame, manifest[2] if manifest else {}, spawn_tagged,
                              lambda binding, controller: key_visibility(binding, body_visibility.get(controller, []),
-                                                                        end_frame))
+                                                                        end_frame), viewmodel_actors,
+                             lambda binding, controller: key_visibility(
+                                 binding, viewmodel_visibility.get(controller, []), end_frame))
     keys += animate_doors(sequence, replay, end_frame)
     log("sequence %s: %d players (%d animated agents, %d viewmodels), %d frames at %d fps, %d keys in %.0f s"
         % (path, len(replay["players"]), len(agents), len(viewmodels), end_frame, fps, keys,

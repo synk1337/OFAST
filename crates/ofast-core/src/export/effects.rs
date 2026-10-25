@@ -82,6 +82,12 @@ pub const EFFECT_TEXTURES: &[(&str, &str)] = &[
         "muzzle_flash",
         "materials/particle/fire_gas/fire_gas_batch_b_top.vtex_c",
     ),
+    // …_ak47_primaryflash_alt.vpcf: the flame CS2's chooser may pick instead of it (listed twice beside it), wispy
+    // tongues (4 sequences of 26 frames).
+    (
+        "muzzle_alt",
+        "materials/particle/simulated/steam/wispy_steam_burst_b.vtex_c",
+    ),
     // …_gen_smoke.vpcf: the puff of smoke after it.
     (
         "muzzle_smoke",
