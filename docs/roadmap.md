@@ -258,6 +258,10 @@ player and round.
   as CS2 picks it. Fitted to CS2's flash through two players' eyes.
 - [ ] Shots, the rest: each gun's own muzzle flash, brass, bullets through walls and players (penetration), the
   tracer counter and timing confirmed.
+- [ ] **Effects rework**: every effect so far is a first pass. They are in the right place, at the right size and
+  time, but their look is far from good. All of them get reworked: smokes, fires and their smoke, HE blasts,
+  flashbangs, muzzle flashes, tracers, impacts, blood and holes. When the rework starts, each effect's gaps get
+  listed against CS2, side by side.
 
 ## Hard problems we know about
 
