@@ -111,7 +111,7 @@ de_fachwerk) — probably stored in another archive.
   the killer's view and the victim's position match (within ~3° vertically, CS2 interpolating the paused demo).
 - [x] A complete round per sequence, the default (2026-10-26: a fragmovie rarely takes a whole match, so several
   rounds or a match in one sequence is not planned). Grenades: M6. (Weapons in hand: M4.5.)
-- [ ] **Studio demo browser (Tauri app): next** (2026-10-26). The effects rework (M6) comes last.
+- [x] **Studio demo browser (Tauri app)** (2026-10-26). The effects rework (M6) comes last.
   - [x] Setup checks (CS2 through Steam's library list, Unreal Engine 5.8 through the Epic Games Launcher's, the
     Unreal project) and the demo list with each demo's map and server.
   - [x] A demo's page: every round with its winner, score and best moments, its kill feed, and a finder for
