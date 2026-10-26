@@ -193,9 +193,11 @@ player and round.
   weapons' 2 % dielectric specular (rendered as 4 % until 2026-10-23: Interchange's master drops the IOR term). The
   SAS agents now read as dark cloth like CS2's.
   [material.md](formats/material.md#characters-and-weapons-csgo_character-csgo_weapon).
-- [ ] Characters' cloth sheen, rim light, retro-reflectivity and colour adjustments (agents read darker than CS2's:
-  an SAS agent in the shade 0.60; they keep Interchange's F0 0.08 meanwhile); why CS2's knife blades look brighter
-  (`g_flMetalnessTransitionBias`?).
+- [ ] Characters' rim light, retro-reflectivity and colour adjustments (agents in the shade still read darker than
+  CS2's: 0.64 – 0.74 of its brightness on round 5's fabrics; their non-cloth materials keep Interchange's F0 0.08
+  meanwhile); why CS2's knife blades look brighter (`g_flMetalnessTransitionBias`?). Done: CS2's cloth shading (its
+  sheen of √albedo on the cloth mask, no highlight there) as glTF sheen and specular textures
+  ([material.md](formats/material.md#characters-and-weapons-csgo_character-csgo_weapon)).
 - [ ] Weapon skins (paint kits, wear, seed, stickers: M10), and the molotov / incendiary holster if CS2 shows one.
 - [ ] **M4.7 CS2's pose recipe** ([decision 020](decisions/020-cs2-pose-recipe.md)): every player pawn sends the
   AnimGraph2 task list its graph ran each tick (clips, times, blend weights, bone masks), Esoterica's task

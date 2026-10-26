@@ -18,7 +18,8 @@
 //!   Translucent and alpha-tested CS2 materials map to glTF `BLEND` / `MASK` (cut at the material's
 //!   `g_flAlphaTestReference`); `csgo_static_overlay` by its blend mode (`OverlayBlend`, private). The shaders CS2
 //!   draws unlit (`csgo_unlitgeneric`, `csgo_black_unlit`) get `KHR_materials_unlit`; weapons a lower
-//!   `KHR_materials_specular`; characters' cloth-shaded materials `KHR_materials_sheen` with no specular.
+//!   `KHR_materials_specular`; characters' cloth-shaded materials `KHR_materials_sheen` and a specular texture, CS2's
+//!   cloth shading (`assemble_cloth_sheen`, private).
 //! - **Textures**: see [`TextureRole`]. Textures are decoded and written as PNG at the end, in parallel; a texture
 //!   that fails to decode is replaced by a 1×1 neutral image and reported as a warning.
 //!
@@ -33,7 +34,8 @@
 //! - **Names.** A CS2 texture keeps its file name plus the role's suffix (`_normal`, `_raw`, …; `_2`, `_3` when
 //!   two differ). A texture OFAST computes for an environment material (`environment`) is named
 //!   `<texture>_cc_<hash>.png` or `<texture>_surface_<hash>.png` (a prop's colour with its masked tint baked in,
-//!   `tint`: `<texture>_tint_<hash>.png`; an unlit card's two textures multiplied: `<texture>_two_<hash>.png`),
+//!   `tint`: `<texture>_tint_<hash>.png`; an unlit card's two textures multiplied: `<texture>_two_<hash>.png`; a
+//!   cloth-shaded character material's sheen and specular: `<colour>_sheen_<hash>.png`, `<metalness>_specular_<hash>.png`),
 //!   `<hash>` being the first 8 hex digits of its pixel
 //!   hash: the same name always holds the same pixels, so a tool that imports each file name once (`import_map.py`'s
 //!   `import_texture`) never keeps a stale bake after a re-export.
@@ -581,9 +583,19 @@ struct OrmSource {
 /// directions there, and glTF has one isotropic roughness.
 const MEAN_RG: usize = 4;
 
-/// The sheen roughness of CS2's cloth-shaded materials (`KHR_materials_sheen`): the materials give a sheen colour and
-/// scale but no roughness for it; a soft, fabric-like spread.
-const CLOTH_SHEEN_ROUGHNESS: f64 = 0.5;
+/// A cloth-shaded character material's sheen ([`TextureJob::ClothSheen`], [`assemble_cloth_sheen`]).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ClothSheen {
+    /// The colour texture (`g_tColor`).
+    color: String,
+    /// `g_tMetalness`, whose B × (1 − G) is the cloth mask.
+    metalness: String,
+    /// `g_flSheenTintColor` (sRGB → linear) × `g_flSheenScale`, as `f32` bits.
+    factor: [u32; 3],
+}
+
+/// `g_flSheenScale` when a cloth-shaded material does not set it: the shader's default (Source 2 Viewer).
+const SHEEN_SCALE_DEFAULT: f64 = 0.667;
 
 /// The least mean cloth mask (`g_tMetalness` B × (1 − G)) a cloth-shaded material's texture needs for its cloth to
 /// be converted ([`GltfWriter::has_cloth_mask`]): the fabrics have about 0.5, the gloves and lenses 0.
@@ -605,6 +617,11 @@ enum TextureJob {
     /// `csgo_unlitgeneric` with `F_TWOTEXTURE`: `g_tColor` × `g_tColor2` (see [`bake_two_texture`]), keeping the
     /// alpha or not.
     TwoTexture(String, String, bool),
+    /// A cloth-shaded character material's sheen colour and roughness ([`assemble_cloth_sheen`]).
+    ClothSheen(ClothSheen),
+    /// A cloth-shaded character material's specular, 1 − its cloth mask in A, from its `g_tMetalness`
+    /// ([`assemble_cloth_specular`]).
+    ClothSpecular(String),
 }
 
 impl TextureJob {
@@ -616,6 +633,8 @@ impl TextureJob {
                 | TextureJob::EnvSurface(_)
                 | TextureJob::TintColor(_)
                 | TextureJob::TwoTexture(..)
+                | TextureJob::ClothSheen(_)
+                | TextureJob::ClothSpecular(_)
         )
     }
 }
@@ -1602,32 +1621,59 @@ impl<'c> GltfWriter<'c> {
             // (ValveResourceFormat's complex shader: `F0 = 0.02` for csgo_weapon): half the specular.
             material["extensions"]["KHR_materials_specular"] = json!({ "specularFactor": 0.5 });
         }
-        let cloth = info.shader == "csgo_character.vfx"
-            && info.ints.get("F_CLOTH_SHADING") == Some(&1)
-            && info
-                .textures
-                .get("g_tMetalness")
-                .is_some_and(|path| self.has_cloth_mask(&path.clone()));
-        if cloth {
-            // CS2's cloth shading (knits, uniforms): a sheen of `g_flSheenTintColor` × `g_flSheenScale` (at most 1) in
-            // place of a glossy highlight, which made the Phoenix balaclava look like metal. The sheen takes the
-            // fabric's own colour (the colour texture): a white one washed the dark knits and uniforms out to grey in
-            // Unreal. Its `g_tMetalness` holds metalness in G as the others' does (0 on the knit, the buckles of a
-            // uniform), whatever the file's name (`…_cloth`); B is the cloth mask (`has_cloth_mask`).
-            let scale = info.floats.get("g_flSheenScale").copied().unwrap_or(1.0);
+        let cloth = match (
+            info.first_texture(COLOR_PARAMS),
+            info.textures.get("g_tMetalness"),
+        ) {
+            (Some((_, color)), Some(metal))
+                if info.shader == "csgo_character.vfx"
+                    && info.ints.get("F_CLOTH_SHADING") == Some(&1)
+                    && self.has_cloth_mask(&metal.clone()) =>
+            {
+                Some((color.to_owned(), metal.clone()))
+            }
+            _ => None,
+        };
+        if let Some((color, metal)) = cloth {
+            // CS2's cloth shading (knits, uniforms; Source 2 Viewer's `complex.frag`): where its cloth mask is
+            // (`g_tMetalness` B × (1 − G); G is metalness, as on the others, whatever the file's name), a sheen of
+            // √albedo × `g_flSheenTintColor` × `g_flSheenScale` replaces the ordinary highlight, and the cloth keeps
+            // all its diffuse light. Without it the Phoenix balaclava's knit took a glossy highlight, like leather or
+            // metal, and the fabrics read darker than CS2's.
+            let scale = info
+                .floats
+                .get("g_flSheenScale")
+                .copied()
+                .unwrap_or(SHEEN_SCALE_DEFAULT) as f32;
+            // An sRGB colour, as `g_vColorTint` (Source 2 Viewer reads it with `SrgbRead`).
             let tint = info
                 .vectors
                 .get("g_flSheenTintColor")
-                .map_or([1.0; 3], |v| [v[0], v[1], v[2]]);
-            let mut sheen = json!({
-                "sheenColorFactor": tint.map(|c| (c * scale).clamp(0.0, 1.0)),
-                "sheenRoughnessFactor": CLOTH_SHEEN_ROUGHNESS,
+                .map_or([1.0; 3], |v| {
+                    [v[0], v[1], v[2]].map(|c| srgb_to_linear(c as f32))
+                });
+            let sheen = self.register(
+                TextureJob::ClothSheen(ClothSheen {
+                    color: color.clone(),
+                    metalness: metal.clone(),
+                    factor: tint.map(|c| (c * scale).to_bits()),
+                }),
+                format!("{}_sheen", stem(&color)),
+            );
+            let specular = self.register(
+                TextureJob::ClothSpecular(metal.clone()),
+                format!("{}_specular", stem(&metal)),
+            );
+            material["extensions"]["KHR_materials_sheen"] = json!({
+                "sheenColorFactor": [1.0, 1.0, 1.0],
+                "sheenColorTexture": { "index": sheen },
+                "sheenRoughnessFactor": 1.0,
+                "sheenRoughnessTexture": { "index": sheen },
             });
-            if let Some(color) = material["pbrMetallicRoughness"].get("baseColorTexture") {
-                sheen["sheenColorTexture"] = color.clone();
-            }
-            material["extensions"]["KHR_materials_sheen"] = sheen;
-            material["extensions"]["KHR_materials_specular"] = json!({ "specularFactor": 0.0 });
+            material["extensions"]["KHR_materials_specular"] = json!({
+                "specularFactor": 1.0,
+                "specularTexture": { "index": specular },
+            });
         }
         let pbr = &mut material["pbrMetallicRoughness"];
         pbr["metallicFactor"] = json!(if metalness.is_some() {
@@ -2001,6 +2047,10 @@ impl<'c> GltfWriter<'c> {
                     TextureJob::TintColor(job) => tint::bake_color(content, job),
                     TextureJob::TwoTexture(first, second, keep_alpha) => {
                         bake_two_texture(content, first, second, *keep_alpha)
+                    }
+                    TextureJob::ClothSheen(job) => assemble_cloth_sheen(content, job),
+                    TextureJob::ClothSpecular(metalness) => {
+                        assemble_cloth_specular(content, metalness)
                     }
                 }
                 .unwrap_or_else(|e| {
@@ -2442,39 +2492,119 @@ fn assemble_orm(content: &Content, source: &OrmSource) -> Result<Image, ExportEr
     };
     let roughness = load(&source.roughness)?;
     let metalness = load(&source.metalness)?;
-    let (width, height) = [&roughness, &metalness]
-        .iter()
-        .filter_map(|s| s.as_ref().map(|(img, _)| (img.width, img.height)))
-        .max_by_key(|(w, h)| w * h)
-        .unwrap_or((1, 1));
-    // Nearest sample of `channel` at output pixel (x, y), or `default` without a source.
-    let sample = |s: &Option<(Image, usize)>, x: usize, y: usize, default: u8| -> u8 {
-        match s {
-            Some((img, channel)) => {
-                let sx = x * img.width / width;
-                let sy = y * img.height / height;
-                let pixel = (sy * img.width + sx) * 4;
-                if *channel == MEAN_RG {
-                    ((u16::from(img.rgba[pixel]) + u16::from(img.rgba[pixel + 1])) / 2) as u8
-                } else {
-                    img.rgba[pixel + channel]
-                }
-            }
-            None => default,
-        }
-    };
+    let (width, height) = largest(&[&roughness, &metalness]);
     let mut rgba = Vec::with_capacity(width * height * 4);
     for y in 0..height {
         for x in 0..width {
             rgba.extend_from_slice(&[
                 255,
-                sample(&roughness, x, y, 255),
-                sample(&metalness, x, y, 0),
+                channel_at(&roughness, x, y, (width, height), 255),
+                channel_at(&metalness, x, y, (width, height), 0),
                 255,
             ]);
         }
     }
     Ok(Image::new(width, height, rgba))
+}
+
+/// The size of the largest of `sources` (1 × 1 without any).
+fn largest(sources: &[&Option<(Image, usize)>]) -> (usize, usize) {
+    sources
+        .iter()
+        .filter_map(|s| s.as_ref().map(|(img, _)| (img.width, img.height)))
+        .max_by_key(|(w, h)| w * h)
+        .unwrap_or((1, 1))
+}
+
+/// The nearest sample of a source's channel ([`MEAN_RG`]: the mean of R and G) at pixel (x, y) of an output of
+/// `size`, or `default` without a source.
+fn channel_at(
+    source: &Option<(Image, usize)>,
+    x: usize,
+    y: usize,
+    (width, height): (usize, usize),
+    default: u8,
+) -> u8 {
+    match source {
+        Some((img, channel)) => {
+            let sx = x * img.width / width;
+            let sy = y * img.height / height;
+            let pixel = (sy * img.width + sx) * 4;
+            if *channel == MEAN_RG {
+                ((u16::from(img.rgba[pixel]) + u16::from(img.rgba[pixel + 1])) / 2) as u8
+            } else {
+                img.rgba[pixel + channel]
+            }
+        }
+        None => default,
+    }
+}
+
+/// CS2's cloth mask at a `g_tMetalness` pixel: B × (1 − G) (Source 2 Viewer's `complex.frag`).
+fn cloth_mask(green: u8, blue: u8) -> f32 {
+    f32::from(blue) / 255.0 * (1.0 - f32::from(green) / 255.0)
+}
+
+/// A cloth-shaded character material's sheen, from CS2's cloth shading (Source 2 Viewer's `complex.frag`,
+/// `texturing.slang`): RGB (sRGB) the sheen colour, √(linear albedo) × `factor` (at most 1) where the cloth mask is,
+/// black elsewhere, as `KHR_materials_sheen`'s colour; A the cloth mask itself, as its roughness. Not a roughness:
+/// Interchange wires a sheen roughness to Unreal's Cloth input, which lerps the ordinary highlight towards the cloth
+/// lobe (`ClothBxDF`), the very blend CS2 makes by its cloth mask; the cloth lobe takes Unreal's main roughness, as
+/// CS2's takes the material's. Other glTF readers get the broadest sheen on the cloth and none elsewhere (its colour
+/// is black there). The textures may differ in size; the output takes the largest.
+fn assemble_cloth_sheen(content: &Content, job: &ClothSheen) -> Result<Image, ExportError> {
+    let color = Some((decode_raw(content, &job.color)?.1, 0));
+    let metalness = Some((decode_raw(content, &job.metalness)?.1, 0));
+    let size = largest(&[&color, &metalness]);
+    let (Some((color, _)), Some((metalness, _))) = (&color, &metalness) else {
+        unreachable!("both decoded above");
+    };
+    let factor = job.factor.map(f32::from_bits);
+    let lut = &*environment::SRGB_TO_LINEAR;
+    let mut rgba = Vec::with_capacity(size.0 * size.1 * 4);
+    for y in 0..size.1 {
+        for x in 0..size.0 {
+            let c = pixel_at(color, x, y, size);
+            let m = pixel_at(metalness, x, y, size);
+            let mask = cloth_mask(m[1], m[2]);
+            for (k, f) in factor.iter().enumerate() {
+                let albedo = lut[usize::from(c[k])];
+                rgba.push(environment::linear_to_srgb(
+                    (albedo.sqrt() * f).clamp(0.0, 1.0) * mask,
+                ));
+            }
+            rgba.push((mask * 255.0).round() as u8);
+        }
+    }
+    Ok(Image::new(size.0, size.1, rgba))
+}
+
+/// The nearest pixel of `image` to pixel (x, y) of an output of `size`.
+fn pixel_at(image: &Image, x: usize, y: usize, (width, height): (usize, usize)) -> [u8; 4] {
+    let pixel = ((y * image.height / height) * image.width + x * image.width / width) * 4;
+    [
+        image.rgba[pixel],
+        image.rgba[pixel + 1],
+        image.rgba[pixel + 2],
+        image.rgba[pixel + 3],
+    ]
+}
+
+/// A cloth-shaded character material's specular as `KHR_materials_specular` reads it: A = 1 − the cloth mask of its
+/// `g_tMetalness` (CS2's cloth replaces the ordinary highlight with its sheen there), RGB white.
+fn assemble_cloth_specular(content: &Content, metalness: &str) -> Result<Image, ExportError> {
+    let image = decode_raw(content, metalness)?.1;
+    let rgba = image
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|p| {
+            let keep = ((1.0 - cloth_mask(p[1], p[2])) * 255.0).round() as u8;
+            [255, 255, 255, keep]
+        })
+        .collect();
+    Ok(Image::new(image.width, image.height, rgba))
 }
 
 /// Keeps only triangles with three distinct vertices and a non-zero area (in Source units²).
@@ -3275,19 +3405,36 @@ mod tests {
                     .is_none()
             );
         }
-        let knit = &writer.materials[knit];
+        let knit = writer.materials[knit].clone();
+        let job = |index: &Json| {
+            let index = index["index"].as_u64().expect("an index") as usize;
+            writer.texture_jobs[index].job.clone()
+        };
+        // The sheen: one texture, √albedo × tint (an sRGB colour) × scale under the cloth mask, and the mask itself.
         let sheen = &knit["extensions"]["KHR_materials_sheen"];
-        assert_eq!(sheen["sheenColorFactor"], json!([0.5, 0.25, 0.125]));
+        assert_eq!(sheen["sheenColorTexture"], sheen["sheenRoughnessTexture"]);
         assert_eq!(
-            sheen["sheenColorTexture"],
-            knit["pbrMetallicRoughness"]["baseColorTexture"]
+            job(&sheen["sheenColorTexture"]),
+            TextureJob::ClothSheen(ClothSheen {
+                color: "knit_color.vtex".into(),
+                metalness: "knit_cloth.vtex".into(),
+                factor: [1.0f32, 0.5, 0.25].map(|c| (srgb_to_linear(c) * 0.5).to_bits()),
+            })
         );
-        assert!(sheen["sheenColorTexture"].get("index").is_some());
+        // The specular: 1 − the cloth mask.
         assert_eq!(
-            knit["extensions"]["KHR_materials_specular"]["specularFactor"],
-            json!(0.0)
+            job(&knit["extensions"]["KHR_materials_specular"]["specularTexture"]),
+            TextureJob::ClothSpecular("knit_cloth.vtex".into())
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_cloth_mask_is_blue_where_green_is_not() {
+        assert_eq!(cloth_mask(0, 255), 1.0);
+        assert_eq!(cloth_mask(255, 255), 0.0);
+        assert_eq!(cloth_mask(0, 0), 0.0);
+        assert!((cloth_mask(51, 255) - 0.8).abs() < 1e-6);
     }
 
     #[test]

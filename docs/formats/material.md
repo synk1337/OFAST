@@ -55,25 +55,34 @@ and without a specular texture the master's Specular is `SpecularFactor` alone, 
 1.5): 0.25 on weapons (F0 0.02), 0.5 on other materials (F0 0.04), finding each instance through its mesh's material
 slot, since Interchange shortens long instance names in the middle (`weapon_kni_e_karambit`). CS2's character
 materials (`csgo_character`: agents, gloves, arms) keep 1, F0 0.08 (`CHARACTER_SPECULAR_FACTOR`): CS2 gives its
-agents a cloth sheen and a rim light that OFAST does not convert or converts only roughly (next paragraphs), and
-without them the agents already read darker than CS2's; F0 0.04 darkens them further. Aurora vs FURIA round 5, CS2's
-Chase Cam views against Unreal's from the same camera (default picture): an SAS agent in the shade reads 0.60 of CS2
-at 0.08 and 0.48 at 0.04, the ground beside him 0.97; KSCERATO in the sun 0.96 and 0.92, the ground 1.09. A stand-in
-until the sheen is converted. Their cloth-shaded materials (`F_CLOTH_SHADING`) take 0 instead (below).
+agents a rim light that OFAST does not convert (and, until 2026-10-26, a cloth sheen OFAST did not either), and
+without them the agents read darker than CS2's; F0 0.04 darkened them further. Aurora vs FURIA round 5, CS2's
+Chase Cam views against Unreal's from the same camera (default picture), before the cloth shading: an SAS agent in
+the shade read 0.60 of CS2 at 0.08 and 0.48 at 0.04, the ground beside him 0.97; KSCERATO in the sun 0.96 and 0.92,
+the ground 1.09. A stand-in. Their cloth-shaded materials (`F_CLOTH_SHADING`) carry a specular texture instead
+(below).
 
-**Cloth shading, roughly** (2026-10-26). A `csgo_character` material with `F_CLOTH_SHADING` whose `g_tMetalness`
-holds a cloth mask (B × (1 − G) at least 0.05 on average: the Phoenix balaclava, body and legs, the SAS uniform and
-sleeves, about 0.5; not the gloves and the SAS lenses, which set the flag too but whose compiled constants have
-none) gets `KHR_materials_sheen` (colour: its colour texture × `g_flSheenTintColor` × `g_flSheenScale`, at most 1;
-roughness 0.5) and `KHR_materials_specular` 0; Interchange draws it with its sheen master
-(`/InterchangeAssets/gltf/M_Sheen`), whose `SpecularFactor` `import_demo.py` sets to that 0. Without it the
-balaclava's knit took a glossy highlight at roughness 0.44 and F0 0.08 and read as leather or metal where CS2 shows
-matte olive knit. Its `g_tMetalness` (`…_balaclava_cloth`) holds metalness in G as the others' does (0 – 4 there),
-B the cloth mask. A white sheen colour (the factor alone) washed the dark fabrics out to grey (the SAS uniform almost
-white); the fabric's own colour keeps them dark. Checked at ticks 34118 (YEKINDAR's balaclava: matte olive with its
-ribs, as in CS2; a little darker) and 34416 (XANTARES's uniform: dark navy). Still not CS2's model: its sheen is
-`sqrt(albedo) · g_flSheenScale` and only on the cloth mask, `g_tMetalness` B × (1 − G), the rest keeping its
-specular; here the sheen is the albedo itself, over the whole material, and the specular is 0 everywhere on it.
+**Cloth shading** (2026-10-26). CS2's character shader (as Source 2 Viewer's `complex.frag`, `texturing.slang` and
+`pbr.slang` rebuild it) shades cloth where `g_tMetalness` B × (1 − G) is set, G being metalness as on the other
+materials: there F0 = `g_flSheenTintColor` × √albedo × `g_flSheenScale` (saturated) with a Charlie lobe (α =
+roughness²) in place of the GGX highlight, the cloth keeping all its diffuse light; elsewhere F0 0.04. glTF's
+`KHR_materials_sheen` is that lobe family. A `csgo_character` material with `F_CLOTH_SHADING` whose `g_tMetalness`
+holds a cloth mask (a mean of at least 0.05: the Phoenix balaclava, body and legs, the SAS uniform and sleeves, about
+0.5; not the gloves and the SAS lenses, which set the flag too but whose compiled constants have none) gets a sheen
+texture (RGB √(linear albedo) × `g_flSheenTintColor` (sRGB → linear) × `g_flSheenScale` (default 0.667) × the mask
+as the sheen colour, A the mask itself as the sheen roughness) and a specular texture (A 1 − the mask,
+`KHR_materials_specular`). Interchange draws it with its sheen master (`/InterchangeAssets/gltf/M_Sheen`, Unreal's
+Cloth shading model), which takes the sheen colour as the Fuzz Color and wires the sheen roughness to the Cloth input:
+the lerp from the ordinary highlight to the cloth lobe (`ClothBxDF`), the blend CS2 makes by its cloth mask, hence
+the mask there rather than a roughness (the cloth lobe takes the main roughness, as CS2's does; another glTF reader
+gets the broadest sheen on the cloth). Off the cloth the specular texture gives F0 0.04 (`import_demo.py` leaves the
+`SpecularFactor` of these at 1). Before, the balaclava's knit took a glossy highlight at roughness 0.44 and F0 0.08
+and read as leather or metal where CS2 shows matte olive knit. A first pass used the colour texture as the sheen over
+the whole material with no specular: matte, but darker; the roughness in the sheen texture's A (Cloth then the
+roughness) gave 0.69, 0.62 and 1.23 on the boxes below. Against CS2 from its camera positions (round 5, Aurora vs
+FURIA), the mean brightness of a lower-body box: YEKINDAR's trousers at 34118 0.74 of CS2's (0.57 with the first
+pass), XANTARES's SAS legs at 34416 0.64 (0.57), YEKINDAR's trousers at 37975 1.32 (0.95), where Unreal's light on
+him is stronger than CS2's. The SAS blue reads a little greyer than CS2's navy.
 
 Until 2026-10-23 `import_demo.py` wrote the glTF's 0.5 itself, matched by instance name: weapons drew F0 0.04, and
 in agent files whose instance names Interchange shortened some weapons (a karambit) kept 0.08. Per-pixel F0
@@ -87,10 +96,9 @@ be judged: every weapon in the round's CS2 views close enough to see wears a pai
 finish until M10), and the light around them differs more than 2 % of reflectance does
 (`test-data/shots/weapon_specular/compare_weapons_cs2.jpg`).
 
-**Not converted** (glTF has no equivalent OFAST uses yet): characters' cloth shading as CS2 draws it (`g_tMetalness`
-B × (1 − G) is a cloth mask; CS2 gives those areas a sheen lobe, F0 = `sqrt(albedo) · g_flSheenScale`; converted only
-roughly above), their rim light
-(`g_flRimlightStrength` on some materials), retro-reflectivity
+**Not converted** (glTF has no equivalent OFAST uses yet): characters' rim light (`g_flRimlightStrength`,
+`g_flRimlightPower` on two of the round's 14 agent materials, the SAS lenses and the Phoenix legs; no public reference
+has its formula, Source 2 Viewer only notes `g_tMetalness` A as its mask), retro-reflectivity
 (`g_tMetalness` R with `F_RETRO_REFLECTIVE`), the characters' colour and roughness adjustments, anisotropy itself, and
 `g_flMetalnessTransitionBias` on weapons, which no public reference explains. Metal parts take their colour as F0 as
 in the standard model; knife blades, whose colour texture is dark grey (sRGB ≈ 0.38), render darker than in CS2.
