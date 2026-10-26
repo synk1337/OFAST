@@ -93,7 +93,9 @@ enum Command {
         out: PathBuf,
         /// Also write the players as animated CS2 agents with their weapons in hand and holstered: one glTF per agent
         /// look (`<demo>_r<round>_<agent>_<mesh groups>.gltf`) and `<demo>_r<round>.agents.json` listing them, their
-        /// animation baked from the demo. Needs the CS2 install (agent and weapon models, animation clips).
+        /// animation baked from the demo: CS2's own poses from the demo's pose recipes where it can, OFAST's own
+        /// elsewhere (the environment variable `OFAST_RECIPE=0` keeps OFAST's own only). Needs the CS2 install
+        /// (agent and weapon models, animation clips).
         #[arg(long)]
         players: bool,
     },

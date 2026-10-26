@@ -171,7 +171,7 @@ struct Round<'a> {
     aim_punch: BTreeMap<u32, HashMap<u32, [f32; 2]>>,
     /// The skeleton's bone masks in its order, for the pose recipes.
     masks: Vec<BoneMask>,
-    /// The round's pose-recipe clip table (`OFAST_RECIPE=1`: CS2's own poses, decision 020).
+    /// The round's pose-recipe clip table (CS2's own poses, decision 020; `None` with `OFAST_RECIPE=0`).
     clip_table: Option<ClipTable>,
 }
 
@@ -327,10 +327,16 @@ pub fn export_players(
         masks,
         clip_table: None,
     };
-    // `OFAST_RECIPE=1`: CS2's own poses from the demo's pose recipes, where its clip table names their clips
-    // (decision 020; not checked against CS2 enough to be the default yet).
+    // CS2's own poses from the demo's pose recipes, where its clip table names their clips (decision 020): the default
+    // since they fit the demo's hits and CS2's picture better than the re-decided ones (`docs/formats/demo.md`);
+    // `OFAST_RECIPE=0` keeps the re-decided poses only. A round without any recipe (a CS2 build without them) learns
+    // no table: that takes a bake of every player.
     let mut recipe_check = None;
-    if std::env::var("OFAST_RECIPE").is_ok_and(|v| v == "1") {
+    let has_recipes = track
+        .samples
+        .iter()
+        .any(|s| s.players.iter().any(|p| p.rig.pose_recipe.is_some()));
+    if has_recipes && std::env::var("OFAST_RECIPE").as_deref().map(str::trim) != Ok("0") {
         let table = learn_clip_table(
             track,
             &round.sets,
@@ -793,10 +799,12 @@ const HITBOX_SET: &str = "cstrike";
 /// How many ticks before a hit's tick its player's hitboxes are posed ([`Body`]): the shot is fired about a tick
 /// before its message ([`crate::demo::shots::shot_times`]), and CS2's server checks it against the victim where the
 /// shooter saw them, earlier still (its lag compensation). Fitted on the demos' hits (`hitbox_check`, the export's
-/// `check:` line) over 10 rounds of 8 demos: posed 3 ticks back, 353 of 505 hit points lie within an inch of a
-/// hitbox's surface (2 back 336, on the hit's own tick 172 of the 413 with a body near; 351 before the body's aim
-/// took the aim punch, [`crate::anim::bake::BODY_AIM_PUNCH`]), and where a bullet went through a body its way out
-/// lies within 3 inches of the next hit's start for 32 of 40 (the 8 inches of [`super::shots::PLAYER_DEPTH`]: 22).
+/// `check:` line) over 10 rounds of 8 demos, on the re-decided poses: posed 3 ticks back, 353 of 505 hit points lay
+/// within an inch of a hitbox's surface (2 back 336, on the hit's own tick 172 of the 413 with a body near; 351 before
+/// the body's aim took the aim punch, [`crate::anim::bake::BODY_AIM_PUNCH`]), and where a bullet went through a body
+/// its way out lay within 3 inches of the next hit's start for 32 of 40 (the 8 inches of
+/// [`super::shots::PLAYER_DEPTH`]: 22). Not fitted again on CS2's own poses, now the default: 371 within an inch
+/// there (349 re-decided since the shot clip restarts with each bullet), 34 of 40 ways out within 3 inches.
 const HIT_POSE_TICKS: f32 = 3.0;
 
 /// A player's hitboxes in the world on frame `world` (the agent's posed bones, model space) with the player's
@@ -916,7 +924,7 @@ fn export_look(
         .as_ref()
         .map(|_| clips_by_path(&round.sets, round.upper.as_ref(), round.graphs.as_ref()));
     for &controller in players {
-        // CS2's own poses before the aim, tick by tick, from the player's recipes (`OFAST_RECIPE=1`).
+        // CS2's own poses before the aim, tick by tick, from the player's recipes (unless `OFAST_RECIPE=0`).
         let recipe_poses = round
             .clip_table
             .as_ref()

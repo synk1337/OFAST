@@ -52,10 +52,11 @@ Next steps, in order:
    inputs (the duck amount at bit 48), and the 14 and 5 together 80 – 850 bits, steady per player, not set by the
    weapon; alignment tests over the tail drown in its constant stretches. What is known is in `demo.md`'s task
    table; Esoterica's IK and target tasks (variable-length targets behind flags) are the next lead.
-4. Bake from the recipe where it is decoded and check against CS2 side by side (`tools/cs2/free_cam.py`) (started:
-   `anim::recipe::RecipePlayer`, opt-in with `OFAST_RECIPE=1`, OFAST's aim over CS2's pose; the demo's hits sit
-   closer to the hitboxes posed from it: 371 of 505 within an inch on 10 rounds of 8 demos, 349 with the
-   re-decided poses; side views from CS2's free camera match it).
+4. Bake from the recipe where it is decoded and check against CS2 side by side (`tools/cs2/free_cam.py`) (done:
+   `anim::recipe::RecipePlayer`, OFAST's aim over CS2's pose; the demo's hits sit closer to the hitboxes posed from
+   it, 371 of 505 within an inch on 10 rounds of 8 demos against 349 with the re-decided poses, and side views from
+   CS2's free camera where the two differ most match CS2 at least as well; the default since 2026-10-26,
+   `OFAST_RECIPE=0` keeping the re-decided poses only).
 
 ## Alternatives considered
 

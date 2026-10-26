@@ -1,7 +1,8 @@
 //! Developer tool: one player's pose recipe on one tick, played ([`ofast_core::anim::recipe::RecipePlayer`]) and set
 //! against OFAST's re-decided pose: each task with its clip's path and whether the clip is additive, then chosen
 //! bones in model space (translation, and the bone's local scale) in three poses: the recipe's as played, the bake
-//! over it (OFAST's aim and weapon snap, as the export with `OFAST_RECIPE=1`) and the bake without it.
+//! over it (OFAST's aim and weapon snap, as the export plays them, without the aim punch) and the bake without it (as
+//! with `OFAST_RECIPE=0`).
 //!
 //! ```bash
 //! cargo run --release --example recipe_pose -- path/to/match.dem 5 XANTARES 34532 [bone,bone…]

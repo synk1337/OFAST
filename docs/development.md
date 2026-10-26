@@ -29,6 +29,7 @@ VPK archives and 200 MB demos.
 | `OFAST_CS2_DIR` | all `game-data` tests | CS2 root folder, if not in Steam's default library |
 | `OFAST_TEST_DEMO` | `tests/cs2_demo.rs` | demo to test with; default: the newest `.dem` in `game\csgo\replays` (download a match in CS2's Watch tab to get one) |
 | `OFAST_ORACLE_PYTHON` | `tests/cs2_demo.rs` | Python with demoparser2 installed (see below); default: `python` on the PATH; skipped if neither has it |
+| `OFAST_RECIPE` | the players' export (`ofast export-demo --players`, `tests/cs2_demo.rs`) | `0`: OFAST's re-decided poses only, not CS2's own from the demo's pose recipes (the default) |
 
 ## Test data rules
 

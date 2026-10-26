@@ -598,7 +598,8 @@ additive jump clip) and 658, left unknown; that table names 93.3 % of the sample
 index drops out of the blends it is the second input of; a blend whose first input it is gives nothing. The hitbox
 fit does not move (these clips rarely play at a hit).
 
-**Playing it** (`anim::recipe::RecipePlayer`, `ofast export-demo … --players` with `OFAST_RECIPE=1`): each tick's
+**Playing it** (`anim::recipe::RecipePlayer`, `ofast export-demo … --players` by default since 2026-10-26;
+`OFAST_RECIPE=0` keeps the re-decided poses only): each tick's
 tasks are played in order: a sample is its clip at its time × its length (a sample the table does not know gives
 nothing); a blend lays its second input over its first (an additive one added, type 8 in model space, the others
 bone by bone) under its mask (mask 0 is the skeleton's first, `UpperBody`, of the 12 it defines: the 4-bit index

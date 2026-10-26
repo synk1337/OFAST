@@ -316,7 +316,8 @@ ofast export-demo match.dem --round 5 --out exports/demos --players
 #   12 weapons), <demo>_r5_tm_phoenix_1.gltf (5 players, 13 weapons)
 ```
 
-With `OFAST_RECIPE=1` the export plays CS2's own pose where the demo's pose recipe gives one (`anim::recipe`,
+By default (since 2026-10-26; `OFAST_RECIPE=0` turns it off) the export plays CS2's own pose where the demo's pose
+recipe gives one (`anim::recipe`,
 [demo.md](demo.md#pose-recipe-cs2s-own-animation), decision 020): the round's clip table is learned first (each
 recipe index matched to the clip this bake samples with it), then each player's recipes are played tick by tick into
 a pose before the aim, which replaces everything above up to the aim; the aim and the flashed pose go on top.
@@ -325,8 +326,11 @@ left out) keep the re-decided pose, cut to and from it, except runs of at most 8
 ticks the demo has no sample for), which blend the two (86 % of round 5's living
 player-ticks are played from the recipes). The aim's action and hand weights still come from OFAST's own decisions:
 where OFAST misses or mistimes an action CS2 plays (a reload, a draw), the hands go back onto the gun, or the aim
-levels, at OFAST's moments, over CS2's pose. Not the default yet: it is checked against the demo's hits so far, and
-against CS2's picture on a few frames only.
+levels, at OFAST's moments, over CS2's pose. It became the default once it fit the demo's hits better (371 of 505
+hit points within an inch on the hitbox fit's 10 rounds against 349) and CS2's picture at least as well at the moments
+where the two differ most ([demo.md](demo.md#pose-recipe-cs2s-own-animation)). Learning the clip table bakes every
+player once more, but the bake then skips OFAST's graph wherever the recipe gives the pose: round 5 exported in 54 s
+with the recipes against 56 s without. A round without any recipe (a CS2 build without them) learns no table.
 
 A 76-second round: 10 players × 4860 frames and 34 weapon bones, 27 – 51 MB per look, in 14 s.
 `tools/unreal/import_demo.py` imports them (at the tick rate) and plays each player's animation on an agent actor
@@ -408,7 +412,11 @@ on de_nuke's CT spawn rests on the floor after 4.5 s with its joints together wi
 still after 2.3 – 10.5 s, within 0.7 – 3.8 m of where its player died (`tests/cs2_demo.rs`
 `deaths_fall_as_ragdolls`, which limits the distance across the ground to 6 m: on de_nuke one body falls 5.9 m
 straight down, past a railing into a pit, off the player clip its player stood on, which bodies do not collide
-with). `examples/ragdoll_settle.rs` prints a ragdoll settling on a flat floor, part by part.
+with). `examples/ragdoll_settle.rs` prints a ragdoll settling on a flat floor, part by part. Those figures were
+measured on the re-decided poses; with CS2's own (the default since 2026-10-26) rounds 3 and 5 of Aurora vs FURIA end
+alike, 0 – 0.4 m apart and within the same spread, but for one body: Wicadia's (round 5, tick 37813) twitches on for
+42.9 s instead of 3.1 s. Its last living frames come from the recipe with no cut (its bones at most 220 units/s
+against 206), so the ragdoll is that sensitive to how it starts.
 Against CS2 (Aurora vs FURIA, de_nuke, round 5, `compare_deaths_b.png`, `compare_deaths_c.png`,
 `compare_deaths_d.png`): KSCERATO, shot running at 248 in/s, lies in CS2 about 2.4 – 2.8 m from where he died along
 his run (−35°), face down, an arm reaching to a duct; OFAST's body goes 2.5 m and lies face down, its head at the
