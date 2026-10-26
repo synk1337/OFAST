@@ -16,6 +16,7 @@
 //! | entities | [`entity`] | create / update / delete entities from `svc_PacketEntities` |
 //! | events | [`events`] | game events (deaths, round ends, bomb…) with named keys |
 //! | players | [`players`] | per-tick player positions and eye angles for one round |
+//! | summary | [`summary`] | a whole demo's rounds, scores, kill feed and highlights, in one pass |
 //! | grenades | [`grenades`] | thrown grenades and the fires they light, per tick |
 //! | smokes | [`smoke`] | a smoke's voxel log decoded, and its cloud simulated |
 //! | shots | [`shots`] | each gun shot's fire-bullets message, and its bullets' directions from its seed |
@@ -57,5 +58,6 @@ pub mod serializer;
 pub mod shots;
 pub mod smoke;
 pub mod stringtable;
+pub mod summary;
 
 pub use parser::{DemoError, DemoParser, FrameInfo, read_header};

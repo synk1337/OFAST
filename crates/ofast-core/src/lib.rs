@@ -14,6 +14,7 @@
 //! | [`demo`] | CS2 demos (`.dem`): frames, string tables, send tables, entities, player positions per round | `docs/formats/demo.md` |
 //! | [`game`] | Locating a CS2 install on disk | — |
 //! | [`items`] | Item definitions (`scripts/items/items_game.txt`, KeyValues 1): weapon names by index | — |
+//! | [`kv1`] | KeyValues 1 text (item definitions, radar overviews, Steam's library list) | — |
 //! | [`anim`] | Animation clips, skeletons, CS2's locomotion graph, each player's baked animation | `docs/formats/animation.md` |
 //! | [`physics`] | Rubikon physics (`PHYS` blocks): agents' ragdolls, maps' world collision | `docs/formats/model.md` |
 //! | [`bytes`] | Shared little-endian byte cursor (and varints) used by every binary reader | — |
@@ -38,6 +39,7 @@ pub mod demo;
 pub mod export;
 pub mod game;
 pub mod items;
+pub mod kv1;
 pub mod kv3;
 pub mod map;
 pub mod meshopt;

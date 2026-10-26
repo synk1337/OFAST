@@ -11,72 +11,7 @@
 
 use std::collections::HashMap;
 
-/// One KeyValues 1 token.
-#[derive(Debug, PartialEq)]
-enum Token<'a> {
-    Text(&'a str),
-    Open,
-    Close,
-}
-
-/// Splits KeyValues 1 text into tokens (quoted strings without their quotes, bare words, braces); comments and
-/// `[$…]` conditions are dropped.
-fn tokens(text: &str) -> impl Iterator<Item = Token<'_>> {
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    std::iter::from_fn(move || {
-        loop {
-            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-                i += 1;
-            }
-            if i >= bytes.len() {
-                return None;
-            }
-            match bytes[i] {
-                b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                    while i < bytes.len() && bytes[i] != b'\n' {
-                        i += 1;
-                    }
-                }
-                b'{' => {
-                    i += 1;
-                    return Some(Token::Open);
-                }
-                b'}' => {
-                    i += 1;
-                    return Some(Token::Close);
-                }
-                b'[' => {
-                    while i < bytes.len() && bytes[i] != b']' {
-                        i += 1;
-                    }
-                    i += 1;
-                }
-                b'"' => {
-                    let start = i + 1;
-                    i = start;
-                    while i < bytes.len() && bytes[i] != b'"' {
-                        // A backslash escapes the next character (\" inside descriptions).
-                        i += if bytes[i] == b'\\' { 2 } else { 1 };
-                    }
-                    let end = i.min(bytes.len());
-                    i = end + 1;
-                    return Some(Token::Text(&text[start..end]));
-                }
-                _ => {
-                    let start = i;
-                    while i < bytes.len()
-                        && !bytes[i].is_ascii_whitespace()
-                        && !matches!(bytes[i], b'{' | b'}' | b'"')
-                    {
-                        i += 1;
-                    }
-                    return Some(Token::Text(&text[start..i]));
-                }
-            }
-        }
-    })
-}
+use crate::kv1::{Token, tokens};
 
 /// Item names by definition index, from the text of `items_game.txt`.
 pub fn item_names(text: &str) -> HashMap<u32, String> {
@@ -99,7 +34,7 @@ pub fn item_values(text: &str, wanted: &str) -> HashMap<u32, String> {
                 path.pop();
                 key = None;
             }
-            Token::Text(text) => match key.take() {
+            Token::Text(text) | Token::Quoted(text) => match key.take() {
                 None => key = Some(text),
                 Some(k) => {
                     // A key–value pair inside items_game/items/<index>.

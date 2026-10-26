@@ -437,9 +437,53 @@ the round end.
   `m_bWarmupPeriod`, `m_gamePhase` (5 = match ended).
 
 OFAST's round: starts when freeze time begins (`m_bFreezePeriod` turns on) outside warmup and before the match has
-ended; number = `m_totalRoundsPlayed + 1`; lasts until the tick before the next round starts, the match ends, or the
-demo ends — so it includes the seconds after the round is decided. Start ticks equal the `round_start` game event.
-A player sample for tick T is the state after the last packet of frame tick T (demoparser2 samples the same way).
+ended; number = `m_totalRoundsPlayed + 1`; lasts until the tick before the next round starts, a warmup begins again
+(some servers warm up after a knife round), or the demo ends — so it includes the seconds after the round is
+decided. The match's last round ends on the tick the match does (`m_gamePhase` 5), which is the tick it is decided:
+that tick is the round's, sampled with its final kill. Start ticks equal the `round_start` game event. A restart or
+a restored backup plays a round number again: `track_round` takes the first round with the number, `track_round_at`
+the one starting at a tick. A player sample for tick T is the state after the last packet of frame tick T
+(demoparser2 samples the same way).
+
+### Round results (the demo summary)
+
+`demo::summary::summarize` reads a whole demo once for the Studio's demo page: each round's winner, why it ended,
+both teams' names and scores, who played which side, the kill feed, and the highlights worked out from them.
+
+Tournament demos have no `round_end` event (above), so the result comes from entities:
+
+- **Game rules**: `m_nRoundEndCount` (a byte that counts round ends; a change is a round end), with the round's
+  `m_iRoundEndWinnerTeam` (2 / 3) and `m_eRoundEndReason`. Reasons are Valve's `RoundEndReason` numbered from 1,
+  the `round_end` event's `reason`: 1 bomb exploded, 7 bomb defused, 8 / 9 CTs / Ts win by elimination, 10 draw,
+  12 time ran out (target saved), 17 / 18 surrender.
+- **Teams** (`CCSTeam`, one entity per side): `m_iTeamNum`, `m_iScore`, `m_szClanTeamname` (the tournament team's
+  name; empty in matchmaking). The entity belongs to the side: at half time the names and scores swap entities on
+  the second half's first tick, so a round's teams are read on the ticks after it is decided and before the next one
+  starts.
+- **Kills**: `player_death`, with `headshot`, `penetrated` (a count of surfaces: non-zero = wallbang), `noscope`,
+  `thrusmoke`, `attackerblind`, `attackerinair`, `assistedflash`; `weapon` is the kill feed's name (`ak47`,
+  `knife_karambit`, `inferno` for fire, `world`).
+- **Sides**: each controller's `m_iTeamNum` when the freeze time ends (`round_freeze_end`), for the players whose
+  pawn lives then (`m_bPawnIsAlive`: a player who left keeps a controller on their side, without a pawn);
+  spectators (team 1) are left out.
+
+On the Aurora vs FURIA major demo (de_dust2, 22 rounds) the reasons match the demo's own events (7
+`bomb_exploded`, 2 `bomb_defused`, on the same rounds) and the last round gives the final score, 13–9; its final
+kill is on the match-end tick (7 kills; 6 before that tick was the round's). The local match demo (de_nuke) gives
+13–7, with the scores changing entities at round 13. A demo cut short (the first part of a map split in two files)
+leaves its last round undecided. Only a round's first decisive end counts (a winner, or a draw): a restart during
+the seconds after it counts a round end too.
+
+A round number can come twice: a restart (`mp_restartgame`, a knife round before the match) or a restored backup
+starts counting again. The summary keeps every round in demo order and marks one whose number comes again later as
+restarted (its result did not count); highlights point at their round by its place in the list, not its number.
+
+Highlights (`summary::highlights`, from the rounds alone): three or more kills of opponents by one player in a round
+(five: an ace); a won clutch — the first time the winning side is down to one player while at least one opponent
+lives, before the round is decided (a side alone from the start is no clutch; kills after the decision are the
+seconds before the next round); a collateral — two or more kills by one player on the same tick with the same gun
+(not a shotgun, whose pellets can kill two players); and special kills — no-scope, wallbang, through smoke,
+airborne, blind, knife. Team kills, suicides and kills whose victim is unknown count for none.
 
 ## Rig inputs
 

@@ -420,17 +420,20 @@ pub enum TrackError {
     /// The demo ended before the requested round started.
     #[error("round {0} not found in the demo")]
     RoundNotFound(u32),
+    /// No round starts at this tick.
+    #[error("no round starts at tick {0} in the demo")]
+    RoundStartNotFound(u32),
 }
 
 /// Field paths the tracker reads, looked up once by name.
-struct Paths {
-    controller_class: String,
+pub(super) struct Paths {
+    pub(super) controller_class: String,
     pawn_class: String,
-    rules_class: String,
+    pub(super) rules_class: String,
     pawn_handle: FieldPath,
-    name: FieldPath,
-    steam_id: FieldPath,
-    team: FieldPath,
+    pub(super) name: FieldPath,
+    pub(super) steam_id: FieldPath,
+    pub(super) team: FieldPath,
     cell: [FieldPath; 3],
     offset: [FieldPath; 3],
     view_offset: [FieldPath; 3],
@@ -797,7 +800,7 @@ struct RulesState {
 
 /// What happened at a tick, according to [`RoundDetector`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RoundEvent {
+pub(super) enum RoundEvent {
     /// A round ended on the previous sampled tick (its info is complete).
     Ended(RoundInfo),
     /// A round started at this tick (`Ended` for the previous round comes first if one was running).
@@ -817,9 +820,15 @@ impl RoundDetector {
         let mut events = Vec::new();
         let starts = rules.freeze && !self.was_freeze && !rules.warmup && !rules.match_ended;
         self.was_freeze = rules.freeze;
-        if (starts || rules.match_ended)
-            && let Some(done) = self.current.take()
+        // A return to warmup ends a round too (some servers warm up again after a knife round): its respawning
+        // deathmatch is no round.
+        if (starts || rules.match_ended || rules.warmup)
+            && let Some(mut done) = self.current.take()
         {
+            // The match ends on the tick its last round is decided: that tick (the final kill) is the round's.
+            if rules.match_ended && !starts {
+                done.end_tick = tick;
+            }
             events.push(RoundEvent::Ended(done));
         }
         if starts {
@@ -843,23 +852,23 @@ impl RoundDetector {
 }
 
 /// What [`walk_rounds`] hands its callback after every tick that changed entities.
-struct TickView<'p, 'd> {
-    parser: &'p DemoParser<'d>,
-    paths: &'p Paths,
-    tick: u32,
+pub(super) struct TickView<'p, 'd> {
+    pub(super) parser: &'p DemoParser<'d>,
+    pub(super) paths: &'p Paths,
+    pub(super) tick: u32,
     /// Round starts / ends detected at this tick.
-    rounds: &'p [RoundEvent],
+    pub(super) rounds: &'p [RoundEvent],
     /// The round running now, if any.
-    current: Option<RoundInfo>,
+    pub(super) current: Option<RoundInfo>,
     /// Game events read since the previous call (they can be from earlier ticks without entity changes).
-    events: &'p [GameEvent],
+    pub(super) events: &'p [GameEvent],
     /// The shot and effect messages read since the previous call ([`shots::FIRE_BULLETS`],
     /// [`shots::EFFECT_DISPATCH`]), likewise.
     messages: &'p [RawMessage],
 }
 
 /// Calls `on_tick` after every tick that changed entities; it returns `false` to stop reading.
-fn walk_rounds(
+pub(super) fn walk_rounds(
     data: &[u8],
     mut on_tick: impl FnMut(TickView<'_, '_>) -> bool,
 ) -> Result<Option<RoundInfo>, TrackError> {
@@ -917,8 +926,24 @@ pub fn list_rounds(data: &[u8]) -> Result<Vec<RoundInfo>, TrackError> {
 }
 
 /// Reads the demo up to the end of `round` and returns every player's position, view offset and eye angles for each
-/// tick of it, and the round's game events.
+/// tick of it, and the round's game events. A restart or a restored backup plays a round number again: this is the
+/// first round with the number ([`track_round_at`] picks a round by its start).
 pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
+    track_round_where(data, |r| r.round == round)?.ok_or(TrackError::RoundNotFound(round))
+}
+
+/// [`track_round`] for the round that starts at `start_tick` ([`RoundInfo::start_tick`], as [`list_rounds`] and the
+/// demo summary give it).
+pub fn track_round_at(data: &[u8], start_tick: u32) -> Result<RoundTrack, TrackError> {
+    track_round_where(data, |r| r.start_tick == start_tick)?
+        .ok_or(TrackError::RoundStartNotFound(start_tick))
+}
+
+/// [`track_round`] for the first round `wanted` picks; `None` when the demo ends before one.
+fn track_round_where(
+    data: &[u8],
+    wanted: impl Fn(&RoundInfo) -> bool,
+) -> Result<Option<RoundTrack>, TrackError> {
     let mut track: Option<RoundTrack> = None;
     // Each smoke's voxel update counter when its log was last read.
     let mut read_at: HashMap<(u32, u32), i64> = HashMap::new();
@@ -934,10 +959,18 @@ pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
             events,
             messages,
         } = view;
-        if let Some(done) = rounds.iter().find_map(|e| match e {
-            RoundEvent::Ended(info) if info.round == round => Some(*info),
+        let ended = rounds.iter().find_map(|e| match e {
+            RoundEvent::Ended(info) if wanted(info) => Some(*info),
             _ => None,
-        }) {
+        });
+        // The match ends on the tick its last round is decided, and no round starts then: that tick is the round's
+        // last sample (the final kill), read below.
+        let match_end = ended.is_some()
+            && track.is_some()
+            && !rounds.iter().any(|e| matches!(e, RoundEvent::Started(_)));
+        if let Some(done) = ended
+            && !match_end
+        {
             // Events read up to now can still belong to the round's last ticks.
             if let Some(track) = track.as_mut() {
                 track
@@ -956,10 +989,10 @@ pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
         if track.is_none() {
             earlier.extend(messages.iter().cloned());
         }
-        if current.is_some_and(|c| c.round == round) {
+        if let Some(info) = current.filter(&wanted).or(ended.filter(|_| match_end)) {
             if track.is_none() {
                 let mut new = RoundTrack {
-                    round,
+                    round: info.round,
                     start_tick: tick,
                     end_tick: tick,
                     tick_interval: parser.tick_interval().unwrap_or(1.0 / 64.0),
@@ -1042,9 +1075,9 @@ pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
             }
             track.end_tick = tick;
         }
-        true
+        !match_end
     })?;
-    track.ok_or(TrackError::RoundNotFound(round))
+    Ok(track)
 }
 
 /// Adds the shots and player hits among `messages` to `track`; a shot's pawn is turned into its controller with the
@@ -1523,6 +1556,74 @@ mod tests {
         CsvcMsgUpdateStringTable, EDemoCommands, NetMessages, SvcMessages, c_demo_class_info,
     };
     use crate::demo::serializer::testing::{F, message};
+
+    /// The game rules of one tick: in freeze time or not, rounds played, warmup, the match over.
+    fn rules(freeze: bool, rounds_played: u32, warmup: bool, match_ended: bool) -> RulesState {
+        RulesState {
+            rounds_played,
+            freeze,
+            warmup,
+            match_ended,
+        }
+    }
+
+    #[test]
+    fn rounds_run_from_freeze_to_freeze_and_end_with_the_match() {
+        let mut detector = RoundDetector::default();
+        assert!(
+            detector.update(10, rules(false, 0, true, false)).is_empty(),
+            "warmup"
+        );
+        assert_eq!(
+            detector.update(20, rules(true, 0, false, false)),
+            [RoundEvent::Started(1)]
+        );
+        assert!(
+            detector
+                .update(30, rules(false, 0, false, false))
+                .is_empty()
+        );
+        let next = detector.update(40, rules(true, 1, false, false));
+        let first = RoundInfo {
+            round: 1,
+            start_tick: 20,
+            end_tick: 30,
+        };
+        assert_eq!(next, [RoundEvent::Ended(first), RoundEvent::Started(2)]);
+        detector.update(50, rules(false, 1, false, false));
+        // The match ends on the tick its last round is decided: that tick belongs to the round.
+        let last = RoundInfo {
+            round: 2,
+            start_tick: 40,
+            end_tick: 60,
+        };
+        assert_eq!(
+            detector.update(60, rules(false, 2, false, true)),
+            [RoundEvent::Ended(last)]
+        );
+        assert_eq!(detector.finish(), None);
+    }
+
+    #[test]
+    fn a_return_to_warmup_ends_the_round() {
+        let mut detector = RoundDetector::default();
+        detector.update(20, rules(true, 0, false, false));
+        detector.update(30, rules(false, 0, false, false));
+        let knife = RoundInfo {
+            round: 1,
+            start_tick: 20,
+            end_tick: 30,
+        };
+        assert_eq!(
+            detector.update(40, rules(false, 0, true, false)),
+            [RoundEvent::Ended(knife)]
+        );
+        assert!(detector.update(50, rules(false, 0, true, false)).is_empty());
+        assert_eq!(
+            detector.update(60, rules(true, 0, false, false)),
+            [RoundEvent::Started(1)]
+        );
+    }
 
     // Class ids (4 classes → 3 bits) and entity indices used by the fixture.
     const RULES_CLASS: u32 = 0;

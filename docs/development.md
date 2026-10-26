@@ -15,18 +15,20 @@
 ```bash
 cargo fmt --all                     # format
 cargo clippy --all-targets          # lint
-cargo test                          # unit tests on synthetic fixtures (what CI runs)
+cargo test                          # unit tests on synthetic fixtures (core and CLI)
+cargo test --workspace              # the same, with the Studio's Rust side (what CI runs; needs WebKitGTK on Linux)
 cargo test --features game-data     # extra tests that read YOUR local CS2 install
 cargo doc --no-deps --open          # browse the API docs
 ```
 
-`game-data` tests find CS2 automatically through Steam's default path. Override with the `OFAST_CS2_DIR` environment
-variable (the folder that contains `game\csgo\pak01_dir.vpk`). Add `--release` when running them: they read whole
-VPK archives and 200 MB demos.
+`game-data` tests find CS2 automatically through Steam's library list (`libraryfolders.vdf`). Override with the
+`OFAST_CS2_DIR` environment variable (the folder that contains `game\csgo\pak01_dir.vpk`). Add `--release` when
+running them: they read whole VPK archives and 200 MB demos.
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `OFAST_CS2_DIR` | all `game-data` tests | CS2 root folder, if not in Steam's default library |
+| `OFAST_CS2_DIR` | all `game-data` tests, the Studio | CS2 root folder, if Steam's library list does not lead to it |
+| `OFAST_UE_DIR` | the Studio | Unreal Engine 5.8's folder, if the Epic Games Launcher did not install it |
 | `OFAST_TEST_DEMO` | `tests/cs2_demo.rs` | demo to test with; default: the newest `.dem` in `game\csgo\replays` (download a match in CS2's Watch tab to get one) |
 | `OFAST_ORACLE_PYTHON` | `tests/cs2_demo.rs` | Python with demoparser2 installed (see below); default: `python` on the PATH; skipped if neither has it |
 | `OFAST_RECIPE` | the players' export (`ofast export-demo --players`, `tests/cs2_demo.rs`) | `0`: OFAST's re-decided poses only, not CS2's own from the demo's pose recipes (the default) |
