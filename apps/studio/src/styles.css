@@ -1,0 +1,164 @@
+/* OFAST Studio: a dark, editor-like look. Colours as tokens, so the theme lives in one place. */
+:root {
+  --bg: #15171a;
+  --panel: #1d2024;
+  --panel-2: #24282d;
+  --line: #2f343a;
+  --text: #e6e8eb;
+  --muted: #8a9099;
+  --accent: #e8a33d;
+  --ok: #4caf7d;
+  --bad: #d9534f;
+  --ct: #5b9bd5;
+  --t: #e0a03c;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.logo {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+
+.subtitle {
+  color: var(--muted);
+}
+
+.content {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.panel-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.panel-head .muted {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error {
+  color: var(--bad);
+}
+
+button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+.setup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.check {
+  display: grid;
+  grid-template-columns: 12px 170px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.check .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.check.ok .dot {
+  background: var(--ok);
+}
+
+.check.missing .dot {
+  background: var(--bad);
+}
+
+table.demos {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.demos th,
+.demos td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.demos th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.demos tbody tr {
+  cursor: pointer;
+}
+
+.demos tbody tr:hover {
+  background: var(--panel-2);
+}
+
+.num {
+  text-align: right;
+}

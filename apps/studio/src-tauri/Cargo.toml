@@ -1,0 +1,26 @@
+[package]
+name = "ofast-studio"
+description = "OFAST Studio: the desktop app (browse CS2 demos, find highlights, send rounds to Unreal)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+# Tauri's convention: the app lives in a library crate, `main.rs` only starts it.
+name = "ofast_studio"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+ofast-core = { path = "../../../crates/ofast-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+
+[lints]
+workspace = true

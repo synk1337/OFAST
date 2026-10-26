@@ -109,8 +109,9 @@ de_fachwerk) — probably stored in another archive.
   killer's camera has the victim at the crosshair just before the kill.
 - [x] Compare first-person frames with CS2 itself (`demo_gototick`, `spec_player`): de_nuke round 2, tick 8135 —
   the killer's view and the victim's position match (within ~3° vertically, CS2 interpolating the paused demo).
-- [ ] Several rounds / a whole match in one sequence; grenades (M6). (Weapons in hand: M4.5.)
-- [ ] Studio demo browser (Tauri app).
+- [x] A complete round per sequence, the default (2026-10-26: a fragmovie rarely takes a whole match, so several
+  rounds or a match in one sequence is not planned). Grenades: M6. (Weapons in hand: M4.5.)
+- [ ] **Studio demo browser (Tauri app): next** (2026-10-26). The effects rework (M6) comes last.
 
 ## M4 progress
 
@@ -294,7 +295,7 @@ player and round.
 - [ ] **Effects rework**: every effect so far is a first pass. They are in the right place, at the right size and
   time, but their look is far from good. All of them get reworked: smokes, fires and their smoke, HE blasts,
   flashbangs, muzzle flashes, tracers, impacts, blood and holes. When the rework starts, each effect's gaps get
-  listed against CS2, side by side.
+  listed against CS2, side by side. Scheduled last (2026-10-26), after the Studio app.
 
 ## Hard problems we know about
 

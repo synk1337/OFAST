@@ -1,12 +1,18 @@
 # OFAST Cargo workspace.
 #
-# Every Rust part of OFAST lives in this one workspace so that `cargo test` / `cargo clippy` at the repository root
-# checks everything at once. New crates are added to `members` as milestones introduce them
-# (apps/studio and apps/capture arrive in later milestones — see docs/roadmap.md).
+# Every Rust part of OFAST lives in this one workspace so that `cargo test --workspace` / `cargo clippy --workspace`
+# at the repository root checks everything at once. New crates are added to `members` as milestones introduce them
+# (apps/capture arrives in a later milestone — see docs/roadmap.md).
+#
+# A plain `cargo test` / `cargo clippy` checks only the default members, the core and the CLI: they build with
+# nothing but Rust installed. The Studio (apps/studio/src-tauri) pulls in Tauri, which needs WebKitGTK on Linux; a
+# working Studio is built with npm (`npm run tauri dev` or `npm run tauri build` in apps/studio), which builds its
+# web UI first.
 
 [workspace]
 resolver = "3"
-members = ["crates/ofast-core", "crates/ofast-cli"]
+members = ["crates/ofast-core", "crates/ofast-cli", "apps/studio/src-tauri"]
+default-members = ["crates/ofast-core", "crates/ofast-cli"]
 
 [workspace.package]
 version = "0.0.1"

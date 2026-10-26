@@ -16,6 +16,8 @@
 node_modules/
 apps/studio/dist/
 apps/studio/src-tauri/target/
+# Tauri regenerates its permission schemas on every build.
+apps/studio/src-tauri/gen/schemas/
 
 # --- Unreal Engine plugin build output ---
 unreal/**/Binaries/

@@ -46,6 +46,23 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # The Studio (apps/studio): its web UI must type-check and build; its Rust side needs WebKitGTK on Linux.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/studio/package-lock.json
+      - name: Studio web UI
+        working-directory: apps/studio
+        shell: bash
+        run: |
+          npm ci
+          npm run build
+      - name: Tauri's system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - name: Clippy
         run: cargo clippy --workspace --all-targets
       - name: Tests (synthetic fixtures only)
