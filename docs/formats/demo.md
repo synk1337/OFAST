@@ -766,8 +766,13 @@ Two kinds of message show where bullets really went, and checked the rule (`exam
   of those 13 demos are exactly the weapon's damage after its range falloff, hit group and armour (most of the 42
   others hit a teammate: CS2 cuts friendly bullets to a third), through walls 289 of 314.
 
-Not yet checked: shotguns' bullets after the first (seeded + 1 each, as CS:GO did), the R8 Revolver's and the
-Negev's own rules. Where the bullets stop is traced through the map's collision
+Shotguns follow another rule, not found yet: their pellets (the first one too) lie on none of the paths the other
+guns' rule gives (seed + 1 + the pellet), nor on those of 11 rules built on the fixed `m_nSpreadSeed` every shotgun
+has in `scripts/weapons.vdata` and the other guns leave at 0 (XM1014 817955, MAG-7 19899236, Sawed-Off 9571223, Nova
+17514: a fixed pattern, as CS:GO's `weapon_accuracy_shotgun_spread_patterns` made it), within 1 milliradian
+(`examples/shot_pellets.rs`). The 13 demos hold only 4 shotgun shots with hits (23 pellets seen, 2 – 32 mrad off the
+nearest predicted). Not checked either: the R8 Revolver's and the Negev's own rules. Where the bullets stop is traced
+through the map's collision
 ([replay.md](replay.md#agents-manifest-demo_rroundagentsjson), `shots`).
 
 ## Models

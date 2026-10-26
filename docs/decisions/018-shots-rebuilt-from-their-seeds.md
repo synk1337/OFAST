@@ -24,8 +24,8 @@ collision triangle its surface property (`world_physics`), per weapon model its 
 
 - **Rebuild each bullet's direction exactly** from the seed, with Valve's random stream (Numerical Recipes' `ran1`)
   and the order of draws the glass panes and player hits pin down for a shot's first bullet (seed + 1; inaccuracy
-  fraction and angle, spread angle and fraction; a shotgun's later pellets take seed + 1 + their number, as CS:GO's
-  did, not checked yet). Checked, not assumed: 82 of the pro demo's 83 panes (the other is another bullet's) and all
+  fraction and angle, spread angle and fraction; a shotgun's pellets take seed + 1 + their number, as CS:GO's once
+  did, which the demos' few shotgun hits do not bear out: [demo.md](../formats/demo.md#shots)). Checked, not assumed: 82 of the pro demo's 83 panes (the other is another bullet's) and all
   17 of the local demo's lie on the rebuilt path to a thousandth of a milliradian, and 725 of the two demos' 726 player
   hits on it to a thousandth of an inch.
 - **Trace each bullet** from the eyes through the map's collision as bullets see it (`stops_bullets`: not grates,
@@ -119,7 +119,7 @@ collision triangle its surface property (`world_physics`), per weapon model its 
   without the compensator's side flashes and sparks), a tracer's trail (one tick after molodoy's shot at 40813 CS2's
   still reaches back to his gun where OFAST's has gone; in YEKINDAR's own view at 37702 too, where OFAST's own
   tracer, on the line from his viewmodel's barrel, is a short streak near the crosshair),
-  bullet holes on doors (moving with them), shotguns' pellets after the first, the R8's and Negev's own spread rules, the limit on how
+  bullet holes on doors (moving with them), shotguns' pellets (another rule, built on their fixed `m_nSpreadSeed`: 12 candidates miss), the R8's and Negev's own spread rules, the limit on how
   many bullet holes CS2 keeps and which (four round-3 holes on de_nuke's open A-site door, whose collision is a static
   hull, do not show in CS2 in round 5), holes on props and signs (not in the world's collision).
   Older demos may have played on other values: one de_inferno demo's plaster walls cost bullets as if plaster's

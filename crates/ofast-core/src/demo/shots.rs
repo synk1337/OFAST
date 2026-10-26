@@ -334,7 +334,9 @@ impl UniformRandom {
 /// Checked on the bullets that broke glass (`examples/shot_spread.rs`): on the de_nuke pro demo 82 of 83 panes lie
 /// on the bullet's path to 0.001 milliradian (the other is another bullet's), on the local match demo all 17 (other
 /// seed offsets or draw orders miss by 1 – 100 milliradians). The pistols, the AK-47, the M4A1-S and the MP9 among
-/// them; not yet checked: shotguns' bullets after the first, and the R8 Revolver's and the Negev's own rules.
+/// them. Shotguns follow another rule, not found yet (their first pellet too; `examples/shot_pellets.rs` tries 12 built
+/// on their fixed `m_nSpreadSeed`, on the demos' 4 shotgun shots with hits): this one stands in for it. Not checked:
+/// the R8 Revolver's and the Negev's own rules.
 pub fn spread_offset(seed: u32, bullet: u32, inaccuracy: f32, spread: f32) -> [f32; 2] {
     let mut random = UniformRandom::new(seed.wrapping_add(1).wrapping_add(bullet) as i32);
     let r1 = random.float(0.0, 1.0);
