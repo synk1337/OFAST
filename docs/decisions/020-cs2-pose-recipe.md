@@ -42,7 +42,7 @@ Next steps, in order:
 1. `demo::recipe` (done for the known types): read the slots and the dynamic bytes per player and tick, parse
    topologies and payloads, report what does not parse.
 2. The resource index → clip table, found for each demo (done: `anim::recipe::learn_clip_table`): each index
-   matched to the clip OFAST's own bake samples with it most exclusively, one clip per index (213 of round 5's 333
+   matched to the clip OFAST's own bake samples with it most exclusively, one clip per index (212 of round 5's 333
    indices, naming 93.2 % of its sample tasks), only clips OFAST plays before its aim, vetted by the blends'
    structure (a 1D blend's two clips are both poses or both deltas); and keep looking for the rule
    (Valve's resource system order: load order, a hash table not matched yet). The match found a bake bug: OFAST

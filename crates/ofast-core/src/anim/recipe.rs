@@ -12,8 +12,8 @@
 //! played over the aim, that the same player held then. The recipes' structure vets the matches: the two clips of a
 //! type 7 blend (a 1D blend between clips of one move) are both poses or both deltas, so while a match's clip is on
 //! the other side from its matched blend partners' clips on more of its blends' player-ticks than not, the match most
-//! at odds is dropped and the table made again without it ([`ClipTable::dropped`]). Clips OFAST never plays where CS2
-//! does stay unknown.
+//! at odds is dropped and the table made again ([`ClipTable::dropped`]). Clips OFAST never plays where CS2 does stay
+//! unknown.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -736,6 +736,23 @@ mod tests {
             [(1, "a"), (2, "b"), (3, "d"), (4, "e"), (5, "c")]
         );
         assert_eq!(table.dropped, [(3, "c".to_owned())]);
+    }
+
+    #[test]
+    fn an_index_lured_by_a_freed_clip_goes_back_to_its_match() {
+        // Poses: "x". Index 1's match "x" is at odds with its partner 3 (a delta): dropped, 1 has no other. The freed
+        // "x" lures index 2 away from its delta "y", at odds with its partner 4 (a delta): dropped, 2 takes "y" again.
+        let matches = [
+            (0.97, 3, "z"),
+            (0.96, 4, "w"),
+            (0.9, 1, "x"),
+            (0.85, 2, "x"),
+            (0.8, 2, "y"),
+        ];
+        let partners = partners_of(&[(1, 3, 5), (2, 4, 5)]);
+        let table = assign(&matches, &partners, |clip| Some(clip != "x"));
+        assert_eq!(clips_of(&table), [(2, "y"), (3, "z"), (4, "w")]);
+        assert_eq!(table.dropped, [(1, "x".to_owned()), (2, "x".to_owned())]);
     }
 
     #[test]

@@ -571,7 +571,7 @@ together over ticks either is played), strongest matches first, each index and e
 lists each clip once), none under 0.3. The bake re-decides CS2's states its own way, so the match is statistical,
 but CS2's clips and OFAST's follow the same inputs: on round 5, 588 is `breathing` (Jaccard 0.88; its time runs at
 6.32 s a cycle, the clip lasts 6.33 s), 463 `idle_ak` (0.92, sampled at time 0 while 95 % of its ticks have an AK in
-hand), 159 `idle_karambit` (0.95), 321 `walk_n_rifle` (0.70). The table matches 213 of the round's 333 indices,
+hand), 159 `idle_karambit` (0.95), 321 `walk_n_rifle` (0.70). The table matches 212 of the round's 333 indices,
 which name 93.2 % of its sample tasks (`breathing` is 224 on the local match, another build). The indices left are
 clips OFAST does not play where CS2 does (0.53 s clips the bake has no counterpart for come out below 0.2); a match
 can still be wrong where OFAST plays one clip and CS2 another at the same moments. One was: 274 is `shoot_m4a1s`
@@ -588,14 +588,15 @@ between clips of one move (stand and crouch, two directions), are both poses or 
 strong match keeps. Each match is weighed against its matched partners' clips by the player-ticks of their blends:
 while one is on the other side on more of them than not, the one most at odds (ties: the weaker match) is dropped for
 good and the table made again without it, so its clip is free for any index and its index takes its next match
-(`anim::recipe::assign`). On round 5 it drops 4: 574 (`crouch_ne_knife`, a pose, 1D-blended only with the delta
-`idle_c4`: an additive C4 idle, now unknown), 283 (`idle_crouch_c4`, a delta, 1D-blended only with the pose
-`planting_crouch`: now `turn_right_23_crouch_knife`, a pose, but likely the standing plant the bake rarely plays),
-734 (`jump_crouch_stand_rifle`, a pose among deltas: now `jump_additive_crouch_start_rifle`, whose 0.60 s its time
-steps match, the pose going to 40), and 210, which took the freed `idle_crouch_c4` and was as much at odds. On the
-local match's round 1 it drops 2: 248 (`draw_tactical`, blended only with weapon idles, which are deltas: now
-`idle_tactical`) and 93 (`inair_crouch_e_pistol`, blended only with an additive jump clip), and the table names
-93.3 % of the sample tasks instead of 92.4 %. The hitbox fit does not move (these clips rarely play at a hit).
+(`anim::recipe::assign`). On round 5 it drops 3: 574 (`crouch_ne_knife`, a pose, 1D-blended only with the delta
+`idle_c4`, so an additive C4 idle) and 283 (`idle_crouch_c4`, a delta, 1D-blended only with the pose
+`planting_crouch`, likely the standing plant the bake rarely plays), both left unknown, no clip on their side passing,
+and 734 (`jump_crouch_stand_rifle`, a pose among deltas), now `jump_additive_crouch_start_rifle`, whose 0.60 s its
+time steps match, the pose going to 40. On the local match's round 1 it drops 3: 248 (`draw_tactical`, blended only
+with weapon idles, which are deltas), now `idle_tactical`, and 93 (`inair_crouch_e_pistol`, blended only with an
+additive jump clip) and 658, left unknown; that table names 93.3 % of the sample tasks instead of 92.4 %. An unknown
+index drops out of the blends it is the second input of; a blend whose first input it is gives nothing. The hitbox
+fit does not move (these clips rarely play at a hit).
 
 **Playing it** (`anim::recipe::RecipePlayer`, `ofast export-demo … --players` with `OFAST_RECIPE=1`): each tick's
 tasks are played in order: a sample is its clip at its time × its length (a sample the table does not know gives
@@ -616,7 +617,14 @@ player-ticks (87,757 of 102,205; the export's `check:` line). The server poses i
 the demo's hits check the poses: on the 10 rounds of 8 demos the hitbox fit uses (`HIT_POSE_TICKS`), 371 of 505 hit
 points lie within an inch of a hitbox's surface with the recipes' poses against 349 with the re-decided ones, 470
 against 464 on a posed body, the median distance lower on 9 of the 10 rounds (0.3 inch against 0.5 – 0.6 on most).
-The shot clip on every bullet moved the re-decided poses from 353 to 349 and the recipes' from 364 to 371.
+The shot clip on every bullet moved the re-decided poses from 353 to 349 and the recipes' from 364 to 371. Against
+CS2's picture where the two bakes differ most (side views from CS2's free camera, rendered in Unreal from the same
+points): running with a grenade or knife out, the recipe has the arms forward as CS2 does where the re-decided pose
+throws an arm over the head; jumping onto a box, the recipe has the crouched landing CS2 shows where the re-decided
+body is still high in the air; planting, both kneel as CS2 does. The plants first came out squatting: the planting
+state turns the planter with its own C4 clips (`TurnOnSpot`), which the bake does not play, while the bake still
+evaluated (and traced) the crouched turns of the locomotion under its plant, so the table paired CS2's plant turns
+with those; the bake no longer evaluates what the plant fully covers, and those indices stay unknown.
 
 ## Deaths
 

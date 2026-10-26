@@ -292,7 +292,10 @@ main graph) picks the locomotion set, the velocity is turned into the body's fra
 blend gives the clips, weights and cycle length; the phase advances by the tick. A start, plant and turn, turn on
 the spot, jump, fall or ladder replaces that move blend with the locomotion graph's state, blended over the graph's
 transition time. Then, bottom to top (`anim::bake`): planting (`SM0/Planting`: `planting` / `planting_crouch`, the
-whole body, 0.1 s in and out) while the C4's state is 300; the weapon's additive idle pose (blended by crouch); the
+whole body, 0.1 s in and out, the movement under it not evaluated once it is fully in) while the C4's state is 300;
+the planting state's own layer of C4 turns on the spot (`SM0/Planting/SM/Planting0/SM0/TurnOnSpot`, which its
+transitions enter on clip events, `CNmIDEventConditionNode`, that the evaluator does not follow) is not played, unlike
+the locomotion's `TurnOnSpot`; the weapon's additive idle pose (blended by crouch); the
 weapons layer in model space (`UpperBody`, `UpperBody_Ladder` on ladders) from the weapon's own graph for its
 action, handing over from one action to the next and fading out over the graph's times; the defuse layer in model
 space (`Defuse` mask, `Defuse_Grenade` with a grenade in hand: the enter clip, then the loop; 0.2 s in, 0.4 s out);

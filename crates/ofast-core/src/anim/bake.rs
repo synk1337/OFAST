@@ -1386,6 +1386,57 @@ impl Baker<'_> {
             }
             return Ok(pose);
         }
+        // Planting replaces the whole body: once blended in, the movement under it is not evaluated (nor traced for the
+        // pose recipes' clip table, where the crouched turns of a planter's body under it paired with CS2's own plant
+        // turns, the planting state's `TurnOnSpot`, which this bake does not play).
+        let planting = match (self.eval, self.graphs, step.plant) {
+            (Some(eval), Some(graphs), Some(plant)) => {
+                let w = fade(
+                    since(plant.start),
+                    plant.end.map(since),
+                    PLANT_BLEND,
+                    PLANT_BLEND,
+                );
+                match graphs.planting.filter(|_| w > 0.0) {
+                    Some(node) => eval
+                        .pose(
+                            &graphs.main,
+                            node,
+                            &self.additive_params(step),
+                            since(plant.start),
+                        )?
+                        .map(|pose| (pose, w)),
+                    None => None,
+                }
+            }
+            _ => None,
+        };
+        let mut pose = match planting {
+            Some((planting, w)) if w >= 1.0 => planting,
+            planting => {
+                let pose = self.body_pose(step, tick)?;
+                match planting {
+                    Some((planting, w)) => mix(pose, planting, w),
+                    None => pose,
+                }
+            }
+        };
+        if let Some(upper) = self.upper {
+            self.upper_body(
+                &mut pose,
+                upper,
+                step,
+                tick,
+                self.eval.zip(self.graphs),
+                false,
+            )?;
+        }
+        Ok(pose)
+    }
+
+    /// The movement's pose at `tick`, blending from the states before while they fade out.
+    fn body_pose(&self, step: &Step, tick: f32) -> Result<Vec<Transform>, AnimError> {
+        let since = |t: u32| self.seconds(tick - t as f32);
         let movement = &step.movement;
         let mut pose = self.movement_pose(step, movement.state, movement.start, tick)?;
         if let Some(previous) = movement.previous
@@ -1405,35 +1456,6 @@ impl Baker<'_> {
                 }
                 pose = mix(old, pose, w);
             }
-        }
-        let (Some(eval), Some(graphs)) = (self.eval, self.graphs) else {
-            if let Some(upper) = self.upper {
-                self.upper_body(&mut pose, upper, step, tick, None, false)?;
-            }
-            return Ok(pose);
-        };
-
-        // Planting replaces the whole body.
-        if let (Some(plant), Some(node)) = (step.plant, graphs.planting) {
-            let w = fade(
-                since(plant.start),
-                plant.end.map(since),
-                PLANT_BLEND,
-                PLANT_BLEND,
-            );
-            if w > 0.0
-                && let Some(planting) = eval.pose(
-                    &graphs.main,
-                    node,
-                    &self.additive_params(step),
-                    since(plant.start),
-                )?
-            {
-                pose = mix(pose, planting, w);
-            }
-        }
-        if let Some(upper) = self.upper {
-            self.upper_body(&mut pose, upper, step, tick, Some((eval, graphs)), false)?;
         }
         Ok(pose)
     }
