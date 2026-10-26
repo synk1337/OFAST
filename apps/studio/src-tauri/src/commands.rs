@@ -2,12 +2,18 @@
 //! error message for the user. Commands that read files run on a worker thread, so a slow folder never
 //! freezes the window.
 
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
 use ofast_core::demo::DemoParser;
+use ofast_core::demo::summary::{DemoSummary, summarize};
 use ofast_core::game::Cs2Install;
 use serde::Serialize;
+use tauri::Manager;
+use tauri::async_runtime::Mutex as AsyncMutex;
 
 /// Environment variable naming Unreal Engine 5.8's folder, for an install the Epic Games Launcher does not list.
 const UNREAL_ENV: &str = "OFAST_UE_DIR";
@@ -191,4 +197,89 @@ fn header(path: &Path) -> Option<(String, String)> {
         header.map_name().to_owned(),
         header.server_name().to_owned(),
     ))
+}
+
+/// A demo file's size and modification time (seconds since 1970): a summary holds while they are unchanged.
+type Stamp = (u64, u64);
+
+/// A demo's summary once read, with the file's stamp when it was.
+type Saved = Option<(Stamp, Arc<DemoSummary>)>;
+
+/// What [`summarize_demo`] read this session, by demo path. Each demo has its own lock, held while it is read: a
+/// second opening (React runs effects twice in development; the user goes back and opens it again) waits for the
+/// first instead of reading the file once more.
+#[derive(Debug, Default)]
+pub struct Summaries(Mutex<HashMap<String, Arc<AsyncMutex<Saved>>>>);
+
+/// Bumped whenever `ofast_core::demo::summary` changes what it reads: summaries saved by an older Studio are read
+/// again. (A saved summary that no longer fits the types is read again as well.)
+const SUMMARY_FORMAT: u32 = 2;
+
+/// Sums a demo up ([`ofast_core::demo::summary::summarize`]): rounds, scores, kill feed and highlights. Reading a
+/// whole match takes seconds, so each summary is kept, in memory and in the app's cache folder, until the file
+/// changes.
+#[tauri::command]
+pub async fn summarize_demo(
+    path: String,
+    app: tauri::AppHandle,
+    summaries: tauri::State<'_, Summaries>,
+) -> Result<Arc<DemoSummary>, String> {
+    let meta = std::fs::metadata(&path).map_err(|e| format!("{path}: {e}"))?;
+    let stamp: Stamp = (
+        meta.len(),
+        meta.modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs()),
+    );
+    let slot = summaries
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .entry(path.clone())
+        .or_default()
+        .clone();
+    let mut saved = slot.lock().await;
+    if let Some((at, summary)) = saved.as_ref()
+        && *at == stamp
+    {
+        return Ok(summary.clone());
+    }
+    let cache = app
+        .path()
+        .app_cache_dir()
+        .ok()
+        .map(|dir| dir.join("summaries").join(cache_name(&path, stamp)));
+    let summary = blocking(move || -> Result<DemoSummary, String> {
+        if let Some(cached) = cache
+            .as_deref()
+            .and_then(|file| std::fs::read(file).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        {
+            return Ok(cached);
+        }
+        let data = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
+        let summary = summarize(&data).map_err(|e| format!("{path}: {e}"))?;
+        // A cache that cannot be written only costs the next opening its seconds.
+        if let Some(file) = cache
+            && let Some(dir) = file.parent()
+            && std::fs::create_dir_all(dir).is_ok()
+            && let Ok(json) = serde_json::to_vec(&summary)
+        {
+            let _ = std::fs::write(&file, json);
+        }
+        Ok(summary)
+    })
+    .await??;
+    let summary = Arc::new(summary);
+    *saved = Some((stamp, summary.clone()));
+    Ok(summary)
+}
+
+/// The cache file of a demo's summary: a hash of its path, size, time and [`SUMMARY_FORMAT`] (Rust's default hasher:
+/// a Studio built with another Rust version may name the same summary differently, and reads the demo again).
+fn cache_name(path: &str, (size, modified): Stamp) -> String {
+    let mut hasher = std::hash::DefaultHasher::new();
+    (path, size, modified, SUMMARY_FORMAT).hash(&mut hasher);
+    format!("{:016x}.json", hasher.finish())
 }

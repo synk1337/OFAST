@@ -1,14 +1,16 @@
 // The Studio's window: the setup checks on top, then the demo list. Opening a demo leads to its page (rounds, kill
-// feed, highlights), which comes next.
+// feed, highlights: DemoPage.tsx).
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { DemoEntry, Environment, environment, listDemos } from "./api";
+import { DemoPage } from "./DemoPage";
 
 export function App() {
   const [env, setEnv] = useState<Environment | null>(null);
   const [folder, setFolder] = useState<string | null>(null);
   const [demos, setDemos] = useState<DemoEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [opened, setOpened] = useState<DemoEntry | null>(null);
 
   useEffect(() => {
     environment().then(
@@ -50,22 +52,28 @@ export function App() {
         <span className="logo">OFAST</span>
         <span className="subtitle">Studio</span>
       </header>
-      <main className="content">
-        <Setup env={env} />
-        {error && <p className="error">{error}</p>}
-        <section className="panel">
-          <div className="panel-head">
-            <h2>Demos</h2>
-            <span className="muted">{folder ?? "No folder"}</span>
-            <button onClick={pickFolder}>Other folder…</button>
-          </div>
-          {folder ? (
-            <DemoList demos={demos} />
-          ) : (
-            <p className="muted">CS2's replays folder was not found: pick the folder that holds your demos.</p>
-          )}
-        </section>
-      </main>
+      {opened ? (
+        <main className="content">
+          <DemoPage demo={opened} onBack={() => setOpened(null)} />
+        </main>
+      ) : (
+        <main className="content">
+          <Setup env={env} />
+          {error && <p className="error">{error}</p>}
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Demos</h2>
+              <span className="muted">{folder ?? "No folder"}</span>
+              <button onClick={pickFolder}>Other folder…</button>
+            </div>
+            {folder ? (
+              <DemoList demos={demos} onOpen={setOpened} />
+            ) : (
+              <p className="muted">CS2's replays folder was not found: pick the folder that holds your demos.</p>
+            )}
+          </section>
+        </main>
+      )}
     </div>
   );
 }
@@ -95,7 +103,7 @@ function Setup({ env }: { env: Environment | null }) {
   );
 }
 
-function DemoList({ demos }: { demos: DemoEntry[] | null }) {
+function DemoList({ demos, onOpen }: { demos: DemoEntry[] | null; onOpen: (demo: DemoEntry) => void }) {
   if (!demos) return <p className="muted">Reading demos…</p>;
   if (demos.length === 0) return <p className="muted">No demos here. Download one from CS2's Watch tab.</p>;
   return (
@@ -111,7 +119,7 @@ function DemoList({ demos }: { demos: DemoEntry[] | null }) {
       </thead>
       <tbody>
         {demos.map((d) => (
-          <tr key={d.path} title={d.path}>
+          <tr key={d.path} title={d.path} onClick={() => onOpen(d)}>
             <td>{d.name}</td>
             <td>{d.map || "?"}</td>
             <td className="muted">{d.server}</td>

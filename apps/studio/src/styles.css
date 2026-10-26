@@ -162,3 +162,234 @@ table.demos {
 .num {
   text-align: right;
 }
+
+/* The demo page: rounds on the left, the finder and the round's kill feed on the right. */
+.demo-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  flex: 1;
+}
+
+.demo-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.demo-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.final-score {
+  margin-left: auto;
+  font-size: 15px;
+}
+
+.demo-body {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.demo-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.rounds {
+  overflow: auto;
+  padding: 6px 0;
+}
+
+.round-row {
+  display: grid;
+  grid-template-columns: 56px 92px 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
+.round-row.head {
+  cursor: default;
+  font-size: 12px;
+}
+
+.round-row:not(.head):hover {
+  background: var(--panel-2);
+}
+
+.round-row.selected {
+  background: var(--panel-2);
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.side-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+  background: var(--line);
+}
+
+.side-dot.t {
+  background: var(--t);
+}
+
+.side-dot.ct {
+  background: var(--ct);
+}
+
+.player.t {
+  color: var(--t);
+}
+
+.player.ct {
+  color: var(--ct);
+}
+
+.badges {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.badge.multi_kill {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.badge.clutch {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.finder {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+
+.tabs button.on,
+.chip.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.chip {
+  padding: 2px 10px;
+  font-size: 12px;
+  border-radius: 12px;
+}
+
+.finder-list {
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+.finder-row {
+  display: grid;
+  grid-template-columns: 40px 44px 140px auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.finder-row:hover {
+  background: var(--panel-2);
+}
+
+.finder-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed {
+  max-height: 45%;
+  overflow: auto;
+}
+
+.kill {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 3px;
+}
+
+.kill.marked {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.kill .time {
+  width: 40px;
+}
+
+.weapon {
+  color: var(--text);
+}
+
+.flag {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.flag.bad {
+  color: var(--bad);
+}
+
+.round-row.restarted {
+  color: var(--muted);
+}
+
+.panel-head .hint {
+  flex: none;
+  font-size: 12px;
+}

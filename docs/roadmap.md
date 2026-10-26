@@ -112,6 +112,14 @@ de_fachwerk) — probably stored in another archive.
 - [x] A complete round per sequence, the default (2026-10-26: a fragmovie rarely takes a whole match, so several
   rounds or a match in one sequence is not planned). Grenades: M6. (Weapons in hand: M4.5.)
 - [ ] **Studio demo browser (Tauri app): next** (2026-10-26). The effects rework (M6) comes last.
+  - [x] Setup checks (CS2 through Steam's library list, Unreal Engine 5.8 through the Epic Games Launcher's, the
+    Unreal project) and the demo list with each demo's map and server.
+  - [x] A demo's page: every round with its winner, score and best moments, its kill feed, and a finder for
+    highlights (3K and more, aces, won clutches, collaterals, no-scopes, wallbangs, through smoke, airborne, blind,
+    knife) or every kill, by player and weapon. One pass over the demo (`demo::summary`; 6 s for a 22-round major
+    demo), kept in the app's cache.
+  - [ ] A round replayed in 2D on the map's radar.
+  - [ ] "Send to Unreal" (export, map import, round import) and "Open in Unreal".
 
 ## M4 progress
 

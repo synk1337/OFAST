@@ -7,9 +7,14 @@ What it does so far:
 
 - Finds CS2, Unreal Engine 5.8 and OFAST's Unreal project (`unreal/Sandbox`)
 - Lists the demos in CS2's replays folder (or any folder), with each one's map and server from its header
+- Opens a demo on its page: every round with its winner, score and best moments, the kill feed of the round chosen,
+  and a finder for the moments worth filming — highlights (3K and more, aces, won clutches, collaterals, no-scopes,
+  wallbangs, kills through smoke, in the air, while blind, with a knife) or every kill, by player and weapon (AWP,
+  pistols…). Reading a whole match takes a few seconds; the result is kept in the app's cache folder until the demo
+  changes.
 
-Coming next: each demo's rounds with their kill feed and highlights (multi-kills, clutches, no-scopes, wallbangs…),
-a 2D radar replay of a round, and "Send to Unreal" (export, map import, round import) with "Open in Unreal".
+Coming next: a 2D radar replay of a round, and "Send to Unreal" (export, map import, round import) with "Open in
+Unreal".
 
 ## Running it
 
@@ -18,11 +23,13 @@ Needs Node.js (22 or newer) and the Rust toolchain.
 ```bash
 cd apps/studio
 npm install
-npm run tauri dev
+npm run app
 ```
 
-`npm run tauri dev` starts the web UI's dev server (Vite, port 1420) and the app's window, and rebuilds either side
-when its files change. `npm run tauri build` makes the installer (NSIS), with the web UI built and embedded.
+`npm run app` starts the web UI's dev server (Vite, port 1420) and the app's window, and rebuilds either side when its
+files change. Its Rust side is built optimized: reading a demo in a debug build is about 20 times slower (a whole
+match: a minute instead of seconds). `npm run tauri dev` gives the debug build, quicker to rebuild while working on
+the Rust side. `npm run tauri build` makes the installer (NSIS), with the web UI built and embedded.
 
 The Rust side (`src-tauri`) is in the repository's Cargo workspace but not among its default members:
 `cargo test --workspace` checks it. A plain `cargo build -p ofast-studio` makes a development build that loads its UI
@@ -33,7 +40,8 @@ install they do not list, set `OFAST_CS2_DIR` or `OFAST_UE_DIR` to its folder.
 
 ## Layout
 
-- `src/`: the web UI (`App.tsx`; `api.ts` types the commands)
+- `src/`: the web UI (`App.tsx`: setup and demo list; `DemoPage.tsx`: a demo's page; `names.ts`: weapons and
+  highlights as people say them; `api.ts` types the commands)
 - `src-tauri/`: the Rust side (`commands.rs`: what the UI can ask), its configuration (`tauri.conf.json`), its
   permissions (`capabilities/`) and icons (`icons/source.png`, the source image; the rest are made from it with
   `npx tauri icon`)
