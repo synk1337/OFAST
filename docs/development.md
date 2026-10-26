@@ -181,6 +181,15 @@ with and without the flashed view, during a `shoot_views.py` run (`-Try` with a 
 While CS2 runs, do not start it again (a second `cs2.exe` only shows "Only one instance of the game can be running"
 and keeps the game from getting focus); leave it in the main menu before long Unreal runs, which it slows down.
 
+**Without the keyboard** (by script, or when another window holds the focus): start CS2 with `-netconport 2121`
+and send console commands over that local port, `python tools/cs2/netcon.py [--wait=s] "<command>" …` (it prints
+the console's output: `getpos`, "Demo paused at … demo tick N"). In demo playback `spec_mode 3` is the chase camera
+(it follows the spectated player's eye angles) and `spec_mode 4` the free camera, which `python tools/cs2/free_cam.py
+x y z pitch yaw` flies to any point (`spec_goto` alone only turns it); it stays there across seeks. Seek as usual
+(paused `demo_gototick N−64`, then `demo_step_tick 64`), then capture the frame with
+`powershell -NoProfile -File tools/cs2/grab_window.ps1 -Out <frame.png>`: CS2's own 2560 × 1440 picture, windows
+over it left out. The demo bar shows the tick drawn, two before the paused tick the console reports.
+
 Many views at once ([checks.md](checks.md)): `python tools/cs2/make_view_cfgs.py <map> <exposure> [views]` writes
 `ofast_v_<map>_<view>.cfg` for every view of `tools/compare/views/<map>.json` and a tour, `ofast_tour_<map>.cfg`, that
 locks the exposure and binds **F8** to the next view and **F9** to the current one. In CS2: `exec ofast_setup`,
