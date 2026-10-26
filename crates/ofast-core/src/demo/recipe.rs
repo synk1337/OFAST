@@ -13,8 +13,9 @@
 //!   is fixed per type ([`inputs_of`], checked by [`check_topology`]).
 //! - The data ([`decode`]): the server tick (`u32`), then each task's payload in the topology's order.
 //!
-//! Only some payloads are known: samples (type 1: a resource index and a 16-bit normalized time), blends (types 7 and
-//! 8: an 8-bit normalized weight, a flag and a bone mask list) and type 0's 6 bits. Payloads follow each other with
+//! Known payloads: samples (type 1: a resource index and a 16-bit normalized time), blends (types 7, 8, 9 and 10: an
+//! 8-bit normalized weight, a flag and a bone mask list), cached poses (types 0 and 6: a 6-bit ID) and the empty pose
+//! (type 13: nothing). Not known: types 14 (the aim, probably), 15 and 5 (always last). Payloads follow each other with
 //! nothing to mark where one ends, so decoding stops at the first task of another type ([`Decoded::end_bit`]).
 
 use std::fmt;
@@ -153,17 +154,30 @@ pub enum Task {
         /// Normalized time, 0 – 1.
         time: f32,
     },
-    /// Types 7 and 8: blend the poses of the two inputs.
+    /// Types 7, 8, 9 and 10: blend the poses of the two inputs. The four kinds share the payload; how each combines
+    /// the poses is not known yet (8 lays the masked layers over the body; 10 is often followed by the upper body's
+    /// weapon layer; 9 is rare).
     Blend {
-        /// 7 or 8 (8 lays the masked layers over the body).
+        /// 7, 8, 9 or 10.
         kind: u8,
         /// Normalized weight of the second input.
         weight: f32,
         /// The bone mask, if any.
         mask: Vec<MaskTask>,
     },
-    /// Type 0: one input and 6 bits whose meaning is not known yet.
-    Type0(u8),
+    /// Type 0: keep the input's pose under an ID (Esoterica's `CachedPoseWriteTask`; 6 bits).
+    CachedPoseWrite(u8),
+    /// Type 6: a pose kept under an ID earlier (Esoterica's `CachedPoseReadTask`; 6 bits).
+    CachedPoseRead(u8),
+    /// Type 13: an input-less pose with no payload (Esoterica's reference and zero poses have none).
+    EmptyPose,
+    /// A payload read as raw bits ([`decode_with`]'s `raw`, for checking widths).
+    Raw {
+        /// The task's type.
+        kind: u8,
+        /// The bits, least-significant first.
+        bits: u32,
+    },
 }
 
 /// What went wrong reading a recipe.
@@ -218,11 +232,11 @@ impl fmt::Display for RecipeError {
 
 impl std::error::Error for RecipeError {}
 
-/// How many inputs a task type takes: the counts with which every topology of a round parses and fits
-/// ([`check_topology`]: the 618 different topologies of round 5 of the de_nuke pro demo).
+/// How many inputs a task type takes: the counts with which every topology fits ([`check_topology`]: the 618
+/// different topologies of round 5 of the de_nuke pro demo and the 1,697 of the local match demo, another CS2 build).
 pub fn inputs_of(kind: u8) -> usize {
     match kind {
-        7 | 8 | 10 => 2,
+        7..=10 => 2,
         0 | 5 | 14 | 15 => 1,
         _ => 0,
     }
@@ -236,6 +250,10 @@ const RESOURCE_BITS: usize = 10;
 /// Bits of a bone mask index in the demos checked: Esoterica sizes it to the skeleton's bone mask count (8 – 15 for
 /// 4 bits), so a CS2 build could change it.
 pub const MASK_INDEX_BITS: usize = 4;
+
+/// Bits of a cached pose's ID (types 0 and 6): the widest that keeps the samples after them aligned on two demos
+/// (Esoterica writes the ID with `CachedPoseID::s_requiredBitsToSerialize` bits; its value there not checked).
+const CACHED_POSE_BITS: usize = 6;
 
 /// The value of `width` bits (at most 32) starting at bit `at` of `bytes`, least-significant first; `None` past the
 /// end. For looking at the bits where [`decode`] stopped.
@@ -377,6 +395,17 @@ impl Decoded {
 
 /// A recipe's tick, topology and as many tasks as can be decoded.
 pub fn decode(recipe: &PoseRecipe) -> Result<Decoded, RecipeError> {
+    decode_with(recipe, &[], None)
+}
+
+/// [`decode`] for checking payload widths by alignment (`examples/pose_recipe.rs`, `OFAST_PROBE`): decoding stops
+/// also at the first task whose type is in `undecoded`, and `raw` (a type and a width, at most 32 bits) reads that
+/// type's payloads as so many raw bits ([`Task::Raw`]) instead of its known or unknown layout.
+pub fn decode_with(
+    recipe: &PoseRecipe,
+    undecoded: &[u8],
+    raw: Option<(u8, usize)>,
+) -> Result<Decoded, RecipeError> {
     if recipe.version != RECIPE_VERSION {
         return Err(RecipeError::Version(recipe.version));
     }
@@ -385,12 +414,24 @@ pub fn decode(recipe: &PoseRecipe) -> Result<Decoded, RecipeError> {
     let tick = bits.take(32)?;
     let mut tasks = Vec::new();
     for node in &topology {
+        if undecoded.contains(&node.kind) {
+            break;
+        }
+        if let Some((kind, width)) = raw
+            && kind == node.kind
+        {
+            tasks.push(Task::Raw {
+                kind,
+                bits: bits.take(width.min(32))?,
+            });
+            continue;
+        }
         tasks.push(match node.kind {
             1 => Task::Sample {
                 resource: bits.take(RESOURCE_BITS)? as u16,
                 time: bits.normalized(16)?,
             },
-            7 | 8 => {
+            7..=10 => {
                 let weight = bits.normalized(8)?;
                 let mask = if bits.take(1)? == 1 {
                     mask_list(&mut bits)?
@@ -403,7 +444,9 @@ pub fn decode(recipe: &PoseRecipe) -> Result<Decoded, RecipeError> {
                     mask,
                 }
             }
-            0 => Task::Type0(bits.take(6)? as u8),
+            0 => Task::CachedPoseWrite(bits.take(CACHED_POSE_BITS)? as u8),
+            6 => Task::CachedPoseRead(bits.take(CACHED_POSE_BITS)? as u8),
+            13 => Task::EmptyPose,
             _ => break,
         });
     }
@@ -535,7 +578,7 @@ mod tests {
         d.put(1000, 10).put(32768, 16);
         let decoded = decode(&recipe(&t, &d)).expect("decodes");
         assert!(decoded.complete());
-        assert_eq!(decoded.tasks[1], Task::Type0(34));
+        assert_eq!(decoded.tasks[1], Task::CachedPoseWrite(34));
         match &decoded.tasks[3] {
             Task::Blend { kind: 8, mask, .. } => {
                 assert_eq!(mask[0], MaskTask::Mask(9));
@@ -548,6 +591,36 @@ mod tests {
             Task::Sample { resource: 1000, .. }
         ));
         assert_eq!(decoded.end_bit, d.at);
+    }
+
+    #[test]
+    fn cached_and_empty_poses_stay_aligned() {
+        // Topology: cached pose read, empty pose, blend(0, 1) of kind 10, sample (the sentinel), blend(2, 3) kind 9.
+        let mut t = Writer::default();
+        t.put(3, 4).put(5, 3);
+        t.put(6, 5).put(13, 5);
+        t.put(10, 5).put(0, 3).put(1, 3);
+        t.put(1, 5);
+        t.put(9, 5).put(2, 3).put(3, 3);
+        let mut d = Writer::default();
+        d.put(1, 32).put(25, 6);
+        d.put(128, 8).put(0, 1);
+        d.put(777, 10).put(1000, 16);
+        d.put(255, 8).put(0, 1);
+        let decoded = decode(&recipe(&t, &d)).expect("decodes");
+        assert!(decoded.complete());
+        assert_eq!(decoded.tasks[0], Task::CachedPoseRead(25));
+        assert_eq!(decoded.tasks[1], Task::EmptyPose);
+        assert!(matches!(decoded.tasks[2], Task::Blend { kind: 10, .. }));
+        assert!(matches!(
+            decoded.tasks[3],
+            Task::Sample { resource: 777, .. }
+        ));
+        assert!(matches!(decoded.tasks[4], Task::Blend { kind: 9, weight, .. } if weight == 1.0));
+        assert_eq!(decoded.topology[4].inputs, vec![2, 3]);
+        assert_eq!(decoded.end_bit, d.at);
+        let fit = check_topology(&t.bytes).expect("parses");
+        assert!(fit.all_used && fit.spare_bits < 8);
     }
 
     #[test]

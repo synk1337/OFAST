@@ -23,12 +23,13 @@ at again while checking whether demos carry the aim punch (they do not).
   input counts found per type, and all 114,455 recipes decode without an error; samples (type 1: 10-bit resource
   index, 16-bit time) and blends (types 7 and 8: 8-bit weight, a bone-mask flag and list) behave as CS2's animation
   does (synced locomotion times stepping one tick of their cycle, weights easing, a weapon clip restarting at each
-  shot); in 73 % of the recipes every clip and blend decodes (`examples/pose_recipe.rs`, `OFAST_CHECK=1`). Details:
-  [demo.md](../formats/demo.md#pose-recipe-cs2s-own-animation).
+  shot); every clip and blend decodes in 98.4 % of the round's recipes and 99.6 % of a match on another build
+  (`examples/pose_recipe.rs`, `OFAST_CHECK=1`). Details: [demo.md](../formats/demo.md#pose-recipe-cs2s-own-animation).
 - The resource index is the same in two tournament matches but in an order not found yet, and another in a demo
   of another CS2 build; locomotion clips are identified by co-occurrence with what OFAST bakes
   (`examples/recipe_map.rs`).
-- Not decoded yet: the payloads of task types 10, 6, 15, 5 and most of 14 (the aim); type 0's 6 bits.
+- Decoded since: types 10 and 9 (blends), 0 and 6 (cached pose write and read), 13 (an empty pose). Not decoded
+  yet: types 14 (the aim, probably), 15 and 5; together they hide a clip in under 2 % of the recipes.
 
 ## Decision
 
@@ -43,7 +44,8 @@ Next steps, in order:
 2. The resource index → clip table, found for each demo: each index's clip from how fast its time runs (the clip's
    length), the weapon in hand and co-occurrence with what OFAST bakes; and keep looking for the rule (Valve's
    resource system order: load order, a hash table not matched yet).
-3. The remaining payloads, by the same stability tests.
+3. The remaining payloads (types 14, 15 and 5; under 2 % of the recipes have a clip after them), by the same
+   alignment tests.
 4. Bake from the recipe where it is decoded and check against CS2 side by side (`tools/cs2/free_cam.py`).
 
 ## Alternatives considered

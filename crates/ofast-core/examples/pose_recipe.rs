@@ -7,9 +7,18 @@
 //!
 //! Prints one line per player and tick whose recipe changed: tick, name, active slot, then each task as
 //! `type(inputs):payload` (`1:#321@0.259` samples resource 321 at 0.259 of its length, `7(0,1):w0.13` blends tasks 0
-//! and 1 by 0.13, `8(4,5):w1.00[mask0]` with bone mask 0), `?` from the first task whose payload is not known.
-//! `OFAST_HEX=1` adds the topology and data bytes. `OFAST_CHECK=1` prints only a summary: recipes read, topologies
-//! that parse, recipes decoded to the end, and which task type stops the others.
+//! and 1 by 0.13, `8(4,5):w1.00[mask0]` with bone mask 0, `0(2):write22` / `6:read22` cached poses, `13:empty`),
+//! `?` from the first task whose payload is not known, then the data bit where decoding stopped and the next two
+//! 16-bit values. `OFAST_HEX=1` adds the topology and data bytes.
+//!
+//! `OFAST_CHECK=1` prints only a summary instead: recipes read, errors by kind, the task types decoding stops at, how
+//! many recipes have every clip and blend decoded (only a 14, 15 or 5 left after the stop), the distinct topologies
+//! (how many fit the input counts, where each type sits); `OFAST_TOPOLOGIES=<file>` writes those topologies in hex.
+//! With it, `OFAST_PROBE=<type>` leaves that type undecoded ([`recipe::decode_with`]) and scores fixed payload widths
+//! for it: before a sample, the widths that keep the sample's clip and step its time a little (1 – 13107 of 65535)
+//! from one server tick to the next in the same topology; before a 14, the widths that put 32768 (the 14's usual
+//! first value) after it. Widths short of the true one by bits that never change score alike: the true width is the
+//! widest of a tie. Blends' payloads vary in length (the mask list) and cannot be scored this way.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -17,6 +26,9 @@ use ofast_core::demo::DemoParser;
 use ofast_core::demo::decoder::FieldValue;
 use ofast_core::demo::entity::handle_to_index;
 use ofast_core::demo::recipe::{self, MaskTask, RecipePaths, Task};
+
+/// A pawn's last probed recipe at one width: its server tick, topology and the clips after the probed type.
+type LastProbe = (u32, Vec<u8>, Vec<u16>);
 
 fn hex(bytes: &[u8]) -> String {
     bytes
@@ -54,10 +66,21 @@ fn main() {
     let mut previous: HashMap<u32, recipe::PoseRecipe> = HashMap::new();
     // Summary: recipes read, errors by kind, decoded to the end, first undecoded type → count, and of those stopping
     // at a type 14 how many have only 14 and 5 left; the distinct topologies.
-    let (mut read, mut complete, mut only_aim_left) = (0usize, 0usize, 0usize);
+    let (mut read, mut complete, mut only_aim_left, mut clips_known) =
+        (0usize, 0usize, 0usize, 0usize);
     let mut errors: BTreeMap<String, usize> = BTreeMap::new();
     let mut stops: BTreeMap<u8, usize> = BTreeMap::new();
     let mut topologies: BTreeSet<Vec<u8>> = BTreeSet::new();
+    let probe: Option<u8> = std::env::var("OFAST_PROBE")
+        .ok()
+        .and_then(|p| p.parse().ok());
+    let mut probed = 0usize;
+    // Width → (recipes decoding without an error, clips after the type keeping their index, clips compared,
+    // recipes with 32768 where a 14 starts).
+    let mut scores: BTreeMap<usize, (usize, usize, usize, usize)> = BTreeMap::new();
+    // Type decoded before a stop at a 14 → (recipes, with 32768 where the 14 starts).
+    let mut aim_marks: BTreeMap<u8, (usize, usize)> = BTreeMap::new();
+    let mut last_probe: HashMap<(u32, usize), LastProbe> = HashMap::new();
     while let Some(frame) = parser.next_frame().expect("frame parses") {
         let Some(tick) = frame.tick else { continue };
         if tick < first || !frame.entities_changed {
@@ -131,6 +154,64 @@ fn main() {
                 if left == [14, 5] {
                     only_aim_left += 1;
                 }
+                // Alignment: decoding stopped at a 14 whose first value is 32768 (the aim's, nearly always), per type
+                // decoded before it.
+                if left[0] == 14 {
+                    let aligned =
+                        recipe::read_bits(&recipe.data, decoded.end_bit, 16) == Some(32768);
+                    let kinds: BTreeSet<u8> = decoded.topology[..decoded.tasks.len()]
+                        .iter()
+                        .map(|t| t.kind)
+                        .collect();
+                    for kind in kinds {
+                        let entry = aim_marks.entry(kind).or_default();
+                        entry.0 += 1;
+                        entry.1 += usize::from(aligned);
+                    }
+                }
+                // Only a 14, a 15 or the 5 after the stop: every clip, time and weight is known.
+                if left.iter().all(|k| matches!(k, 5 | 14 | 15)) {
+                    clips_known += 1;
+                }
+            }
+            // `OFAST_PROBE=<type>`: read that type's payloads as 0 – 32 raw bits and decode the rest of the recipe
+            // each way. At the right width the decode goes through and the clips after it keep their resource index
+            // from one server tick to the next (same player and topology); where decoding then stops at a 14, the
+            // aim's first value is 32768 nearly always.
+            if let Some(kind) = probe
+                && decoded.topology.iter().any(|t| t.kind == kind)
+            {
+                probed += 1;
+                for width in 0..=32 {
+                    let score = scores.entry(width).or_default();
+                    let Ok(d) = recipe::decode_with(&recipe, &[], Some((kind, width))) else {
+                        continue;
+                    };
+                    score.0 += 1;
+                    let after = d.tasks.iter().position(|t| matches!(t, Task::Raw { .. }));
+                    let indices: Vec<u16> = d
+                        .tasks
+                        .iter()
+                        .skip(after.map_or(usize::MAX, |a| a + 1))
+                        .filter_map(|t| match t {
+                            Task::Sample { resource, .. } => Some(*resource),
+                            _ => None,
+                        })
+                        .collect();
+                    if let Some((t, topology, before)) = last_probe.get(&(e.index, width))
+                        && *t + 1 == d.tick
+                        && *topology == recipe.topology
+                    {
+                        score.1 += before.iter().zip(&indices).filter(|(a, b)| a == b).count();
+                        score.2 += before.len().min(indices.len());
+                    }
+                    if d.topology.get(d.tasks.len()).map(|t| t.kind) == Some(14)
+                        && recipe::read_bits(&recipe.data, d.end_bit, 16) == Some(32768)
+                    {
+                        score.3 += 1;
+                    }
+                    last_probe.insert((e.index, width), (d.tick, recipe.topology.clone(), indices));
+                }
             }
             if !check {
                 let mut parts: Vec<String> = decoded
@@ -156,7 +237,10 @@ fn main() {
                             } => {
                                 format!("w{weight:.2}{}", mask(m))
                             }
-                            Task::Type0(v) => format!("u{v}"),
+                            Task::CachedPoseWrite(id) => format!("write{id}"),
+                            Task::CachedPoseRead(id) => format!("read{id}"),
+                            Task::EmptyPose => "empty".to_owned(),
+                            Task::Raw { bits, .. } => format!("raw{bits}"),
                         };
                         format!("{}{inputs}:{payload}", node.kind)
                     })
@@ -187,10 +271,60 @@ fn main() {
         }
     }
     if check {
+        let known = complete + clips_known;
         println!(
             "{read} recipes: errors {errors:?}; {complete} decoded to the end; the rest stop at task types \
-             {stops:?} (type → recipes), {only_aim_left} of them with only a 14 and a 5 left"
+             {stops:?} (type → recipes), {only_aim_left} of them with only a 14 and a 5 left; every clip and blend \
+             known in {known} ({:.1} %: only a 14, 15 or 5 after the stop)",
+            known as f64 * 100.0 / read.max(1) as f64
         );
+        let marks: Vec<String> = aim_marks
+            .iter()
+            .map(|(kind, (n, aligned))| {
+                format!(
+                    "{kind}: {:.1} % of {n}",
+                    *aligned as f64 * 100.0 / (*n).max(1) as f64
+                )
+            })
+            .collect();
+        println!(
+            "stops at a 14 with 32768 there, by type decoded before it: {}",
+            marks.join(", ")
+        );
+        if let Some(kind) = probe {
+            // Ranked by the share of clips after the type that keep their index, then by clean decodes.
+            let mut best: Vec<(usize, f64, usize, usize)> = scores
+                .iter()
+                .map(|(&w, &(ok, kept, compared, aim))| {
+                    (w, kept as f64 / compared.max(1) as f64, ok, aim)
+                })
+                .collect();
+            best.sort_by(|a, b| b.1.total_cmp(&a.1).then(b.2.cmp(&a.2)));
+            println!(
+                "type {kind}: in {probed} recipes; best payload widths (width: clips after it kept, clean decodes, 32768 at a 14):"
+            );
+            for (w, kept, ok, aim) in best.iter().take(6) {
+                println!(
+                    "  {w:2} bits: {:.1} % kept, {ok} decode, {aim} with 32768",
+                    kept * 100.0
+                );
+            }
+            // The most clean decodes after the most, wherever its width ranks.
+            let mut by_decodes: Vec<(usize, usize, usize)> =
+                best.iter().map(|b| (b.2, b.0, b.3)).collect();
+            by_decodes.sort_unstable_by(|a, b| b.cmp(a));
+            if let [(top, top_width, top_aim), (next, next_width, next_aim), ..] = by_decodes[..] {
+                println!(
+                    "  most clean decodes: {top} at {top_width} bits ({top_aim} with 32768); the next most {next} at \
+                     {next_width} bits ({next_aim} with 32768)"
+                );
+            }
+        }
+        // `OFAST_TOPOLOGIES=<file>`: the distinct topologies' bytes in hex, one per line, to fit input counts offline.
+        if let Ok(file) = std::env::var("OFAST_TOPOLOGIES") {
+            let lines: Vec<String> = topologies.iter().map(|t| hex(t)).collect();
+            std::fs::write(&file, lines.join("\n") + "\n").expect("topologies written");
+        }
         // The distinct topologies: how many fit the input counts, and where each type sits.
         let mut fit = 0;
         // Type → (topologies with it, first in, last in, next type → count).

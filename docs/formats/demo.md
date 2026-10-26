@@ -513,19 +513,29 @@ The fields sit on the pawn's `CBodyComponent` → `m_animationController`:
 A **topology** is a 4-bit width `D` (at most 8), a `D`-bit task count, then per task a 5-bit type and its inputs
 (`D` bits each: indices of earlier tasks). How many inputs each type takes is not written: with the counts below
 all 618 different topologies of round 5 of the de_nuke pro demo (demo ticks 29322 – 41800) fit (each input an
-earlier task, every task but the last used by a later one, the bits ending in the blob's last byte), and all
-114,455 recipes of the round decode without an error (`examples/pose_recipe.rs` with `OFAST_CHECK=1` prints these
-counts and where each type sits). The **data** follows the topology's order, each payload straight after the last,
-so a task whose payload is not known hides everything after it:
+earlier task, every task but the last used by a later one, the bits ending in the blob's last byte), and so do the
+1,697 of the local match demo (another CS2 build, which adds types 9 and 13); all 114,455 recipes of the round and
+678,075 of the match decode without an error (`examples/pose_recipe.rs` with `OFAST_CHECK=1` prints these counts
+and where each type sits). The **data** follows the topology's order, each payload straight after the last, so a
+task whose payload is not known hides everything after it. Payload widths were found by alignment
+(`OFAST_PROBE=<type>` reads the type's payloads as 0 – 32 raw bits and decodes the rest each way): at the right
+width every recipe decodes cleanly, the clips after it keep their index from one tick to the next, and where
+decoding then stops at a 14 its first value is the aim's usual 32768; at any other width fewer decode and the mark is
+missing. A blend's payload varies in length, so blends are checked by that last mark alone: with every type decoded
+as in the table,
+the recipes that stop at a 14 have 32768 there about as often whatever types come before (47 – 75 % on round 5,
+54 – 94 % on the local match; a misaligned type would leave it near none).
 
 | Type | Inputs | Payload | What |
 |---|---|---|---|
 | 1 | 0 | resource index (10 bits in these demos, enough for the 909 clips and 67 graphs the graph refers to), normalized time (16 bits) | sample a clip |
 | 7 | 2 | normalized weight (8 bits), a flag, and when set a bone mask list | blend the second input over the first |
 | 8 | 2 | the same | blend; the masked layers (weight 1, bone mask 0, over the upper body) |
-| 0 | 1 | 6 bits (22, 25, 26 and 34 seen) | not known yet; a sample always follows (in 200 of the 618 topologies) |
-| 10 | 2 | not known yet | a third two-input kind (in 371), followed by a sample, a 14, a 15 or the 5 |
-| 6 | 0 | not known yet | an input-less pose, first in all 31 topologies that have one |
+| 10 | 2 | the same (the recipes with one: 41 % with the 32768 mark on round 5, 54 % on the local match, as the others) | another blend kind (in 371 of the 618 topologies), often before the weapon layer |
+| 9 | 2 | the same (89 % of the 257 with the mark) | another blend kind, rare (in the local match only) |
+| 0 | 1 | a 6-bit ID (22, 25, 26 and 34 seen; at 6 bits all 6,797 recipes of round 5 with one decode, 4,002 of them with the mark; the next best width, 20 bits, 3,302 and 1) | keep the pose under that ID (Esoterica's `CachedPoseWriteTask`) |
+| 6 | 0 | a 6-bit ID (all 862 decode at 6 bits, 639 with the mark; the next best, 31 bits, 383 and none) | the pose kept under that ID (`CachedPoseReadTask`), first in all 31 topologies that have one |
+| 13 | 0 | nothing (all 173 decode at 0 bits, 163 with the mark; the next best, 25 bits, 170 and none) | an input-less pose (Esoterica's reference and zero poses carry nothing) |
 | 15 | 1 | not known yet | in 64 topologies, always just before the 14 |
 | 14 | 1 | not known yet: it starts with two 16-bit values near 32768 | the aim, probably (in all but one topology, then a sample or the 5): for YEKINDAR mid-spray (ticks 37930 – 37931) the two read 32768 and 32894, 32768 and 32636 — yaw 0 to the body and the pitch level — while his eyes look 7 – 9° down: the pitch of the bullets (eyes + 2 × aim punch), not of the eyes |
 | 5 | 1 | not known yet | last in every topology |
@@ -540,8 +550,8 @@ A typical list: `1 1 7(0,1) 1 7(2,3) 1 8(4,5) 1 8(6,7) 14(8) 5(9)`: the locomoti
 at one shared time, two weights), a pose at time 0 laid over the upper body, the weapon's clip over it (YEKINDAR's
 AK fire, restarting at each shot), the aim, the last step. The locomotion times advance by `tick interval ÷ cycle
 length` (0.026 a tick on a 0.6 s run cycle) and the weights ease as the player turns: this is the pose CS2 drew.
-Round 5: 73 % of the recipes decode every clip and blend (decoding stops with only the closing 14 and 5 left, or
-at the 5); the others stop at a type 10 (22 %), 15 (4 %), 6 (1 %) or a 14 with more after it (1 %).
+Every clip and blend decodes in 98.4 % of round 5's recipes and 99.6 % of the local match's (decoding stops at a
+14, 15 or 5 with no clip or blend after it); the rest have a clip after a 14 or a 15.
 
 The resource index is not the graph's own resource order. The main graph and its 66 child graphs refer to 909 clips
 (their `m_resources` lists, followed down by hand during the spike); their indices follow no rule tried by hand

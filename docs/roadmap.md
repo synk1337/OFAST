@@ -200,8 +200,8 @@ player and round.
 - [ ] **M4.7 CS2's pose recipe** ([decision 020](decisions/020-cs2-pose-recipe.md)): every player pawn sends the
   AnimGraph2 task list its graph ran each tick (clips, times, blend weights, bone masks), Esoterica's task
   serializer; bake from it instead of re-deciding the graph. Done so far: `demo::recipe` reads every player's
-  recipe; all 114,455 of a round decode without an error, 73 % with every clip and blend (the rest stop at task
-  types whose payloads are not known yet); locomotion clips identified by co-occurrence
+  recipe; all 114,455 of a round decode without an error, 98.4 % with every clip and blend (the rest have a clip
+  after a task whose payload is not known yet); locomotion clips identified by co-occurrence
   ([demo.md](formats/demo.md#pose-recipe-cs2s-own-animation)). To do: each demo's resource index table (it changes
   with the CS2 build; or its rule), the remaining task payloads, baking from it, checks against CS2.
 
