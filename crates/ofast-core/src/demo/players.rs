@@ -283,6 +283,9 @@ pub struct RigInputs {
     /// demo ticks to a fraction (`m_nCsViewPunchAngleTick` + `m_flCsViewPunchAngleTickRatio`, a game tick); `None`
     /// before any. It decays from then on ([`super::recoil::view_punch_at`]).
     pub view_punch: Option<super::recoil::ViewPunch>,
+    /// The AnimGraph2 tasks the server's graph ran for the pawn this tick, as sent ([`super::recipe`]): `None` while
+    /// dead or in a demo without them.
+    pub pose_recipe: Option<super::recipe::PoseRecipe>,
 }
 
 /// Whether a pawn's flash duration ([`RigInputs::flash_duration`]) going from `seen` to `duration` is a new blinding.
@@ -633,6 +636,7 @@ struct RigPaths {
     flash_duration: Option<FieldPath>,
     flash_max_alpha: Option<FieldPath>,
     view_punch: Option<[FieldPath; 3]>,
+    recipe: Option<super::recipe::RecipePaths>,
     /// Per weapon class id: every class with an item definition index (each weapon has its own serializer, so the
     /// same field sits at a different path in each).
     weapons: HashMap<u32, WeaponPaths>,
@@ -722,6 +726,7 @@ impl RigPaths {
                     path("m_pCameraServices.m_flCsViewPunchAngleTickRatio")?,
                 ])
             })(),
+            recipe: super::recipe::RecipePaths::find(serializers),
             weapons,
         }
     }
@@ -1482,6 +1487,10 @@ fn read_rig(parser: &DemoParser<'_>, paths: &RigPaths, pawn: &Entity) -> RigInpu
             let ratio = pawn.get(ratio).and_then(FieldValue::as_f32).unwrap_or(0.0);
             Some(([angle[0], angle[1]], f64::from(tick) + f64::from(ratio)))
         }),
+        pose_recipe: paths
+            .recipe
+            .as_ref()
+            .and_then(|r| super::recipe::read(pawn, r)),
     }
 }
 

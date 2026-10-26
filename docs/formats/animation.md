@@ -297,7 +297,8 @@ weapons layer in model space (`UpperBody`, `UpperBody_Ladder` on ladders) from t
 action, handing over from one action to the next and fading out over the graph's times; the defuse layer in model
 space (`Defuse` mask, `Defuse_Grenade` with a grenade in hand: the enter clip, then the loop; 0.2 s in, 0.4 s out);
 the body additives (`jump_additive_start` from take-off, `jump_additive_land` from landing to its end, `breathing`
-while standing idle); the weapon's additive shot from each tick the state enters 100 or 101; the flinches of each hit
+while standing idle); the weapon's additive shot from each bullet (the player's fire-bullets messages; in a demo
+without them, each tick the state enters 100 or 101, which holds through a spray); the flinches of each hit
 and while burning (additive); the aim from the eye angles and body yaw, with the weapon snapped onto the hand; and the
 flashed pose over it while flashed. A drawn weapon stays in its holster for the draw's first 0.1 s (the blend into `Deploy`), then
 the draw clip, which begins with the hand at the holster, takes it from there. Poses are keyed on every tick (64 per
@@ -311,6 +312,18 @@ ofast export-demo match.dem --round 5 --out exports/demos --players
 #   <demo>_r5_ctm_sas_5.gltf (3 players, 9 weapons), <demo>_r5_ctm_sas_6.gltf (2 players with defuse kits,
 #   12 weapons), <demo>_r5_tm_phoenix_1.gltf (5 players, 13 weapons)
 ```
+
+With `OFAST_RECIPE=1` the export plays CS2's own pose where the demo's pose recipe gives one (`anim::recipe`,
+[demo.md](demo.md#pose-recipe-cs2s-own-animation), decision 020): the round's clip table is learned first (each
+recipe index matched to the clip this bake samples with it), then each player's recipes are played tick by tick into
+a pose before the aim, which replaces everything above up to the aim; the aim and the flashed pose go on top.
+Ticks without a recipe pose (no recipe, or one whose base clips the table does not know; a layer it does not know is
+left out) keep the re-decided pose, cut to and from it, except runs of at most 8 ticks between two recipe poses (and
+ticks the demo has no sample for), which blend the two (86 % of round 5's living
+player-ticks are played from the recipes). The aim's action and hand weights still come from OFAST's own decisions:
+where OFAST misses or mistimes an action CS2 plays (a reload, a draw), the hands go back onto the gun, or the aim
+levels, at OFAST's moments, over CS2's pose. Not the default yet: it is checked against the demo's hits so far, and
+against CS2's picture on a few frames only.
 
 A 76-second round: 10 players × 4860 frames and 34 weapon bones, 27 – 51 MB per look, in 14 s.
 `tools/unreal/import_demo.py` imports them (at the tick rate) and plays each player's animation on an agent actor

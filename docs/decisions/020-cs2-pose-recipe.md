@@ -41,14 +41,17 @@ Next steps, in order:
 
 1. `demo::recipe` (done for the known types): read the slots and the dynamic bytes per player and tick, parse
    topologies and payloads, report what does not parse.
-2. The resource index → clip table, found for each demo (started): each index matched to the clip OFAST's own
-   bake samples with it most exclusively (`examples/recipe_table.rs`; candidates for 86 % of round 5's sampled
-   clips at a Jaccard index of 0.5 or more, not yet one to one), checked against how fast its time runs and the
-   weapon in hand; and keep looking for the rule (Valve's resource system order: load order, a hash table not
-   matched yet).
+2. The resource index → clip table, found for each demo (done: `anim::recipe::learn_clip_table`): each index
+   matched to the clip OFAST's own bake samples with it most exclusively, one clip per index (214 of round 5's 333
+   indices, naming 93.2 % of its sample tasks), only clips OFAST plays before its aim; and keep looking for the rule
+   (Valve's resource system order: load order, a hash table not matched yet). The match found a bake bug: OFAST
+   played a gun's shot clip once per spray where CS2 restarts it with every bullet (`docs/formats/demo.md`).
 3. The remaining payloads (types 14, 15 and 5; under 2 % of the recipes have a clip after them), by the same
    alignment tests.
-4. Bake from the recipe where it is decoded and check against CS2 side by side (`tools/cs2/free_cam.py`).
+4. Bake from the recipe where it is decoded and check against CS2 side by side (`tools/cs2/free_cam.py`) (started:
+   `anim::recipe::RecipePlayer`, opt-in with `OFAST_RECIPE=1`, OFAST's aim over CS2's pose; the demo's hits sit
+   closer to the hitboxes posed from it: 371 of 505 within an inch on 10 rounds of 8 demos, 349 with the
+   re-decided poses; side views from CS2's free camera match it).
 
 ## Alternatives considered
 

@@ -51,11 +51,12 @@ use super::shots::{
 use super::viewmodel::{export_viewmodel_look, load_viewmodel_rig};
 use crate::anim::aim::AimBones;
 use crate::anim::bake::{
-    ActionGraph, GraphRig, LocomotionSets, UpperBody, WeaponAnimation, WeaponSet, bake_player,
-    frame_samples,
+    ActionGraph, GraphRig, LocomotionSets, PlayerExtras, UpperBody, WeaponAnimation, WeaponSet,
+    bake_player, frame_samples,
 };
 use crate::anim::graph::Graph;
 use crate::anim::layers::BoneMask;
+use crate::anim::recipe::{ClipTable, RecipePlayer, clips_by_path, learn_clip_table};
 use crate::anim::viewmodel::ARMS_MODEL;
 use crate::anim::weapon::WeaponClips;
 use crate::anim::{
@@ -168,6 +169,10 @@ struct Round<'a> {
     collision: Option<WorldCollision>,
     /// Each player's aim punch (pitch, yaw) by tick, which their body's aim follows ([`super::punch`]).
     aim_punch: BTreeMap<u32, HashMap<u32, [f32; 2]>>,
+    /// The skeleton's bone masks in its order, for the pose recipes.
+    masks: Vec<BoneMask>,
+    /// The round's pose-recipe clip table (`OFAST_RECIPE=1`: CS2's own poses, decision 020).
+    clip_table: Option<ClipTable>,
 }
 
 /// The world physics of `map` (`maps/<map>/world_physics.vmdl`), or why it cannot be read (the map's archive is not
@@ -196,6 +201,8 @@ pub struct PlayerRig {
     pub sets: LocomotionSets,
     /// The clip skeleton (`worldmodel.vnmskel`).
     pub clip_skeleton: NmSkeleton,
+    /// Its bone masks, in its order (`m_maskDefinitions`; a mask it cannot read is all zeros).
+    pub masks: Vec<BoneMask>,
     /// The upper-body layers' data, when readable.
     pub upper: Option<UpperBody>,
     /// The graphs of the graph-evaluated layers, when readable.
@@ -249,9 +256,18 @@ pub fn load_player_rig(content: &Content, track: &RoundTrack) -> Result<PlayerRi
             None
         }
     };
+    // Every bone mask, in the skeleton's order (the pose recipe names them by index).
+    let masks = BoneMask::ids(&skeleton_data)
+        .iter()
+        .map(|id| {
+            BoneMask::from_skeleton(&skeleton_data, &clip_skeleton, id)
+                .unwrap_or_else(|| BoneMask(vec![0.0; clip_skeleton.bones.len()]))
+        })
+        .collect();
     Ok(PlayerRig {
         sets,
         clip_skeleton,
+        masks,
         upper,
         graphs,
         items_text,
@@ -270,6 +286,7 @@ pub fn export_players(
     let PlayerRig {
         sets,
         clip_skeleton,
+        masks,
         upper,
         graphs,
         items_text,
@@ -294,7 +311,7 @@ pub fn export_players(
         .iter()
         .map(|(&controller, ticks)| (controller, ticks.iter().map(|r| (r.tick, r.aim)).collect()))
         .collect();
-    let round = Round {
+    let mut round = Round {
         content,
         track,
         sets,
@@ -307,7 +324,27 @@ pub fn export_players(
         world,
         collision,
         aim_punch,
+        masks,
+        clip_table: None,
     };
+    // `OFAST_RECIPE=1`: CS2's own poses from the demo's pose recipes, where its clip table names their clips
+    // (decision 020; not checked against CS2 enough to be the default yet).
+    let mut recipe_check = None;
+    if std::env::var("OFAST_RECIPE").is_ok_and(|v| v == "1") {
+        let table = learn_clip_table(
+            track,
+            &round.sets,
+            round.upper.as_ref(),
+            round.graphs.as_ref(),
+        );
+        recipe_check = Some(format!(
+            "pose recipes: {} clips matched, naming {} of {} sample tasks",
+            table.clips.len(),
+            table.samples.1,
+            table.samples.0
+        ));
+        round.clip_table = Some(table);
+    }
 
     // Each player's look, from the last sample where they were alive (else their last one).
     let mut last: BTreeMap<u32, &PlayerSample> = BTreeMap::new();
@@ -366,7 +403,7 @@ pub fn export_players(
         dropped: 0,
         viewmodels: 0,
         falls: Vec::new(),
-        checks: Vec::new(),
+        checks: recipe_check.into_iter().collect(),
         fps: round.fps,
         frames: round.frames.len(),
         warnings,
@@ -374,6 +411,7 @@ pub fn export_players(
     let mut manifest = Vec::new();
     let mut muzzles: Vec<Muzzle> = Vec::new();
     let mut bodies: Vec<Body> = Vec::new();
+    let mut recipe_ticks = (0usize, 0usize);
     for (look, players) in &groups {
         let mut name = format!(
             "{demo_name}_r{}_{}_{}",
@@ -385,7 +423,7 @@ pub fn export_players(
             name = format!("{name}_{}", stem(gloves));
         }
         let (written, weapons, falls, look_muzzles, look_bodies) =
-            export_look(&round, look, players, out_dir, &name)?;
+            export_look(&round, look, players, out_dir, &name, &mut recipe_ticks)?;
         muzzles.extend(look_muzzles);
         bodies.extend(look_bodies);
         report.deaths += falls.len();
@@ -439,6 +477,12 @@ pub fn export_players(
         report.warnings.extend(written.warnings);
         report.players += players.len();
         report.weapons += weapons.len();
+    }
+    if round.clip_table.is_some() {
+        report.checks.push(format!(
+            "pose recipes: CS2's pose on {} of {} living player-ticks, the rest re-decided",
+            recipe_ticks.1, recipe_ticks.0
+        ));
     }
     let dropped = export_dropped(&round, demo_name, out_dir, &mut report);
     let (viewmodels, view_muzzles) =
@@ -825,13 +869,15 @@ fn muzzle_at(
     ))
 }
 
-/// Writes one look's glTF ([`LookExport`]).
+/// Writes one look's glTF ([`LookExport`]); `recipe_ticks` counts its players' living ticks and those played from the
+/// pose recipes (with [`Round::clip_table`]).
 fn export_look(
     round: &Round<'_>,
     look: &Look,
     players: &[u32],
     out_dir: &Path,
     file_name: &str,
+    recipe_ticks: &mut (usize, usize),
 ) -> Result<LookExport, ExportError> {
     let content = round.content;
     let track = round.track;
@@ -864,7 +910,24 @@ fn export_look(
     let mut bodies = Vec::new();
     let mut places: Vec<Vec<Vec<(Slot, Place)>>> = Vec::new();
     let mut slots: BTreeSet<Slot> = BTreeSet::new();
+    let clips = round
+        .clip_table
+        .as_ref()
+        .map(|_| clips_by_path(&round.sets, round.upper.as_ref(), round.graphs.as_ref()));
     for &controller in players {
+        // CS2's own poses before the aim, tick by tick, from the player's recipes (`OFAST_RECIPE=1`).
+        let recipe_poses = round
+            .clip_table
+            .as_ref()
+            .zip(clips.as_ref())
+            .map(|(table, clips)| {
+                let (poses, alive) =
+                    RecipePlayer::new(table, clips, &round.masks, &round.clip_skeleton)
+                        .play_round(track, controller);
+                recipe_ticks.0 += alive.len();
+                recipe_ticks.1 += alive.iter().filter(|t| poses.contains_key(t)).count();
+                poses
+            });
         let poses = bake_player(
             track,
             controller,
@@ -872,7 +935,10 @@ fn export_look(
             round.upper.as_ref(),
             round.graphs.as_ref(),
             round.fps,
-            round.aim_punch.get(&controller).unwrap_or(&HashMap::new()),
+            PlayerExtras {
+                aim_punch: round.aim_punch.get(&controller),
+                recipe_poses: recipe_poses.as_ref(),
+            },
         )?;
         let carried: Vec<Vec<(Slot, Place)>> = round
             .frames

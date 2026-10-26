@@ -19,7 +19,8 @@
 //! 5. **Defuse** (model space, `Defuse` mask): `Defuse/Defuse` while defusing, its enter clip then its loop.
 //! 6. **Body additives** (additive): the jump start from take-off, the landing until its clip ends, breathing
 //!    while standing idle (`Breathing` mask).
-//! 7. **Shot** (additive, upper body): `shoot_<w>` from each tick the weapon enters a shooting state (100 / 101).
+//! 7. **Shot** (additive, upper body): `shoot_<w>` from each shot (the fire-bullets messages; for a player without
+//!    any, each new timestamp of a shooting state, 100 / 101), as CS2 restarts it with every bullet of a spray.
 //! 8. **Flinches** (additive): `BodyFlinch` / `HeadFlinch` for each hit (`player_hurt`: hit group and side),
 //!    `FireFlinch` while burning.
 //! 9. **Aim** ([`super::aim`]): the upper body turned towards the view (eye yaw relative to the body yaw, eye pitch),
@@ -27,15 +28,20 @@
 //!    and the weapon snapped onto the hand.
 //! 10. **Flashed** (model space, `Flashed` mask, over the aim): the arms before the face while flashed.
 //!
+//! With CS2's own poses from the demo's pose recipes ([`PlayerExtras::recipe_poses`], [`super::recipe`]), a frame
+//! that has one takes it in place of layers 1 – 8, which then only decide the aim's weights; the aim and the flashed
+//! arms go over it.
+//!
 //! Poses are sampled at a fixed frame rate from the round's first tick, ready to key on a model's skeleton (after
 //! [`super::Retargeter`]). Not baked yet: foot IK, ragdolls.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use super::aim::{AimBones, AimInputs, aim, snap_weapon};
 use super::eval::{Evaluator, Leave, Library, Params, StateId};
 use super::layers::{BoneMask, add_layer, model_space_layer};
 use super::locomotion::{LocomotionBlend, blend_poses};
+use super::recipe::RECIPE_GAP;
 use super::states::{
     BURN_GAP, GroundAction, GroundInputs, LADDER_CYCLE_HEIGHT, MIN_AIR_TICKS, Movement,
     PLANT_STATE, REVERSAL_SPEED, REVERSAL_WINDOW, SMALL_TURN_MAX, SMALL_TURN_MIN, STANDING_SPEED,
@@ -372,7 +378,7 @@ struct Step {
     plant: Option<Span>,
     defuse: Option<Span>,
     additive: Option<(Additive, u32)>,
-    /// Tick of the latest shot with the weapon in hand.
+    /// Tick of the latest shot (fire-bullets message) since the weapon in hand was taken out.
     shot: Option<u32>,
     /// The latest hit to the body and to the head: tick and flinch type ([`flinch_types`]).
     flinch_body: Option<(u32, &'static str)>,
@@ -395,9 +401,9 @@ pub fn body_relative(velocity: [f32; 3], yaw: f32) -> [f32; 2] {
 }
 
 /// What the body's aim takes of the aim punch on `tick` ([`BODY_AIM_PUNCH`]).
-fn body_punch(aim_punch: &HashMap<u32, [f32; 2]>, tick: u32) -> [f32; 2] {
+fn body_punch(aim_punch: Option<&HashMap<u32, [f32; 2]>>, tick: u32) -> [f32; 2] {
     aim_punch
-        .get(&tick)
+        .and_then(|p| p.get(&tick))
         .map_or([0.0; 2], |p| p.map(|a| a * BODY_AIM_PUNCH))
 }
 
@@ -412,10 +418,21 @@ fn normalize_angle(degrees: f32) -> f32 {
 /// under it; Source 2 Viewer's body animator adds the punch once (`PlayerBodyAnimator.cs`), which tilts it 5° off.
 pub const BODY_AIM_PUNCH: f32 = crate::demo::recoil::BULLET_SCALE;
 
+/// What a player's bake takes besides the round and the rig ([`bake_player`]); the default, nothing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlayerExtras<'a> {
+    /// The player's aim punch (pitch, yaw) by tick ([`crate::export::punch`]), which the body's aim follows
+    /// ([`BODY_AIM_PUNCH`]).
+    pub aim_punch: Option<&'a HashMap<u32, [f32; 2]>>,
+    /// CS2's own pose before the aim by tick ([`super::recipe::RecipePlayer`]), played where present with OFAST's
+    /// aim and flashed arms over it, instead of the re-decided states.
+    pub recipe_poses: Option<&'a BTreeMap<u32, Vec<Transform>>>,
+}
+
 /// One player's poses (clip-skeleton bones) at `fps` frames per second from the round's first tick to its last:
 /// `None` while the player has no living pawn. Without `upper`, the locomotion alone; without `graphs`, no
-/// graph-evaluated states (moving and standing only, no actions). `aim_punch`: the player's aim punch (pitch, yaw)
-/// by tick ([`crate::export::punch`]), which the body's aim follows ([`BODY_AIM_PUNCH`]); empty for none.
+/// graph-evaluated states (moving and standing only, no actions); `extras` ([`PlayerExtras`]): the aim punch, CS2's
+/// own poses.
 pub fn bake_player(
     track: &RoundTrack,
     controller: u32,
@@ -423,7 +440,7 @@ pub fn bake_player(
     upper: Option<&UpperBody>,
     graphs: Option<&GraphRig>,
     fps: f32,
-    aim_punch: &HashMap<u32, [f32; 2]>,
+    extras: PlayerExtras<'_>,
 ) -> Result<Vec<Option<Vec<Transform>>>, AnimError> {
     let baker = Baker {
         track,
@@ -431,7 +448,7 @@ pub fn bake_player(
         upper,
         graphs,
         eval: graphs.map(|g| Evaluator::new(&g.library)),
-        aim_punch,
+        extras,
     };
     let steps = baker.steps(controller)?;
     let frames = frame_samples(track, fps);
@@ -457,14 +474,13 @@ pub fn timeline(
     graphs: Option<&GraphRig>,
 ) -> Result<Vec<(u32, String)>, AnimError> {
     // The aim does not decide anything.
-    let no_punch = HashMap::new();
     let baker = Baker {
         track,
         sets,
         upper,
         graphs,
         eval: graphs.map(|g| Evaluator::new(&g.library)),
-        aim_punch: &no_punch,
+        extras: PlayerExtras::default(),
     };
     let mut out = Vec::new();
     let mut last: Option<&Step> = None;
@@ -588,12 +604,30 @@ struct Baker<'a> {
     upper: Option<&'a UpperBody>,
     graphs: Option<&'a GraphRig>,
     eval: Option<Evaluator<'a>>,
-    aim_punch: &'a HashMap<u32, [f32; 2]>,
+    extras: PlayerExtras<'a>,
 }
 
 impl Baker<'_> {
     fn seconds(&self, ticks: f32) -> f32 {
         ticks.max(0.0) * self.track.tick_interval
+    }
+
+    /// The recipe's pose at a frame's `tick`: the pose on that tick, else the poses on either side blended by how far
+    /// between, when they are at most [`RECIPE_GAP`] + 1 ticks apart as [`super::recipe::fill_gaps`] bridges (a frame
+    /// between two ticks, or on a tick the demo has no sample for).
+    fn recipe_pose(&self, tick: f32) -> Option<Vec<Transform>> {
+        let poses = self.extras.recipe_poses?;
+        let before = poses.range(..=tick.floor() as u32).next_back();
+        let after = poses.range(tick.ceil() as u32..).next();
+        match (before, after) {
+            (Some((&a, pose)), _) if a as f32 == tick => Some(pose.clone()),
+            (Some((&a, from)), Some((&b, to))) if b > a && b - a <= RECIPE_GAP + 1 => Some(mix(
+                from.clone(),
+                to.clone(),
+                (tick - a as f32) / (b - a) as f32,
+            )),
+            _ => None,
+        }
     }
 
     fn weapon(&self, item: Option<u32>) -> Option<&WeaponAnimation> {
@@ -647,7 +681,7 @@ impl Baker<'_> {
         let mut defuse: Option<Span> = None;
         let mut additive: Option<(Additive, u32)> = None;
         let mut shot: Option<u32> = None;
-        let mut last_state: Option<(u32, i64)> = None;
+        let mut last_state: Option<(u32, i64, Option<u32>)> = None;
         // This player's hits, oldest first, consumed as the ticks pass.
         let hurts: Vec<&GameEvent> = track
             .events
@@ -655,6 +689,14 @@ impl Baker<'_> {
             .filter(|e| e.name == "player_hurt" && e.controller("userid") == Some(controller))
             .collect();
         let mut next_hurt = 0usize;
+        // This player's shots (their fire-bullets messages, one per shot), likewise.
+        let fired: Vec<u32> = track
+            .shots
+            .iter()
+            .filter(|(c, _)| *c == controller)
+            .map(|(_, s)| s.tick)
+            .collect();
+        let mut next_shot = 0usize;
         let mut flinch_body: Option<(u32, &'static str)> = None;
         let mut flinch_head: Option<(u32, &'static str)> = None;
         let mut burning: Option<(u32, u32)> = None;
@@ -668,6 +710,9 @@ impl Baker<'_> {
                 // time are passed over).
                 while hurts.get(next_hurt).is_some_and(|e| e.tick <= sample.tick) {
                     next_hurt += 1;
+                }
+                while fired.get(next_shot).is_some_and(|&t| t <= sample.tick) {
+                    next_shot += 1;
                 }
                 flash_seen = None;
                 previous = None;
@@ -782,7 +827,7 @@ impl Baker<'_> {
 
             let air_height = run.map_or(0.0, |r| r.height(player.position[2], rig.velocity[2]));
             let ladder = bearings[i].map_or((0.0, 180.0), |b| ladder_angles(b, rig.body_yaw));
-            let punch = body_punch(self.aim_punch, tick);
+            let punch = body_punch(self.extras.aim_punch, tick);
             let mut step = Step {
                 tick,
                 set,
@@ -969,9 +1014,22 @@ impl Baker<'_> {
             };
             step.additive = additive;
 
-            // A shot starts whenever the state enters 100 or 101 (they alternate shot by shot).
-            let state = rig.weapon.as_ref().map(|w| (w.item, w.anim_state));
-            if let Some((_, s)) = state
+            // A shot starts with each of the player's fire-bullets messages (one per shot, a shotgun's pellets
+            // together). For a player without any, whenever the weapon's state (re)starts 100 or 101 with a new
+            // timestamp: the state alone holds through a spray. Another weapon in hand ends the shot.
+            let state = rig
+                .weapon
+                .as_ref()
+                .map(|w| (w.item, w.anim_state, w.state_tick));
+            if state.map(|s| s.0) != last_state.map(|s| s.0) {
+                shot = None;
+            }
+            while let Some(&t) = fired.get(next_shot).filter(|&&t| t <= tick) {
+                next_shot += 1;
+                shot = Some(t);
+            }
+            if fired.is_empty()
+                && let Some((_, s, _)) = state
                 && matches!(s, 100 | 101)
                 && last_state != state
             {
@@ -1310,9 +1368,24 @@ impl Baker<'_> {
             .unwrap_or(0.0)
     }
 
-    /// The pose at demo tick `tick` (fractional) of a step: every layer of the module docs.
+    /// The pose at demo tick `tick` (fractional) of a step: every layer of the module docs, or the recipe's pose with
+    /// the aim and the flashed arms over it.
     fn render(&self, step: &Step, tick: f32) -> Result<Vec<Transform>, AnimError> {
         let since = |t: u32| self.seconds(tick - t as f32);
+        // CS2's own pose from the recipe, when there is one: OFAST's aim and flashed arms over it.
+        if let Some(mut pose) = self.recipe_pose(tick) {
+            if let Some(upper) = self.upper {
+                self.upper_body(
+                    &mut pose,
+                    upper,
+                    step,
+                    tick,
+                    self.eval.zip(self.graphs),
+                    true,
+                )?;
+            }
+            return Ok(pose);
+        }
         let movement = &step.movement;
         let mut pose = self.movement_pose(step, movement.state, movement.start, tick)?;
         if let Some(previous) = movement.previous
@@ -1335,7 +1408,7 @@ impl Baker<'_> {
         }
         let (Some(eval), Some(graphs)) = (self.eval, self.graphs) else {
             if let Some(upper) = self.upper {
-                self.upper_body(&mut pose, upper, step, tick, None)?;
+                self.upper_body(&mut pose, upper, step, tick, None, false)?;
             }
             return Ok(pose);
         };
@@ -1360,7 +1433,7 @@ impl Baker<'_> {
             }
         }
         if let Some(upper) = self.upper {
-            self.upper_body(&mut pose, upper, step, tick, Some((eval, graphs)))?;
+            self.upper_body(&mut pose, upper, step, tick, Some((eval, graphs)), false)?;
         }
         Ok(pose)
     }
@@ -1444,7 +1517,8 @@ impl Baker<'_> {
         }
     }
 
-    /// Layers 3 – 8 of the module docs over the body pose.
+    /// Layers 3 – 10 of the module docs over the body pose; `over_recipe`: the body pose is the recipe's, which already
+    /// has CS2's layers 3 – 8, so those only decide the aim's weights.
     fn upper_body(
         &self,
         pose: &mut [Transform],
@@ -1452,10 +1526,14 @@ impl Baker<'_> {
         step: &Step,
         tick: f32,
         graphs: Option<(Evaluator<'_>, &GraphRig)>,
+        over_recipe: bool,
     ) -> Result<(), AnimError> {
+        // Over a recipe's pose (CS2's own layers already in it) the layers below only set the aim's weights: those that
+        // only pose are skipped, and the pose is put back before the aim.
+        let recipe_pose = over_recipe.then(|| pose.to_vec());
         let since = |t: u32| self.seconds(tick - t as f32);
         let weapon = self.weapon(step.item);
-        if let Some(idle) = weapon.and_then(|w| w.idle.as_ref()) {
+        if !over_recipe && let Some(idle) = weapon.and_then(|w| w.idle.as_ref()) {
             add_layer(
                 pose,
                 &crouch_blend(idle, 0.0, step.crouch)?,
@@ -1482,25 +1560,27 @@ impl Baker<'_> {
             } else {
                 1.0
             };
-            let mask = match (step.movement.state, &upper.ladder_mask) {
-                (Movement::Ladder, Some(ladder)) => ladder,
-                _ => &upper.mask,
-            };
-            let current = self.action_pose(eval, step, &action, tick)?;
-            let old = match step.handover {
-                Some(h) if blend_in < 1.0 => self.action_pose(eval, step, &h, tick)?,
-                _ => None,
-            };
-            // The new action's pose blends in over the old one's, from the weight the layer had then.
-            let weight = action.layer_weight(tick, interval);
-            let layer = match (old, current) {
-                (Some(old), Some(current)) => Some((mix(old, current, blend_in), weight)),
-                (Some(old), None) => Some((old, action.inherited * (1.0 - blend_in))),
-                (None, Some(current)) => Some((current, weight)),
-                (None, None) => None,
-            };
-            if let Some((layer, weight)) = layer {
-                model_space_layer(pose, &layer, weight, mask, &upper.parents);
+            if !over_recipe {
+                let mask = match (step.movement.state, &upper.ladder_mask) {
+                    (Movement::Ladder, Some(ladder)) => ladder,
+                    _ => &upper.mask,
+                };
+                let current = self.action_pose(eval, step, &action, tick)?;
+                let old = match step.handover {
+                    Some(h) if blend_in < 1.0 => self.action_pose(eval, step, &h, tick)?,
+                    _ => None,
+                };
+                // The new action's pose blends in over the old one's, from the weight the layer had then.
+                let weight = action.layer_weight(tick, interval);
+                let layer = match (old, current) {
+                    (Some(old), Some(current)) => Some((mix(old, current, blend_in), weight)),
+                    (Some(old), None) => Some((old, action.inherited * (1.0 - blend_in))),
+                    (None, Some(current)) => Some((current, weight)),
+                    (None, None) => None,
+                };
+                if let Some((layer, weight)) = layer {
+                    model_space_layer(pose, &layer, weight, mask, &upper.parents);
+                }
             }
             // The aim pulls towards level and lets go of the hands while an action plays.
             action_weight = ease(action.aim_fade(tick, interval));
@@ -1530,14 +1610,19 @@ impl Baker<'_> {
             )?;
         }
 
-        if let (Some(shot), Some(shoot)) = (step.shot, weapon.and_then(|w| w.shoot.as_ref())) {
+        if !over_recipe
+            && let (Some(shot), Some(shoot)) = (step.shot, weapon.and_then(|w| w.shoot.as_ref()))
+        {
             let elapsed = since(shot);
             if elapsed < shoot.duration {
                 add_layer(pose, &shoot.sample(elapsed, false)?, 1.0, Some(&upper.mask));
             }
         }
-        if let Some((eval, rig)) = graphs {
+        if !over_recipe && let Some((eval, rig)) = graphs {
             self.flinches(pose, eval, rig, step, tick)?;
+        }
+        if let Some(recipe_pose) = recipe_pose {
+            pose.copy_from_slice(&recipe_pose);
         }
 
         if let Some(weapon) = weapon {
@@ -1564,8 +1649,11 @@ impl Baker<'_> {
             let amount = flashed_amount(since(start), duration);
             // The state's layer weight: `flashed_amount` 0.1 – 1 onto 0 – 0.95.
             let weight = ((amount - 0.1) / 0.9).clamp(0.0, 1.0) * 0.95;
+            // Over the aim, where the pose recipe's decoded part never reaches: out of the clip table's trace.
             if weight > 0.0
-                && let Some(layer) = eval.pose(&rig.main, node, &self.additive_params(step), 0.0)?
+                && let Some(layer) = super::untraced(|| {
+                    eval.pose(&rig.main, node, &self.additive_params(step), 0.0)
+                })?
             {
                 model_space_layer(pose, &layer, weight, mask, &upper.parents);
                 if weapon.is_some() {
@@ -1780,8 +1868,8 @@ mod tests {
     fn the_body_aims_where_the_bullets_go() {
         let punch = HashMap::from([(5, [-1.5, 0.25])]);
         // Twice the punch, as the bullets take it; nothing on a tick without one.
-        assert_eq!(body_punch(&punch, 5), [-3.0, 0.5]);
-        assert_eq!(body_punch(&punch, 6), [0.0, 0.0]);
+        assert_eq!(body_punch(Some(&punch), 5), [-3.0, 0.5]);
+        assert_eq!(body_punch(Some(&punch), 6), [0.0, 0.0]);
     }
 
     #[test]

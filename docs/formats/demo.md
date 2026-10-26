@@ -564,18 +564,45 @@ start with the triangle), 434 is `idle_rifle`, 321 `walk_n_rifle`, 141 `walk_ne_
 `run_ne_rifle`, 175 `idle_crouch_rifle`, 289 `walk_n_pistol`. The local match demo, recorded on another CS2 build,
 has another (`walk_n_pistol` is 847 there): the table has to be found for each build.
 
-**Finding the table from the demo** (`examples/recipe_table.rs`): OFAST bakes every player at the tick rate with a
-trace of the clips it samples (`anim::trace_start`), and each index is matched to the baked clip that comes with it
-most exclusively on the same player's same ticks (Jaccard: ticks together over ticks either is played). The bake
-re-decides CS2's states its own way, so the match is statistical, but CS2's clips and OFAST's follow the same inputs:
-on round 5, 588 is `breathing` (Jaccard 0.88; its time runs at 6.32 s a cycle, the clip lasts 6.33 s), 463
-`idle_ak` (0.92, sampled at time 0 while 95 % of its ticks have an AK in hand), 159 `idle_karambit` (0.95), 321
-`walk_n_rifle` (0.70). These are match candidates, not yet a checked table: indices with a match of 0.5 or more
-cover 86 % of the round's sampled clips (sample tasks; 156 indices), 0.3 or more 93 % (223); on the local match's
-round 1, 79 % and 94 % (`breathing` is 224 there; the tool prints these shares). At 0.5 or more, 10 clips are the
-match of two indices each (draws, ladders, a jump: OFAST plays one clip where CS2 plays two, so one of the two is
-wrong), and nothing yet makes the matches one to one. The indices left are clips OFAST does not play where CS2
-does (0.53 s clips the bake has no counterpart for come out below 0.2).
+**Finding the table from the demo** (`anim::recipe::learn_clip_table`; `examples/recipe_table.rs` prints it): OFAST
+bakes every player at the tick rate with a trace of the clips it samples (`anim::trace_start`), and each index is
+matched to the baked clip that comes with it most exclusively on the same player's same ticks (Jaccard: ticks
+together over ticks either is played), strongest matches first, each index and each clip taken once (the context
+lists each clip once), none under 0.3. The bake re-decides CS2's states its own way, so the match is statistical,
+but CS2's clips and OFAST's follow the same inputs: on round 5, 588 is `breathing` (Jaccard 0.88; its time runs at
+6.32 s a cycle, the clip lasts 6.33 s), 463 `idle_ak` (0.92, sampled at time 0 while 95 % of its ticks have an AK in
+hand), 159 `idle_karambit` (0.95), 321 `walk_n_rifle` (0.70). The table matches 214 of the round's 333 indices,
+which name 93.2 % of its sample tasks (`breathing` is 224 on the local match, another build). The indices left are
+clips OFAST does not play where CS2 does (0.53 s clips the bake has no counterpart for come out below 0.2); a match
+can still be wrong where OFAST plays one clip and CS2 another at the same moments. One was: 274 is `shoot_m4a1s`
+(0.40 s; it restarts with each bullet of XANTARES's sprays and ends 0.4 s after the last), but the bake started its
+shot clip only when the weapon's state entered 100 or 101, which holds through a spray, so it played once per spray,
+and 274 went to `flashed_crouch` (0.32), the pose XANTARES held over the same ticks; his upper body came out flashed
+while CS2 shows him spraying. The bake now starts the shot clip on every bullet (the fire-bullets messages), and the
+shot clips match far better (274 `shoot_m4a1s` 0.96, 754 `shoot_ak` 0.61 → 0.89, 517 `shoot_famas` 0.38 → 0.97).
+The trace also leaves out what OFAST plays over its aim (the flashed arms, `anim::untraced`): the recipe's decoded
+part ends at the aim, so no index it names can be such a clip.
+
+**Playing it** (`anim::recipe::RecipePlayer`, `ofast export-demo … --players` with `OFAST_RECIPE=1`): each tick's
+tasks are played in order: a sample is its clip at its time × its length (a sample the table does not know gives
+nothing); a blend lays its second input over its first (an additive one added, type 8 in model space, the others
+bone by bone) under its mask (mask 0 is the skeleton's first, `UpperBody`, of the 12 it defines: the 4-bit index
+fits), gives nothing without its first input and its first input alone without its second (a layer the table does not
+know is left out: giving no pose there instead, for masked layers over a quarter of weight, fit the hits worse, 364
+of 505 within an inch against 371, the layers left out being mostly wrong matches, such as an additive idle blended
+with a whole pose, rather than clips OFAST does not play; an action CS2 plays with a clip the table misses is lost
+from the pose while OFAST's aim weights for it remain); a cached
+pose is kept by its ID and read back on later ticks (forgotten when the player dies, or when its ID is written from
+nothing known); the empty pose is the skeleton's reference. A
+recipe whose result is a delta, or that no known clip went into (the empty pose alone), gives no pose. That pose
+replaces OFAST's re-decided locomotion and layers; OFAST's own aim (the recipe's aim is type 14, not decoded) and
+flashed arms go on top. A living tick without a recipe pose keeps the re-decided pose, except runs of at most 8 ticks
+between two recipe poses, which blend the two. On round 5 the recipes give the pose on 86 % of the living
+player-ticks (87,757 of 102,205; the export's `check:` line). The server poses its hitboxes with its own graph, so
+the demo's hits check the poses: on the 10 rounds of 8 demos the hitbox fit uses (`HIT_POSE_TICKS`), 371 of 505 hit
+points lie within an inch of a hitbox's surface with the recipes' poses against 349 with the re-decided ones, 470
+against 464 on a posed body, the median distance lower on 9 of the 10 rounds (0.3 inch against 0.5 – 0.6 on most).
+The shot clip on every bullet moved the re-decided poses from 353 to 349 and the recipes' from 364 to 371.
 
 ## Deaths
 

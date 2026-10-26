@@ -28,6 +28,7 @@
 //! | [`layers`] | bone masks, additive and model-space layers |
 //! | [`aim`] | CS2's aim node, rebuilt: spine, weapon, hand IK |
 //! | [`bake`] | each player's pose over a round from the demo's rig inputs |
+//! | [`recipe`] | CS2's pose recipe played back: each demo's clip table |
 //! | [`viewmodel`] | each player's first-person arms and weapon over a round, from the demo's weapon states |
 //! | [`constraints`] | the model's procedural bones (twist bones, shoulder blades) from its `BoneConstraintList` |
 //!
@@ -43,13 +44,14 @@ pub mod eval;
 pub mod graph;
 pub mod layers;
 pub mod locomotion;
+pub mod recipe;
 mod retarget;
 mod skeleton;
 pub mod states;
 pub mod viewmodel;
 pub mod weapon;
 
-pub use clip::{Clip, ClipEvent, TrackSettings, trace_end, trace_frame, trace_start};
+pub use clip::{Clip, ClipEvent, TrackSettings, trace_end, trace_frame, trace_start, untraced};
 pub use constraints::BoneConstraints;
 pub use locomotion::Locomotion;
 pub use retarget::Retargeter;

@@ -36,7 +36,7 @@ thread_local! {
 }
 
 /// Starts recording, on this thread, which clips [`Clip::sample`] samples in each frame begun with [`trace_frame`]:
-/// for tools that check which clips a bake played (`examples/recipe_table.rs`). Off, it costs a check per sample.
+/// to learn which clips a bake played (`anim::recipe::learn_clip_table`). Off, it costs a check per sample.
 pub fn trace_start() {
     TRACE.with(|t| *t.borrow_mut() = Some(Vec::new()));
 }
@@ -54,6 +54,15 @@ pub fn trace_frame() {
 /// sampled: compare them with `std::ptr::from_ref(clip) as usize` of the clips a tool knows by path.
 pub fn trace_end() -> Vec<Vec<usize>> {
     TRACE.with(|t| t.borrow_mut().take()).unwrap_or_default()
+}
+
+/// Runs `f` with the trace ([`trace_start`]) paused, so the clips it samples are left out of it: the bake's layers
+/// over the aim, which the pose recipe's decoded part never reaches (`anim::recipe`).
+pub fn untraced<T>(f: impl FnOnce() -> T) -> T {
+    let paused = TRACE.with(|t| t.borrow_mut().take());
+    let out = f();
+    TRACE.with(|t| *t.borrow_mut() = paused);
+    out
 }
 
 /// How one track (bone) is stored.
