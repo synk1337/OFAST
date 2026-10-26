@@ -49,7 +49,7 @@ pub mod states;
 pub mod viewmodel;
 pub mod weapon;
 
-pub use clip::{Clip, ClipEvent, TrackSettings};
+pub use clip::{Clip, ClipEvent, TrackSettings, trace_end, trace_frame, trace_start};
 pub use constraints::BoneConstraints;
 pub use locomotion::Locomotion;
 pub use retarget::Retargeter;

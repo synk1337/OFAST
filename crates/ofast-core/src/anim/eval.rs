@@ -182,6 +182,11 @@ impl Library {
         self.clips.get(path)
     }
 
+    /// Every loaded clip and its path.
+    pub fn clips(&self) -> impl Iterator<Item = (&str, &Clip)> {
+        self.clips.iter().map(|(path, clip)| (path.as_str(), clip))
+    }
+
     /// Adds an already decoded clip (tests, clips loaded elsewhere).
     pub fn insert_clip(&mut self, path: &str, clip: Clip) {
         self.clips.insert(path.to_owned(), clip);

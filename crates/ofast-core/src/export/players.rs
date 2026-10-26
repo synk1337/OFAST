@@ -1221,6 +1221,14 @@ const ITEMS_GAME: &str = "scripts/items/items_game.txt";
 /// and the graph that state plays, if any ([`WeaponClips::action_state`], [`WeaponClips::action_graph`]).
 type ActionSources = HashMap<u32, (Option<usize>, Option<String>)>;
 
+/// A weapon's additive idle clips, standing then crouched, from the paths its graph lists ([`WeaponClips::idle`]):
+/// the first, and the first with `crouch` in its name (else the first again).
+fn idle_paths(paths: &[String]) -> Option<[String; 2]> {
+    let stand = paths.first()?;
+    let crouch = paths.iter().find(|p| p.contains("crouch")).unwrap_or(stand);
+    Some([stand.clone(), crouch.clone()])
+}
+
 /// The upper-body layers' data for every weapon the round's players hold or carry: names from `items_game.txt`,
 /// clips found in the graphs ([`WeaponClips`]; their category also picks a carried weapon's holster), the
 /// `UpperBody` masks and the aim's bones, and where each weapon's actions are ([`load_graph_rig`] loads them).
@@ -1257,15 +1265,9 @@ fn load_upper_body(
         })
     };
     let pair = |paths: &[String]| -> Result<Option<[Clip; 2]>, ExportError> {
-        Ok(match paths {
-            [] => None,
-            [only] => Some([clip(only)?, clip(only)?]),
-            // Standing first, crouched second.
-            _ => {
-                let stand = &paths[0];
-                let crouch = paths.iter().find(|p| p.contains("crouch")).unwrap_or(stand);
-                Some([clip(stand)?, clip(crouch)?])
-            }
+        Ok(match idle_paths(paths) {
+            None => None,
+            Some([stand, crouch]) => Some([clip(&stand)?, clip(&crouch)?]),
         })
     };
     let items: BTreeSet<u32> = track
@@ -1304,6 +1306,11 @@ fn load_upper_body(
                 idle: pair(&clips.idle)?,
                 shoot: clips.shoot.first().map(clip).transpose()?,
                 actions: None,
+                paths: idle_paths(&clips.idle)
+                    .into_iter()
+                    .flatten()
+                    .chain(clips.shoot.first().cloned())
+                    .collect(),
             },
         );
     }

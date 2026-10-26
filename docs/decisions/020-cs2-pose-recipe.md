@@ -41,9 +41,11 @@ Next steps, in order:
 
 1. `demo::recipe` (done for the known types): read the slots and the dynamic bytes per player and tick, parse
    topologies and payloads, report what does not parse.
-2. The resource index → clip table, found for each demo: each index's clip from how fast its time runs (the clip's
-   length), the weapon in hand and co-occurrence with what OFAST bakes; and keep looking for the rule (Valve's
-   resource system order: load order, a hash table not matched yet).
+2. The resource index → clip table, found for each demo (started): each index matched to the clip OFAST's own
+   bake samples with it most exclusively (`examples/recipe_table.rs`; candidates for 86 % of round 5's sampled
+   clips at a Jaccard index of 0.5 or more, not yet one to one), checked against how fast its time runs and the
+   weapon in hand; and keep looking for the rule (Valve's resource system order: load order, a hash table not
+   matched yet).
 3. The remaining payloads (types 14, 15 and 5; under 2 % of the recipes have a clip after them), by the same
    alignment tests.
 4. Bake from the recipe where it is decoded and check against CS2 side by side (`tools/cs2/free_cam.py`).

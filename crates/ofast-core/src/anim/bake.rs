@@ -152,6 +152,8 @@ pub struct WeaponAnimation {
     pub shoot: Option<Clip>,
     /// The weapons layer's graph (draws, reloads, attacks, throws…), when [`GraphRig`] has it.
     pub actions: Option<ActionGraph>,
+    /// The paths of `idle` (standing, crouched) and then of `shoot`, when it has one.
+    pub paths: Vec<String>,
 }
 
 /// What the upper-body layers need: the weapons by item definition index, CS2's `UpperBody` mask, the aim's bones.
@@ -435,6 +437,7 @@ pub fn bake_player(
     let frames = frame_samples(track, fps);
     let mut out = Vec::with_capacity(frames.len());
     for (tick, index) in frames {
+        super::trace_frame();
         out.push(match steps.get(index).and_then(Option::as_ref) {
             Some(step) => Some(baker.render(step, tick)?),
             None => None,

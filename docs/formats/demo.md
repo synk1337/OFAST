@@ -554,15 +554,28 @@ Every clip and blend decodes in 98.4 % of round 5's recipes and 99.6 % of the lo
 14, 15 or 5 with no clip or blend after it); the rest have a clip after a 14 or a 15.
 
 The resource index is not the graph's own resource order. The main graph and its 66 child graphs refer to 909 clips
-(their `m_resources` lists, followed down by hand during the spike); their indices follow no rule tried by hand
-(their order in the graphs, their ids sorted, CRC32, FNV and MurmurHash orders of their paths and ids, hash-table
-slots; not kept as a probe). Esoterica numbers them in the order it walks the graph's resource lookup table, a hash
-map, which would explain an order that looks random and changes with the build. The two tournament matches checked (three rounds) share one order: by co-occurrence with the
-locomotion OFAST bakes (`examples/recipe_map.rs`, on recipes that start with the triangle), 434 is `idle_rifle`,
-321 `walk_n_rifle`, 141 `walk_ne_rifle`, 850 `walk_e_rifle`, 229 `walk_nw_rifle`, 919 `walk_w_rifle`, 697
-`walk_se_rifle`, 854 `walk_s_rifle`, 534 `walk_sw_rifle`, 22 `run_ne_rifle`, 175 `idle_crouch_rifle`, 289
-`walk_n_pistol`. The local match demo, recorded on another CS2 build, has another (`walk_n_pistol` is 847 there): the
-table has to be found for each build.
+(`examples/recipe_table.rs` counts them); their indices follow no rule tried by hand (their order in the graphs, their
+ids sorted, CRC32, FNV and MurmurHash orders of their paths and ids, hash-table slots, EASTL-style prime buckets; not
+kept as a probe). Esoterica numbers them in the order it walks the graph's resource lookup table, a hash map, which
+would explain an order that looks random and changes with the build. The two tournament matches checked (three
+rounds) share one order: by co-occurrence with the locomotion OFAST bakes (`examples/recipe_map.rs`, on recipes that
+start with the triangle), 434 is `idle_rifle`, 321 `walk_n_rifle`, 141 `walk_ne_rifle`, 850 `walk_e_rifle`, 229
+`walk_nw_rifle`, 919 `walk_w_rifle`, 697 `walk_se_rifle`, 854 `walk_s_rifle`, 534 `walk_sw_rifle`, 22
+`run_ne_rifle`, 175 `idle_crouch_rifle`, 289 `walk_n_pistol`. The local match demo, recorded on another CS2 build,
+has another (`walk_n_pistol` is 847 there): the table has to be found for each build.
+
+**Finding the table from the demo** (`examples/recipe_table.rs`): OFAST bakes every player at the tick rate with a
+trace of the clips it samples (`anim::trace_start`), and each index is matched to the baked clip that comes with it
+most exclusively on the same player's same ticks (Jaccard: ticks together over ticks either is played). The bake
+re-decides CS2's states its own way, so the match is statistical, but CS2's clips and OFAST's follow the same inputs:
+on round 5, 588 is `breathing` (Jaccard 0.88; its time runs at 6.32 s a cycle, the clip lasts 6.33 s), 463
+`idle_ak` (0.92, sampled at time 0 while 95 % of its ticks have an AK in hand), 159 `idle_karambit` (0.95), 321
+`walk_n_rifle` (0.70). These are match candidates, not yet a checked table: indices with a match of 0.5 or more
+cover 86 % of the round's sampled clips (sample tasks; 156 indices), 0.3 or more 93 % (223); on the local match's
+round 1, 79 % and 94 % (`breathing` is 224 there; the tool prints these shares). At 0.5 or more, 10 clips are the
+match of two indices each (draws, ladders, a jump: OFAST plays one clip where CS2 plays two, so one of the two is
+wrong), and nothing yet makes the matches one to one. The indices left are clips OFAST does not play where CS2
+does (0.53 s clips the bake has no counterpart for come out below 0.2).
 
 ## Deaths
 

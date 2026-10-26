@@ -25,8 +25,36 @@
 //! - **translation** (unless static), 3 × `u16`: `start + u / 65535 × length` per axis;
 //! - **scale** (unless static), 1 × `u16`, the same way.
 
+use std::cell::RefCell;
+
 use super::{AnimError, Transform};
 use crate::kv3::Value;
+
+thread_local! {
+    /// While tracing ([`trace_start`]): per frame, the address of every clip sampled.
+    static TRACE: RefCell<Option<Vec<Vec<usize>>>> = const { RefCell::new(None) };
+}
+
+/// Starts recording, on this thread, which clips [`Clip::sample`] samples in each frame begun with [`trace_frame`]:
+/// for tools that check which clips a bake played (`examples/recipe_table.rs`). Off, it costs a check per sample.
+pub fn trace_start() {
+    TRACE.with(|t| *t.borrow_mut() = Some(Vec::new()));
+}
+
+/// Starts a new frame of the trace (does nothing when not tracing). The bake calls it before each frame it renders.
+pub fn trace_frame() {
+    TRACE.with(|t| {
+        if let Some(frames) = t.borrow_mut().as_mut() {
+            frames.push(Vec::new());
+        }
+    });
+}
+
+/// Stops tracing and returns, per frame begun with [`trace_frame`], the addresses of the clips
+/// sampled: compare them with `std::ptr::from_ref(clip) as usize` of the clips a tool knows by path.
+pub fn trace_end() -> Vec<Vec<usize>> {
+    TRACE.with(|t| t.borrow_mut().take()).unwrap_or_default()
+}
 
 /// How one track (bone) is stored.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -223,6 +251,11 @@ impl Clip {
     /// The pose at `time` seconds, interpolated between the two nearest frames. Past the end it holds the last
     /// frame, or wraps when `looping` (the last frame of a looping clip equals its first).
     pub fn sample(&self, time: f32, looping: bool) -> Result<Vec<Transform>, AnimError> {
+        TRACE.with(|t| {
+            if let Some(frame) = t.borrow_mut().as_mut().and_then(|f| f.last_mut()) {
+                frame.push(std::ptr::from_ref(self) as usize);
+            }
+        });
         let last = self.frames.saturating_sub(1);
         if last == 0 {
             return self.decode_frame(0);
