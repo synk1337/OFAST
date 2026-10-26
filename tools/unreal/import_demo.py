@@ -1287,6 +1287,8 @@ def main():
     if not world.startswith("/Game/"):
         raise RuntimeError("refusing to save " + world)
     levels.save_current_level()
+    # The Studio's "Send to Unreal" takes this line as the sign the round was built.
+    log("built %s" % sequence.get_path_name())
     if SHOT_DIR:
         verification_shots(sequence, replay, cameras)
     else:

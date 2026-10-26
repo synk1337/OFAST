@@ -118,8 +118,11 @@ de_fachwerk) — probably stored in another archive.
     highlights (3K and more, aces, won clutches, collaterals, no-scopes, wallbangs, through smoke, airborne, blind,
     knife) or every kill, by player and weapon. One pass over the demo (`demo::summary`; 6 s for a 22-round major
     demo), kept in the app's cache.
-  - [ ] A round replayed in 2D on the map's radar.
-  - [ ] "Send to Unreal" (export, map import, round import) and "Open in Unreal".
+  - [x] A round replayed in 2D on the map's radar (2026-10-26): CS2's radar image and overview (`map::overview`),
+    the round's positions every 4 ticks, framed on the area its players use.
+  - [x] "Send to Unreal" (export, map import the first time, round import, with progress) and "Open in Unreal"
+    (2026-10-26): a round of a 22-round major demo in about ten minutes, its map already imported.
+  - [x] A beginner's guide to the Studio ([user guide](user-guide/README.md)).
 
 ## M4 progress
 

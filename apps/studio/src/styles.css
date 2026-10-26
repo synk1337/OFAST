@@ -348,8 +348,8 @@ select {
 }
 
 .feed {
-  max-height: 45%;
   overflow: auto;
+  min-height: 0;
 }
 
 .kill {
@@ -391,5 +391,180 @@ select {
 
 .panel-head .hint {
   flex: none;
+  font-size: 12px;
+}
+
+/* The round's panel, and the 2D replay beside its kill feed. */
+.round-area {
+  /* Beside the finder, the round takes at most 45% of the height and scrolls its feed. */
+  max-height: 45%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.round-area.replay {
+  display: grid;
+  grid-template-columns: auto minmax(280px, 1fr);
+  gap: 12px;
+  flex: 1;
+  max-height: none;
+}
+
+.round-area.replay .feed {
+  max-height: none;
+}
+
+.panel-head button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.kill.clickable {
+  cursor: pointer;
+}
+
+.kill.clickable:hover {
+  background: var(--panel-2);
+}
+
+.radar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.radar-canvas {
+  width: min(66vh, 640px);
+  height: auto;
+  aspect-ratio: 1;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.radar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.radar-controls .time {
+  width: 40px;
+  text-align: right;
+}
+
+.timeline {
+  position: relative;
+  flex: 1;
+  height: 24px;
+}
+
+.timeline input {
+  width: 100%;
+  margin: 0;
+  height: 24px;
+  accent-color: var(--accent);
+}
+
+.timeline .mark {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 6px;
+  pointer-events: none;
+  transform: translateX(-1px);
+}
+
+.timeline .mark.kill-mark {
+  background: var(--bad);
+}
+
+.timeline .mark.freeze {
+  background: var(--muted);
+}
+
+.timeline .mark.decided {
+  background: var(--ok);
+}
+
+.kill .weapon,
+.kill .player {
+  white-space: nowrap;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a1a1a;
+  font-weight: 600;
+}
+
+button.primary:hover {
+  filter: brightness(1.1);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* "Send to Unreal" at the bottom of the window. */
+.send-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.send-bar.running {
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.send-bar.done {
+  box-shadow: inset 3px 0 var(--ok);
+}
+
+.send-bar.failed {
+  box-shadow: inset 3px 0 var(--bad);
+}
+
+.send-title {
+  white-space: nowrap;
+}
+
+.send-state {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.send-state code {
+  font-size: 12px;
+}
+
+/* Beside the replay the round's panel is narrow: its head wraps, without the hint about times. */
+.round-area.replay .feed .panel-head {
+  flex-wrap: wrap;
+}
+
+.round-area.replay .feed .panel-head .hint {
+  display: none;
+}
+
+.panel-head h2 {
+  white-space: nowrap;
+}
+
+.send-bar.failed .send-state {
+  white-space: normal;
+}
+
+.send-warning {
+  display: block;
+  color: var(--accent);
   font-size: 12px;
 }

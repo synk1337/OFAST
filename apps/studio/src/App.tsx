@@ -2,8 +2,9 @@
 // feed, highlights: DemoPage.tsx).
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { DemoEntry, Environment, environment, listDemos } from "./api";
+import { DemoEntry, Environment, RoundSummary, environment, listDemos, sendToUnreal } from "./api";
 import { DemoPage } from "./DemoPage";
+import { SendBar, SendJob } from "./SendBar";
 
 export function App() {
   const [env, setEnv] = useState<Environment | null>(null);
@@ -11,6 +12,19 @@ export function App() {
   const [demos, setDemos] = useState<DemoEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [opened, setOpened] = useState<DemoEntry | null>(null);
+  // The round on its way to Unreal (one at a time), kept while the user browses. Each sending gets its own bar.
+  const [job, setJob] = useState<SendJob | null>(null);
+  const sending = job !== null && !job.sent && !job.error;
+  const canSend = Boolean(env?.unreal && env?.project) && !sending;
+  const send = (demo: DemoEntry, round: RoundSummary) => {
+    const id = Date.now();
+    const title = `${demo.name}, round ${round.round}`;
+    setJob({ id, title });
+    sendToUnreal(demo.path, round.start_tick).then(
+      (sent) => setJob({ id, title, sent }),
+      (e) => setJob({ id, title, error: String(e) }),
+    );
+  };
 
   useEffect(() => {
     environment().then(
@@ -54,7 +68,11 @@ export function App() {
       </header>
       {opened ? (
         <main className="content">
-          <DemoPage demo={opened} onBack={() => setOpened(null)} />
+          <DemoPage
+            demo={opened}
+            onBack={() => setOpened(null)}
+            onSend={canSend ? (round) => send(opened, round) : undefined}
+          />
         </main>
       ) : (
         <main className="content">
@@ -74,6 +92,7 @@ export function App() {
           </section>
         </main>
       )}
+      {job && <SendBar key={job.id} job={job} onClose={() => setJob(null)} />}
     </div>
   );
 }

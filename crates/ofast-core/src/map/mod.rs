@@ -23,6 +23,7 @@
 //! independent implementation.
 
 mod entities;
+pub mod overview;
 
 pub use entities::{Entity, EntityValue};
 

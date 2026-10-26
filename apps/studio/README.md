@@ -12,9 +12,14 @@ What it does so far:
   wallbangs, kills through smoke, in the air, while blind, with a knife) or every kill, by player and weapon (AWP,
   pistols…). Reading a whole match takes a few seconds; the result is kept in the app's cache folder until the demo
   changes.
+- Replays a round in 2D on the map's radar (CS2's own radar image and overview): players, deaths, grenades,
+  smokes and fires, with play / pause, speed and a timeline; a kill clicked in the feed plays from a few seconds
+  before it
+- Sends a round to OFAST's Unreal project ("Send to Unreal": the round exported with its players, the map exported
+  and imported the first time, the round built as a Level Sequence in the map's level, with progress), then opens it
+  ("Open in Unreal": the level, and the sequence in Sequencer)
 
-Coming next: a 2D radar replay of a round, and "Send to Unreal" (export, map import, round import) with "Open in
-Unreal".
+How to use it, for beginners: [docs/user-guide](../../docs/user-guide/README.md).
 
 ## Running it
 
@@ -40,8 +45,9 @@ install they do not list, set `OFAST_CS2_DIR` or `OFAST_UE_DIR` to its folder.
 
 ## Layout
 
-- `src/`: the web UI (`App.tsx`: setup and demo list; `DemoPage.tsx`: a demo's page; `names.ts`: weapons and
-  highlights as people say them; `api.ts` types the commands)
-- `src-tauri/`: the Rust side (`commands.rs`: what the UI can ask), its configuration (`tauri.conf.json`), its
-  permissions (`capabilities/`) and icons (`icons/source.png`, the source image; the rest are made from it with
-  `npx tauri icon`)
+- `src/`: the web UI (`App.tsx`: setup and demo list; `DemoPage.tsx`: a demo's page; `RadarView.tsx`: the 2D
+  replay; `SendBar.tsx`: "Send to Unreal" while it runs; `names.ts`: weapons and highlights as people say them;
+  `api.ts` types the commands)
+- `src-tauri/`: the Rust side (`commands.rs`: setup, demos, summaries, radar; `unreal.rs`: sending a round to
+  Unreal and opening it), its configuration (`tauri.conf.json`), its permissions (`capabilities/`) and icons
+  (`icons/source.png`, the source image; the rest are made from it with `npx tauri icon`)

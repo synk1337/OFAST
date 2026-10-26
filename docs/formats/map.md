@@ -103,6 +103,20 @@ spanning about −118k…110k units horizontally and up to 109k high once scaled
 `irradiance` (BC6H 8192²), `directional_irradiance` (DXT1), `direct_light_shadows` (BC4); lightmap UVs are vertex
 attribute `TEXCOORD` 3 (`R16G16_UNORM`) scaled by `m_vLightmapUvScale`. OFAST relights maps with Lumen instead.
 
+## Radar overview
+
+The Studio's 2D replay draws players on the map's radar (`map::overview`). The radar is not in the map's VPK but in
+the main archive:
+
+- `resource/overviews/<map>.txt`, KeyValues 1 text, the file HLTV used: `pos_x` / `pos_y`, the world position of
+  the image's top-left corner, and `scale`, world units per pixel (de_dust2: −2476, 3239, 4.4; de_nuke: −3453,
+  2887, 7). A map on two floors adds `verticalsections`: `default` and `lower`, each with `AltitudeMin` /
+  `AltitudeMax` (de_nuke: the lower level below −495).
+- `panorama/images/overheadmaps/<map>_radar_psd.vtex_c`, 1024 × 1024 (de_nuke, de_train and de_vertigo also have
+  `<map>_lower_radar_psd.vtex_c`).
+
+A world point (x, y) sits at pixel ((x − pos_x) / scale, (pos_y − y) / scale): world y goes up the image.
+
 ## Sources
 
 - ValveResourceFormat (MIT): `Resource/ResourceTypes/{World,WorldNode,EntityLump}.cs`,

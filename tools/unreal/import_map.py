@@ -4,7 +4,8 @@ Run with tools/unreal/run_ue.ps1 (-Script tools/unreal/import_map.py -Gltf <map>
 
 Inputs (environment variables):
     OFAST_GLTF   absolute path of <map>.gltf (the <map>.ofast.json manifest must sit next to it)
-    OFAST_SHOT   folder for screenshots: <map>_ct0.png, <map>_t0.png, <map>_top.png
+    OFAST_SHOT   folder for screenshots: <map>_ct0.png, <map>_t0.png, <map>_top.png; empty for none (the
+                 Studio's "Send to Unreal": the editor quits once the level is saved)
     OFAST_NAME   map name (asset folder /Game/OFAST/<name>, level /Game/OFAST/Maps/<name>)
     OFAST_VIEWS  optional JSON file of extra viewpoints given as CS2 setpos/setang (see extra_views)
     OFAST_STYLE  optional lighting style (run_ue.ps1 -Style): "standard" (default, CS2's look) or "realistic"
@@ -42,7 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gltf_specular  # noqa: E402
 
 GLTF = os.environ["OFAST_GLTF"]
-SHOT_DIR = os.environ["OFAST_SHOT"]
+SHOT_DIR = os.environ.get("OFAST_SHOT", "")
 if SHOT_DIR.lower().endswith(".png"):  # a file path was given: use its folder
     SHOT_DIR = os.path.dirname(SHOT_DIR)
 NAME = os.environ.get("OFAST_NAME") or os.path.splitext(os.path.basename(GLTF))[0]
@@ -2892,6 +2893,11 @@ def main():
     shots = views(manifest, imported)
     save_changed_instances()
     save_level()
+    if not SHOT_DIR:
+        # The Studio's "Send to Unreal" takes this line as the sign the map was imported.
+        log("imported %s" % LEVEL)
+        unreal.SystemLibrary.quit_editor()
+        return
     # Enough frames per screenshot for Lumen and temporal AA to settle at the screenshot resolution.
     unreal.SystemLibrary.execute_console_command(None, "r.HighResScreenshotDelay 16")
     for command in RENDER_CVARS:

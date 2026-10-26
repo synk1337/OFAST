@@ -39,10 +39,14 @@ use super::sky::{SkyExport, export_sky, write_flat_hdr};
 use super::{ExportError, ExportOptions};
 use crate::content::Content;
 use crate::coords;
-use crate::map::{Entity, IDENTITY, Map, Transform, compose, entity_transform, object_flags};
+use crate::game::Cs2Install;
+use crate::map::{
+    Entity, IDENTITY, Map, Transform, compose, entity_transform, object_flags, sky_to_world,
+};
 use crate::model::{DrawCall, Model};
 use crate::resource::{BlockKind, Resource};
 use crate::texture::Image;
+use crate::vpk::Vpk;
 
 /// Entity classes whose `model` is drawn.
 const MODEL_ENTITY_CLASSES: &[&str] = &[
@@ -96,6 +100,76 @@ pub struct Skybox<'a> {
     pub map: &'a Map,
     /// Skybox → main-world placement (scale ×16 around the sky camera for most maps).
     pub transform: Transform,
+}
+
+/// What [`export_installed_map`] did with the map's 3D skybox.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SkyboxExport {
+    /// The map has none.
+    None,
+    /// Exported with the map: its world, how many objects it has, its scale and sky camera, and where it sits.
+    Exported {
+        /// The skybox world's name.
+        world: String,
+        /// Scene objects and aggregates.
+        objects: usize,
+        /// Skybox units per world unit (16 for most maps).
+        scale: f32,
+        /// The sky camera, skybox units.
+        camera: [f32; 3],
+        /// Where the skybox reference sits in the main world.
+        origin: [f32; 3],
+    },
+    /// Left out: its archive could not be read (the map still exported).
+    Skipped(String),
+}
+
+/// Exports one of the install's maps by name (`de_mirage`), with its 3D skybox, as `ofast export-map` does: the
+/// map's own archive is searched first, the skybox's (its own archive under `maps/prefabs/`) right after it.
+pub fn export_installed_map(
+    install: &Cs2Install,
+    name: &str,
+    out_dir: &Path,
+    options: ExportOptions,
+) -> Result<(ExportReport, SkyboxExport), ExportError> {
+    let mut content = Content::for_map(install, name)?;
+    let loaded = Map::load(&content, name)?;
+    let mut note = SkyboxExport::None;
+    let mut skybox_map = None;
+    if let Some(reference) = loaded.skybox_reference() {
+        let archive = install.csgo_dir().join(&reference.archive);
+        let sky = Vpk::open(&archive)
+            .map_err(ExportError::from)
+            .and_then(|vpk| {
+                content.insert(1, vpk);
+                Map::load(&content, &reference.world).map_err(ExportError::from)
+            });
+        match sky {
+            Ok(sky) => {
+                let (camera, scale) = sky.sky_camera().unwrap_or(([0.0; 3], 16.0));
+                note = SkyboxExport::Exported {
+                    world: reference.world.clone(),
+                    objects: sky
+                        .nodes
+                        .iter()
+                        .map(|n| n.scene_objects.len() + n.aggregates.len())
+                        .sum(),
+                    scale,
+                    camera,
+                    origin: reference.origin,
+                };
+                let transform = sky_to_world(camera, scale, &reference);
+                skybox_map = Some((sky, transform));
+            }
+            Err(e) => note = SkyboxExport::Skipped(format!("{}: {e}", archive.display())),
+        }
+    }
+    let skybox = skybox_map.as_ref().map(|(map, transform)| Skybox {
+        map,
+        transform: *transform,
+    });
+    let report = export_map(&content, &loaded, skybox.as_ref(), out_dir, options)?;
+    Ok((report, note))
 }
 
 /// Exports `map` (loaded from `content`), and its 3D skybox when given, to `out_dir/<map>.gltf` and

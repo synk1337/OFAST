@@ -2,6 +2,7 @@
 // (highlights, or every kill, by player and weapon), and the chosen round's kill feed.
 import { useEffect, useMemo, useState } from "react";
 import { DemoEntry, DemoSummary, Kill, RoundSummary, Side, summarizeDemo } from "./api";
+import { RadarView } from "./RadarView";
 import {
   HIGHLIGHT_FILTERS,
   WEAPON_FILTERS,
@@ -12,7 +13,16 @@ import {
   weaponName,
 } from "./names";
 
-export function DemoPage({ demo, onBack }: { demo: DemoEntry; onBack: () => void }) {
+export function DemoPage({
+  demo,
+  onBack,
+  onSend,
+}: {
+  demo: DemoEntry;
+  onBack: () => void;
+  /** Sends a round to Unreal; missing while Unreal or its project is not found, or while a round is on its way. */
+  onSend?: (round: RoundSummary) => void;
+}) {
   const [summary, setSummary] = useState<DemoSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,7 +51,7 @@ export function DemoPage({ demo, onBack }: { demo: DemoEntry; onBack: () => void
       {!summary && !error && (
         <p className="muted">Reading the demo… A whole match takes a few seconds; it is remembered afterwards.</p>
       )}
-      {summary && <DemoView summary={summary} />}
+      {summary && <DemoView summary={summary} path={demo.path} onSend={onSend} />}
     </div>
   );
 }
@@ -91,11 +101,22 @@ function FinalScore({ summary }: { summary: DemoSummary }) {
   );
 }
 
-function DemoView({ summary }: { summary: DemoSummary }) {
+function DemoView({
+  summary,
+  path,
+  onSend,
+}: {
+  summary: DemoSummary;
+  path: string;
+  onSend?: (round: RoundSummary) => void;
+}) {
   const teams = useMemo(() => teamsOf(summary), [summary]);
   // Rounds go by their index in the summary: a restarted round's number comes again.
   const [selected, setSelected] = useState(0);
   const [marked, setMarked] = useState<{ round: number; kills: number[] } | null>(null);
+  // The 2D replay instead of the finder, and the kill it was last asked to jump to.
+  const [replay, setReplay] = useState(false);
+  const [seek, setSeek] = useState<{ tick: number; n: number } | null>(null);
   const round = summary.rounds[selected] ?? null;
 
   const pick = (round: number, kills: number[]) => {
@@ -115,14 +136,21 @@ function DemoView({ summary }: { summary: DemoSummary }) {
         }}
       />
       <div className="demo-main">
-        <Finder summary={summary} onPick={pick} />
+        {!replay && <Finder summary={summary} onPick={pick} />}
         {round && (
-          <RoundFeed
-            summary={summary}
-            teams={teams}
-            round={round}
-            marked={marked?.round === selected ? marked.kills : []}
-          />
+          <div className={replay ? "round-area replay" : "round-area"}>
+            {replay && <RadarView key={selected} path={path} summary={summary} roundIndex={selected} seek={seek} />}
+            <RoundFeed
+              summary={summary}
+              teams={teams}
+              round={round}
+              marked={marked?.round === selected ? marked.kills : []}
+              replay={replay}
+              onReplay={() => setReplay((r) => !r)}
+              onSend={onSend && (() => onSend(round))}
+              onKill={replay ? (tick) => setSeek((s) => ({ tick, n: (s?.n ?? 0) + 1 })) : undefined}
+            />
+          </div>
         )}
       </div>
     </div>
@@ -304,11 +332,22 @@ function RoundFeed({
   teams,
   round,
   marked,
+  replay,
+  onReplay,
+  onKill,
+  onSend,
 }: {
   summary: DemoSummary;
   teams: Teams;
   round: RoundSummary;
   marked: number[];
+  /** The 2D replay is shown beside the feed. */
+  replay: boolean;
+  onReplay: () => void;
+  /** A kill clicked: the replay jumps there. */
+  onKill?: (tick: number) => void;
+  /** Sends the round to Unreal (missing when it cannot be now). */
+  onSend?: () => void;
 }) {
   const sides = new Map(round.players.map((p) => [p.player, p.side]));
   const side0 = teams.sideOf(round);
@@ -330,10 +369,30 @@ function RoundFeed({
         <span className="muted hint" title="CS2's own clock counts down; these count up from the end of freeze time.">
           Times from the end of freeze time
         </span>
+        <button className={replay ? "on" : ""} onClick={onReplay}>
+          {replay ? "Back to the finder" : "2D replay"}
+        </button>
+        <button
+          className="primary"
+          onClick={onSend}
+          disabled={!onSend}
+          title={
+            onSend
+              ? "Export this round with its players and build it in OFAST's Unreal project"
+              : "Needs Unreal Engine 5.8 and OFAST's Unreal project, and no other round on its way"
+          }
+        >
+          Send to Unreal
+        </button>
       </div>
       {round.kills.length === 0 && <p className="muted">No kills.</p>}
       {round.kills.map((k, i) => (
-        <div key={i} className={marked.includes(i) ? "kill marked" : "kill"}>
+        <div
+          key={i}
+          className={["kill", marked.includes(i) && "marked", onKill && "clickable"].filter(Boolean).join(" ")}
+          onClick={onKill && (() => onKill(k.tick))}
+          title={onKill && "Replay from a few seconds before"}
+        >
           <span className="muted time">{clock((k.tick - start) * summary.tick_interval)}</span>
           {who(k.attacker)}
           {k.assister !== null && (

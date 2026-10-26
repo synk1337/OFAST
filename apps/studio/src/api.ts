@@ -1,5 +1,6 @@
 // The Studio's commands (apps/studio/src-tauri/src/commands.rs), typed for the UI.
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 /** What the Studio needs on this computer, each null when not found. */
 export interface Environment {
@@ -105,3 +106,74 @@ export interface DemoSummary {
 export const environment = () => invoke<Environment>("environment");
 export const listDemos = (folder: string) => invoke<DemoEntry[]>("list_demos", { folder });
 export const summarizeDemo = (path: string) => invoke<DemoSummary>("summarize_demo", { path });
+
+// A round for the 2D replay (`radar_round` in commands.rs).
+
+export interface Overview {
+  /** The world x of the radar image's left edge. */
+  pos_x: number;
+  /** The world y of its top edge. */
+  pos_y: number;
+  /** World units per image pixel (the image is 1024 pixels wide). */
+  scale: number;
+  /** The levels of a map on two floors ("default", "lower"), each with its own image. */
+  sections: { name: string; altitude_min: number; altitude_max: number }[];
+}
+
+export interface RadarPlayer {
+  /** Index into the round's players. */
+  slot: number;
+  /** 2 = T, 3 = CT. */
+  team: number;
+  x: number;
+  y: number;
+  z: number;
+  /** Degrees, 0 = +x, counter-clockwise. */
+  yaw: number;
+  alive: boolean;
+}
+
+export interface RadarFrame {
+  tick: number;
+  players: RadarPlayer[];
+  grenades: [number, number, number][];
+  smokes: [number, number][];
+  fires: [number, number][];
+}
+
+export interface RadarRound {
+  map: string;
+  overview: Overview | null;
+  players: { name: string; steam_id: string }[];
+  frames: RadarFrame[];
+}
+
+export const radarRound = (path: string, startTick: number) =>
+  invoke<RadarRound>("radar_round", { path, startTick });
+/** A radar image's PNG bytes. */
+export const radarImage = (map: string, section: string) => invoke<ArrayBuffer>("radar_image", { map, section });
+
+// "Send to Unreal" (`unreal.rs`).
+
+export type SendStep = "round" | "map_export" | "map_import" | "round_import";
+
+/** One line of a sending's progress. */
+export interface SendProgress {
+  step: SendStep;
+  message: string;
+  /** A warning the bar keeps showing (later lines replace the others). */
+  warning: boolean;
+}
+
+/** Where to look in Unreal once a round is sent. */
+export interface Sent {
+  /** /Game/OFAST/Maps/<map> */
+  level: string;
+  /** /Game/OFAST/Replays/<demo>_r<round> */
+  sequence: string;
+}
+
+export const sendToUnreal = (path: string, startTick: number) => invoke<Sent>("send_to_unreal", { path, startTick });
+export const openInUnreal = (sent: Sent) => invoke<void>("open_in_unreal", { ...sent });
+export const onSendProgress = (handler: (progress: SendProgress) => void) =>
+  listen<SendProgress>("unreal-progress", (event) => handler(event.payload));

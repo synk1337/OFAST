@@ -78,6 +78,12 @@ The map must be imported first (below). `import_demo.py` builds `/Game/OFAST/Rep
 level: player proxies in team colours, a first-person camera per player, camera cuts on each killer, kill markers —
 see [replay.md](formats/replay.md). `-Shot` adds verification screenshots (killer's view before the first kills).
 
+The Studio's "Send to Unreal" runs the same steps without a terminal (`apps/studio/src-tauri/src/unreal.rs`): the
+round and its players exported into the app's data folder, the map exported and imported the first time
+(`import_map.py` without `OFAST_SHOT`: no screenshots, the editor quits once the level is saved), then
+`import_demo.py`. "Open in Unreal" starts the editor with `tools/unreal/open_sequence.py` (`OFAST_LEVEL`,
+`OFAST_SEQUENCE`).
+
 Developer tools for game files: `cargo run --release --example resource_dump -- find <text>` lists archive paths,
 `cargo run --release --example resource_dump -- <path>_c` dumps a compiled file's blocks (KV3 as text), and
 `cargo run --release --example kv3_inspect -- <path>_c` prints raw KV3 headers.
