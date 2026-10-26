@@ -48,7 +48,10 @@ Next steps, in order:
    (Valve's resource system order: load order, a hash table not matched yet). The match found a bake bug: OFAST
    played a gun's shot clip once per spray where CS2 restarts it with every bullet (`docs/formats/demo.md`).
 3. The remaining payloads (types 14, 15 and 5; under 2 % of the recipes have a clip after them), by the same
-   alignment tests.
+   alignment tests. A first spike (2026-10-26) found the 14 longer than 32 bits or varying, carrying the graph's
+   inputs (the duck amount at bit 48), and the 14 and 5 together 80 – 850 bits, steady per player, not set by the
+   weapon; alignment tests over the tail drown in its constant stretches. What is known is in `demo.md`'s task
+   table; Esoterica's IK and target tasks (variable-length targets behind flags) are the next lead.
 4. Bake from the recipe where it is decoded and check against CS2 side by side (`tools/cs2/free_cam.py`) (started:
    `anim::recipe::RecipePlayer`, opt-in with `OFAST_RECIPE=1`, OFAST's aim over CS2's pose; the demo's hits sit
    closer to the hitboxes posed from it: 371 of 505 within an inch on 10 rounds of 8 demos, 349 with the
