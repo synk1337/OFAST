@@ -121,9 +121,10 @@ WARM_UP_TICKS = 300
 SHOT_DELAY_S = 6.0  # as import_map.SHOT_DELAY_S: lets Lumen settle after each cut
 SHOT_TIMEOUT_TICKS = 3000  # editor ticks a screenshot may take before it is given up
 # SpecularFactor of CS2's character materials (csgo_character): Interchange's 1, F0 0.08, not glTF's 0.04. CS2 adds a
-# cloth sheen and a rim light to its agents that OFAST does not convert yet; without them the agents read darker than
-# CS2's, more so at F0 0.04 (an SAS agent in the shade 0.60 of CS2 at 0.08, 0.48 at 0.04; docs/formats/material.md,
-# "Weapons' and agents' specular"). A stand-in until the sheen is converted.
+# cloth sheen and a rim light to its agents that OFAST converts only roughly or not at all; without them the agents
+# read darker than CS2's, more so at F0 0.04 (an SAS agent in the shade 0.60 of CS2 at 0.08, 0.48 at 0.04;
+# docs/formats/material.md, "Weapons' and agents' specular"). A stand-in until the sheen is converted. Cloth-shaded
+# materials (KHR_materials_sheen) take their glTF specular, 0, instead (set_gltf_specular).
 CHARACTER_SPECULAR_FACTOR = 1.0
 
 levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
@@ -313,13 +314,15 @@ def static_pipelines():
 def set_gltf_specular(gltf_path, objects):
     """Sets SpecularFactor on the imported material instances that Interchange's glTF master draws without a specular
     texture, as import_map.py does for maps (gltf_specular.specular_factor): 0.25 on CS2's weapons (glTF
-    specularFactor 0.5, F0 0.02), 0.5 on the rest (F0 0.04); CHARACTER_SPECULAR_FACTOR on the agents. Interchange
+    specularFactor 0.5, F0 0.02), 0.5 on the rest (F0 0.04); CHARACTER_SPECULAR_FACTOR on the agents, but 0 on their
+    cloth-shaded materials (KHR_materials_sheen, drawn by Interchange's sheen master: a sheen, no highlight). Interchange
     leaves it at 1, F0 0.08. Instances are found through the meshes' material slots, which keep the glTF material
     names: Interchange shortens long asset names in the middle (weapon_kni_e_karambit), so matching by the instance's
     name missed some weapons."""
     with open(gltf_path, encoding="utf-8") as f:
         materials = {m["name"]: m for m in json.load(f).get("materials", [])}
-    masters = {assets.load_asset(gltf_specular.INTERCHANGE_MASTER).get_path_name()}
+    masters = {assets.load_asset(path).get_path_name()
+               for path in (gltf_specular.INTERCHANGE_MASTER, gltf_specular.SHEEN_MASTER)}
     slots = []
     for o in objects:
         if isinstance(o, unreal.StaticMesh):
@@ -332,19 +335,24 @@ def set_gltf_specular(gltf_path, objects):
         name = str(slot.get_editor_property("material_slot_name"))
         if isinstance(instance, unreal.MaterialInstanceConstant) and name in materials:
             found[instance.get_path_name()] = (instance, materials[name])
-    count = characters = 0
+    count = characters = cloth = 0
     for instance, material in found.values():
         if not gltf_specular.takes_specular_factor(instance, masters):
             continue
-        if material.get("extras", {}).get("ofast", {}).get("shader") == "csgo_character.vfx":
+        character = material.get("extras", {}).get("ofast", {}).get("shader") == "csgo_character.vfx"
+        characters += character
+        if "KHR_materials_sheen" in material.get("extensions", {}):
+            # CS2's cloth shading: a sheen instead of a highlight (glTF specularFactor 0).
+            factor = gltf_specular.specular_factor(material)
+            cloth += 1
+        elif character:
             factor = CHARACTER_SPECULAR_FACTOR
-            characters += 1
         else:
             factor = gltf_specular.specular_factor(material)
         unreal.MaterialEditingLibrary.set_material_instance_scalar_parameter_value(instance, "SpecularFactor", factor)
         count += 1
-    log("  SpecularFactor set on %d of %d glTF materials (%d on mesh slots), %d of them csgo_character"
-        % (count, len(materials), len(found), characters))
+    log("  SpecularFactor set on %d of %d glTF materials (%d on mesh slots), %d of them csgo_character (%d cloth)"
+        % (count, len(materials), len(found), characters, cloth))
 
 
 def agents_manifest(replay):

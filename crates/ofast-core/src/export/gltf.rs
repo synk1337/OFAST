@@ -17,7 +17,8 @@
 //!   parameters are kept in `extras.ofast` so the Unreal plugin can later build matching master materials.
 //!   Translucent and alpha-tested CS2 materials map to glTF `BLEND` / `MASK` (cut at the material's
 //!   `g_flAlphaTestReference`); `csgo_static_overlay` by its blend mode (`OverlayBlend`, private). The shaders CS2
-//!   draws unlit (`csgo_unlitgeneric`, `csgo_black_unlit`) get `KHR_materials_unlit`.
+//!   draws unlit (`csgo_unlitgeneric`, `csgo_black_unlit`) get `KHR_materials_unlit`; weapons a lower
+//!   `KHR_materials_specular`; characters' cloth-shaded materials `KHR_materials_sheen` with no specular.
 //! - **Textures**: see [`TextureRole`]. Textures are decoded and written as PNG at the end, in parallel; a texture
 //!   that fails to decode is replaced by a 1×1 neutral image and reported as a warning.
 //!
@@ -580,6 +581,14 @@ struct OrmSource {
 /// directions there, and glTF has one isotropic roughness.
 const MEAN_RG: usize = 4;
 
+/// The sheen roughness of CS2's cloth-shaded materials (`KHR_materials_sheen`): the materials give a sheen colour and
+/// scale but no roughness for it; a soft, fabric-like spread.
+const CLOTH_SHEEN_ROUGHNESS: f64 = 0.5;
+
+/// The least mean cloth mask (`g_tMetalness` B × (1 − G)) a cloth-shaded material's texture needs for its cloth to
+/// be converted ([`GltfWriter::has_cloth_mask`]): the fabrics have about 0.5, the gloves and lenses 0.
+const CLOTH_MASK_MIN: f64 = 0.05;
+
 /// A texture to decode and write when the export finishes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum TextureJob {
@@ -777,6 +786,8 @@ pub(crate) struct GltfWriter<'c> {
     material_ids: BTreeMap<(String, [u8; 4]), usize>,
     /// material path → parsed info (or None when unreadable).
     material_infos: BTreeMap<String, Option<MaterialInfo>>,
+    /// `g_tMetalness` texture path → whether it holds a cloth mask ([`GltfWriter::has_cloth_mask`]).
+    cloth_masks: BTreeMap<String, bool>,
     /// texture job → glTF texture index (before `finish` merges textures with equal pixels).
     texture_ids: BTreeMap<TextureJob, usize>,
     /// Textures to decode and write in `finish`, by glTF texture index.
@@ -862,6 +873,7 @@ impl<'c> GltfWriter<'c> {
             materials: Vec::new(),
             material_ids: BTreeMap::new(),
             material_infos: BTreeMap::new(),
+            cloth_masks: BTreeMap::new(),
             texture_ids: BTreeMap::new(),
             texture_jobs: Vec::new(),
             texture_names: BTreeSet::new(),
@@ -1446,6 +1458,30 @@ impl<'c> GltfWriter<'c> {
     /// The file name of a material, made unique: two CS2 materials can share a file name in different folders
     /// (e.g. `materials/de_dust/sitebwall13a.vmat` and `.../brush_shapes/sitebwall13a.vmat`), and Unreal would mix
     /// them up. The second one gets its folder name appended.
+    /// Whether the `g_tMetalness` texture at `path` holds a cloth mask: CS2 shades cloth where B × (1 − G) is set
+    /// (`docs/formats/material.md`), and a mean of [`CLOTH_MASK_MIN`] or more counts. The fabrics' textures have about
+    /// 0.5 (B 117 – 151 of 255, G near 0); the constants CS2 compiles for gloves (all 0) and the SAS lenses (G 1) have
+    /// none, though their materials set `F_CLOTH_SHADING` too. Decoded once per texture; an unreadable one has none.
+    fn has_cloth_mask(&mut self, path: &str) -> bool {
+        if let Some(&known) = self.cloth_masks.get(path) {
+            return known;
+        }
+        let mean = decode_raw(self.content, path).map_or(0.0, |(_, image)| {
+            let pixels = image.rgba.len() / 4;
+            image
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| f64::from(p[2]) / 255.0 * (1.0 - f64::from(p[1]) / 255.0))
+                .sum::<f64>()
+                / pixels.max(1) as f64
+        });
+        let cloth = mean >= CLOTH_MASK_MIN;
+        self.cloth_masks.insert(path.to_owned(), cloth);
+        cloth
+    }
+
     fn unique_material_name(&mut self, path: &str) -> String {
         let p = Path::new(path);
         let stem = p
@@ -1565,6 +1601,33 @@ impl<'c> GltfWriter<'c> {
             // CS2's weapon shader reflects 2 % at normal incidence off its non-metals, not glTF's 4 %
             // (ValveResourceFormat's complex shader: `F0 = 0.02` for csgo_weapon): half the specular.
             material["extensions"]["KHR_materials_specular"] = json!({ "specularFactor": 0.5 });
+        }
+        let cloth = info.shader == "csgo_character.vfx"
+            && info.ints.get("F_CLOTH_SHADING") == Some(&1)
+            && info
+                .textures
+                .get("g_tMetalness")
+                .is_some_and(|path| self.has_cloth_mask(&path.clone()));
+        if cloth {
+            // CS2's cloth shading (knits, uniforms): a sheen of `g_flSheenTintColor` × `g_flSheenScale` (at most 1) in
+            // place of a glossy highlight, which made the Phoenix balaclava look like metal. The sheen takes the
+            // fabric's own colour (the colour texture): a white one washed the dark knits and uniforms out to grey in
+            // Unreal. Its `g_tMetalness` holds metalness in G as the others' does (0 on the knit, the buckles of a
+            // uniform), whatever the file's name (`…_cloth`); B is the cloth mask (`has_cloth_mask`).
+            let scale = info.floats.get("g_flSheenScale").copied().unwrap_or(1.0);
+            let tint = info
+                .vectors
+                .get("g_flSheenTintColor")
+                .map_or([1.0; 3], |v| [v[0], v[1], v[2]]);
+            let mut sheen = json!({
+                "sheenColorFactor": tint.map(|c| (c * scale).clamp(0.0, 1.0)),
+                "sheenRoughnessFactor": CLOTH_SHEEN_ROUGHNESS,
+            });
+            if let Some(color) = material["pbrMetallicRoughness"].get("baseColorTexture") {
+                sheen["sheenColorTexture"] = color.clone();
+            }
+            material["extensions"]["KHR_materials_sheen"] = sheen;
+            material["extensions"]["KHR_materials_specular"] = json!({ "specularFactor": 0.0 });
         }
         let pbr = &mut material["pbrMetallicRoughness"];
         pbr["metallicFactor"] = json!(if metalness.is_some() {
@@ -2071,7 +2134,11 @@ impl<'c> GltfWriter<'c> {
             extensions_used.push("KHR_lights_punctual");
             document["extensions"] = json!({ "KHR_lights_punctual": { "lights": self.lights } });
         }
-        for extension in ["KHR_materials_unlit", "KHR_materials_specular"] {
+        for extension in [
+            "KHR_materials_unlit",
+            "KHR_materials_specular",
+            "KHR_materials_sheen",
+        ] {
             if self
                 .materials
                 .iter()
@@ -2130,6 +2197,12 @@ fn remap_texture_indices(material: &mut Json, texture_of: &[usize]) {
     remap(material, texture_of);
     if let Some(pbr) = material.get_mut("pbrMetallicRoughness") {
         remap(pbr, texture_of);
+    }
+    // The extensions' texture slots (`KHR_materials_sheen`'s `sheenColorTexture`).
+    if let Some(extensions) = material.get_mut("extensions").and_then(Json::as_object_mut) {
+        for extension in extensions.values_mut() {
+            remap(extension, texture_of);
+        }
     }
 }
 
@@ -2676,6 +2749,7 @@ mod tests {
         let mut material = json!({
             "pbrMetallicRoughness": { "baseColorTexture": { "index": 2 }, "metallicRoughnessTexture": { "index": 1 } },
             "normalTexture": { "index": 0 },
+            "extensions": { "KHR_materials_sheen": { "sheenColorTexture": { "index": 2 } } },
             "extras": { "ofast": { "environment": { "layer2": { "color": "textures/a_cc.png" } }, "textures": {
                 "g_tColor1": "materials/a_cc.png"
             } } },
@@ -2688,6 +2762,10 @@ mod tests {
         assert_eq!(
             material["pbrMetallicRoughness"]["metallicRoughnessTexture"]["index"],
             1
+        );
+        assert_eq!(
+            material["extensions"]["KHR_materials_sheen"]["sheenColorTexture"]["index"],
+            0
         );
         let renamed = HashMap::from([(
             "textures/a_cc.png".to_owned(),
@@ -3156,9 +3234,62 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// de_mirage's `wrongway_timer` (`csgo_unlitgeneric`, translucent) and `black_simple` (`csgo_black_unlit`, no
-    /// texture) next to a lit material: only the unlit ones get `KHR_materials_unlit`, the file declares it, and
-    /// `extras.ofast` keeps the CS2 shader.
+    #[test]
+    fn cloth_shaded_characters_get_a_sheen_of_their_own_colour() {
+        let content = Content::new();
+        let dir = temp_folder("cloth");
+        let mut writer = GltfWriter::new(&content, &dir, ExportOptions::default()).expect("writer");
+        let info = |cloth: bool, metalness: &str| MaterialInfo {
+            shader: "csgo_character.vfx".into(),
+            textures: [
+                ("g_tColor", "knit_color.vtex"),
+                ("g_tNormal", "knit_normal.vtex"),
+                ("g_tMetalness", metalness),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect(),
+            ints: BTreeMap::from([("F_CLOTH_SHADING".to_owned(), i64::from(cloth))]),
+            floats: BTreeMap::from([("g_flSheenScale".to_owned(), 0.5)]),
+            vectors: BTreeMap::from([("g_flSheenTintColor".to_owned(), [1.0, 0.5, 0.25, 0.0])]),
+        };
+        // A knit with a cloth mask; the same without the flag; a glove with the flag but a constant with no mask.
+        writer.cloth_masks.insert("knit_cloth.vtex".into(), true);
+        writer.cloth_masks.insert("glove_metal.vtex".into(), false);
+        for (path, cloth, metalness) in [
+            ("characters/knit.vmat", true, "knit_cloth.vtex"),
+            ("characters/vest.vmat", false, "knit_cloth.vtex"),
+            ("characters/glove.vmat", true, "glove_metal.vtex"),
+        ] {
+            writer
+                .material_infos
+                .insert(path.into(), Some(info(cloth, metalness)));
+        }
+        let knit = writer.material("characters/knit.vmat", [1.0; 4]);
+        let vest = writer.material("characters/vest.vmat", [1.0; 4]);
+        let glove = writer.material("characters/glove.vmat", [1.0; 4]);
+        for plain in [vest, glove] {
+            assert!(
+                writer.materials[plain]["extensions"]
+                    .get("KHR_materials_sheen")
+                    .is_none()
+            );
+        }
+        let knit = &writer.materials[knit];
+        let sheen = &knit["extensions"]["KHR_materials_sheen"];
+        assert_eq!(sheen["sheenColorFactor"], json!([0.5, 0.25, 0.125]));
+        assert_eq!(
+            sheen["sheenColorTexture"],
+            knit["pbrMetallicRoughness"]["baseColorTexture"]
+        );
+        assert!(sheen["sheenColorTexture"].get("index").is_some());
+        assert_eq!(
+            knit["extensions"]["KHR_materials_specular"]["specularFactor"],
+            json!(0.0)
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn character_and_weapon_roughness_sources() {
         let content = Content::new();
@@ -3240,6 +3371,9 @@ mod tests {
         );
     }
 
+    /// de_mirage's `wrongway_timer` (`csgo_unlitgeneric`, translucent) and `black_simple` (`csgo_black_unlit`, no
+    /// texture) next to a lit material: only the unlit ones get `KHR_materials_unlit`, the file declares it, and
+    /// `extras.ofast` keeps the CS2 shader.
     #[test]
     fn unlit_shaders_get_khr_materials_unlit() {
         let content = Content::new();

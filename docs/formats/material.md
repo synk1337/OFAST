@@ -55,11 +55,25 @@ and without a specular texture the master's Specular is `SpecularFactor` alone, 
 1.5): 0.25 on weapons (F0 0.02), 0.5 on other materials (F0 0.04), finding each instance through its mesh's material
 slot, since Interchange shortens long instance names in the middle (`weapon_kni_e_karambit`). CS2's character
 materials (`csgo_character`: agents, gloves, arms) keep 1, F0 0.08 (`CHARACTER_SPECULAR_FACTOR`): CS2 gives its
-agents a cloth sheen and a rim light that OFAST does not convert (next paragraph), and without them the agents
-already read darker than CS2's; F0 0.04 darkens them further. Aurora vs FURIA round 5, CS2's Chase Cam views against
-Unreal's from the same camera (default picture): an SAS agent in the shade reads 0.60 of CS2 at 0.08 and 0.48 at
-0.04, the ground beside him 0.97; KSCERATO in the sun 0.96 and 0.92, the ground 1.09. A stand-in until the sheen is
-converted.
+agents a cloth sheen and a rim light that OFAST does not convert or converts only roughly (next paragraphs), and
+without them the agents already read darker than CS2's; F0 0.04 darkens them further. Aurora vs FURIA round 5, CS2's
+Chase Cam views against Unreal's from the same camera (default picture): an SAS agent in the shade reads 0.60 of CS2
+at 0.08 and 0.48 at 0.04, the ground beside him 0.97; KSCERATO in the sun 0.96 and 0.92, the ground 1.09. A stand-in
+until the sheen is converted. Their cloth-shaded materials (`F_CLOTH_SHADING`) take 0 instead (below).
+
+**Cloth shading, roughly** (2026-10-26). A `csgo_character` material with `F_CLOTH_SHADING` whose `g_tMetalness`
+holds a cloth mask (B × (1 − G) at least 0.05 on average: the Phoenix balaclava, body and legs, the SAS uniform and
+sleeves, about 0.5; not the gloves and the SAS lenses, which set the flag too but whose compiled constants have
+none) gets `KHR_materials_sheen` (colour: its colour texture × `g_flSheenTintColor` × `g_flSheenScale`, at most 1;
+roughness 0.5) and `KHR_materials_specular` 0; Interchange draws it with its sheen master
+(`/InterchangeAssets/gltf/M_Sheen`), whose `SpecularFactor` `import_demo.py` sets to that 0. Without it the
+balaclava's knit took a glossy highlight at roughness 0.44 and F0 0.08 and read as leather or metal where CS2 shows
+matte olive knit. Its `g_tMetalness` (`…_balaclava_cloth`) holds metalness in G as the others' does (0 – 4 there),
+B the cloth mask. A white sheen colour (the factor alone) washed the dark fabrics out to grey (the SAS uniform almost
+white); the fabric's own colour keeps them dark. Checked at ticks 34118 (YEKINDAR's balaclava: matte olive with its
+ribs, as in CS2; a little darker) and 34416 (XANTARES's uniform: dark navy). Still not CS2's model: its sheen is
+`sqrt(albedo) · g_flSheenScale` and only on the cloth mask, `g_tMetalness` B × (1 − G), the rest keeping its
+specular; here the sheen is the albedo itself, over the whole material, and the specular is 0 everywhere on it.
 
 Until 2026-10-23 `import_demo.py` wrote the glTF's 0.5 itself, matched by instance name: weapons drew F0 0.04, and
 in agent files whose instance names Interchange shortened some weapons (a karambit) kept 0.08. Per-pixel F0
@@ -73,8 +87,9 @@ be judged: every weapon in the round's CS2 views close enough to see wears a pai
 finish until M10), and the light around them differs more than 2 % of reflectance does
 (`test-data/shots/weapon_specular/compare_weapons_cs2.jpg`).
 
-**Not converted** (glTF has no equivalent OFAST uses yet): characters' cloth shading (`g_tMetalness` B × (1 − G) is
-a cloth mask; CS2 gives those areas a sheen lobe, F0 = `sqrt(albedo) · g_flSheenScale`), their rim light
+**Not converted** (glTF has no equivalent OFAST uses yet): characters' cloth shading as CS2 draws it (`g_tMetalness`
+B × (1 − G) is a cloth mask; CS2 gives those areas a sheen lobe, F0 = `sqrt(albedo) · g_flSheenScale`; converted only
+roughly above), their rim light
 (`g_flRimlightStrength` on some materials), retro-reflectivity
 (`g_tMetalness` R with `F_RETRO_REFLECTIVE`), the characters' colour and roughness adjustments, anisotropy itself, and
 `g_flMetalnessTransitionBias` on weapons, which no public reference explains. Metal parts take their colour as F0 as

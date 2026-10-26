@@ -17,6 +17,9 @@ Interchange creates the instances with SpecularFactor 1 whatever the glTF says; 
 import unreal
 
 INTERCHANGE_MASTER = "/InterchangeAssets/gltf/M_Default"
+# Interchange's master for materials with KHR_materials_sheen (CS2's cloth-shaded agent materials): the same
+# SpecularFactor, created at 1 likewise.
+SHEEN_MASTER = "/InterchangeAssets/gltf/M_Sheen"
 GLTF_DEFAULT_IOR = 1.5  # KHR_materials_ior's default; OFAST's exports never write the extension
 
 
