@@ -565,6 +565,25 @@ gone after the blast, Unreal's doorway matches CS2's at the same ticks.)
 every closed door sample (65,473 and 59,015) stands at its closed angles, every open one (8,119 and 9,022) has swung
 60 – 120° about z, and no door leaves its hinge.
 
+## Physics props
+
+The props the server simulates (the map's `prop_physics_multiplayer`) are `CPhysicsPropMultiplayer` entities
+(`TickSample::props`, `PropSample`; `CPhysicsProp` and `CPhysicsPropOverride` would read the same way, not seen yet):
+the body component's origin and `m_angRotation`, sent on the ticks they move, the model. Bullets, blasts and players
+push them about. de_nuke has 25: hanging hard hats and office mugs. Every one is made again where its map entity puts
+it at each round's start (round 5: all 25 at their entity lump's origins and angles, a few placed lying on the floor),
+exactly on the round's first tick (not 320 ticks before, as the doors leave), and sometimes within a round (a
+vitality vs FaZe de_nuke demo remakes all 25 at tick 191 of round 1), under other entity indices: a prop entity's
+first sample names its map entity. In round 5 the A site's three hats on their rack (130, −1040 … −1104, −344) fall
+63 – 74 units to the floor from tick 37079, a tick before the HE grenade that throws them goes off (37080, as the
+doors leave a tick before theirs); CS2 shows them there through YEKINDAR's eyes at 37685.
+
+Not every entity the map has is networked: `func_brush` blockers and `prop_dynamic` props of other game modes that
+start disabled (de_nuke's retake brushes and wingman silo doors) are not in the demo at all, and of de_nuke's
+networked `prop_dynamic` props 7 of 9 interact as window, block sound and touch all only (`m_Collision`'s
+`m_nInteractsAs`; no `solid` layer: bullets go through them, [replay.md](replay.md), `shots`).
+`examples/solid_entities.rs` lists the model entities a demo has solid on a tick.
+
 ## First-person view
 
 CS2's viewmodel is client-side (`C_CS2HudModelArms`, since July 2025): demos carry no viewmodel entity and no pose.

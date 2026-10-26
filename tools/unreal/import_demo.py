@@ -41,6 +41,8 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
   was picked up or the round ended;
 - the map's rotating doors (the replay's `doors`), each the level's own door actor (found at its hinge) swung as the
   demo has it;
+- the map's physics props (the replay's `props`: de_nuke's hard hats and mugs), each the level's own actor (found
+  where the round starts it) moved as the demo has it;
 - per thrown grenade (the replay's `grenades`), its model (the agents manifest's models) flying from the throw to its
   detonation, expiry or landing, keyed like the dropped weapons;
 - per smoke whose cloud the export simulated, a Heterogeneous Volume drawing it from its atlas, its frame picked by
@@ -104,6 +106,8 @@ POSITION_TOLERANCE_CM = 0.2
 ANGLE_TOLERANCE_DEG = 0.1
 # A map actor is the demo's door when its origin is within this of the door's closed position (its hinge).
 DOOR_MATCH_CM = 2.0
+# A map actor is the demo's physics prop when its origin is within this of the prop's first position.
+PROP_MATCH_CM = 2.0
 # A door is blown apart when an HE grenade goes off this close to its hinge (units) this few ticks after its entity's
 # last tick (broken_doors; seen: 9 - 83 units, 1 tick).
 DOOR_BLAST_REACH = 128.0
@@ -618,6 +622,60 @@ def animate_doors(sequence, replay, end_frame):
     return keys
 
 
+def animate_props(sequence, replay, end_frame):
+    """The map's physics props moved as the demo has them (the replay's `props`: de_nuke's hanging hard hats and mugs,
+    which bullets, blasts and players push about). CS2 makes every prop again where the map entity puts it (at the
+    round's start, sometimes within it), so the entries with the same first key are one prop: the map import's own
+    actors there with that rotation (every mesh node of its model), keyed with the entries' origins and rotations (a
+    prop made again jumps back where the map has it), hidden after the last entry's last tick when the prop leaves
+    before the round's end. A prop that never moves nor leaves is left as the map has it, and so is one with no actor
+    there. Returns the number of keys."""
+    props = replay.get("props", [])
+    if not props:
+        return 0
+    tick0 = replay["start_tick"]
+    end_tick = replay["end_tick"]
+    # One prop per first key: its entries' keys by tick, and the last tick any of them was there.
+    by_spawn = {}
+    for prop in props:
+        spawn = tuple(prop["keys"][0][1:])
+        keyed, last = by_spawn.setdefault(spawn, ({}, 0))
+        keyed.update({k[0]: k for k in prop["keys"]})
+        by_spawn[spawn] = (keyed, max(last, prop["last_tick"]))
+    candidates = [a for a in actors.get_all_level_actors()
+                  if TAG not in a.tags and isinstance(a, unreal.StaticMeshActor)]
+    keys = 0
+    moved = 0
+    for spawn, (keyed, last) in by_spawn.items():
+        points = [keyed[t] for t in sorted(keyed)]
+        leaves = last < end_tick
+        if all(p[1:] == list(spawn) for p in points) and not leaves:
+            continue
+        start = unreal.Vector(*to_unreal(spawn[:3]))
+        rotation = unreal.Rotator(roll=spawn[5], pitch=-spawn[3], yaw=-spawn[4])
+        matches = [a for a in candidates if (a.get_actor_location() - start).length() < PROP_MATCH_CM
+                   and angle_between(a.get_actor_rotation(), rotation) < 2.0]
+        if not matches:
+            log("prop at %s: no map actor there with its rotation: not moved" % (spawn[:3],))
+            continue
+        frames = [p[0] - tick0 for p in points]
+        rotations = euler_filter([(p[6], -p[4], -p[5]) for p in points])
+        for actor in matches:
+            component = actor.static_mesh_component
+            component.set_editor_property("mobility", unreal.ComponentMobility.MOVABLE)
+            # No decals: they mark whatever lies in their box, and a hat landing in a scorch's would show it.
+            component.set_editor_property("receives_decals", False)
+            binding = sequence.add_possessable(actor)
+            scale = actor.get_actor_scale3d()
+            keys += key_transform(binding, frames, [to_unreal(p[1:4]) for p in points], rotations,
+                                  (scale.x, scale.y, scale.z), end_frame)
+            if leaves:
+                key_visibility(binding, [(0, True), (last + 1 - tick0, False)], end_frame)
+        moved += 1
+    log("props: %d of %d moved or removed" % (moved, len(by_spawn)))
+    return keys
+
+
 def broken_doors(replay):
     """Hinge -> the tick a door was blown apart, for the replay's doors an HE grenade broke. CS2 removes the entity of a
     door a blast breaks and draws the doorway clear from then: on the Aurora vs FURIA de_nuke demo the A door's entity
@@ -999,6 +1057,7 @@ def build(replay):
                                  binding, viewmodel_visibility.get(controller, []), end_frame))
     keys += place_brass(sequence, replay, import_cases(replay), end_frame, viewmodel_actors, viewmodel_visibility)
     keys += animate_doors(sequence, replay, end_frame)
+    keys += animate_props(sequence, replay, end_frame)
     log("sequence %s: %d players (%d animated agents, %d viewmodels), %d frames at %d fps, %d keys in %.0f s"
         % (path, len(replay["players"]), len(agents), len(viewmodels), end_frame, fps, keys,
            time.monotonic() - started))

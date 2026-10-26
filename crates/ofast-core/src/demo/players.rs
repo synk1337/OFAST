@@ -212,6 +212,31 @@ pub struct DoorSample {
     pub state: u32,
 }
 
+/// A physics prop the server simulates (`CPhysicsPropMultiplayer`: the map's `prop_physics_multiplayer`, de_nuke's
+/// hanging hard hats and mugs) at one tick: bullets, blasts and players push it about. CS2 makes every prop again
+/// where the map entity puts it at each round's start (de_nuke round 5: all 25 at their entity lump's origins and
+/// angles, some placed lying down) and sometimes within a round, under other entity indices.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropSample {
+    /// The prop's entity index.
+    pub entity: u32,
+    /// The entity's serial number: a prop made again can take a freed slot (`entity`) under another serial.
+    pub serial: u32,
+    /// Its model (resource id).
+    pub model: u64,
+    /// Its origin (body component's cell and offset).
+    pub position: [f32; 3],
+    /// Its rotation, degrees: pitch, yaw, roll (`CBodyComponent.m_angRotation`).
+    pub angles: [f32; 3],
+}
+
+/// The classes of the physics props [`PropSample`] reads.
+const PROP_CLASSES: [&str; 3] = [
+    "CPhysicsPropMultiplayer",
+    "CPhysicsProp",
+    "CPhysicsPropOverride",
+];
+
 /// Index of the flashbangs in the pawn's ammo counts (`m_pWeaponServices.m_iAmmo`). Observed on the local match
 /// demo, from the grenades each player carried: 13 HE, 14 flashbangs (2 with one flashbang entity), 15 smoke,
 /// 16 molotov or incendiary.
@@ -325,6 +350,8 @@ pub struct TickSample {
     pub dropped: Vec<DroppedWeapon>,
     /// The map's rotating doors, in entity order.
     pub doors: Vec<DoorSample>,
+    /// The map's physics props, in entity order.
+    pub props: Vec<PropSample>,
     /// Thrown grenades (in flight, resting, or a smoke's cloud), in entity order ([`super::grenades`]).
     pub grenades: Vec<GrenadeSample>,
     /// Fires of molotovs and incendiary grenades, in entity order.
@@ -411,7 +438,45 @@ struct Paths {
     death: DeathPaths,
     viewmodel: ViewmodelPaths,
     doors: Option<DoorPaths>,
+    props: Vec<PropPaths>,
     grenades: GrenadePaths,
+}
+
+/// Field paths of a physics prop class ([`PROP_CLASSES`]) the demo has.
+#[derive(Debug)]
+struct PropPaths {
+    class: String,
+    model: FieldPath,
+    cell: [FieldPath; 3],
+    offset: [FieldPath; 3],
+    rotation: FieldPath,
+}
+
+impl PropPaths {
+    /// One per class of [`PROP_CLASSES`] the demo has.
+    fn find(serializers: &Serializers) -> Vec<Self> {
+        PROP_CLASSES
+            .iter()
+            .filter_map(|&class| {
+                let prop = serializers.by_name(class)?;
+                let path = |field: &str| serializers.path_of(prop, field);
+                let axes = |prefix: &str| -> Option<[FieldPath; 3]> {
+                    Some([
+                        path(&format!("{prefix}X"))?,
+                        path(&format!("{prefix}Y"))?,
+                        path(&format!("{prefix}Z"))?,
+                    ])
+                };
+                Some(Self {
+                    class: class.into(),
+                    model: path(MODEL_FIELD)?,
+                    cell: axes("CBodyComponent.m_cell")?,
+                    offset: axes("CBodyComponent.m_vec")?,
+                    rotation: path("CBodyComponent.m_angRotation")?,
+                })
+            })
+            .collect()
+    }
 }
 
 /// Field paths of a pawn's viewmodel settings. Each is optional (older demos may lack them).
@@ -695,6 +760,7 @@ impl Paths {
             death: DeathPaths::find(serializers),
             viewmodel: ViewmodelPaths::find(serializers),
             doors: DoorPaths::find(serializers),
+            props: PropPaths::find(serializers),
             grenades: GrenadePaths::find(serializers, classes),
         })
     }
@@ -916,6 +982,7 @@ pub fn track_round(data: &[u8], round: u32) -> Result<RoundTrack, TrackError> {
                 players: read_players(parser, paths),
                 dropped: read_dropped(parser, paths),
                 doors: read_doors(parser, paths),
+                props: read_props(parser, paths),
                 grenades: paths
                     .grenades
                     .grenades(parser, &pawn_controllers(parser, paths)),
@@ -1241,6 +1308,36 @@ fn pawn_controllers(parser: &DemoParser<'_>, paths: &Paths) -> HashMap<u32, u32>
             Some((pawn, c.index))
         })
         .collect()
+}
+
+/// The physics props (a prop without its origin cell is skipped).
+fn read_props(parser: &DemoParser<'_>, paths: &Paths) -> Vec<PropSample> {
+    let mut out = Vec::new();
+    for prop in parser.entities().iter() {
+        let class = parser.class_name(prop.class_id);
+        let Some(fields) = paths.props.iter().find(|p| Some(p.class.as_str()) == class) else {
+            continue;
+        };
+        let Some(position) = origin(prop, &fields.cell, &fields.offset) else {
+            continue;
+        };
+        let model = prop
+            .get(&fields.model)
+            .and_then(FieldValue::as_u64)
+            .unwrap_or(0);
+        let angles = prop
+            .get(&fields.rotation)
+            .and_then(FieldValue::as_vector3)
+            .unwrap_or_default();
+        out.push(PropSample {
+            entity: prop.index,
+            serial: prop.serial,
+            model,
+            position,
+            angles,
+        });
+    }
+    out
 }
 
 /// The rotating doors (fields never sent read as their defaults: 0; a door without its origin cell is skipped).

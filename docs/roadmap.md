@@ -269,8 +269,9 @@ player and round.
   (on 13 demos they made every count worse).
 - [ ] Shots, the rest: each gun's own muzzle flash, bullet holes that move with doors, what the hits after walls
   that the trace does not explain came out of.
-- [ ] The map's physics props as the demo moves them (`CPhysicsPropMultiplayer`: de_nuke's hanging hard hats and
-  mugs, 25 of them; CS2 shows the A site's hats on the floor by round 5 where OFAST keeps them on their rack).
+- [x] The map's physics props as the demo moves them (`CPhysicsPropMultiplayer`: de_nuke's hanging hard hats and
+  mugs, 25 of them): in round 5 an HE grenade knocks the A site's three hats off their rack, and they lie on the floor
+  where CS2 shows them.
 - [ ] **Effects rework**: every effect so far is a first pass. They are in the right place, at the right size and
   time, but their look is far from good. All of them get reworked: smokes, fires and their smoke, HE blasts,
   flashbangs, muzzle flashes, tracers, impacts, blood and holes. When the rework starts, each effect's gaps get

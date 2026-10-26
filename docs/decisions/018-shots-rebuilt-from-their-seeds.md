@@ -45,6 +45,9 @@ collision triangle its surface property (`world_physics`), per weapon model its 
   through, a wall between a hit's start and its point is not there. The rotating doors are walls too: each door
   model's own collision, the bullet's line turned into its space as the demo has the door standing on that tick
   (no bullet holes on them: a hole is fixed in the world and a door moves).
+- **The player each bullet met, named from their hitboxes** (added 2026-10-26): the hit's point lies on the body
+  posed there (the nearest hitbox surface, not the shooter's), which names the player (`victim`); their blood is
+  drawn on an actor hidden with their body, as CS2's view through their eyes shows none.
 - **A tracer on every shot, from the moment it was fired**: CS2 draws one on each shot of a gun with a tracer system
   (YEKINDAR's view: four in a row; soulfly's: molodoy's AK on shots one in three would skip), whatever
   `m_nTracerFrequency` says (3 on the AK; 0 still means none: the silenced modes). The shot is fired before its
@@ -118,8 +121,7 @@ collision triangle its surface property (`world_physics`), per weapon model its 
   tracer, on the line from his viewmodel's barrel, is a short streak near the crosshair),
   bullet holes on doors (moving with them), shotguns' pellets after the first, the R8's and Negev's own spread rules, the limit on how
   many bullet holes CS2 keeps and which (four round-3 holes on de_nuke's open A-site door, whose collision is a static
-  hull, do not show in CS2 in round 5), hiding the blood of a hit on the player the camera looks through (the hits
-  do not name the player hit; CS2 shows none in that view), holes on props and signs (not in the world's collision).
+  hull, do not show in CS2 in round 5), holes on props and signs (not in the world's collision).
   Older demos may have played on other values: one de_inferno demo's plaster walls cost bullets as if plaster's
   distance modifier were 0.5, the current files' 0.7.
 - The sprite material's per-instance data grew from 8 to 12 floats; levels imported before read the defaults

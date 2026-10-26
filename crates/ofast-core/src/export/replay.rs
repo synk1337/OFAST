@@ -18,6 +18,8 @@
 //!   unowned, with its look and its origin and rotation keyed on the ticks it moved;
 //! - the map's rotating doors, with their closed position (which names them in the map) and their rotation keyed on
 //!   the ticks they swung;
+//! - the map's physics props (hard hats, mugs), their origin and rotation keyed on the ticks they moved, the first
+//!   key where the map entity puts them;
 //! - the thrown grenades (flights keyed like the dropped weapons, detonations) and the fires they lit; each smoke's
 //!   cloud is simulated ([`crate::demo::smoke`]) and written next to the file as an atlas texture
 //!   ([`super::smoke`]), which its `volume` names.
@@ -33,7 +35,8 @@ use super::smoke::{Blast, atlas_layout, smoke_atlas, write_smoke_atlas};
 use crate::demo::events::{EventValue, GameEvent};
 use crate::demo::grenades::{FireSample, GrenadeKind, GrenadeSample, SmokeLog};
 use crate::demo::players::{
-    DoorSample, DroppedWeapon, PlayerSample, RoundTrack, TickSample, flash_starts, track_round,
+    DoorSample, DroppedWeapon, PlayerSample, PropSample, RoundTrack, TickSample, flash_starts,
+    track_round,
 };
 use crate::demo::smoke::{self, SmokeSettings};
 
@@ -292,6 +295,7 @@ pub fn replay_json(track: &RoundTrack, demo_name: &str) -> Json {
         "events": milestones,
         "dropped_weapons": dropped_json(track),
         "doors": doors_json(track),
+        "props": props_json(track),
         "grenades": grenades_json(track, &format!("{demo_name}_r{}", track.round)),
         "fires": fires_json(track),
     })
@@ -612,6 +616,36 @@ fn doors_json(track: &RoundTrack) -> Vec<Json> {
     .collect()
 }
 
+/// The map's physics props: one entry per prop entity of the round, with its model and its keys ([`keyed_stretches`]:
+/// its origin and rotation on the first tick and every tick it moved). CS2 makes every prop again where the map
+/// entity puts it (at the round's start, sometimes within the round), so an entry's first key names the prop in the
+/// map export, and the entries with the same first key are the same prop's.
+fn props_json(track: &RoundTrack) -> Vec<Json> {
+    keyed_stretches(
+        track,
+        |sample| {
+            sample
+                .props
+                .iter()
+                .map(|p| (p.entity, p, p.position, p.angles))
+                .collect()
+        },
+        // An index reused by another prop starts a new stretch.
+        |a: &PropSample, b: &PropSample| a.serial == b.serial && a.model == b.model,
+    )
+    .into_iter()
+    .map(|s| {
+        json!({
+            "entity": s.item.entity,
+            "model": format!("{:016x}", s.item.model),
+            "first_tick": s.first,
+            "last_tick": s.last,
+            "keys": s.keys,
+        })
+    })
+    .collect()
+}
+
 /// One stretch an entity was there, keyed for [`keyed_stretches`].
 struct Stretch<'t, T> {
     entity: u32,
@@ -831,6 +865,7 @@ mod tests {
                     players: vec![player(1, 0.0, true), player(2, 5.0, true)],
                     dropped: vec![dropped(300, 7, 10.0), dropped(301, 44, 0.0)],
                     doors: vec![door(0.0)],
+                    props: vec![prop(180, -344.0), prop(181, -744.0)],
                     grenades: vec![grenade(0.0)],
                     fires: Vec::new(),
                 },
@@ -840,6 +875,7 @@ mod tests {
                     // The HE grenade was picked up; the AK-47 lies still.
                     dropped: vec![dropped(300, 7, 10.0)],
                     doors: vec![door(0.0)],
+                    props: vec![prop(180, -344.0), prop(181, -744.0)],
                     // The HE grenade goes off here; a fire lights with one flame.
                     grenades: vec![grenade(10.0)],
                     fires: vec![fire(&[true])],
@@ -850,6 +886,8 @@ mod tests {
                     // The AK-47 is pushed; the door starts to open.
                     dropped: vec![dropped(300, 7, 12.0)],
                     doors: vec![door(6.5)],
+                    // The hat falls; the other prop stays.
+                    props: vec![prop(180, -400.0), prop(181, -744.0)],
                     // The HE grenade's entity lingers after going off; the fire's first flame went out, a second
                     // burns, and the fire is put out on this tick.
                     grenades: vec![grenade(10.0)],
@@ -955,6 +993,20 @@ mod tests {
             (json!(100), json!(100))
         );
 
+        // The props: the hat where the map has it at 100 and 101, fallen at 102; the other one still all along.
+        let props = replay["props"].as_array().expect("props");
+        assert_eq!(props.len(), 2);
+        assert_eq!(props[0]["model"], "00000000000000cc");
+        assert_eq!(
+            props[0]["keys"],
+            json!([
+                [100, 130.0, -1080.0, -344.0, 0.0, -90.0, 0.0],
+                [101, 130.0, -1080.0, -344.0, 0.0, -90.0, 0.0],
+                [102, 130.0, -1080.0, -400.0, 0.0, -90.0, 0.0]
+            ])
+        );
+        assert_eq!(props[1]["keys"].as_array().map(Vec::len), Some(2));
+
         // The door: closed at 100 and 101, swung 6.5° at 102.
         let door = &replay["doors"][0];
         assert_eq!(door["closed_position"], json!([257.0, -1310.0, -416.0]));
@@ -1045,6 +1097,17 @@ mod tests {
                     burning,
                 })
                 .collect(),
+        }
+    }
+
+    /// A hard hat at (130, -1080, z).
+    fn prop(entity: u32, z: f32) -> PropSample {
+        PropSample {
+            entity,
+            serial: 1,
+            model: 0xcc,
+            position: [130.0, -1080.0, z],
+            angles: [0.0, -90.0, 0.0],
         }
     }
 

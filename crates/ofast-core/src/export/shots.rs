@@ -42,7 +42,7 @@
 //! | `muzzle`, `muzzle_direction` | where they left the barrel as the exported agent shows it (third person), and along the barrel; `null` when the agent shows no gun in hand then |
 //! | `view_muzzle`, `view_muzzle_direction` | the same as the shooter's viewmodel shows it (first person), in the viewmodel rig's model space: Source axes (x forward, y left, z up), inches (in Unreal the viewmodel's component space: the camera, before the player's viewmodel offsets and the left hand's mirroring); `null` without a viewmodel then |
 //! | `view_tracer` | where the shooter's own view shows the tracer leave, in the world: the viewmodel's muzzle on the shot tick's camera, moved to the world point seen at the same place on the screen ([`view_tracer_start`]); `null` without a viewmodel |
-//! | `bullets` | per bullet (shotguns fire several): `end` (where it stopped), `on` (`"world"`, `"player"` or `"air"`: nothing within range), `normal` (of the surface met, facing the shooter; `null` on a player or in the air), `surface` (the world surface's property name, `null` when unknown), `impact` (the surface's impact system, [`Impact::effect`]), `decal` (its bullet-hole decal group) and, on the world, `thickness` (of the wall it stopped in, `null` when the trace finds no way out of it); `through`: what it went through before, in order: each wall's way in and way out (`on` `"world"`, `end`, `normal`: facing back at the bullet going in, along it coming out, `surface`, `impact`, `decal`, `thickness`; `door` true on a door's side, which takes no bullet hole) and each player (`on` `"player"`, `end`: where it met them) |
+//! | `bullets` | per bullet (shotguns fire several): `end` (where it stopped), `on` (`"world"`, `"player"` or `"air"`: nothing within range), `normal` (of the surface met, facing the shooter; `null` on a player or in the air), `surface` (the world surface's property name, `null` when unknown), `impact` (the surface's impact system, [`Impact::effect`]), `decal` (its bullet-hole decal group) and, on the world, `thickness` (of the wall it stopped in, `null` when the trace finds no way out of it); `through`: what it went through before, in order: each wall's way in and way out (`on` `"world"`, `end`, `normal`: facing back at the bullet going in, along it coming out, `surface`, `impact`, `decal`, `thickness`; `door` true on a door's side, which takes no bullet hole) and each player (`on` `"player"`, `end`: where it met them, `victim`: the player hit, their controller, from the posed hitboxes nearest the hit, [`body_hit`]; `null` when none is near); a bullet ending on a player has `victim` too |
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -651,21 +651,6 @@ impl Obstacles<'_> {
             crossings.extend(doors.crossings(track, tick, from, direction, reach));
         }
         walls_through(crossings, data)
-    }
-
-    /// Where the line from `from` along `direction` comes out of the player that `shooter`'s bullet met `hit` inches
-    /// along it on `tick`: the way out of the body hit there ([`body_hit`], [`way_through`]); `None` without one.
-    fn body_exit(
-        &self,
-        tick: u32,
-        shooter: Option<u32>,
-        from: [f32; 3],
-        direction: [f32; 3],
-        hit: f32,
-    ) -> Option<f32> {
-        let point = std::array::from_fn(|k| from[k] + direction[k] * hit);
-        let body = body_hit(self.bodies, tick, point, shooter)?;
-        way_through(body, from, direction, hit).map(|(_, out)| out)
     }
 }
 
@@ -1326,7 +1311,7 @@ fn world_hits(bullet: &Json) -> impl Iterator<Item = &Json> {
 /// truth: a wall or player before one it shows is gone through (the rule giving less than 1 damage left, a door in
 /// the way OFAST cannot see), a wall traced between a hit's start and its point is not there for CS2, and a later hit
 /// starting just past a player is where the bullet came out of them; else it comes out of the player's hitboxes
-/// where `obstacles`' bodies have them ([`Obstacles::body_exit`]).
+/// where `obstacles`' bodies have them ([`body_hit`], [`way_through`]), which also name the player hit (`victim`).
 fn bullet_json(
     shot: &Shot,
     bullet: u32,
@@ -1451,7 +1436,13 @@ fn bullet_json(
                 };
                 next_player += 1;
                 damage = falloff(damage, at, hit);
-                let end = json!({ "on": "player", "end": rounded(point(hit)) });
+                // The player hit: the body nearest the hit's point, when the export posed one there.
+                let victim = body_hit(obstacles.bodies, shot.tick, point(hit), shooter);
+                let end = json!({
+                    "on": "player",
+                    "end": rounded(point(hit)),
+                    "victim": victim.map(|b| b.controller),
+                });
                 // Where it came out: a later hit's start just past (not past the next wall: that start is the
                 // wall's way out), else where the line leaves the player's hitboxes, else a body's depth on; never
                 // beyond the next wall's way in, which is the wall's to charge.
@@ -1461,7 +1452,11 @@ fn bullet_json(
                     .map(|p| p.1)
                     .filter(|&start| start > hit && start < hit + MAX_BODY && start <= wall_ahead)
                     .min_by(f32::total_cmp)
-                    .or_else(|| obstacles.body_exit(shot.tick, shooter, shot.eye, direction, hit))
+                    .or_else(|| {
+                        victim
+                            .and_then(|b| way_through(b, shot.eye, direction, hit))
+                            .map(|(_, out)| out)
+                    })
                     .unwrap_or(hit + PLAYER_DEPTH)
                     .min(wall_ahead)
                     .max(hit);
@@ -1921,6 +1916,7 @@ mod tests {
             players: Vec::new(),
             dropped: Vec::new(),
             doors: vec![door(yaw)],
+            props: Vec::new(),
             grenades: Vec::new(),
             fires: Vec::new(),
         };
@@ -2095,5 +2091,9 @@ mod tests {
         );
         assert_eq!(bullet["on"], "player");
         assert_eq!(bullet["end"], json!([200.0, 30.0, 0.0]));
+        // That body names the player hit; without bodies, nobody is named.
+        assert_eq!(bullet["victim"], 2);
+        let bullet = fire([0.0, 30.0, 0.0], &[past]);
+        assert_eq!(bullet["through"][0]["victim"], Json::Null);
     }
 }

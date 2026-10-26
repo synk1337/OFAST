@@ -260,11 +260,13 @@ def sprite_slots(shots, alt=True, own_views=None):
     of their tracers from the third-person barrel; the same for their first-person flashes, in the viewmodel rig's
     space; the same for their tracers as their own view shows them, from the viewmodel's barrel (export::shots'
     `view_tracer`, in the world; only for the shooters in `own_views`, those with a viewmodel shown in their view,
-    when given); layer name -> slots of the impacts by surface family, blood, and the tracers of shots that have no
-    own-view tracer, seen in every view)."""
+    when given); victim controller -> layer name -> slots of the blood of hits on that player (export::shots'
+    `victim`: their own view shows none); layer name -> slots of the impacts by surface family, the blood of hits
+    whose victim is not known, and the tracers of shots that have no own-view tracer, seen in every view)."""
     muzzles = {}
     views = {}
     own = {}
+    blood = {}
     slots = {}
 
     def add(layers, slot, into):
@@ -316,10 +318,12 @@ def sprite_slots(shots, alt=True, own_views=None):
                 elif at["on"] == "player":
                     # Back toward the shooter: CS2's mist flies along its effect's own axis, and the shooter sees it
                     # in front of the player hit (molodoy's view at tick 40840 of de_nuke round 5; along the bullet it
-                    # hid behind the body).
+                    # hid behind the body). On the player hit's own actor when the export names them (`victim`).
                     hit = at["end"]
-                    add(BLOOD_LAYERS, (hit, tick, tick, unit([s - e for e, s in zip(hit, shot["eye"])]), 0.0), slots)
-    return muzzles, views, own, slots
+                    victim = at.get("victim")
+                    into = slots if victim is None else blood.setdefault(victim, {})
+                    add(BLOOD_LAYERS, (hit, tick, tick, unit([s - e for e, s in zip(hit, shot["eye"])]), 0.0), into)
+    return muzzles, views, own, blood, slots
 
 
 def light_frames(shots, tick0, end_frame, key="muzzle"):
@@ -561,7 +565,8 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, v
     through their own eyes), their first-person flashes on their viewmodel actor (`viewmodels`: controller -> actor,
     from import_demo.spawn_viewmodel), an actor per shooter with a viewmodel for their tracers as their own view
     shows them, and their muzzle lights (place_lights; `show_first_person(binding, controller)` keys a binding's
-    visibility as their viewmodel's), one actor ("shots") for the impacts, the blood and the tracers seen in every
+    visibility as their viewmodel's), an actor per player hit for the blood of the hits on them (hidden with their
+    body), one actor ("shots") for the impacts, the blood of hits on no known player and the tracers seen in every
     view, and the bullet holes. Returns the number of shots."""
     shots = agents.get("shots", [])
     effects = agents.get("effects", [])
@@ -583,7 +588,7 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, v
         log("effects: no muzzle_alt sheet (export the round again): every shot draws the main flame")
     # Own-view tracers for the shooters whose viewmodel their own view shows.
     own_views = set((viewmodels or {}).keys()) if show_first_person is not None else set()
-    muzzles, views, own, shared = sprite_slots(shots, alt, own_views)
+    muzzles, views, own, blood, shared = sprite_slots(shots, alt, own_views)
     drawn = 0
 
     def draw(actor, by_layer):
@@ -615,6 +620,11 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, v
         actor = spawn(unreal.Actor, "own tracers %s" % names.get(controller, controller), (0.0, 0.0, 0.0))
         first_person += draw(actor, by_layer)
         show_first_person(sequence.add_possessable(actor), controller)
+    # The blood of the hits on each player: hidden with their body, as CS2's own view of a player hit shows none.
+    for controller, by_layer in sorted(blood.items()):
+        actor = spawn(unreal.Actor, "blood on %s" % names.get(controller, controller), (0.0, 0.0, 0.0))
+        drawn += draw(actor, by_layer)
+        hide(sequence.add_possessable(actor), controller)
     drawn += first_person + draw(spawn(unreal.Actor, "shots", (0.0, 0.0, 0.0)), shared)
     lights = place_lights(sequence, replay, shots, end_frame, spawn, hide,
                           viewmodels if show_first_person else {}, show_first_person)

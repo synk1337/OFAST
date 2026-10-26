@@ -526,6 +526,7 @@ mod tests {
                 players: Vec::new(),
                 dropped: Vec::new(),
                 doors: Vec::new(),
+                props: Vec::new(),
                 grenades: Vec::new(),
                 fires: vec![fire],
             }],
