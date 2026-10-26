@@ -9,7 +9,11 @@
 //! each clip taken once (the context lists each clip once); a match under [`MIN_JACCARD`] is left out. Only the clips
 //! OFAST plays before its aim are traced ([`super::untraced`]): the recipe's decoded part ends at the aim, and
 //! co-occurrence alone once matched a shot clip's index (restarted with every bullet of a spray) to the flashed pose,
-//! played over the aim, that the same player held then. Clips OFAST never plays where CS2 does stay unknown.
+//! played over the aim, that the same player held then. The recipes' structure vets the matches: the two clips of a
+//! type 7 blend (a 1D blend between clips of one move) are both poses or both deltas, so while a match's clip is on
+//! the other side from its matched blend partners' clips on more of its blends' player-ticks than not, the match most
+//! at odds is dropped and the table made again without it ([`ClipTable::dropped`]). Clips OFAST never plays where CS2
+//! does stay unknown.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -28,6 +32,9 @@ pub const MIN_JACCARD: f32 = 0.3;
 pub struct ClipTable {
     /// Index → (clip path, Jaccard index of the match).
     pub clips: BTreeMap<u16, (String, f32)>,
+    /// Matches the blends' structure dropped ([`learn_clip_table`]), in order: (index, the clip it had); an index can
+    /// lose more than one.
+    pub dropped: Vec<(u16, String)>,
     /// Sample tasks in the round's recipes, and how many of them name an index in the table.
     pub samples: (usize, usize),
 }
@@ -115,6 +122,8 @@ pub fn learn_clip_table(
     let mut index_ticks: HashMap<u16, usize> = HashMap::new();
     let mut clip_ticks: HashMap<&str, usize> = HashMap::new();
     let mut samples: Vec<u16> = Vec::new();
+    // Index → the indices it is type-7-blended with directly, and how often.
+    let mut partners: Partners = HashMap::new();
     for sample in &track.samples {
         for p in &sample.players {
             let Some(decoded) = p
@@ -135,6 +144,7 @@ pub fn learn_clip_table(
                 .collect();
             let indices: BTreeSet<u16> = sampled.iter().copied().collect();
             samples.extend(sampled);
+            add_partners(&mut partners, &decoded);
             let Some(clips) = baked.get(&(sample.tick, p.controller)) else {
                 continue;
             };
@@ -159,20 +169,104 @@ pub fn learn_clip_table(
         .filter(|&(j, ..)| j >= MIN_JACCARD)
         .collect();
     matches.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
-    let mut table = ClipTable::default();
-    let mut taken: BTreeSet<&str> = BTreeSet::new();
-    for (j, index, clip) in matches {
-        if table.clips.contains_key(&index) || !taken.insert(clip) {
-            continue;
-        }
-        table.clips.insert(index, (clip.to_owned(), j));
-    }
+    let library = clips_by_path(sets, upper, graphs);
+    let mut table = assign(&matches, &partners, |clip| {
+        library.get(clip).map(|c| c.is_additive())
+    });
     let named = samples
         .iter()
         .filter(|i| table.clips.contains_key(i))
         .count();
     table.samples = (samples.len(), named);
     table
+}
+
+/// Index → the indices it is type-7-blended with directly, and how often ([`learn_clip_table`]).
+type Partners = HashMap<u16, HashMap<u16, usize>>;
+
+/// Adds the type 7 blends of `decoded` between two sampled indices to `partners`, both ways (an index blended with
+/// itself says nothing).
+fn add_partners(partners: &mut Partners, decoded: &Decoded) {
+    for (node, task) in decoded.topology.iter().zip(&decoded.tasks) {
+        let Task::Blend { kind: 7, .. } = task else {
+            continue;
+        };
+        let sample = |k: usize| match node
+            .inputs
+            .get(k)
+            .and_then(|&j| decoded.tasks.get(usize::from(j)))
+        {
+            Some(Task::Sample { resource, .. }) => Some(*resource),
+            _ => None,
+        };
+        if let (Some(a), Some(b)) = (sample(0), sample(1))
+            && a != b
+        {
+            *partners.entry(a).or_default().entry(b).or_default() += 1;
+            *partners.entry(b).or_default().entry(a).or_default() += 1;
+        }
+    }
+}
+
+/// The table from `matches` (Jaccard index, index, clip; strongest first) vetted by the blends' structure (module
+/// docs) with `partners` and `additive` (whether a clip is a delta): one to one, each index and clip taken once; then,
+/// while a match is more at odds with its partners than not, the one most at odds is dropped for good (ties: the
+/// weaker match) and the table made again without it, so its clip is free for any index and its index takes its next
+/// match. Each round drops a pair not dropped before, so it ends.
+fn assign(
+    matches: &[(f32, u16, &str)],
+    partners: &Partners,
+    additive: impl Fn(&str) -> Option<bool>,
+) -> ClipTable {
+    let mut banned: BTreeSet<(u16, &str)> = BTreeSet::new();
+    let mut dropped: Vec<(u16, String)> = Vec::new();
+    loop {
+        let mut chosen: BTreeMap<u16, (&str, f32)> = BTreeMap::new();
+        let mut taken: BTreeSet<&str> = BTreeSet::new();
+        for &(j, index, clip) in matches {
+            if !banned.contains(&(index, clip))
+                && !chosen.contains_key(&index)
+                && taken.insert(clip)
+            {
+                chosen.insert(index, (clip, j));
+            }
+        }
+        // Each match against its matched partners: the player-ticks of blends with a clip on its side and not.
+        let worst = chosen
+            .iter()
+            .filter_map(|(&index, &(clip, j))| {
+                let own = additive(clip)?;
+                let (agree, disagree) = partners.get(&index).into_iter().flatten().fold(
+                    (0usize, 0usize),
+                    |(agree, disagree), (&p, &n)| match chosen
+                        .get(&p)
+                        .and_then(|&(c, _)| additive(c))
+                    {
+                        Some(side) if side == own => (agree + n, disagree),
+                        Some(_) => (agree, disagree + n),
+                        None => (agree, disagree),
+                    },
+                );
+                (disagree > agree).then(|| (disagree - agree, j, index, clip))
+            })
+            .max_by(|a, b| a.0.cmp(&b.0).then(b.1.total_cmp(&a.1)).then(b.2.cmp(&a.2)));
+        match worst {
+            Some((_, _, index, clip)) => {
+                banned.insert((index, clip));
+                dropped.push((index, clip.to_owned()));
+            }
+            None => {
+                return ClipTable {
+                    clips: chosen
+                        .into_iter()
+                        .map(|(index, (clip, j))| (index, (clip.to_owned(), j)))
+                        .collect(),
+                    dropped,
+                    samples: (0, 0),
+                };
+            }
+        }
+    }
 }
 
 /// Where a demo's clips are: every clip a bake can sample, by path.
@@ -600,6 +694,100 @@ mod tests {
         assert!(player.pose(&missing).is_none());
         player.reset();
         assert!(player.pose(&read).is_none());
+    }
+
+    /// `pairs` (index, index, blends) both ways.
+    fn partners_of(pairs: &[(u16, u16, usize)]) -> Partners {
+        let mut partners: Partners = HashMap::new();
+        for &(x, y, n) in pairs {
+            partners.entry(x).or_default().insert(y, n);
+            partners.entry(y).or_default().insert(x, n);
+        }
+        partners
+    }
+
+    fn clips_of(table: &ClipTable) -> Vec<(u16, &str)> {
+        table
+            .clips
+            .iter()
+            .map(|(&i, (clip, _))| (i, clip.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn a_match_at_odds_with_its_blend_partners_is_dropped_and_the_table_made_again() {
+        // Deltas: "a", "b", "d". Index 3 takes the pose "c" first, but it is 1D-blended only with index 2, a delta:
+        // dropped, it takes the delta "d", and "c" goes to index 5, whose only match it is. Index 2 also blends with
+        // index 1, a delta like itself, more often: kept.
+        let matches = [
+            (0.9, 1, "a"),
+            (0.8, 2, "b"),
+            (0.7, 3, "c"),
+            (0.6, 5, "c"),
+            (0.5, 3, "d"),
+            (0.4, 4, "e"),
+        ];
+        let partners = partners_of(&[(1, 2, 10), (3, 2, 5)]);
+        let table = assign(&matches, &partners, |clip| {
+            Some(matches!(clip, "a" | "b" | "d"))
+        });
+        assert_eq!(
+            clips_of(&table),
+            [(1, "a"), (2, "b"), (3, "d"), (4, "e"), (5, "c")]
+        );
+        assert_eq!(table.dropped, [(3, "c".to_owned())]);
+    }
+
+    #[test]
+    fn of_two_matches_at_odds_only_the_weaker_is_dropped() {
+        // Index 1 (pose "a") and index 2 (delta "b") blend only with each other: the weaker, 2, is dropped and takes
+        // its next match, a pose like 1's; then nothing is at odds.
+        let matches = [(0.9, 1, "a"), (0.6, 2, "b"), (0.5, 2, "c")];
+        let partners = partners_of(&[(1, 2, 7)]);
+        let table = assign(&matches, &partners, |clip| Some(clip == "b"));
+        assert_eq!(clips_of(&table), [(1, "a"), (2, "c")]);
+        assert_eq!(table.dropped, [(2, "b".to_owned())]);
+    }
+
+    #[test]
+    fn partners_are_the_sampled_inputs_of_type_7_blends() {
+        // 5 and 6 blended by type 7; 7 with itself (nothing); a type 8 blend of two blends (nothing).
+        let recipe = decoded(
+            vec![
+                (1, vec![]),
+                (1, vec![]),
+                (7, vec![0, 1]),
+                (1, vec![]),
+                (1, vec![]),
+                (7, vec![3, 4]),
+                (8, vec![2, 5]),
+            ],
+            [5, 6]
+                .iter()
+                .map(|&resource| Task::Sample {
+                    resource,
+                    time: 0.0,
+                })
+                .chain([Task::Blend {
+                    kind: 7,
+                    weight: 0.5,
+                    mask: Vec::new(),
+                }])
+                .chain([7, 7].iter().map(|&resource| Task::Sample {
+                    resource,
+                    time: 0.0,
+                }))
+                .chain([7, 8].iter().map(|&kind| Task::Blend {
+                    kind,
+                    weight: 0.5,
+                    mask: Vec::new(),
+                }))
+                .collect(),
+        );
+        let mut partners: Partners = HashMap::new();
+        add_partners(&mut partners, &recipe);
+        add_partners(&mut partners, &recipe);
+        assert_eq!(partners, partners_of(&[(5, 6, 2)]));
     }
 
     #[test]

@@ -42,8 +42,9 @@ Next steps, in order:
 1. `demo::recipe` (done for the known types): read the slots and the dynamic bytes per player and tick, parse
    topologies and payloads, report what does not parse.
 2. The resource index → clip table, found for each demo (done: `anim::recipe::learn_clip_table`): each index
-   matched to the clip OFAST's own bake samples with it most exclusively, one clip per index (214 of round 5's 333
-   indices, naming 93.2 % of its sample tasks), only clips OFAST plays before its aim; and keep looking for the rule
+   matched to the clip OFAST's own bake samples with it most exclusively, one clip per index (213 of round 5's 333
+   indices, naming 93.2 % of its sample tasks), only clips OFAST plays before its aim, vetted by the blends'
+   structure (a 1D blend's two clips are both poses or both deltas); and keep looking for the rule
    (Valve's resource system order: load order, a hash table not matched yet). The match found a bake bug: OFAST
    played a gun's shot clip once per spray where CS2 restarts it with every bullet (`docs/formats/demo.md`).
 3. The remaining payloads (types 14, 15 and 5; under 2 % of the recipes have a clip after them), by the same

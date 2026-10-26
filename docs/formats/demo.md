@@ -571,7 +571,7 @@ together over ticks either is played), strongest matches first, each index and e
 lists each clip once), none under 0.3. The bake re-decides CS2's states its own way, so the match is statistical,
 but CS2's clips and OFAST's follow the same inputs: on round 5, 588 is `breathing` (Jaccard 0.88; its time runs at
 6.32 s a cycle, the clip lasts 6.33 s), 463 `idle_ak` (0.92, sampled at time 0 while 95 % of its ticks have an AK in
-hand), 159 `idle_karambit` (0.95), 321 `walk_n_rifle` (0.70). The table matches 214 of the round's 333 indices,
+hand), 159 `idle_karambit` (0.95), 321 `walk_n_rifle` (0.70). The table matches 213 of the round's 333 indices,
 which name 93.2 % of its sample tasks (`breathing` is 224 on the local match, another build). The indices left are
 clips OFAST does not play where CS2 does (0.53 s clips the bake has no counterpart for come out below 0.2); a match
 can still be wrong where OFAST plays one clip and CS2 another at the same moments. One was: 274 is `shoot_m4a1s`
@@ -582,6 +582,20 @@ while CS2 shows him spraying. The bake now starts the shot clip on every bullet 
 shot clips match far better (274 `shoot_m4a1s` 0.96, 754 `shoot_ak` 0.61 → 0.89, 517 `shoot_famas` 0.38 → 0.97).
 The trace also leaves out what OFAST plays over its aim (the flashed arms, `anim::untraced`): the recipe's decoded
 part ends at the aim, so no index it names can be such a clip.
+
+The recipes' structure then vets the matches (`ClipTable::dropped`): the two clips of a type 7 blend, a 1D blend
+between clips of one move (stand and crouch, two directions), are both poses or both deltas (additive), which every
+strong match keeps. Each match is weighed against its matched partners' clips by the player-ticks of their blends:
+while one is on the other side on more of them than not, the one most at odds (ties: the weaker match) is dropped for
+good and the table made again without it, so its clip is free for any index and its index takes its next match
+(`anim::recipe::assign`). On round 5 it drops 4: 574 (`crouch_ne_knife`, a pose, 1D-blended only with the delta
+`idle_c4`: an additive C4 idle, now unknown), 283 (`idle_crouch_c4`, a delta, 1D-blended only with the pose
+`planting_crouch`: now `turn_right_23_crouch_knife`, a pose, but likely the standing plant the bake rarely plays),
+734 (`jump_crouch_stand_rifle`, a pose among deltas: now `jump_additive_crouch_start_rifle`, whose 0.60 s its time
+steps match, the pose going to 40), and 210, which took the freed `idle_crouch_c4` and was as much at odds. On the
+local match's round 1 it drops 2: 248 (`draw_tactical`, blended only with weapon idles, which are deltas: now
+`idle_tactical`) and 93 (`inair_crouch_e_pistol`, blended only with an additive jump clip), and the table names
+93.3 % of the sample tasks instead of 92.4 %. The hitbox fit does not move (these clips rarely play at a hit).
 
 **Playing it** (`anim::recipe::RecipePlayer`, `ofast export-demo … --players` with `OFAST_RECIPE=1`): each tick's
 tasks are played in order: a sample is its clip at its time × its length (a sample the table does not know gives

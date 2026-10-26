@@ -338,8 +338,9 @@ pub fn export_players(
             round.graphs.as_ref(),
         );
         recipe_check = Some(format!(
-            "pose recipes: {} clips matched, naming {} of {} sample tasks",
+            "pose recipes: {} clips matched ({} matches the blends' structure dropped), naming {} of {} sample tasks",
             table.clips.len(),
+            table.dropped.len(),
             table.samples.1,
             table.samples.0
         ));

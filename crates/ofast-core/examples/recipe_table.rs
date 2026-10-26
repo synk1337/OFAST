@@ -12,8 +12,8 @@
 //! match and the match's Jaccard index and length. An index without a match lists the clips that could play with
 //! that weapon (the main graph's resources and its child graphs': a weapon's own graph,
 //! `worldmodel_gun.vnmgraph+ak47.vnmgraph`, plays only while that weapon is in hand, a locomotion graph only with its
-//! set), their own graph's first, ranked by how well their length fits. Last, the share of sample tasks the table
-//! names.
+//! set), their own graph's first, ranked by how well their length fits. Last, the matches the blends' structure
+//! dropped (and what the index has now) and the share of sample tasks the table names.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -243,6 +243,15 @@ fn main() {
             s.samples,
             s.steps.len(),
             implied.map_or("?".to_owned(), |i| format!("{i:.2} s")),
+        );
+    }
+    for (index, clip) in &table.dropped {
+        let now = table.path(*index).map_or("nothing".to_owned(), |p| {
+            p.rsplit('/').next().unwrap_or(p).to_owned()
+        });
+        println!(
+            "dropped by the blends' structure: {index} {} (now {now})",
+            clip.rsplit('/').next().unwrap_or(clip)
         );
     }
     println!(
