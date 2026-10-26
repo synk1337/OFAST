@@ -6,7 +6,8 @@
 //! 3. import the round (`tools/unreal/import_demo.py`): a Level Sequence in the map's level.
 //!
 //! The Unreal steps run `UnrealEditor-Cmd` without a window; its `OFAST:` log lines come to the UI as progress
-//! ([`PROGRESS_EVENT`]), and a step counts as done only once its script logged its last line. Exports go to the app's
+//! ([`PROGRESS_EVENT`]), and a step counts as done only once its script logged its last line. Imports draw nothing,
+//! so the editor runs without a renderer (`-nullrhi`): it takes no GPU memory. Exports go to the app's
 //! data folder (`exports/demos`, `exports/maps/<map>`) and are deleted once imported: they are made from the user's
 //! CS2 files and are big (a map: gigabytes).
 
@@ -316,6 +317,8 @@ fn run_script(
             "-stdout",
             "-FullStdOutLogOutput",
             "-NoSound",
+            // Nothing is drawn (no screenshots): no renderer, so the GPU's memory cannot run out.
+            "-nullrhi",
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
