@@ -2,7 +2,17 @@
 // feed, highlights: DemoPage.tsx).
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { DemoEntry, Environment, RoundSummary, environment, listDemos, sendToUnreal } from "./api";
+import {
+  CameraPlan,
+  DemoEntry,
+  Environment,
+  RoundSummary,
+  Sent,
+  environment,
+  listDemos,
+  sendToUnreal,
+  updateCameras,
+} from "./api";
 import { DemoPage } from "./DemoPage";
 import { SendBar, SendJob } from "./SendBar";
 
@@ -16,15 +26,23 @@ export function App() {
   const [job, setJob] = useState<SendJob | null>(null);
   const sending = job !== null && !job.sent && !job.error;
   const canSend = Boolean(env?.unreal && env?.project) && !sending;
-  const send = (demo: DemoEntry, round: RoundSummary) => {
+  // Counts the sendings done: the demo page looks up the rounds in Unreal again.
+  const [version, setVersion] = useState(0);
+  const run = (title: string, work: Promise<Sent>) => {
     const id = Date.now();
-    const title = `${demo.name}, round ${round.round}`;
     setJob({ id, title });
-    sendToUnreal(demo.path, round.start_tick).then(
-      (sent) => setJob({ id, title, sent }),
+    work.then(
+      (sent) => {
+        setJob({ id, title, sent });
+        setVersion((v) => v + 1);
+      },
       (e) => setJob({ id, title, error: String(e) }),
     );
   };
+  const send = (demo: DemoEntry, round: RoundSummary, plan: CameraPlan) =>
+    run(`${demo.name}, round ${round.round}`, sendToUnreal(demo.path, round.start_tick, plan));
+  const cameras = (demo: DemoEntry, round: RoundSummary, plan: CameraPlan) =>
+    run(`${demo.name}, round ${round.round}: cameras`, updateCameras(demo.path, round.start_tick, plan));
 
   useEffect(() => {
     environment().then(
@@ -71,7 +89,11 @@ export function App() {
           <DemoPage
             demo={opened}
             onBack={() => setOpened(null)}
-            onSend={canSend ? (round) => send(opened, round) : undefined}
+            unreal={{
+              send: canSend ? (round, plan) => send(opened, round, plan) : undefined,
+              updateCameras: canSend ? (round, plan) => cameras(opened, round, plan) : undefined,
+              version,
+            }}
           />
         </main>
       ) : (

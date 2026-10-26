@@ -14,12 +14,16 @@ builds the round in OFAST's Unreal project for you.
   Versions → 5.8)
 - A graphics card that runs Unreal Engine 5 with Lumen comfortably, and plenty of memory: Unreal alone can take
   15–20 GB while it imports a round
-- For now, the OFAST folder itself (OFAST has no installer yet), with Node.js 22 or newer and the Rust toolchain to
-  start the Studio — see [apps/studio/README.md](../../apps/studio/README.md)
+- For now, the OFAST folder itself, with Node.js 22 or newer and the Rust toolchain to start the Studio — see
+  [apps/studio/README.md](../../apps/studio/README.md)
+
+OFAST has no installer yet. Once it has one, the Studio comes as a setup program and none of the commands below are
+needed: no Node.js, Rust or Visual Studio, only Windows 10 or 11, CS2, Unreal Engine 5.8 and Microsoft Edge WebView2
+(already part of Windows 11; the setup program installs it if it is missing).
 
 ## Starting the Studio
 
-In the OFAST folder:
+Until then, in the OFAST folder:
 
 ```bash
 cd apps/studio
@@ -68,6 +72,34 @@ green) move through it. Click a kill in the feed to watch it from a few seconds 
 
 The first replay of a round reads the demo up to that round: a few seconds, more for late rounds of a long demo.
 
+## Choosing the cameras
+
+Each kill in the round's feed has a camera to its right. By default a round is cut kill by kill through each
+killer's eyes; for any kill you can pick instead, for its last 4 seconds:
+
+- **Victim's eyes**: what the victim saw coming;
+- **Behind the killer**: over his right shoulder, looking where he looks;
+- **Around the killer**: circling him slowly at chest height;
+- **Fixed camera**: a spot that sees both players at the kill, turning to follow them (when no spot sees both, a
+  kill through a wall, it is the camera behind the killer instead);
+- **From above**: high over the killer, looking down.
+
+These cameras keep out of walls: one that would end up behind a wall comes in front of it.
+
+Above the feed:
+
+- **First-person view**: *as played* is the player's view exactly as CS2 shows it; *smoothed* and *very smooth*
+  take the mouse's jitter out. At every shot the view is still exactly where the player aimed, so the crosshair stays
+  on the bullets.
+- **HLAE camera…**: a camera path you made in CS2 with HLAE (`mirv_campath save`, an `.xml` file) or a camera
+  recording (`mirv_camio`, a `.cam` file) of this demo. The round cuts to it for its whole time.
+- **Update cameras**: once the round is in Unreal, changes its cameras without sending it again (about a minute
+  instead of ten). Cuts you made by hand in Unreal are replaced; cameras you added stay. A round sent before this
+  version of OFAST has to be sent again first.
+
+In Unreal every camera can be cut to, also one you add yourself: each player's own camera hides only that player's
+body and shows only their arms and gun, so a camera outside the players always shows them right.
+
 ## Sending a round to Unreal
 
 **Send to Unreal** builds the round in OFAST's Unreal project. A bar at the bottom of the window follows it, and
@@ -78,7 +110,8 @@ you can keep browsing meanwhile. It:
 2. the first time a map is used, exports the map from CS2's files and imports it into Unreal (this can take a long
    time: Unreal compiles its shaders the first time);
 3. builds the round in Unreal: a **Level Sequence** in the map's level, with a camera through each player's eyes,
-   cuts to each killer, and markers for the freeze time's end, the kills, the bomb and the round's end.
+   the cameras you chose, the cuts between them, and markers for the freeze time's end, the kills, the bomb and the
+   round's end.
 
 Close Unreal before sending (the import needs the project to itself), and if you can, close CS2 too: Unreal needs a
 lot of memory. A round takes about ten minutes the first time.

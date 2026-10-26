@@ -6,7 +6,9 @@
 //! ofast export-map de_mirage --out exports/de_mirage   (--bake-model-tints: tints in the textures, for Blender)
 //! ofast demo-rounds match.dem                      a demo's rounds and their ticks
 //! ofast export-demo match.dem --round 3 --out exports/demos   one round as a replay file for Unreal
-//!                                       (--players: and the players as animated agents with their weapons)
+//!                                       (--players: and the players as animated agents with their weapons;
+//!                                        --shots 152112:orbit --smooth 0.5 --hlae path.xml: its cameras)
+//! ofast camera-to-hlae round.cameras.json --camera 0 --out shot.xml   a camera as an HLAE campath (or .cam)
 //! ofast vpk verify                                 check CS2's archive checksums
 //! ```
 //!
@@ -17,9 +19,12 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand};
+use ofast_core::camera::hlae::{Campath, write_cam, write_campath};
+use ofast_core::camera::shots::ShotKind;
 use ofast_core::content::Content;
 use ofast_core::demo::players::{list_rounds, track_round};
 use ofast_core::export::ExportOptions;
+use ofast_core::export::cameras::{CameraPlan, HLAE_ASPECT, export_cameras, read_cameras};
 use ofast_core::export::gltf::{ExportReport, export_model_with_clips};
 use ofast_core::export::map::{SkyboxExport, export_installed_map};
 use ofast_core::export::players::export_players;
@@ -96,6 +101,31 @@ enum Command {
         /// (agent and weapon models, animation clips).
         #[arg(long)]
         players: bool,
+        /// Kills shown through another camera than the killer's eyes: `TICK:KIND,…` (the kill's tick, from the
+        /// replay file's `kills`), KIND one of pov, victim, behind, orbit, tripod, above. Written to
+        /// `<demo>_r<round>.cameras.json` with every player's eyes and the camera cuts.
+        #[arg(long, value_delimiter = ',')]
+        shots: Vec<String>,
+        /// First-person smoothing, 0 (none) to 1 (strong); the view stays on the aim at every shot.
+        #[arg(long, default_value_t = 0.0)]
+        smooth: f64,
+        /// An HLAE camera file to cut to over its time in the round: a `mirv_campath` path (`.xml`) or a `mirv_camio`
+        /// recording (`.cam`). Repeatable.
+        #[arg(long)]
+        hlae: Vec<PathBuf>,
+    },
+    /// Write one camera of a cameras file (`export-demo`'s, or one written from Unreal by
+    /// `tools/unreal/export_camera.py`) as an HLAE file: `.xml` a `mirv_campath` path, `.cam` a `mirv_camio`
+    /// recording.
+    CameraToHlae {
+        /// The cameras file.
+        cameras: PathBuf,
+        /// Which camera: its number in the file (from 0) or its name.
+        #[arg(long, default_value = "0")]
+        camera: String,
+        /// The HLAE file to write (`.xml` or `.cam`).
+        #[arg(long, short)]
+        out: PathBuf,
     },
     /// Archive tools.
     Vpk {
@@ -156,6 +186,30 @@ fn print_report(report: &ExportReport, started: Instant) {
     }
 }
 
+/// The cameras `export-demo` was asked for: `--shots TICK:KIND,…`, `--smooth`, `--hlae`.
+fn camera_plan(shots: &[String], smoothing: f64, hlae: &[PathBuf]) -> Result<CameraPlan, String> {
+    let mut plan = CameraPlan {
+        smoothing,
+        hlae: hlae.to_vec(),
+        ..CameraPlan::default()
+    };
+    for shot in shots {
+        let (tick, kind) = shot
+            .split_once(':')
+            .ok_or_else(|| format!("--shots {shot:?}: TICK:KIND expected"))?;
+        let tick: u32 = tick
+            .trim()
+            .parse()
+            .map_err(|_| format!("--shots {shot:?}: {tick:?} is not a tick"))?;
+        let kind = ShotKind::parse(kind.trim()).ok_or_else(|| {
+            let kinds: Vec<&str> = ShotKind::ALL.iter().map(|k| k.name()).collect();
+            format!("--shots {shot:?}: {kind:?} is not one of {kinds:?}")
+        })?;
+        plan.shots.insert(tick, kind);
+    }
+    Ok(plan)
+}
+
 fn run(cli: Cli) -> Result<(), String> {
     let started = Instant::now();
     // Demos are plain files: no CS2 install needed.
@@ -175,7 +229,11 @@ fn run(cli: Cli) -> Result<(), String> {
             round,
             out,
             players,
+            shots,
+            smooth,
+            hlae,
         } => {
+            let plan = camera_plan(shots, *smooth, hlae)?;
             let data = std::fs::read(demo).map_err(|e| format!("{}: {e}", demo.display()))?;
             let name = demo.file_stem().and_then(|s| s.to_str()).unwrap_or("demo");
             let track = track_round(&data, *round).map_err(|e| e.to_string())?;
@@ -193,18 +251,36 @@ fn run(cli: Cli) -> Result<(), String> {
             for warning in &report.warnings {
                 println!("warning: {warning}");
             }
-            if *players {
+            // With the players, CS2's content: the map's archive too, for its collision (the dead fall on it, the
+            // shot cameras keep out of walls); the game's alone if it is missing.
+            let content = if *players {
                 let install = match &cli.cs2 {
                     Some(root) => Cs2Install::from_root(root),
                     None => Cs2Install::locate(),
                 }
                 .ok_or("CS2 not found — pass --cs2 <folder> or set OFAST_CS2_DIR")?;
-                // The map's archive too, for its collision (the dead fall on it); the game's alone if it is missing.
-                let content = Content::for_map(&install, &track.map_name)
-                    .or_else(|_| Content::game(&install))
-                    .map_err(|e| e.to_string())?;
+                Some(
+                    Content::for_map(&install, &track.map_name)
+                        .or_else(|_| Content::game(&install))
+                        .map_err(|e| e.to_string())?,
+                )
+            } else {
+                None
+            };
+            let cameras = export_cameras(content.as_ref(), &track, &plan, name, out)
+                .map_err(|e| e.to_string())?;
+            println!(
+                "wrote {} ({} cameras, {} cuts)",
+                cameras.path.display(),
+                cameras.cameras,
+                cameras.cuts
+            );
+            for warning in &cameras.warnings {
+                println!("warning: {warning}");
+            }
+            if let Some(content) = &content {
                 let report =
-                    export_players(&content, &track, name, out).map_err(|e| e.to_string())?;
+                    export_players(content, &track, name, out).map_err(|e| e.to_string())?;
                 for file in &report.files {
                     println!("wrote {}", file.display());
                 }
@@ -231,6 +307,39 @@ fn run(cli: Cli) -> Result<(), String> {
             }
             return Ok(());
         }
+        Command::CameraToHlae {
+            cameras,
+            camera,
+            out,
+        } => {
+            let text = std::fs::read_to_string(cameras)
+                .map_err(|e| format!("{}: {e}", cameras.display()))?;
+            let (clock, list) =
+                read_cameras(&text).map_err(|e| format!("{}: {e}", cameras.display()))?;
+            let chosen = camera
+                .parse::<usize>()
+                .ok()
+                .and_then(|i| list.get(i))
+                .or_else(|| list.iter().find(|c| &c.name == camera))
+                .ok_or_else(|| {
+                    let names: Vec<&str> = list.iter().map(|c| c.name.as_str()).collect();
+                    format!("no camera {camera:?} (the file has {names:?})")
+                })?;
+            let extension = out.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let written = match extension.to_ascii_lowercase().as_str() {
+                "cam" => write_cam(&chosen.keys, clock, HLAE_ASPECT),
+                "xml" => write_campath(&Campath::from_keys(&chosen.keys, clock)),
+                _ => return Err(format!("{}: .xml or .cam expected", out.display())),
+            };
+            std::fs::write(out, written).map_err(|e| format!("{}: {e}", out.display()))?;
+            println!(
+                "wrote {} ({}: {} keys)",
+                out.display(),
+                chosen.name,
+                chosen.keys.len()
+            );
+            return Ok(());
+        }
         _ => {}
     }
 
@@ -241,7 +350,9 @@ fn run(cli: Cli) -> Result<(), String> {
     .ok_or("CS2 not found — pass --cs2 <folder> or set OFAST_CS2_DIR")?;
 
     match cli.command {
-        Command::DemoRounds { .. } | Command::ExportDemo { .. } => unreachable!("handled above"),
+        Command::DemoRounds { .. } | Command::ExportDemo { .. } | Command::CameraToHlae { .. } => {
+            unreachable!("handled above")
+        }
         Command::Find { text } => {
             let content = Content::game(&install).map_err(|e| e.to_string())?;
             for vpk in content.archives() {

@@ -379,15 +379,16 @@ def key_light(place, light, keys, end_frame):
             previous = (frame, value)
 
 
-def place_lights(sequence, replay, shots, end_frame, spawn, hide, viewmodels, show_first_person):
+def place_lights(sequence, replay, shots, end_frame, spawn, light, viewmodels):
     """A muzzle light per shooter (light_frames): movable (a location track on a light that is not is refused in a
     game world, which Movie Render Queue renders), its location keyed (constant) at each shot's muzzle, its intensity
-    pulsed; hidden with the shooter's body (`hide`: see place_shots). In the shooter's own view their first-person
-    flash has its own light, as CS2's `_fps` system has (its third-person child's `fakelight`): a light component on
-    their viewmodel actor (`viewmodels`), keyed at each shot's `view_muzzle` there, shown only with the viewmodel
-    (`show_first_person(binding, controller)` keys a binding's visibility as the viewmodel's). CS2's lights the door
-    edge in front of YEKINDAR's AK one tick after his shot (de_nuke round 5, tick 37950); the third-person light, low
-    and to the right of his eyes, lit the floor and door frame beside him orange instead. Returns the number of
+    pulsed. In the shooter's own view their first-person flash has its own light, as CS2's `_fps` system has (its
+    third-person child's `fakelight`): a light component on their viewmodel actor (`viewmodels`), keyed at each shot's
+    `view_muzzle` there. A light cannot be hidden in one camera only: `light(owner, binding, controller, first_person,
+    component=False)` keys which of the two shows by the camera cuts (the viewmodel's inside the cuts through the
+    shooter's eyes, the other outside them) and tags it for later camera changes (replay_cameras). CS2's lights the
+    door edge in front of YEKINDAR's AK one tick after his shot (de_nuke round 5, tick 37950); the third-person light,
+    low and to the right of his eyes, lit the floor and door frame beside him orange instead. Returns the number of
     lights."""
     tick0 = replay["start_tick"]
     names = {p["controller"]: p["name"] for p in replay["players"]}
@@ -396,15 +397,15 @@ def place_lights(sequence, replay, shots, end_frame, spawn, hide, viewmodels, sh
         first = next((p for _, p, _ in keys if p), None)
         if first is None:
             continue
-        light = grenade_effects.spawn_light(spawn, "muzzle light %s" % names.get(controller, controller), first,
-                                            MUZZLE_LIGHT["color"], MUZZLE_LIGHT["radius"])
-        component = light.get_editor_property("light_component")
+        light_actor = grenade_effects.spawn_light(spawn, "muzzle light %s" % names.get(controller, controller),
+                                                  first, MUZZLE_LIGHT["color"], MUZZLE_LIGHT["radius"])
+        component = light_actor.get_editor_property("light_component")
         component.set_mobility(unreal.ComponentMobility.MOVABLE)
         component.set_editor_property("cast_shadows", False)
         # The actor's binding (its location), then its light component's (its intensity), as intensity_channel does.
-        binding = sequence.add_possessable(light)
+        binding = sequence.add_possessable(light_actor)
         key_light(binding, sequence.add_possessable(component), keys, end_frame)
-        hide(binding, controller)
+        light(light_actor, binding, controller, False)
     view_lights = light_frames(shots, tick0, end_frame, "view_muzzle")
     for controller, keys in view_lights.items():
         if controller not in viewmodels:
@@ -418,7 +419,7 @@ def place_lights(sequence, replay, shots, end_frame, spawn, hide, viewmodels, sh
         component.set_editor_property("cast_shadows", False)
         binding = sequence.add_possessable(component)
         key_light(binding, binding, keys, end_frame)
-        show_first_person(binding, controller)
+        light(component, binding, controller, True, component=True)
     return len(lights) + sum(1 for c in view_lights if c in viewmodels)
 
 
@@ -557,17 +558,17 @@ def place_holes(shots, earlier, instances, spawn):
     return placed
 
 
-def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, viewmodels=None,
-                show_first_person=None):
+def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, viewmodels=None, show_first_person=None,
+                light=None):
     """Everything above for a round, from the agents manifest `agents` (its `shots`, `earlier_holes`, `effects` and
     `decals`; without them: nothing): an actor per shooter for their muzzle flashes and tracers, hidden with their
-    body (`hide(binding, controller)` keys the body's visibility on a sequence binding: not while the camera looks
-    through their own eyes), their first-person flashes on their viewmodel actor (`viewmodels`: controller -> actor,
-    from import_demo.spawn_viewmodel), an actor per shooter with a viewmodel for their tracers as their own view
-    shows them, and their muzzle lights (place_lights; `show_first_person(binding, controller)` keys a binding's
-    visibility as their viewmodel's), an actor per player hit for the blood of the hits on them (hidden with their
-    body), one actor ("shots") for the impacts, the blood of hits on no known player and the tracers seen in every
-    view, and the bullet holes. Returns the number of shots."""
+    body (`hide(actor, binding, controller)`: shown while the body is, and not in their own camera), their
+    first-person flashes on their viewmodel actor (`viewmodels`: controller -> actor, from
+    import_demo.spawn_viewmodel), an actor per shooter with a viewmodel for their tracers as their own view shows them
+    (`show_first_person(actor, binding, controller)`: shown as their viewmodel is, in their own camera only), their
+    muzzle lights (place_lights, with `light`), an actor per player hit for the blood of the hits on them (hidden with
+    their body), one actor ("shots") for the impacts, the blood of hits on no known player and the tracers seen in
+    every view, and the bullet holes. Returns the number of shots."""
     shots = agents.get("shots", [])
     effects = agents.get("effects", [])
     if not shots:
@@ -608,7 +609,7 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, v
         actor = spawn(unreal.Actor, "muzzle flashes and tracers %s" % names.get(controller, controller),
                       (0.0, 0.0, 0.0))
         drawn += draw(actor, by_layer)
-        hide(sequence.add_possessable(actor), controller)
+        hide(actor, sequence.add_possessable(actor), controller)
     viewmodels = viewmodels or {}
     first_person = 0
     for controller, by_layer in sorted(views.items()):
@@ -619,15 +620,15 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, v
     for controller, by_layer in sorted(own.items()):
         actor = spawn(unreal.Actor, "own tracers %s" % names.get(controller, controller), (0.0, 0.0, 0.0))
         first_person += draw(actor, by_layer)
-        show_first_person(sequence.add_possessable(actor), controller)
+        show_first_person(actor, sequence.add_possessable(actor), controller)
     # The blood of the hits on each player: hidden with their body, as CS2's own view of a player hit shows none.
     for controller, by_layer in sorted(blood.items()):
         actor = spawn(unreal.Actor, "blood on %s" % names.get(controller, controller), (0.0, 0.0, 0.0))
         drawn += draw(actor, by_layer)
-        hide(sequence.add_possessable(actor), controller)
+        hide(actor, sequence.add_possessable(actor), controller)
     drawn += first_person + draw(spawn(unreal.Actor, "shots", (0.0, 0.0, 0.0)), shared)
-    lights = place_lights(sequence, replay, shots, end_frame, spawn, hide,
-                          viewmodels if show_first_person else {}, show_first_person)
+    lights = place_lights(sequence, replay, shots, end_frame, spawn, light,
+                          viewmodels if show_first_person else {}) if light else 0
     holes = place_holes(shots, agents.get("earlier_holes", []), hole_instances(replay_path, agents.get("decals", {})),
                         spawn)
     log("shots: %d (%d sprite slots, %d of them first person; %d muzzle lights, %d bullet holes)"

@@ -308,6 +308,44 @@ player and round.
   flashbangs, muzzle flashes, tracers, impacts, blood and holes. When the rework starts, each effect's gaps get
   listed against CS2, side by side. Scheduled last (2026-10-26), after the Studio app.
 
+## M7 progress
+
+- [x] **Design** ([decision 021](decisions/021-cameras.md)): every camera of a round made in Rust (`camera`,
+  `export::cameras`) and written to the round's cameras file ([cameras.md](formats/cameras.md)); in Unreal, each
+  player's own camera hides that player's body by owner (`bOwnerNoSee`, `bOnlyOwnerSee`), so any camera can be cut
+  to, one the user adds included.
+- [x] **First-person smoothing**: a Whittaker smoother on the eye angles, pinned to the original aim on the ticks
+  around each shot and kill (the crosshair stays on the bullets); the recoil on the view moved to Rust with it.
+- [x] **Shot cameras** for a kill's last 4 seconds: behind the killer, around him, a fixed camera that sees both
+  players, from above, or the victim's eyes; kept out of walls with the map's collision.
+- [x] **HLAE**: `mirv_campath` XML and `mirv_camio` `.cam` read and written; a campath sampled with HLAE's own
+  interpolation (cubic splines at rest at both ends, McEnnan's quaternion spline); times from CS2's game clock
+  (`RoundTrack::server_tick_offset`). `ofast export-demo --hlae`, `ofast camera-to-hlae`.
+- [x] **Studio**: a camera per kill in the round's feed, first-person smoothing, HLAE files, "Update cameras" for a
+  round already in Unreal (`import_cameras.py`: a minute instead of a full import).
+- [x] **Back to HLAE**: a camera of a built round written back from Unreal as Sequencer plays it
+  (`export_camera.py`), then `ofast camera-to-hlae`. Checked on de_dust2 round 17 (2026-10-26): a fixed camera
+  read back matches its exported keys to 0.0001 units and degrees on all 288 ticks.
+- [x] **Checked in Unreal** (de_dust2 round 17, 2026-10-26): every shot kind through screenshots, owner visibility
+  after the level was saved and loaded again (through XANTARES's eyes his body stays hidden), "Update cameras" from
+  the Studio (6 shot cameras replaced by 2, 12 cuts, the eyes smoothed, 16 muzzle lights found by their tags).
+- [ ] A campath and a `.cam` made in CS2 with HLAE, imported (HLAE is not installed here); a camera made in Unreal
+  played in CS2 with HLAE.
+- [ ] Editing in Unreal: a guide to making and keying one's own camera in Sequencer.
+- [ ] Shots in tight places: a camera behind the killer pulled in by close walls (a stairwell: 20 – 30 units) should
+  rise over his head instead; a fixed camera can frame its killer's back up close early in its shot.
+
+## Order from here
+
+A first pass on each milestone left, M7 to M10, then a second pass through every milestone to fix, tweak and
+polish (2026-10-26). That pass includes the effects rework and the installer:
+
+- [ ] **Installer**: the Studio as a setup program (`tauri build`, NSIS), made by CI on version tags. It carries
+  OFAST's Unreal scripts (`tools/unreal`) and a template of its Unreal project (Python only: no C++ to compile), and
+  makes the user's own project in a writable folder on first start (the Studio finds both in the source folder
+  today). What users need then: Windows 10 or 11, CS2, Unreal Engine 5.8 and WebView2 (part of Windows 11; the
+  setup program installs it when missing). No Node.js, Rust or Visual Studio.
+
 ## Hard problems we know about
 
 - **Player animation.** Demos contain no skeleton poses, but they do contain the server's pose recipe: the clips,

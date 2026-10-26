@@ -23,6 +23,8 @@ pub fn run() {
             commands::radar_round,
             commands::radar_image,
             unreal::send_to_unreal,
+            unreal::update_cameras,
+            unreal::sent_rounds,
             unreal::open_in_unreal,
         ])
         .build(tauri::generate_context!())

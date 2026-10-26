@@ -17,8 +17,10 @@
 //! - [`shots`]: each bullet of a round traced through the map, walls and players, with what it met.
 //! - [`brass`]: the cases the guns throw out, flown as CS2's casing particles fly.
 //! - [`punch`]: how far recoil turns each player's first-person camera and viewmodel off their eye angles.
+//! - [`cameras`]: a round's cameras: every player's eyes, the shot cameras of its kills, HLAE cameras, the cuts.
 
 pub mod brass;
+pub mod cameras;
 pub mod deaths;
 pub mod effects;
 mod environment;
@@ -94,4 +96,7 @@ pub enum ExportError {
     /// A character (agent with weapons and gloves) could not be put together.
     #[error("character: {0}")]
     Character(String),
+    /// A camera file (HLAE's) could not be read.
+    #[error("camera: {0}")]
+    Camera(String),
 }

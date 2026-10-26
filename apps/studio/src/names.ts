@@ -1,5 +1,5 @@
 // Names for people: weapons as the game's kill feed shows them, highlights, round ends.
-import type { Highlight, KillTag, RoundEnd, RoundSummary, WeaponClass } from "./api";
+import type { Highlight, KillTag, RoundEnd, RoundSummary, ShotKind, WeaponClass } from "./api";
 
 /** The game's own names for the weapons of the kill feed (`player_death`'s `weapon` key). */
 const WEAPONS: Record<string, string> = {
@@ -135,3 +135,20 @@ export function outcome(round: RoundSummary, winnerName: string): string {
   const reason = roundEndName(round.reason);
   return reason ? `${winnerName} won: ${reason}` : `${winnerName} won`;
 }
+
+/** The cameras a kill can be seen through (`camera::shots`), in the order offered. */
+export const SHOTS: [ShotKind, string][] = [
+  ["pov", "Killer's eyes"],
+  ["victim", "Victim's eyes"],
+  ["behind", "Behind the killer"],
+  ["orbit", "Around the killer"],
+  ["tripod", "Fixed camera"],
+  ["above", "From above"],
+];
+
+/** First-person smoothing strengths (`camera::smooth`). */
+export const SMOOTHING: [number, string][] = [
+  [0, "as played"],
+  [0.35, "smoothed"],
+  [0.7, "very smooth"],
+];

@@ -155,7 +155,22 @@ export const radarImage = (map: string, section: string) => invoke<ArrayBuffer>(
 
 // "Send to Unreal" (`unreal.rs`).
 
-export type SendStep = "round" | "map_export" | "map_import" | "round_import";
+export type SendStep = "round" | "map_export" | "map_import" | "round_import" | "cameras";
+
+/** Which camera a kill is shown through (`camera::shots::ShotKind`). */
+export type ShotKind = "pov" | "victim" | "behind" | "orbit" | "tripod" | "above";
+
+/** A round's cameras as the user picked them (`export::cameras::CameraPlan`). */
+export interface CameraPlan {
+  /** By kill tick: the kills not shown through the killer's eyes. */
+  shots: Record<number, ShotKind>;
+  /** First-person smoothing, 0 (none) to 1 (strong). */
+  smoothing: number;
+  /** HLAE camera files (`mirv_campath` .xml, `mirv_camio` .cam). */
+  hlae: string[];
+}
+
+export const NO_PLAN: CameraPlan = { shots: {}, smoothing: 0, hlae: [] };
 
 /** One line of a sending's progress. */
 export interface SendProgress {
@@ -173,7 +188,12 @@ export interface Sent {
   sequence: string;
 }
 
-export const sendToUnreal = (path: string, startTick: number) => invoke<Sent>("send_to_unreal", { path, startTick });
+export const sendToUnreal = (path: string, startTick: number, plan: CameraPlan) =>
+  invoke<Sent>("send_to_unreal", { path, startTick, plan });
+export const updateCameras = (path: string, startTick: number, plan: CameraPlan) =>
+  invoke<Sent>("update_cameras", { path, startTick, plan });
+/** The round numbers of a demo already in OFAST's Unreal project. */
+export const sentRounds = (path: string) => invoke<number[]>("sent_rounds", { path });
 export const openInUnreal = (sent: Sent) => invoke<void>("open_in_unreal", { ...sent });
 export const onSendProgress = (handler: (progress: SendProgress) => void) =>
   listen<SendProgress>("unreal-progress", (event) => handler(event.payload));

@@ -15,9 +15,12 @@ What it does so far:
 - Replays a round in 2D on the map's radar (CS2's own radar image and overview): players, deaths, grenades,
   smokes and fires, with play / pause, speed and a timeline; a kill clicked in the feed plays from a few seconds
   before it
-- Sends a round to OFAST's Unreal project ("Send to Unreal": the round exported with its players, the map exported
-  and imported the first time, the round built as a Level Sequence in the map's level, with progress), then opens it
-  ("Open in Unreal": the level, and the sequence in Sequencer)
+- Picks each kill's camera (the killer's or the victim's eyes, behind, around or above the killer, a fixed camera),
+  first-person smoothing and HLAE camera files for a round (`docs/formats/cameras.md`)
+- Sends a round to OFAST's Unreal project ("Send to Unreal": the round exported with its players and cameras, the
+  map exported and imported the first time, the round built as a Level Sequence in the map's level, with progress),
+  changes the cameras of a round already there ("Update cameras"), then opens it ("Open in Unreal": the level, and
+  the sequence in Sequencer)
 
 How to use it, for beginners: [docs/user-guide](../../docs/user-guide/README.md).
 

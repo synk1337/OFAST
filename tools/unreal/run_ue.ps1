@@ -20,6 +20,13 @@ param(
     [string]$Try = "",
     # For import_demo.py: the replay file written by `ofast export-demo`.
     [string]$Replay = "",
+    # For import_cameras.py: the round's cameras file written by `ofast export-demo`; for export_camera.py, the file to
+    # write.
+    [string]$Cameras = "",
+    # For export_camera.py and shoot_sequence.py: the round's sequence, /Game/OFAST/Replays/<demo>_r<round>.
+    [string]$Sequence = "",
+    # For shoot_sequence.py: demo ticks to screenshot, "153200,154050".
+    [string]$Ticks = "",
     # For import_demo.py: extra screenshots through players' eyes, "tick:controller,tick:controller".
     [string]$PovShots = "",
     # For import_demo.py: close-ups of players, "tick:controller,tick:controller".
@@ -46,6 +53,9 @@ $env:OFAST_ONLY = $Only
 # A .json file is resolved here: Unreal changes its working directory at startup, so relative paths would break.
 $env:OFAST_TRY = if ($Try.ToLower().EndsWith(".json")) { & $resolve $Try } else { $Try }
 $env:OFAST_REPLAY = if ($Replay) { & $resolve $Replay } else { "" }
+$env:OFAST_CAMERAS = if ($Cameras) { & $resolve $Cameras } else { "" }
+$env:OFAST_SEQUENCE = $Sequence
+$env:OFAST_TICKS = $Ticks
 $env:OFAST_POV_SHOTS = $PovShots
 $env:OFAST_CLOSE_SHOTS = $CloseShots
 $env:OFAST_VIEW_SHOTS = $ViewShots

@@ -26,15 +26,15 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
   baked animation (`player_<controller>`: body, weapons in hand and holstered), its feet on the demo's positions and
   turned along the body yaw; otherwise a proxy (a capsule-sized cylinder in team colours: CT blue, T orange, with a
   "visor" at the eyes showing where the player faces) turned along the eye yaw. Actor label "CT <name>" /
-  "T <name>"; hidden while the camera looks through the player's own eyes, and while dead unless the export baked
-  the death as a ragdoll (the agents manifest lists the ticks of those deaths under `ragdolls`: the body falls and
-  stays);
-- per player: a first-person camera at the eye (feet + the networked eye height), aimed along pitch and yaw, with
-  CS2's default field of view (90 degrees at 4:3);
+  "T <name>"; not seen by the player's own first-person camera (decision 021: that camera owns the body, which is
+  bOwnerNoSee, so any camera a cut uses shows it right), and hidden while dead unless the export baked the death as a
+  ragdoll (the agents manifest lists the ticks of those deaths under `ragdolls`: the body falls and stays);
+- per player: a first-person camera ("POV <name>") at the eyes, aimed as the cameras file has it (the eye angles
+  turned by recoil, smoothed when the export was asked to), with CS2's default field of view (90 degrees at 4:3);
 - per player, when the export wrote their first-person view (the agents manifest's `viewmodels`): the viewmodel
   (arms and the weapon in hand, `viewmodel_<controller>` baked from the demo's weapon states) on that camera at the
-  player's own viewmodel offsets, drawn with Unreal's first-person rendering at the player's viewmodel FOV, shown
-  only while the camera looks through the player's eyes;
+  player's own viewmodel offsets, drawn with Unreal's first-person rendering at the player's viewmodel FOV, seen
+  only by that camera (bOnlyOwnerSee);
 - per stretch a weapon lay in the world (the replay's `dropped_weapons`: a dead player's gun, a weapon dropped for
   a teammate), its model (the agents manifest's `dropped_weapons` glTFs) moved as the demo has it, with its full
   rotation (Rotator(roll=roll, pitch=-pitch, yaw=-yaw)), shown from the tick it was let go to the tick before it
@@ -57,8 +57,10 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
   (shot_effects.py);
 - per shot of a gun that throws one, its case (the agents manifest's `brass` and `cases`): flown in the world from
   the agent's gun, and on the shooter's viewmodel for their own view (place_brass);
-- a camera cut track that follows the killer of each kill in turn (from the previous kill until half a second after
-  this one), the way fragmovie editors cut a round;
+- the round's cameras from its cameras file (`<demo>_r<round>.cameras.json` next to the replay, written by
+  `ofast export-demo`; replay_cameras.py): the shot cameras chosen for its kills and HLAE cameras, as CineCameraActors,
+  and the camera cut track (by default each kill in turn through its killer's eyes, from the previous kill until half
+  a second after this one, the way fragmovie editors cut a round);
 - marked frames: freeze time end, every kill ("attacker > victim (weapon, HS)") and bomb events.
 
 Conversions are the map import's: Source (x, y, z) inches -> Unreal (x, -y, z) x 2.54 cm, angles (pitch, yaw) ->
@@ -66,7 +68,6 @@ Rotator(pitch=-pitch, yaw=-yaw). Keys that a straight line through their neighbo
 (standing still, running straight), which keeps the sequence light; the tolerance is far below what shows.
 """
 
-import bisect
 import json
 import math
 import os
@@ -80,8 +81,12 @@ import unreal
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gltf_specular  # noqa: E402
 import grenade_effects  # noqa: E402
+import replay_cameras  # noqa: E402
 import shot_effects  # noqa: E402
 import smoke_volumes  # noqa: E402
+from replay_cameras import (  # noqa: E402
+    ANGLE_TOLERANCE_DEG, POSITION_TOLERANCE_CM, TAG, UNITS_TO_CM, channels_by_name, key_visibility, reduce_keys,
+    spawn_tagged, to_unreal, unwrap)
 
 REPLAY_PATH = os.environ["OFAST_REPLAY"]
 SHOT_DIR = os.environ.get("OFAST_SHOT", "")
@@ -92,18 +97,13 @@ CLOSE_SHOTS = [tuple(int(v) for v in item.split(":"))
 VIEW_SHOTS = [(int(item.split(":")[0]),) + tuple(float(v) for v in item.split(":")[1:6])
               for item in os.environ.get("OFAST_VIEW_SHOTS", "").split(",") if item.count(":") == 5]
 WIDTH, HEIGHT = 1920, 1080
-TAG = unreal.Name("OFAST_replay")
-UNITS_TO_CM = 2.54
 # Player proxy: CS2's player hull is 32 x 32 x 72 units; the engine cylinder is 100 cm with its pivot in the middle.
 HULL_SCALE = (32 * UNITS_TO_CM / 100, 32 * UNITS_TO_CM / 100, 72 * UNITS_TO_CM / 100)
 HULL_HALF_HEIGHT_CM = 36 * UNITS_TO_CM
 TEAM_COLOURS = {2: (1.0, 0.45, 0.05), 3: (0.1, 0.35, 1.0)}  # T orange, CT blue
 TEAM_NAMES = {2: "T", 3: "CT"}
 # CS2's default field of view: 90 degrees horizontally at 4:3, i.e. 106.26 degrees at 16:9 (as import_map.py).
-HFOV_16_9 = math.degrees(2 * math.atan(math.tan(math.radians(45)) * (16 / 9) / (4 / 3)))
-# Key reduction tolerances: 0.2 cm and 0.1 degree.
-POSITION_TOLERANCE_CM = 0.2
-ANGLE_TOLERANCE_DEG = 0.1
+HFOV_16_9 = replay_cameras.hfov_16_9(90.0)
 # A map actor is the demo's door when its origin is within this of the door's closed position (its hinge).
 DOOR_MATCH_CM = 2.0
 # A map actor is the demo's physics prop when its origin is within this of the prop's first position.
@@ -112,8 +112,6 @@ PROP_MATCH_CM = 2.0
 # last tick (broken_doors; seen: 9 - 83 units, 1 tick).
 DOOR_BLAST_REACH = 128.0
 DOOR_BLAST_TICKS = 4
-# Camera cuts: how long after a kill the killer's view stays on.
-CUT_AFTER_KILL_S = 0.5
 # How long a case thrown in the world is hidden in its shooter's own view, where the first-person case flies instead
 # (export::brass::VIEW_LIFE): after that it lies in the world for every view.
 CASE_VIEW_FLIGHT_S = 1.0
@@ -136,21 +134,6 @@ def log(message):
     unreal.log("OFAST: " + message)
 
 
-def to_unreal(position):
-    x, y, z = position
-    return (x * UNITS_TO_CM, -y * UNITS_TO_CM, z * UNITS_TO_CM)
-
-
-def unwrap(angles):
-    """Makes a degree sequence continuous (359 -> 361 instead of 359 -> 1), so keys never spin the long way."""
-    out = []
-    for a in angles:
-        if out:
-            a = out[-1] + ((a - out[-1] + 180.0) % 360.0 - 180.0)
-        out.append(a)
-    return out
-
-
 def euler_filter(rotations):
     """Unreal (roll, pitch, yaw) triples made continuous for linear keys. Each triple is turned to the nearest of its
     two equivalent forms, (r, p, y) and (r + 180, 180 - p, y + 180), each angle unwrapped next to the previous key.
@@ -168,22 +151,6 @@ def euler_filter(rotations):
             r, p, y = min(same, flipped, key=lambda c: abs(c[0] - pr) + abs(c[1] - pp) + abs(c[2] - py))
         out.append((r, p, y))
     return out
-
-
-def reduce_keys(frames, values, tolerance):
-    """Drops keys that linear interpolation between the kept neighbours reproduces within `tolerance`. Keeps the
-    first and last key of every run (values are lists of floats of equal length)."""
-    if len(frames) <= 2:
-        return list(zip(frames, values))
-    kept = [0]
-    for i in range(1, len(frames) - 1):
-        a, b = kept[-1], i + 1
-        t = (frames[i] - frames[a]) / (frames[b] - frames[a])
-        if any(abs(values[a][k] + (values[b][k] - values[a][k]) * t - values[i][k]) > tolerance
-               for k in range(len(values[i]))):
-            kept.append(i)
-    kept.append(len(frames) - 1)
-    return [(frames[i], values[i]) for i in kept]
 
 
 def runs(frames, values):
@@ -225,16 +192,6 @@ def team_material(team):
     mel.set_material_instance_vector_parameter_value(instance, "Color", unreal.LinearColor(r, g, b, 1.0))
     assets.save_loaded_asset(instance)
     return instance
-
-
-def spawn_tagged(cls_or_mesh, label, location=(0.0, 0.0, 0.0)):
-    if isinstance(cls_or_mesh, unreal.StaticMesh):
-        actor = actors.spawn_actor_from_object(cls_or_mesh, unreal.Vector(*location))
-    else:
-        actor = actors.spawn_actor_from_class(cls_or_mesh, unreal.Vector(*location))
-    actor.tags = [TAG]
-    actor.set_actor_label(label)
-    return actor
 
 
 def spawn_proxy(player):
@@ -434,45 +391,16 @@ def import_cases(replay):
     return meshes
 
 
-def case_in_world(own_view, first, last, flight_end):
-    """(frame, visible) of a case in the world: shown from frame `first` to `last`, but not before `flight_end` while
-    `own_view` (the shooter's viewmodel visibility changes: shown while the camera looks through their eyes) shows —
-    there the first-person case flies instead. A case lying on the floor shows in every view, the shooter's own and
-    after their death too."""
-    frames = [f for f, _ in own_view]
-
-    def watching(frame):
-        k = bisect.bisect_right(frames, frame) - 1
-        return own_view[k][1] if k >= 0 else False
-
-    points = [first] + frames[bisect.bisect_right(frames, first):bisect.bisect_left(frames, flight_end)]
-    out = [(0, False)] if first > 0 else []
-    out += [(f, not watching(f)) for f in points if f <= last]
-    if flight_end <= last:
-        out.append((flight_end, True))
-    out.append((last + 1, False))
-    return out
-
-
-def windowed(changes, first, last):
-    """(frame, visible) `changes` shown only from frame `first` to `last` as well: hidden before and after."""
-    frames = [f for f, _ in changes]
-    at = bisect.bisect_right(frames, first) - 1
-    out = [(0, False)] if first > 0 else []
-    out.append((first, changes[at][1] if at >= 0 else False))
-    out += changes[bisect.bisect_right(frames, first):bisect.bisect_right(frames, last)]
-    out.append((last + 1, False))
-    return out
-
-
-def place_brass(sequence, replay, meshes, end_frame, viewmodel_actors, viewmodel_visibility):
+def place_brass(sequence, replay, meshes, end_frame, viewmodel_actors, hide_in_own_view, own_view_only):
     """One actor per case the round's guns threw (the agents manifest's `brass`, written by export::brass), its model
     keyed as the export flew it and shown from leaving the port to the end of its life (`still`: it lies at its last
-    key). A case thrown from the gun the agent holds (`view` false) is in the world (case_in_world: hidden in flight
-    while the camera looks through its shooter's eyes, where CS2 draws the first-person one). One thrown from the
-    viewmodel (`view` true) rides on the shooter's viewmodel actor, keyed in its space, drawn with Unreal's
-    first-person rendering and shown only with the viewmodel. Movable, as Unreal attaches only movable components to
-    a moving actor and Movie Render Queue needs them to move. Returns the number of keys."""
+    key). A case thrown from the gun the agent holds (`view` false) is in the world. Where its shooter's own view
+    shows the first-person case instead (a shooter with a viewmodel), its flight (the first CASE_VIEW_FLIGHT_S) is an
+    actor their own camera does not see (`hide_in_own_view(actor, controller)`), and the case lying after it another
+    one, seen by every camera (CS2 draws the cases on the floor in first person too). One thrown from the viewmodel
+    (`view` true) rides on the shooter's viewmodel actor, keyed in its space, drawn with Unreal's first-person
+    rendering and seen only by their own camera (`own_view_only(actor, controller)`). Movable, as Unreal attaches
+    only movable components to a moving actor and Movie Render Queue needs them to move. Returns the number of keys."""
     loaded = agents_manifest(replay)
     if loaded is None:
         return 0
@@ -480,15 +408,10 @@ def place_brass(sequence, replay, meshes, end_frame, viewmodel_actors, viewmodel
     fps = round(1.0 / replay["tick_interval"])
     keys = placed = 0
     keep = unreal.AttachmentRule.KEEP_RELATIVE
-    for case in loaded[2].get("brass", []):
-        mesh = meshes.get(case["model"])
-        controller = case["controller"]
-        parent = viewmodel_actors.get(controller) if case["view"] else None
-        first, last = case["first_tick"] - tick0, case["last_tick"] - tick0
-        if mesh is None or (case["view"] and parent is None) or last < 0 or first >= end_frame:
-            continue
-        actor = spawn_tagged(mesh, "%s case %d at %d" % ("view" if case["view"] else "world", controller,
-                                                         case["tick"]))
+
+    def spawn_case(mesh, label, points, parent, shown):
+        nonlocal keys
+        actor = spawn_tagged(mesh, label)
         component = actor.static_mesh_component
         component.set_mobility(unreal.ComponentMobility.MOVABLE)
         component.set_editor_property("cast_shadow", False)
@@ -496,18 +419,34 @@ def place_brass(sequence, replay, meshes, end_frame, viewmodel_actors, viewmodel
             actor.attach_to_actor(parent, "", keep, keep, keep, False)
             component.set_editor_property("first_person_primitive_type", unreal.FirstPersonPrimitiveType.FIRST_PERSON)
         binding = sequence.add_possessable(actor)
-        points = case["keys"]
         frames = [k[0] - tick0 for k in points]
         locations = [to_unreal(k[1:4]) for k in points]
         # Source (pitch, yaw, roll) -> Rotator(roll=roll, pitch=-pitch, yaw=-yaw), as the dropped weapons'.
         rotations = euler_filter([(k[6], -k[4], -k[5]) for k in points])
         keys += key_transform(binding, frames, locations, rotations, (1.0, 1.0, 1.0), end_frame)
-        own_view = viewmodel_visibility.get(controller, [])
+        first, last = shown
+        key_visibility(binding, ([(0, False)] if first > 0 else []) + [(first, True), (last + 1, False)], end_frame)
+        return actor
+
+    for case in loaded[2].get("brass", []):
+        mesh = meshes.get(case["model"])
+        controller = case["controller"]
+        viewmodel = viewmodel_actors.get(controller)
+        parent = viewmodel if case["view"] else None
+        first, last = case["first_tick"] - tick0, case["last_tick"] - tick0
+        if mesh is None or (case["view"] and parent is None) or last < 0 or first >= end_frame:
+            continue
+        label = "%s case %d at %d" % ("view" if case["view"] else "world", controller, case["tick"])
         if case["view"]:
-            changes = windowed(own_view, first, last)
+            own_view_only(spawn_case(mesh, label, case["keys"], parent, (first, last)), controller)
+        elif viewmodel is None:
+            spawn_case(mesh, label, case["keys"], None, (first, last))
         else:
-            changes = case_in_world(own_view, first, last, first + round(CASE_VIEW_FLIGHT_S * fps))
-        key_visibility(binding, changes, end_frame)
+            flight_end = first + round(CASE_VIEW_FLIGHT_S * fps)
+            hide_in_own_view(spawn_case(mesh, label, case["keys"], None, (first, min(flight_end, last + 1) - 1)),
+                             controller)
+            if flight_end <= last:
+                spawn_case(mesh, label + " lying", case["keys"], None, (flight_end, last))
         placed += 1
     if placed:
         log("brass: %d cases, %d keys" % (placed, keys))
@@ -895,10 +834,6 @@ def spawn_pov_camera(player):
     return camera
 
 
-def channels_by_name(section):
-    return {str(c.channel_name): c for c in section.get_all_channels()}
-
-
 def key_transform(binding, frames, locations, rotations, scale, end_frame):
     """A transform track: location (cm) and rotation (Unreal degrees: (pitch, yaw), or (roll, pitch, yaw) for a full
     rotation) keyed linearly, after dropping keys a straight line already gives. `scale` is the constant scale (the
@@ -927,65 +862,27 @@ def key_transform(binding, frames, locations, rotations, scale, end_frame):
     return count
 
 
-def key_visibility(binding, changes, end_frame):
-    """A visibility track from (frame, visible) pairs: one key per change."""
-    track = binding.add_track(unreal.MovieSceneVisibilityTrack)
-    track.set_property_name_and_path("bHiddenInGame", "bHiddenInGame")
-    section = track.add_section()
-    section.set_range(0, end_frame)
-    channel = section.get_all_channels()[0]
-    previous = None
-    for frame, value in changes:
-        if value != previous:
-            channel.add_key(unreal.FrameNumber(frame), value)
-            previous = value
+def life_changes(frames, alive):
+    """(frame, visible) at every sample: shown while `alive` (a pawn, and alive or lying as a ragdoll)."""
+    return list(zip(frames, alive))
 
 
-def visibility_changes(frames, alive, own_view, first_person=False):
-    """(frame, visible) at every sample and every camera-cut boundary: shown while alive with a pawn, except while
-    the camera looks through this player's own eyes (in first person CS2 does not draw your own body either; here
-    the visor and name would block the view). `own_view` lists the (start, end) frame ranges of those cuts. With
-    `first_person` (the player's viewmodel) the other way round: shown only while alive and the camera looks
-    through their eyes — attached to their camera, it would float in front of it in every other view."""
-    boundaries = sorted({f for r in own_view for f in r} | set(frames))
-    changes = []
-    sample = 0
-    for frame in boundaries:
-        while sample + 1 < len(frames) and frames[sample + 1] <= frame:
-            sample += 1
-        watching = any(start <= frame < end for start, end in own_view)
-        changes.append((frame, alive[sample] and watching == first_person))
-    return changes
-
-
-def carve(ranges, frames):
-    """`ranges` of (start, end) frames without the single frames in `frames`."""
-    out = []
-    for start, end in ranges:
-        cuts = sorted(f for f in frames if start <= f < end)
-        for f in cuts:
-            if f > start:
-                out.append((start, f))
-            start = f + 1
-        if start < end:
-            out.append((start, end))
-    return out
-
-
-def camera_cut_plan(replay, controllers, end_frame, fps):
-    """(start, end, controller) per cut: for each kill in turn, the killer's view from the previous cut until half a
-    second after the kill (the last one runs to the end of the round)."""
-    tick0 = replay["start_tick"]
-    kills = [k for k in replay["kills"] if k["attacker"] in controllers]
-    plan = []
-    start = 0
-    for i, kill in enumerate(kills):
-        last = i == len(kills) - 1
-        end = end_frame if last else min(end_frame, kill["tick"] - tick0 + round(CUT_AFTER_KILL_S * fps))
-        if end > start:
-            plan.append((start, end, kill["attacker"]))
-            start = end
-    return plan
+def apply_owners(cameras, hidden_in_own_view, own_view_only):
+    """Owner visibility (decision 021): each player's POV camera owns what their own view must not show (every
+    primitive of those actors bOwnerNoSee: their body, their flashes in the world, the blood on them, their cases in
+    flight) and what only it shows (bOnlyOwnerSee: their viewmodel and what rides on it), so Unreal hides them in that
+    camera only, whatever camera a cut uses. Applied last, after the effects added their components. `cameras`:
+    controller -> (camera, binding); the others: controller -> actors."""
+    owned = 0
+    for controller, (camera, _) in cameras.items():
+        for group, flag in ((hidden_in_own_view.get(controller, []), "owner_no_see"),
+                            (own_view_only.get(controller, []), "only_owner_see")):
+            for actor in group:
+                actor.set_owner(camera)
+                for component in actor.get_components_by_class(unreal.PrimitiveComponent):
+                    component.set_editor_property(flag, True)
+                owned += 1
+    log("owner visibility: %d actors on %d POV cameras" % (owned, len(cameras)))
 
 
 def build(replay):
@@ -996,6 +893,10 @@ def build(replay):
     fps = round(1.0 / replay["tick_interval"])
     name = "%s_r%d" % (replay["demo"], replay["round"])
     path = "/Game/OFAST/Replays/" + name
+    cameras_path = replay_cameras.cameras_path(REPLAY_PATH)
+    if not os.path.exists(cameras_path):
+        raise RuntimeError("no cameras file %s (exported before M7?): export the round again" % cameras_path)
+    cameras_file = replay_cameras.load(cameras_path)
     if assets.does_asset_exist(path):
         assets.delete_asset(path)
     sequence = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
@@ -1005,28 +906,38 @@ def build(replay):
     sequence.set_playback_end(end_frame)
 
     cameras = {}
-    # Each player's body visibility (frame, visible) changes: their muzzle flashes follow it (shot_effects); and their
-    # viewmodel actor and its visibility changes, which their first-person flashes and light follow.
-    body_visibility = {}
+    # Each player's body (frame, visible) changes: their muzzle flashes and the blood on them follow it
+    # (shot_effects); and their viewmodel actor and its changes, which their first-person flashes and tracers follow.
+    body_life = {}
     viewmodel_actors = {}
-    viewmodel_visibility = {}
+    viewmodel_life = {}
+    # What each player's own view must not show, and what only it shows: owners set at the end (apply_owners).
+    hidden_in_own_view = {}
+    own_view_only = {}
     started = time.monotonic()
     keys = 0
-    cuts = camera_cut_plan(replay, {p["controller"] for p in replay["players"]}, end_frame, fps)
     agents = import_agents(replay)
     viewmodels = import_viewmodels(replay)
     manifest = agents_manifest(replay)
-    # Recoil on each player's own view (export::punch): tick -> (camera pitch, yaw, viewmodel pitch, yaw), Source's.
+    # Recoil on each player's viewmodel (export::punch): tick -> (camera pitch, yaw, viewmodel pitch, yaw), Source's;
+    # the cameras file has the camera's part in the eyes already.
     punches = {int(c): {k[0]: k[1:] for k in keys}
                for c, keys in ((manifest[2] if manifest else {}).get("punch") or {}).items()}
     for player in replay["players"]:
-        track = replay["samples"]["players"][str(player["controller"])]
+        controller = player["controller"]
+        track = replay["samples"]["players"][str(controller)]
         positions = [None if p is None else to_unreal(p) for p in track["position"]]
         known = [a for a in track["angles"] if a is not None]
         yaws = iter(unwrap([-a[1] for a in known]))
         pitches = iter([-a[0] for a in known])
         rotations = [None if a is None else (next(pitches), next(yaws)) for a in track["angles"]]
-        agent = agents.get(player["controller"])
+        # The first-person camera: the player's eyes from the cameras file (recoil and smoothing in them).
+        camera = spawn_pov_camera(player)
+        camera_binding = sequence.add_possessable(camera)
+        keys += replay_cameras.key_eyes(camera_binding, cameras_file["eyes"].get(str(controller), []), tick0,
+                                        end_frame)
+        cameras[controller] = (camera, camera_binding)
+        agent = agents.get(controller)
         if agent is not None:
             # The agent: feet on the positions, turned along the body yaw (the way CS2 draws the model).
             body = spawn_agent(player, agent[0])
@@ -1047,42 +958,27 @@ def build(replay):
         deaths = agent[2] if agent is not None else []
         alive = [(bool(a) or any(first <= t <= last for first, last in deaths)) and p is not None
                  for a, p, t in zip(track["alive"], positions, ticks)]
-        own_view = [(start, end) for start, end, who in cuts if who == player["controller"]]
-        # Frames other cameras screenshot (close-ups, other players' eyes) show this player even inside his own cut.
-        shown = [t - tick0 for t, _ in CLOSE_SHOTS] + [view[0] - tick0 for view in VIEW_SHOTS] + \
-            [t - tick0 for t, who in POV_SHOTS if who != player["controller"]]
-        own_view = carve(own_view, shown)
-        # Frames shown through this player's eyes by the POV screenshots: hide the body there too.
-        own_view += [(t - tick0, t - tick0 + 1) for t, who in POV_SHOTS if who == player["controller"]]
-        changes = visibility_changes(frames, alive, own_view)
-        body_visibility[player["controller"]] = changes
+        changes = life_changes(frames, alive)
+        body_life[controller] = changes
         for actor in [body] + attached:
             key_visibility(sequence.add_possessable(actor) if actor is not body else binding, changes, end_frame)
-        camera = spawn_pov_camera(player)
-        eyes = [None if p is None or h is None else (p[0], p[1], p[2] + h * UNITS_TO_CM)
-                for p, h in zip(positions, track["eye_height"])]
-        camera_binding = sequence.add_possessable(camera)
-        # The camera turned off the eye angles by recoil (the punch's Source angles: negated as the eye angles are).
-        punch = punches.get(player["controller"], {})
-        view_rotations = [None if r is None else (r[0] - punch.get(t, (0.0, 0.0))[0],
-                                                  r[1] - punch.get(t, (0.0, 0.0))[1])
-                          for r, t in zip(rotations, ticks)]
-        keys += key_transform(camera_binding, frames, eyes, view_rotations, (1.0, 1.0, 1.0), end_frame)
-        cameras[player["controller"]] = (camera, camera_binding)
-        # The arms and the weapon in hand, on the camera, while the camera looks through this player's eyes.
-        viewmodel = viewmodels.get(player["controller"])
+        hidden_in_own_view.setdefault(controller, []).extend([body] + attached)
+        # The arms and the weapon in hand, on the camera, seen only through this player's eyes.
+        viewmodel = viewmodels.get(controller)
         if viewmodel is not None:
             vm = spawn_viewmodel(player, viewmodel[0], camera)
-            viewmodel_actors[player["controller"]] = vm
+            viewmodel_actors[controller] = vm
             vm_binding = sequence.add_possessable(vm)
             key_animation(vm_binding, viewmodel[1], end_frame)
             offset = (player.get("viewmodel") or {}).get("offset", [1.0, 1.0, -1.0])
+            punch = punches.get(controller, {})
             key_viewmodel_hand(vm_binding, frames, track.get("left_handed", []), offset, end_frame,
                                [punch.get(t) for t in ticks])
             living = [bool(a) and p is not None for a, p in zip(track["alive"], positions)]
-            vm_changes = visibility_changes(frames, living, own_view, first_person=True)
-            viewmodel_visibility[player["controller"]] = vm_changes
+            vm_changes = life_changes(frames, living)
+            viewmodel_life[controller] = vm_changes
             key_visibility(vm_binding, vm_changes, end_frame)
+            own_view_only.setdefault(controller, []).append(vm)
     world_models = import_dropped_weapons(replay)
     keys += place_dropped_weapons(sequence, replay, world_models, end_frame)
     keys += place_grenades(sequence, replay, world_models, end_frame)
@@ -1092,33 +988,51 @@ def build(replay):
     smoke_volumes.place_smokes(sequence, replay, REPLAY_PATH, end_frame, spawn_tagged)
     grenade_effects.place_effects(sequence, replay, REPLAY_PATH, end_frame, manifest[2] if manifest else {},
                                   {controller: camera for controller, (camera, _) in cameras.items()}, spawn_tagged)
+    own_views = replay_cameras.own_views(cameras_file)
+
+    def hide(actor, binding, controller):
+        key_visibility(binding, body_life.get(controller, []), end_frame)
+        hidden_in_own_view.setdefault(controller, []).append(actor)
+
+    def first_person(actor, binding, controller):
+        key_visibility(binding, viewmodel_life.get(controller, []), end_frame)
+        own_view_only.setdefault(controller, []).append(actor)
+
+    def light(owner, binding, controller, in_first_person, component=False):
+        replay_cameras.tag_light(owner, controller, in_first_person, component)
+        key_visibility(binding, replay_cameras.light_changes(own_views.get(controller, []), in_first_person),
+                       end_frame)
+
     shot_effects.place_shots(sequence, replay, REPLAY_PATH, end_frame, manifest[2] if manifest else {}, spawn_tagged,
-                             lambda binding, controller: key_visibility(binding, body_visibility.get(controller, []),
-                                                                        end_frame), viewmodel_actors,
-                             lambda binding, controller: key_visibility(
-                                 binding, viewmodel_visibility.get(controller, []), end_frame))
-    keys += place_brass(sequence, replay, import_cases(replay), end_frame, viewmodel_actors, viewmodel_visibility)
+                             hide, viewmodel_actors, first_person, light)
+    keys += place_brass(sequence, replay, import_cases(replay), end_frame, viewmodel_actors,
+                        lambda actor, c: hidden_in_own_view.setdefault(c, []).append(actor),
+                        lambda actor, c: own_view_only.setdefault(c, []).append(actor))
     keys += animate_doors(sequence, replay, end_frame)
     keys += animate_props(sequence, replay, end_frame)
-    log("sequence %s: %d players (%d animated agents, %d viewmodels), %d frames at %d fps, %d keys in %.0f s"
+    # The shot and HLAE cameras, and the cuts.
+    shots = []
+    shot_actors = []
+    for camera in cameras_file["cameras"]:
+        actor = replay_cameras.spawn_shot_camera(camera)
+        shot_actors.append((actor, camera))
+        shots.append(replay_cameras.key_shot_camera(sequence, actor, camera, tick0, end_frame))
+    cuts = replay_cameras.add_cuts(sequence, cameras_file, {c: b for c, (_, b) in cameras.items()}, shots)
+    apply_owners(cameras, hidden_in_own_view, own_view_only)
+    log("sequence %s: %d players (%d animated agents, %d viewmodels), %d frames at %d fps, %d keys in %.0f s; "
+        "%d shot cameras, %d camera cuts"
         % (path, len(replay["players"]), len(agents), len(viewmodels), end_frame, fps, keys,
-           time.monotonic() - started))
-    add_camera_cuts(sequence, cuts, cameras)
+           time.monotonic() - started, len(shots), cuts))
     add_markers(sequence, replay)
+    # The demo's clock, for a camera made here and written back (export_camera.py: ticks and HLAE's game time).
+    for tag, value in (("OFAST_start_tick", tick0), ("OFAST_tick_interval", replay["tick_interval"]),
+                       ("OFAST_server_tick_offset", cameras_file.get("server_tick_offset")),
+                       ("OFAST_demo", replay["demo"]), ("OFAST_map", replay["map"]),
+                       ("OFAST_round", replay["round"])):
+        if value is not None:
+            assets.set_metadata_tag(sequence, tag, str(value))
     assets.save_loaded_asset(sequence)
-    return sequence, {controller: camera for controller, (camera, _) in cameras.items()}
-
-
-def add_camera_cuts(sequence, cuts, cameras):
-    """The camera cut track from camera_cut_plan. `cameras`: controller -> (camera actor, its binding)."""
-    if not cuts:
-        return
-    track = sequence.add_track(unreal.MovieSceneCameraCutTrack)
-    for start, end, controller in cuts:
-        section = track.add_section()
-        section.set_range(start, end)
-        section.set_camera_binding_id(sequence.get_binding_id(cameras[controller][1]))
-    log("camera cuts: %d (killer's view, kill by kill)" % len(cuts))
+    return sequence, {controller: camera for controller, (camera, _) in cameras.items()}, shot_actors
 
 
 def add_markers(sequence, replay):
@@ -1201,7 +1115,7 @@ def view_camera(tick, x, y, z, pitch, yaw):
     return camera
 
 
-def verification_shots(sequence, replay, cameras):
+def verification_shots(sequence, replay, cameras, shot_actors=()):
     """Screenshots from the killer's eye 8 ticks before the first three kills, to compare with CS2 (demo_gototick,
     spec_player in first person), and one from above the players at the first kill."""
     tick0 = replay["start_tick"]
@@ -1233,6 +1147,12 @@ def verification_shots(sequence, replay, cameras):
     for number, view in enumerate(VIEW_SHOTS):
         path = os.path.join(SHOT_DIR, "replay_%s_tick%d_view%d.png" % (prefix, view[0], number))
         shots.append((view[0] - tick0, view_camera(*view), path))
+    # Each shot camera half a second before the end of its keys (8 ticks before its kill), and at its first key.
+    for number, (actor, camera) in enumerate(shot_actors):
+        keys = camera["keys"]
+        for tick in (int(keys[-1][0]) - 40, int(keys[0][0])):
+            path = os.path.join(SHOT_DIR, "replay_%s_tick%d_shot%d_%s.png" % (prefix, tick, number, camera["kind"]))
+            shots.append((tick - tick0, actor, path))
     if not shots:
         unreal.SystemLibrary.quit_editor()
         return
@@ -1282,7 +1202,7 @@ def main():
     if replay.get("format") != "ofast-replay" or replay.get("version") != 1:
         raise RuntimeError("%s is not an OFAST replay (version 1)" % REPLAY_PATH)
     clean_level(replay["map"])
-    sequence, cameras = build(replay)
+    sequence, cameras, shot_actors = build(replay)
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world().get_path_name()
     if not world.startswith("/Game/"):
         raise RuntimeError("refusing to save " + world)
@@ -1290,7 +1210,7 @@ def main():
     # The Studio's "Send to Unreal" takes this line as the sign the round was built.
     log("built %s" % sequence.get_path_name())
     if SHOT_DIR:
-        verification_shots(sequence, replay, cameras)
+        verification_shots(sequence, replay, cameras, shot_actors)
     else:
         unreal.SystemLibrary.quit_editor()
 

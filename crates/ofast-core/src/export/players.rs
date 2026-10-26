@@ -177,7 +177,7 @@ struct Round<'a> {
 
 /// The world physics of `map` (`maps/<map>/world_physics.vmdl`), or why it cannot be read (the map's archive is not
 /// open, or the file is broken).
-fn load_world_physics(content: &Content, map: &str) -> Result<PhysicsData, String> {
+pub(crate) fn load_world_physics(content: &Content, map: &str) -> Result<PhysicsData, String> {
     let path = format!("maps/{map}/world_physics.vmdl");
     let bytes = content
         .read_resource(&path)
@@ -1290,7 +1290,7 @@ pub(super) fn stem(path: &str) -> &str {
 /// The main graph of third-person animation.
 const MAIN_GRAPH: &str = "animation/graphs/worldmodel/worldmodel.vnmgraph";
 /// CS2's item definitions.
-const ITEMS_GAME: &str = "scripts/items/items_game.txt";
+pub(crate) const ITEMS_GAME: &str = "scripts/items/items_game.txt";
 
 /// Where each weapon's weapons-layer actions are, by item: its state in the main graph's `Weapons/State/Weapons`
 /// and the graph that state plays, if any ([`WeaponClips::action_state`], [`WeaponClips::action_graph`]).

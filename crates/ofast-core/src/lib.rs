@@ -18,6 +18,7 @@
 //! | [`anim`] | Animation clips, skeletons, CS2's locomotion graph, each player's baked animation | `docs/formats/animation.md` |
 //! | [`physics`] | Rubikon physics (`PHYS` blocks): agents' ragdolls, maps' world collision | `docs/formats/model.md` |
 //! | [`bytes`] | Shared little-endian byte cursor (and varints) used by every binary reader | — |
+//! | [`camera`] | Cameras: first-person smoothing, shot cameras, HLAE's campath and `.cam` files | `docs/formats/cameras.md` |
 //!
 //! More modules (textures, meshes, materials, maps…) arrive milestone by milestone — see
 //! `docs/roadmap.md`.
@@ -33,6 +34,7 @@
 
 pub mod anim;
 pub mod bytes;
+pub mod camera;
 pub mod content;
 pub mod coords;
 pub mod demo;

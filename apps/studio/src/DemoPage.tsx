@@ -1,10 +1,24 @@
 // A demo's page: its rounds (winner, score, the round's best moments), a finder for the moments worth filming
-// (highlights, or every kill, by player and weapon), and the chosen round's kill feed.
+// (highlights, or every kill, by player and weapon), and the chosen round's kill feed with each kill's camera.
 import { useEffect, useMemo, useState } from "react";
-import { DemoEntry, DemoSummary, Kill, RoundSummary, Side, summarizeDemo } from "./api";
+import { open } from "@tauri-apps/plugin-dialog";
+import {
+  CameraPlan,
+  DemoEntry,
+  DemoSummary,
+  Kill,
+  NO_PLAN,
+  RoundSummary,
+  ShotKind,
+  Side,
+  sentRounds,
+  summarizeDemo,
+} from "./api";
 import { RadarView } from "./RadarView";
 import {
   HIGHLIGHT_FILTERS,
+  SHOTS,
+  SMOOTHING,
   WEAPON_FILTERS,
   clock,
   highlightName,
@@ -13,15 +27,25 @@ import {
   weaponName,
 } from "./names";
 
+/** What the Studio does with a round in Unreal; each missing while Unreal or its project is not found, or while a
+ * round is on its way. */
+export interface UnrealActions {
+  /** Sends a round with its cameras. */
+  send?: (round: RoundSummary, plan: CameraPlan) => void;
+  /** Changes the cameras of a round sent before. */
+  updateCameras?: (round: RoundSummary, plan: CameraPlan) => void;
+  /** Changes when a sending ends: the rounds in Unreal are looked up again. */
+  version: number;
+}
+
 export function DemoPage({
   demo,
   onBack,
-  onSend,
+  unreal,
 }: {
   demo: DemoEntry;
   onBack: () => void;
-  /** Sends a round to Unreal; missing while Unreal or its project is not found, or while a round is on its way. */
-  onSend?: (round: RoundSummary) => void;
+  unreal: UnrealActions;
 }) {
   const [summary, setSummary] = useState<DemoSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +75,7 @@ export function DemoPage({
       {!summary && !error && (
         <p className="muted">Reading the demo… A whole match takes a few seconds; it is remembered afterwards.</p>
       )}
-      {summary && <DemoView summary={summary} path={demo.path} onSend={onSend} />}
+      {summary && <DemoView summary={summary} path={demo.path} unreal={unreal} />}
     </div>
   );
 }
@@ -101,18 +125,25 @@ function FinalScore({ summary }: { summary: DemoSummary }) {
   );
 }
 
-function DemoView({
-  summary,
-  path,
-  onSend,
-}: {
-  summary: DemoSummary;
-  path: string;
-  onSend?: (round: RoundSummary) => void;
-}) {
+function DemoView({ summary, path, unreal }: { summary: DemoSummary; path: string; unreal: UnrealActions }) {
   const teams = useMemo(() => teamsOf(summary), [summary]);
   // Rounds go by their index in the summary: a restarted round's number comes again.
   const [selected, setSelected] = useState(0);
+  // Each round's cameras as picked (by round index), and the round numbers already in Unreal.
+  const [plans, setPlans] = useState<Record<number, CameraPlan>>({});
+  const [sent, setSent] = useState<number[]>([]);
+  useEffect(() => {
+    let current = true;
+    sentRounds(path).then(
+      (rounds) => current && setSent(rounds),
+      () => {},
+    );
+    return () => {
+      current = false;
+    };
+  }, [path, unreal.version]);
+  const plan = plans[selected] ?? NO_PLAN;
+  const setPlan = (p: CameraPlan) => setPlans((all) => ({ ...all, [selected]: p }));
   const [marked, setMarked] = useState<{ round: number; kills: number[] } | null>(null);
   // The 2D replay instead of the finder, and the kill it was last asked to jump to.
   const [replay, setReplay] = useState(false);
@@ -147,7 +178,14 @@ function DemoView({
               marked={marked?.round === selected ? marked.kills : []}
               replay={replay}
               onReplay={() => setReplay((r) => !r)}
-              onSend={onSend && (() => onSend(round))}
+              plan={plan}
+              onPlan={setPlan}
+              onSend={unreal.send && (() => unreal.send?.(round, plan))}
+              onUpdateCameras={
+                unreal.updateCameras && sent.includes(round.round)
+                  ? () => unreal.updateCameras?.(round, plan)
+                  : undefined
+              }
               onKill={replay ? (tick) => setSeek((s) => ({ tick, n: (s?.n ?? 0) + 1 })) : undefined}
             />
           </div>
@@ -334,8 +372,11 @@ function RoundFeed({
   marked,
   replay,
   onReplay,
+  plan,
+  onPlan,
   onKill,
   onSend,
+  onUpdateCameras,
 }: {
   summary: DemoSummary;
   teams: Teams;
@@ -344,11 +385,31 @@ function RoundFeed({
   /** The 2D replay is shown beside the feed. */
   replay: boolean;
   onReplay: () => void;
+  /** The round's cameras as picked. */
+  plan: CameraPlan;
+  onPlan: (plan: CameraPlan) => void;
   /** A kill clicked: the replay jumps there. */
   onKill?: (tick: number) => void;
   /** Sends the round to Unreal (missing when it cannot be now). */
   onSend?: () => void;
+  /** Changes its cameras in Unreal (missing when it cannot be now, or the round was not sent). */
+  onUpdateCameras?: () => void;
 }) {
+  const setShot = (tick: number, kind: ShotKind) => {
+    const shots = { ...plan.shots };
+    if (kind === "pov") delete shots[tick];
+    else shots[tick] = kind;
+    onPlan({ ...plan, shots });
+  };
+  const addHlae = async () => {
+    const picked = await open({
+      multiple: true,
+      title: "HLAE camera files",
+      filters: [{ name: "HLAE campath or camio recording", extensions: ["xml", "cam"] }],
+    });
+    const files = Array.isArray(picked) ? picked : picked ? [picked] : [];
+    if (files.length) onPlan({ ...plan, hlae: [...plan.hlae, ...files.filter((f) => !plan.hlae.includes(f))] });
+  };
   const sides = new Map(round.players.map((p) => [p.player, p.side]));
   const side0 = teams.sideOf(round);
   const [a, b] = scoreAfter(teams, round);
@@ -385,6 +446,44 @@ function RoundFeed({
           Send to Unreal
         </button>
       </div>
+      <div className="cameras-row">
+        <label title="Smooths the mouse's jitter out of the players' own views; the aim stays exact at every shot">
+          First-person view{" "}
+          <select value={plan.smoothing} onChange={(e) => onPlan({ ...plan, smoothing: Number(e.target.value) })}>
+            {SMOOTHING.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button onClick={addHlae} title="A camera path made in CS2 with HLAE (mirv_campath .xml or mirv_camio .cam)">
+          HLAE camera…
+        </button>
+        {plan.hlae.map((file) => (
+          <span key={file} className="chip on" title={file}>
+            {file.split(/[\\/]/).pop()}{" "}
+            <span
+              className="remove"
+              onClick={() => onPlan({ ...plan, hlae: plan.hlae.filter((f) => f !== file) })}
+              title="Remove"
+            >
+              ×
+            </span>
+          </span>
+        ))}
+        <button
+          onClick={onUpdateCameras}
+          disabled={!onUpdateCameras}
+          title={
+            onUpdateCameras
+              ? "Change this round's cameras in Unreal without sending it again (about a minute)"
+              : "For a round already sent to Unreal"
+          }
+        >
+          Update cameras
+        </button>
+      </div>
       {round.kills.length === 0 && <p className="muted">No kills.</p>}
       {round.kills.map((k, i) => (
         <div
@@ -413,6 +512,21 @@ function RoundFeed({
             {k.team_kill && <span className="flag bad">team kill</span>}
           </span>
           {who(k.victim)}
+          {k.attacker !== null && (
+            <select
+              className="shot"
+              value={plan.shots[k.tick] ?? "pov"}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => setShot(k.tick, e.target.value as ShotKind)}
+              title="The camera this kill is seen through in Unreal: the last 4 seconds before it"
+            >
+              {SHOTS.filter(([kind]) => kind !== "victim" || k.victim !== null).map(([kind, label]) => (
+                <option key={kind} value={kind}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       ))}
     </section>

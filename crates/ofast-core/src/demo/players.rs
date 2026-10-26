@@ -395,6 +395,10 @@ pub struct RoundTrack {
     pub earlier_shots: Vec<Shot>,
     /// Where those shots' bullets met players.
     pub earlier_hits: Vec<PlayerHit>,
+    /// How far the server's tick runs ahead of the demo's (`CNETMsg_Tick` minus the frame's tick; constant within a
+    /// demo, [`DemoParser::server_tick`]), from the round's first tick that had both; `None` without any. CS2's game
+    /// clock (`curtime`, which HLAE's camera files use) is the server tick times the tick interval.
+    pub server_tick_offset: Option<i64>,
 }
 
 /// Where one round is in the demo.
@@ -1004,6 +1008,7 @@ fn track_round_where(
                     player_hits: Vec::new(),
                     earlier_shots: Vec::new(),
                     earlier_hits: Vec::new(),
+                    server_tick_offset: None,
                 };
                 for m in earlier.drain(..).filter(|m| m.tick < tick) {
                     if m.kind == shots::FIRE_BULLETS {
@@ -1017,6 +1022,12 @@ fn track_round_where(
                 track = Some(new);
             }
             let track = track.as_mut().expect("set above");
+            if track.server_tick_offset.is_none() {
+                track.server_tick_offset = parser
+                    .server_tick()
+                    .zip(parser.tick())
+                    .map(|(server, demo)| i64::from(server) - i64::from(demo));
+            }
             let start = track.start_tick;
             track
                 .events

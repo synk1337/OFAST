@@ -568,3 +568,28 @@ button:disabled {
   color: var(--accent);
   font-size: 12px;
 }
+
+/* Each kill's camera, and the round's camera choices. */
+.kill select.shot {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 1px 4px;
+}
+
+.cameras-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px 8px;
+  font-size: 13px;
+}
+
+.cameras-row select {
+  padding: 2px 6px;
+}
+
+.cameras-row .chip .remove {
+  cursor: pointer;
+  margin-left: 4px;
+}

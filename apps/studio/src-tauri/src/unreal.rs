@@ -1,9 +1,13 @@
 //! "Send to Unreal" and "Open in Unreal": a round of a demo into OFAST's Unreal project (`unreal/Sandbox`), the same
 //! steps as the command line (`docs/development.md`, "A demo round in Unreal"):
 //!
-//! 1. export the round with its players (`ofast export-demo --players`),
+//! 1. export the round with its players and its cameras (`ofast export-demo --players`, with the shots the user
+//!    picked: [`CameraPlan`]),
 //! 2. the first time a map is used, export it (`ofast export-map`) and import it (`tools/unreal/import_map.py`),
 //! 3. import the round (`tools/unreal/import_demo.py`): a Level Sequence in the map's level.
+//!
+//! "Update cameras" changes the cameras of a round already sent, without importing it again: its cameras exported
+//! (`export::cameras`), then `tools/unreal/import_cameras.py` (decision 021).
 //!
 //! The Unreal steps run `UnrealEditor-Cmd` without a window; its `OFAST:` log lines come to the UI as progress
 //! ([`PROGRESS_EVENT`]), and a step counts as done only once its script logged its last line. Imports draw nothing,
@@ -19,6 +23,7 @@ use std::sync::Mutex;
 use ofast_core::content::Content;
 use ofast_core::demo::players::track_round_at;
 use ofast_core::export::ExportOptions;
+use ofast_core::export::cameras::{CameraPlan, export_cameras};
 use ofast_core::export::map::export_installed_map;
 use ofast_core::export::players::export_players;
 use ofast_core::export::replay::write_replay;
@@ -40,7 +45,8 @@ const LOG: &str = r"unreal\Sandbox\Saved\Logs\OFASTSandbox.log";
 
 /// The environment variables OFAST's Unreal scripts read: all are set for each run (empty when unused), so none
 /// leaks from the Studio's own environment.
-const SCRIPT_VARIABLES: [&str; 14] = [
+const SCRIPT_VARIABLES: [&str; 16] = [
+    "OFAST_CAMERAS",
     "OFAST_GLTF",
     "OFAST_SHOT",
     "OFAST_NAME",
@@ -55,6 +61,7 @@ const SCRIPT_VARIABLES: [&str; 14] = [
     "OFAST_VIEW_SHOTS",
     "OFAST_LEVEL",
     "OFAST_SEQUENCE",
+    "OFAST_TICKS",
 ];
 
 /// Where a sending is.
@@ -69,6 +76,8 @@ pub enum Step {
     MapImport,
     /// Importing the round into Unreal.
     RoundImport,
+    /// Changing the cameras of a round already in Unreal.
+    Cameras,
 }
 
 /// One line of a sending's progress.
@@ -99,19 +108,152 @@ pub struct Sending(AsyncMutex<()>);
 /// leaving a hidden editor importing on its own.
 static EDITOR_RUNNING: Mutex<Option<u32>> = Mutex::new(None);
 
-/// Sends the round of `path` that starts at `start_tick` to Unreal (see the [module docs](self)). Takes minutes, the
-/// first time on a map much longer (the map's export and import, and Unreal compiling its shaders).
+/// Sends the round of `path` that starts at `start_tick` to Unreal with the cameras of `plan` (see the
+/// [module docs](self)). Takes minutes, the first time on a map much longer (the map's export and import, and Unreal
+/// compiling its shaders).
 #[tauri::command]
 pub async fn send_to_unreal(
     path: String,
     start_tick: u32,
+    plan: CameraPlan,
     app: AppHandle,
     sending: tauri::State<'_, Sending>,
 ) -> Result<Sent, String> {
     let _only = sending.0.try_lock().map_err(|_| {
         "A round is being sent to Unreal already: wait for it to finish.".to_owned()
     })?;
-    blocking(move || send(&app, &path, start_tick)).await?
+    blocking(move || send(&app, &path, start_tick, &plan)).await?
+}
+
+/// Changes the cameras of the round of `path` that starts at `start_tick`, already sent, to those of `plan` (see the
+/// [module docs](self)): about a minute, most of it Unreal starting.
+#[tauri::command]
+pub async fn update_cameras(
+    path: String,
+    start_tick: u32,
+    plan: CameraPlan,
+    app: AppHandle,
+    sending: tauri::State<'_, Sending>,
+) -> Result<Sent, String> {
+    let _only = sending.0.try_lock().map_err(|_| {
+        "A round is being sent to Unreal already: wait for it to finish.".to_owned()
+    })?;
+    blocking(move || cameras(&app, &path, start_tick, &plan)).await?
+}
+
+/// The rounds of the demo at `path` whose sequence is in OFAST's Unreal project (round numbers): sent before, their
+/// cameras can change.
+#[tauri::command]
+pub async fn sent_rounds(path: String) -> Result<Vec<u32>, String> {
+    blocking(move || {
+        let Some(repo) = repository() else {
+            return Vec::new();
+        };
+        let prefix = format!("{}_r", asset_name(stem(&path)));
+        let mut rounds: Vec<u32> = std::fs::read_dir(repo.join(REPLAYS))
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter_map(|file| {
+                let name = file.file_name().to_string_lossy().into_owned();
+                name.strip_prefix(&prefix)?
+                    .strip_suffix(".uasset")?
+                    .parse()
+                    .ok()
+            })
+            .collect();
+        rounds.sort_unstable();
+        rounds
+    })
+    .await
+}
+
+/// Where the rounds' sequences are, in the repository.
+const REPLAYS: &str = r"unreal\Sandbox\Content\OFAST\Replays";
+
+/// A demo path's file name without its extension.
+fn stem(path: &str) -> &str {
+    Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("demo")
+}
+
+/// Tells the UI where a sending is (nobody may hear it: the UI may have gone to another page).
+fn emit(app: &AppHandle, step: Step, message: String, warning: bool) {
+    let _ = app.emit(
+        PROGRESS_EVENT,
+        Progress {
+            step,
+            message,
+            warning,
+        },
+    );
+}
+
+/// The CS2 content a round's export reads: the game's archives and the map's, for its collision (the dead fall on
+/// it, shot cameras keep out of its walls); the game's alone if the map's is missing.
+fn round_content(install: &Cs2Install, map: &str) -> Result<Content, String> {
+    Content::for_map(install, map)
+        .or_else(|_| Content::game(install))
+        .map_err(|e| e.to_string())
+}
+
+fn cameras(
+    app: &AppHandle,
+    path: &str,
+    start_tick: u32,
+    plan: &CameraPlan,
+) -> Result<Sent, String> {
+    let report = |message: String, warning: bool| emit(app, Step::Cameras, message, warning);
+    let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
+    let repo = repository().ok_or("OFAST's Unreal project was not found.")?;
+    let project = repo.join(PROJECT);
+    unreal_closed()?;
+    let install = Cs2Install::locate().ok_or("CS2 was not found.")?;
+    report("Reading the round…".into(), false);
+    let data = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let name = asset_name(stem(path));
+    let track = track_round_at(&data, start_tick).map_err(|e| format!("{path}: {e}"))?;
+    drop(data);
+    let prefix = format!("{name}_r{}", track.round);
+    if !repo
+        .join(REPLAYS)
+        .join(format!("{prefix}.uasset"))
+        .is_file()
+    {
+        return Err("This round is not in Unreal yet: send it first.".into());
+    }
+    report("Making the cameras…".into(), false);
+    let content = round_content(&install, &track.map_name)?;
+    let demos = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("exports")
+        .join("demos");
+    let made =
+        export_cameras(Some(&content), &track, plan, &name, &demos).map_err(|e| e.to_string())?;
+    for warning in made.warnings {
+        report(warning, true);
+    }
+    report("Updating the cameras in Unreal…".into(), false);
+    unreal_closed()?;
+    let result = run_script(
+        &engine,
+        &repo,
+        &project,
+        "import_cameras.py",
+        &[("OFAST_CAMERAS", made.path.as_os_str())],
+        "cameras updated ",
+        |line| report(line, false),
+    );
+    let _ = std::fs::remove_file(&made.path);
+    result?;
+    Ok(Sent {
+        level: format!("/Game/OFAST/Maps/{}", track.map_name),
+        sequence: format!("/Game/OFAST/Replays/{prefix}"),
+    })
 }
 
 /// Stops the editor a sending runs, if any (the Studio is closing).
@@ -125,18 +267,8 @@ pub fn stop_sending() {
     }
 }
 
-fn send(app: &AppHandle, path: &str, start_tick: u32) -> Result<Sent, String> {
-    let report = |step: Step, message: String| {
-        // The UI may have gone to another page: progress nobody hears is fine.
-        let _ = app.emit(
-            PROGRESS_EVENT,
-            Progress {
-                step,
-                message,
-                warning: false,
-            },
-        );
-    };
+fn send(app: &AppHandle, path: &str, start_tick: u32, plan: &CameraPlan) -> Result<Sent, String> {
+    let report = |step: Step, message: String| emit(app, step, message, false);
     let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
     let repo = repository().ok_or("OFAST's Unreal project was not found.")?;
     let project = repo.join(PROJECT);
@@ -148,26 +280,17 @@ fn send(app: &AppHandle, path: &str, start_tick: u32) -> Result<Sent, String> {
         .map_err(|e| e.to_string())?
         .join("exports");
     if running("cs2.exe") {
-        let _ = app.emit(
-            PROGRESS_EVENT,
-            Progress {
-                step: Step::Round,
-                message:
-                    "CS2 is open: Unreal needs a lot of memory, close CS2 if the import fails."
-                        .into(),
-                warning: true,
-            },
+        emit(
+            app,
+            Step::Round,
+            "CS2 is open: Unreal needs a lot of memory, close CS2 if the import fails.".into(),
+            true,
         );
     }
 
     report(Step::Round, "Reading the round…".into());
     let data = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-    let name = asset_name(
-        Path::new(path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("demo"),
-    );
+    let name = asset_name(stem(path));
     let track = track_round_at(&data, start_tick).map_err(|e| format!("{path}: {e}"))?;
     let demos = exports.join("demos");
     let replay = write_replay(&track, &name, &demos).map_err(|e| e.to_string())?;
@@ -178,12 +301,15 @@ fn send(app: &AppHandle, path: &str, start_tick: u32) -> Result<Sent, String> {
             replay.players
         ),
     );
-    // The map's archive too, for its collision (the dead fall on it); the game's alone if it is missing.
-    let content = Content::for_map(&install, &track.map_name)
-        .or_else(|_| Content::game(&install))
-        .map_err(|e| e.to_string())?;
+    let content = round_content(&install, &track.map_name)?;
     export_players(&content, &track, &name, &demos).map_err(|e| e.to_string())?;
     drop(data);
+    report(Step::Round, "Making the cameras…".into());
+    let cameras =
+        export_cameras(Some(&content), &track, plan, &name, &demos).map_err(|e| e.to_string())?;
+    for warning in cameras.warnings {
+        emit(app, Step::Round, warning, true);
+    }
 
     let map = track.map_name.as_str();
     let level = format!("/Game/OFAST/Maps/{map}");

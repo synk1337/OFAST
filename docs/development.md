@@ -75,15 +75,19 @@ powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/import_demo.py -Re
 ```
 
 The map must be imported first (below). `import_demo.py` builds `/Game/OFAST/Replays/<demo>_r<round>` in the map's
-level: player proxies in team colours, a first-person camera per player, camera cuts on each killer, kill markers —
-see [replay.md](formats/replay.md). `-Shot` adds verification screenshots (killer's view before the first kills).
+level: player proxies in team colours, a first-person camera per player, the round's cameras and cuts from
+`<demo>_r<round>.cameras.json` (`export-demo` writes it: `--shots TICK:KIND,…`, `--smooth`, `--hlae`), kill markers —
+see [replay.md](formats/replay.md) and [cameras.md](formats/cameras.md). `-Shot` adds verification screenshots
+(killer's view before the first kills, each shot camera). `import_cameras.py -Cameras <file>` changes the cameras of
+a round already built.
 
 The Studio's "Send to Unreal" runs the same steps without a terminal (`apps/studio/src-tauri/src/unreal.rs`): the
 round and its players exported into the app's data folder, the map exported and imported the first time
 (`import_map.py` without `OFAST_SHOT`: no screenshots, the editor quits once the level is saved), then
 `import_demo.py`. Both run with `-nullrhi`: nothing is drawn, so Unreal takes no GPU memory (with a renderer, a
-12 GB card ran out while `import_demo.py` built a round's smoke volumes: 23 GB asked of an 8.4 GB budget). "Open in Unreal" starts the editor with `tools/unreal/open_sequence.py` (`OFAST_LEVEL`,
-`OFAST_SEQUENCE`).
+12 GB card ran out while `import_demo.py` built a round's smoke volumes: 23 GB asked of an 8.4 GB budget). "Update
+cameras" exports the round's cameras again and runs `import_cameras.py` (`OFAST_CAMERAS`). "Open in Unreal" starts
+the editor with `tools/unreal/open_sequence.py` (`OFAST_LEVEL`, `OFAST_SEQUENCE`).
 
 Developer tools for game files: `cargo run --release --example resource_dump -- find <text>` lists archive paths,
 `cargo run --release --example resource_dump -- <path>_c` dumps a compiled file's blocks (KV3 as text), and

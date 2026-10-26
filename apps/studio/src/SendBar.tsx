@@ -23,6 +23,7 @@ const STEPS: Record<SendStep, string> = {
   map_export: "Exporting the map",
   map_import: "Importing the map into Unreal",
   round_import: "Building the round in Unreal",
+  cameras: "Updating the cameras",
 };
 
 export function SendBar({ job, onClose }: { job: SendJob; onClose: () => void }) {
