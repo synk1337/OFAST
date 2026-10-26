@@ -51,6 +51,7 @@ pub mod grenades;
 pub mod parser;
 pub mod players;
 pub mod proto;
+pub mod recipe;
 pub mod recoil;
 pub mod serializer;
 pub mod shots;

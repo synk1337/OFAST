@@ -22,7 +22,8 @@ M4 replaces the proxies with CS2's own agents, animated. Four research passes (2
   layer under an upper-body mask; weapon actions (deploy, reload) in model space; additive shoot, flinch, breathing,
   jump start / land. **Aim (pitch / yaw over the spine, neck and head, hand IK) is game code**, not clips. Deaths are
   ragdolls (the agent has a `PHYS` block), not clips of the graph.
-- **Demos** carry no bone poses (the pawn's serialised animation recipe is undocumented), but per tick: body yaw,
+- **Demos** carry no bone poses (the pawn's serialised animation recipe looked undocumented then; it is partly decoded
+  since, [decision 020](020-cs2-pose-recipe.md)), but per tick: body yaw,
   velocity, ground flag, duck amount, walking, scoped, ladder move type, the active weapon (handle → item definition),
   its gameplay animation state (deploy 11, idle 50, shoot 100 / 101, reload 800, grenade 200 – 202, plant 300, knife
   500 – 505…), reload flag, jump and landing ticks, defusing, flash, and death data (ragdoll force and bone). The

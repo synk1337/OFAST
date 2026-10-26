@@ -490,6 +490,70 @@ faster than 50 units/s — positions advance by sub-tick moves). Round 5 compare
 difference. demoparser2 cannot check the velocity (its `CCSPlayerPawn.m_vecX/Y/Z` mixes the velocity and the view
 offset, see below).
 
+### Pose recipe (CS2's own animation)
+
+The demo does carry what CS2's server animated: every `CCSPlayerPawn` sends its AnimGraph2 **pose recipe**, the
+list of pose tasks the graph ran that tick (sample this clip at this time, blend these two poses by this weight…),
+which clients play back instead of running the graph themselves. Source 2 Viewer and demoparser2 do not decode it;
+OFAST reads and decodes it in `demo::recipe` ([decision 020](../decisions/020-cs2-pose-recipe.md);
+`examples/pose_recipe.rs` prints it per player and tick, `OFAST_CHECK=1` counts what decodes). It is written the
+way Esoterica's task serializer writes it (Bobby Anguelov's open engine, whose design AnimGraph2 follows:
+`Animation_TaskSerializer`, `BitSerialization.h`, `Animation_BoneMaskTask.cpp`): bits least-significant first.
+
+The fields sit on the pawn's `CBodyComponent` → `m_animationController`:
+
+| Field | Declared type | What it holds |
+|---|---|---|
+| `m_hGraphDefinitionAG2` | `uint64` | the graph's resource id: `animation/graphs/worldmodel/worldmodel.vnmgraph` for every player |
+| `m_SerializePoseRecipeAG2Slots` | `CUtlVectorEmbeddedNetworkVar<AnimGraph2SerializedPoseRecipeSlot_t>`, 32 slots | each slot's `m_topology`, a byte blob: a task list the player has used lately (below) |
+| `m_nSerializePoseRecipeAG2ActiveSlot` | `uint32` | which slot this tick's tasks follow; changes when the graph's task list changes |
+| `m_SerializePoseRecipeAG2Dynamic` | `CNetworkUtlVectorBase<uint8>`: a length, then one element per byte (32, 64 or 96) | this tick's task data: the server tick (`u32`), then each task's payload in the slot's order |
+| `m_nSerializePoseRecipeVersionAG2` | `int32` | 2 |
+
+A **topology** is a 4-bit width `D` (at most 8), a `D`-bit task count, then per task a 5-bit type and its inputs
+(`D` bits each: indices of earlier tasks). How many inputs each type takes is not written: with the counts below
+all 618 different topologies of round 5 of the de_nuke pro demo (demo ticks 29322 – 41800) fit (each input an
+earlier task, every task but the last used by a later one, the bits ending in the blob's last byte), and all
+114,455 recipes of the round decode without an error (`examples/pose_recipe.rs` with `OFAST_CHECK=1` prints these
+counts and where each type sits). The **data** follows the topology's order, each payload straight after the last,
+so a task whose payload is not known hides everything after it:
+
+| Type | Inputs | Payload | What |
+|---|---|---|---|
+| 1 | 0 | resource index (10 bits in these demos, enough for the 909 clips and 67 graphs the graph refers to), normalized time (16 bits) | sample a clip |
+| 7 | 2 | normalized weight (8 bits), a flag, and when set a bone mask list | blend the second input over the first |
+| 8 | 2 | the same | blend; the masked layers (weight 1, bone mask 0, over the upper body) |
+| 0 | 1 | 6 bits (22, 25, 26 and 34 seen) | not known yet; a sample always follows (in 200 of the 618 topologies) |
+| 10 | 2 | not known yet | a third two-input kind (in 371), followed by a sample, a 14, a 15 or the 5 |
+| 6 | 0 | not known yet | an input-less pose, first in all 31 topologies that have one |
+| 15 | 1 | not known yet | in 64 topologies, always just before the 14 |
+| 14 | 1 | not known yet: it starts with two 16-bit values near 32768 | the aim, probably (in all but one topology, then a sample or the 5): for YEKINDAR mid-spray (ticks 37930 – 37931) the two read 32768 and 32894, 32768 and 32636 — yaw 0 to the body and the pitch level — while his eyes look 7 – 9° down: the pitch of the bullets (eyes + 2 × aim punch), not of the eyes |
+| 5 | 1 | not known yet | last in every topology |
+
+A bone mask list (Esoterica's `BoneMaskTaskList`) is a 5-bit count, then per entry a 3-bit kind: 0 `Mask`, one of
+the skeleton's bone masks by index (4 bits in these demos; Esoterica sizes it to the mask count, so a CS2 build can
+change it); 1 `GenerateMask`, an 8-bit normalized weight; 2 `Blend`, two earlier entries and a weight; 3 `Scale`, an
+earlier entry and a weight; 4 `Combine`, two earlier entries. Entries are named with as many bits as the count
+needs, weights with 8; kinds 5 – 7 do not exist.
+
+A typical list: `1 1 7(0,1) 1 7(2,3) 1 8(4,5) 1 8(6,7) 14(8) 5(9)`: the locomotion blend-space triangle (three clips
+at one shared time, two weights), a pose at time 0 laid over the upper body, the weapon's clip over it (YEKINDAR's
+AK fire, restarting at each shot), the aim, the last step. The locomotion times advance by `tick interval ÷ cycle
+length` (0.026 a tick on a 0.6 s run cycle) and the weights ease as the player turns: this is the pose CS2 drew.
+Round 5: 73 % of the recipes decode every clip and blend (decoding stops with only the closing 14 and 5 left, or
+at the 5); the others stop at a type 10 (22 %), 15 (4 %), 6 (1 %) or a 14 with more after it (1 %).
+
+The resource index is not the graph's own resource order. The main graph and its 66 child graphs refer to 909 clips
+(their `m_resources` lists, followed down by hand during the spike); their indices follow no rule tried by hand
+(their order in the graphs, their ids sorted, CRC32, FNV and MurmurHash orders of their paths and ids, hash-table
+slots; not kept as a probe). Esoterica numbers them in the order it walks the graph's resource lookup table, a hash
+map, which would explain an order that looks random and changes with the build. The two tournament matches checked (three rounds) share one order: by co-occurrence with the
+locomotion OFAST bakes (`examples/recipe_map.rs`, on recipes that start with the triangle), 434 is `idle_rifle`,
+321 `walk_n_rifle`, 141 `walk_ne_rifle`, 850 `walk_e_rifle`, 229 `walk_nw_rifle`, 919 `walk_w_rifle`, 697
+`walk_se_rifle`, 854 `walk_s_rifle`, 534 `walk_sw_rifle`, 22 `run_ne_rifle`, 175 `idle_crouch_rifle`, 289
+`walk_n_pistol`. The local match demo, recorded on another CS2 build, has another (`walk_n_pistol` is 847 there): the
+table has to be found for each build.
+
 ## Deaths
 
 CS2 simulates a dead player's ragdoll on the client: demos do not carry its motion. On the death tick the pawn's
@@ -888,3 +952,5 @@ baselines (`"12:3"` keys), seeking via full packets, the `coord_size_params` ove
   https://github.com/markus-wa/demoinfocs-golang
 - Valve protobufs via SteamDatabase GameTracking-CS2 — https://github.com/SteamDatabase/GameTracking-CS2
 - Oracle used in tests: demoparser2 0.42.0 through `tools/oracle/demoparser2_oracle.py`.
+- Esoterica (MIT, C++): `Code/Engine/Animation/TaskSystem/Animation_TaskSerializer.*`, `Animation_BoneMaskTask.cpp`,
+  `Code/Base/Serialization/BitSerialization.h` — the pose recipe's encoding — https://github.com/BobbyAnguelov/Esoterica

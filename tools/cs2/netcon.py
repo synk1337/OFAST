@@ -37,7 +37,8 @@ def main():
         except socket.timeout:
             pass
     s.close()
-    print(out.decode("utf-8", "replace"))
+    # The console sends UTF-8 (player names, marks): write it as such whatever the terminal's code page.
+    sys.stdout.buffer.write(out.decode("utf-8", "replace").encode("utf-8") + b"\n")
 
 
 if __name__ == "__main__":
