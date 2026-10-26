@@ -216,10 +216,11 @@ player and round.
   the weapon in hand, the arms keep their lengths, every shot starts on its tick.
 - [x] **Recoil on the view** ([decision 019](decisions/019-recoil-on-the-view.md)): the camera turned by the aim
   punch (rebuilt from the shots: each kick from the view punch the demo sends, or the gun's recoil table) and the view
-  punch, the viewmodel past it; YEKINDAR's view mid-spray frames as CS2's does.
+  punch, the viewmodel past it; YEKINDAR's view mid-spray frames as CS2's does. The third-person body aims where the
+  bullets go (the eyes plus twice the punch): a sprayer's gun keeps to the bullets' line as in CS2's side views.
 - [ ] Sway behind turns, bob while running, landing dip (CS2's client code); ironsights; shotguns' staged reloads;
   `FirstPersonScale` against walls; grenade throws and knife swings checked against CS2; the viewmodel's place
-  mid-spray (its muzzle 4 % of the frame higher than CS2's); the aim punch on the third-person body's aim.
+  mid-spray (its muzzle 4 % of the frame higher than CS2's).
 
 ## M6 progress
 

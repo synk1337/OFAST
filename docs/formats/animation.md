@@ -211,8 +211,11 @@ knife's `idle_default_ct` is all identity (the knife set's carry is already righ
 weight, so the spine, arms, head and weapon get 1 and the pelvis and legs 0. **Model-space layers** blend each masked
 bone's model-space rotation towards the layer's and recompute its local rotation under the already blended parent.
 
-**Aim** (`CNmAimCSNode`, engine code, rebuilt from Source 2 Viewer's reconstruction): the view yaw relative to the
-body (−89 … 89°, remapped into −55 … 65°) turns `spine_0 … 3` about the up axis by 0.1 / 0.2 / 0.3 / 0.4 of it; the
+**Aim** (`CNmAimCSNode`, engine code, rebuilt from Source 2 Viewer's reconstruction). The aim is where the bullets
+go: the eye angles plus twice the aim punch rebuilt from the shots (`anim::bake::BODY_AIM_PUNCH`,
+[demo.md](demo.md#recoil-on-the-view)); in CS2 a sprayer's gun keeps to the bullets' line while the eyes are pulled
+under it (Source 2 Viewer adds the punch once). The aim's yaw relative to the body (−89 … 89°, remapped into
+−55 … 65°) turns `spine_0 … 3` about the up axis by 0.1 / 0.2 / 0.3 / 0.4 of it; the
 pitch (positive down) bends the spine about each bone's local Z by 0.125 / 0.225 / 0.25 / 0.4 of a per-category range
 (rifles −25.5 … 25°) and the neck / head by 0.35 / 0.65 of another (rifles −35 … 20°); the weapon pivot moves onto
 `spine_3`; knives pitch the pivot, rifles and pistols pitch the weapon, shift it at extreme pitches and turn the

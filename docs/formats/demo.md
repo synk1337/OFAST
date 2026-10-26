@@ -638,6 +638,13 @@ CS2 turns a player's own view off their eye angles by recoil (`demo::recoil`, `e
   pull); after the spray's first shot (37685) 49.0 % in CS2, 49.2 % in OFAST, 47.9 % without the recoil; across, the
   two agree to 0.1 % of the width. The viewmodel's muzzle sits 4 % of the height above CS2's (6 % on a single shot
   before any recoil, at tick 37685: the firing animation's pose, not the punch).
+- The third-person body aims where the bullets go: the eye angles plus twice the punch (`anim::bake::BODY_AIM_PUNCH`;
+  Source 2 Viewer adds it once). Checked against CS2's free camera beside two sprays of round 5, the barrel's slope on
+  screen against OFAST's barrel projected into the same camera: YEKINDAR's AK (ticks 37900 – 37975, his eye pitch
+  pulled 11° down while the bullets stay level) keeps a −0.7 to −1.5° slope in CS2 from the first shot to the
+  thirteenth; OFAST gives +0.1° there with the punch doubled, −5.4° with it once, −10.9° without, and the muzzle
+  lands 2.5 px from CS2's in a 1456-px-wide frame (22 px with it once, 41 without). A fit over five frames of his and
+  XANTARES's M4A1-S spray gives 1.9 × the punch.
 
 ## Grenades
 

@@ -9,7 +9,8 @@
 //! Glock, the Five-SeveN) take each kick from an entry of their table that is not their recoil index's. Checked
 //! (`examples/aim_punch.rs`): at every shot the aim (the fire-bullets message's) minus the eye angles there is twice
 //! the punch; the rebuilt one is within a median 0.07 – 0.09° of it on 4 rounds of 3 demos (the eye angles come
-//! only once a tick), and a full-auto spray's first view punch jump is its table's first kick to 0.0001°.
+//! only once a tick), and a full-auto spray's first view punch jump is its table's first kick to 0.0001°. The same
+//! aim punch turns each agent's aim in third person ([`crate::anim::bake::BODY_AIM_PUNCH`]).
 //!
 //! Written to the agents manifest as `punch`: per player (controller, as text), `[tick, camera pitch, camera yaw,
 //! viewmodel pitch, viewmodel yaw]` (degrees, Source's: negative pitch up, positive yaw left) on each tick either is
@@ -89,8 +90,21 @@ pub fn kicks(
     out
 }
 
-/// The round's `punch` (module docs).
-pub fn punch_json(track: &RoundTrack, data: &ShotData) -> Json {
+/// One player's recoil on one tick ([`recoil_by_tick`]): the aim punch (rebuilt) and the view punch (the demo's),
+/// (pitch, yaw) degrees, Source's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Recoil {
+    /// The tick (a sample's).
+    pub tick: u32,
+    /// The aim punch.
+    pub aim: [f32; 2],
+    /// The view punch.
+    pub view: [f32; 2],
+}
+
+/// Every player's recoil on every sample tick of the round (module docs): the aim punch rebuilt from their shots'
+/// kicks ([`kicks`]), the view punch the demo sends.
+pub fn recoil_by_tick(track: &RoundTrack, data: &ShotData) -> BTreeMap<u32, Vec<Recoil>> {
     let dt = track.tick_interval;
     let times = shot_times(
         track
@@ -109,7 +123,7 @@ pub fn punch_json(track: &RoundTrack, data: &ShotData) -> Json {
         .iter()
         .flat_map(|s| s.players.iter().map(|p| p.controller))
         .collect();
-    let mut out = serde_json::Map::new();
+    let mut out = BTreeMap::new();
     for controller in players {
         // The view punch as last set, sample by sample, and its jumps (each over what was left of the last).
         let mut sets: Vec<(u32, Option<ViewPunch>)> = Vec::new();
@@ -137,8 +151,7 @@ pub fn punch_json(track: &RoundTrack, data: &ShotData) -> Json {
         let mut punch = AimPunch::default();
         let mut at = sets.first().map_or(0, |s| s.0.saturating_sub(1));
         let mut next = 0;
-        let mut keys = Vec::new();
-        let mut active = false;
+        let mut recoil = Vec::with_capacity(sets.len());
         for (tick, set) in sets {
             while let Some(&(time, velocity)) = kicks.get(next) {
                 if time >= f64::from(tick) {
@@ -157,23 +170,40 @@ pub fn punch_json(track: &RoundTrack, data: &ShotData) -> Json {
                 punch.advance(dt);
                 at += 1;
             }
-            let view = view_punch_at(set, f64::from(tick), dt);
-            let camera: [f32; 2] = std::array::from_fn(|k| punch.angle[k] * VIEW_SCALE + view[k]);
-            let viewmodel = punch.angle.map(|a| a * VIEWMODEL_EXTRA);
+            recoil.push(Recoil {
+                tick,
+                aim: punch.angle,
+                view: view_punch_at(set, f64::from(tick), dt),
+            });
+        }
+        out.insert(controller, recoil);
+    }
+    out
+}
+
+/// The round's `punch` (module docs) from every player's recoil ([`recoil_by_tick`]).
+pub fn punch_json(recoil: &BTreeMap<u32, Vec<Recoil>>) -> Json {
+    let mut out = serde_json::Map::new();
+    for (controller, ticks) in recoil {
+        let mut keys = Vec::new();
+        let mut active = false;
+        for r in ticks {
+            let camera: [f32; 2] = std::array::from_fn(|k| r.aim[k] * VIEW_SCALE + r.view[k]);
+            let viewmodel = r.aim.map(|a| a * VIEWMODEL_EXTRA);
             let something = camera.iter().chain(&viewmodel).any(|v| v.abs() >= NOTHING);
             if something || active {
-                let r = |v: f32| (f64::from(v) * 1000.0).round() / 1000.0;
+                let round = |v: f32| (f64::from(v) * 1000.0).round() / 1000.0;
                 let (camera, viewmodel) = if something {
                     (camera, viewmodel)
                 } else {
                     ([0.0; 2], [0.0; 2])
                 };
                 keys.push(json!([
-                    tick,
-                    r(camera[0]),
-                    r(camera[1]),
-                    r(viewmodel[0]),
-                    r(viewmodel[1])
+                    r.tick,
+                    round(camera[0]),
+                    round(camera[1]),
+                    round(viewmodel[0]),
+                    round(viewmodel[1])
                 ]));
             }
             active = something;

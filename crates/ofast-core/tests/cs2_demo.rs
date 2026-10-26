@@ -1283,6 +1283,7 @@ fn bake_decisions_follow_the_demo() {
                 rig.upper.as_ref(),
                 rig.graphs.as_ref(),
                 16.0,
+                &Default::default(),
             )
             .expect("bake");
             assert!(

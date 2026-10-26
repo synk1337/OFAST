@@ -25,6 +25,8 @@ angles plus twice the punch.
 - **Turn the camera** by 0.9 × the aim punch + the view punch, and **the viewmodel** by 0.65 × the aim punch past it,
   keyed per tick from the agents manifest's `punch` (`export::punch`); in Unreal on the POV camera's rotation and on
   the viewmodel's transform track.
+- **Aim the third-person body where the bullets go**: the eye angles plus 2 × the aim punch on the graph's aim layer
+  (`anim::bake::BODY_AIM_PUNCH`), baked into every agent's animation.
 
 ## Alternatives considered
 
@@ -34,6 +36,8 @@ angles plus twice the punch.
   median of what the shots show, the eye angles' tick rate being the limit.
 - **The aim punch from the shots' own aim only** (aim − eye angles, between shots by the model): exact only at the
   shots, and the eye angles come once a tick, not at the shot's sub-tick moment.
+- **The body's aim with the punch once**, as Source 2 Viewer's body animator adds it: in CS2's side views of a spray
+  the gun keeps to the bullets' line, which the punch once leaves 5° under (below).
 
 ## Consequences
 
@@ -42,6 +46,12 @@ angles plus twice the punch.
   49.2 % against CS2's 49.0 % (47.9 % without).
 - Deep in a full-auto spray the rebuilt aim punch runs about 3 % under what the shots show (the order of decay and
   integration in CS2's step is between Source 2 Viewer's and the exact integral); about 0.06° on the camera.
+- A sprayer's gun points where the bullets go, as in CS2. Measured from CS2's demo free camera beside two sprays of
+  round 5 (the slope of the barrel on screen against OFAST's barrel projected into the same camera): through
+  YEKINDAR's AK spray his eyes are pulled 11° down while the bullets stay level, and CS2's barrel keeps a −0.7 to
+  −1.5° slope from the first shot to the thirteenth; OFAST's is +0.1° with 2 × the punch, −5.4° with it once,
+  −10.9° without. A fit over five frames of his spray and XANTARES's gives 1.9 × the punch. On that round OFAST's
+  barrels now run a median 0.9° off the bullets' line from a spray's sixth shot on (6.4° before), 0.6° over all
+  shots (2.8°).
 - Not yet: the viewmodel's place mid-spray (its muzzle 4 % of the frame higher than CS2's, as on a single shot without
-  recoil: the firing animation's pose), the aim punch on the third-person body's aim (Source 2 Viewer adds it to the
-  body's aim layer), the view punch of being hit (not seen apart from shots yet).
+  recoil: the firing animation's pose), the view punch of being hit (not seen apart from shots yet).

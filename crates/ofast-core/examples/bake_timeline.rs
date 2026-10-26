@@ -100,6 +100,7 @@ fn main() {
                 rig.upper.as_ref(),
                 rig.graphs.as_ref(),
                 fps,
+                &Default::default(),
             )
             .expect("bake");
             let bad: Vec<usize> = poses

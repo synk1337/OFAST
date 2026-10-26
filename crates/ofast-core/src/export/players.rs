@@ -44,7 +44,7 @@ use super::loadout::{
     AgentMounts, Place, Slot, WeaponFrames, WeaponLook, carried_places, hide_changes, key_places,
     skeleton_with_slots, slot_target,
 };
-use super::punch::punch_json;
+use super::punch::{punch_json, recoil_by_tick};
 use super::shots::{
     Body, Capsule, Doors, ShotData, earlier_holes_json, export_decals, hitbox_check, shots_json,
 };
@@ -166,6 +166,8 @@ struct Round<'a> {
     world: Option<PhysicsData>,
     /// Its solid collision, for the bodies of the dead.
     collision: Option<WorldCollision>,
+    /// Each player's aim punch (pitch, yaw) by tick, which their body's aim follows ([`super::punch`]).
+    aim_punch: BTreeMap<u32, HashMap<u32, [f32; 2]>>,
 }
 
 /// The world physics of `map` (`maps/<map>/world_physics.vmdl`), or why it cannot be read (the map's archive is not
@@ -286,6 +288,12 @@ pub fn export_players(
         })
         .ok();
     let collision = world.as_ref().map(WorldCollision::from_physics);
+    let shot_data = ShotData::load(content, items_text.as_deref(), &mut warnings);
+    let recoil = recoil_by_tick(track, &shot_data);
+    let aim_punch = recoil
+        .iter()
+        .map(|(&controller, ticks)| (controller, ticks.iter().map(|r| (r.tick, r.aim)).collect()))
+        .collect();
     let round = Round {
         content,
         track,
@@ -298,6 +306,7 @@ pub fn export_players(
         frames: frame_samples(track, animation_fps(track)),
         world,
         collision,
+        aim_punch,
     };
 
     // Each player's look, from the last sample where they were alive (else their last one).
@@ -441,7 +450,6 @@ pub fn export_players(
         .world
         .as_ref()
         .map(|w| WorldCollision::from_physics_where(w, CollisionAttribute::stops_bullets));
-    let shot_data = ShotData::load(content, items_text.as_deref(), &mut report.warnings);
     // By tick, as the bullets look them up.
     bodies.sort_by_key(|b| b.tick);
     let doors = Doors::load(content, track, &round.models, &mut report.warnings);
@@ -498,7 +506,7 @@ pub fn export_players(
             "earlier_holes": earlier_holes,
             "decals": decals,
             "brass": brass,
-            "punch": punch_json(track, &shot_data),
+            "punch": punch_json(&recoil),
             "cases": cases,
         }))
         .expect("JSON serializes"),
@@ -740,10 +748,10 @@ const HITBOX_SET: &str = "cstrike";
 /// How many ticks before a hit's tick its player's hitboxes are posed ([`Body`]): the shot is fired about a tick
 /// before its message ([`crate::demo::shots::shot_times`]), and CS2's server checks it against the victim where the
 /// shooter saw them, earlier still (its lag compensation). Fitted on the demos' hits (`hitbox_check`, the export's
-/// `check:` line) over 10 rounds of 8 demos: posed 3 ticks back, 351 of 505 hit points lie within an inch of a
-/// hitbox's surface (2 back 336, on the hit's own tick 172 of the 413 with a body near), and where a bullet went
-/// through a body its way out lies within 3 inches of the next hit's start for 32 of 40 (the 8 inches of
-/// [`super::shots::PLAYER_DEPTH`]: 22).
+/// `check:` line) over 10 rounds of 8 demos: posed 3 ticks back, 353 of 505 hit points lie within an inch of a
+/// hitbox's surface (2 back 336, on the hit's own tick 172 of the 413 with a body near; 351 before the body's aim
+/// took the aim punch, [`crate::anim::bake::BODY_AIM_PUNCH`]), and where a bullet went through a body its way out
+/// lies within 3 inches of the next hit's start for 32 of 40 (the 8 inches of [`super::shots::PLAYER_DEPTH`]: 22).
 const HIT_POSE_TICKS: f32 = 3.0;
 
 /// A player's hitboxes in the world on frame `world` (the agent's posed bones, model space) with the player's
@@ -864,6 +872,7 @@ fn export_look(
             round.upper.as_ref(),
             round.graphs.as_ref(),
             round.fps,
+            round.aim_punch.get(&controller).unwrap_or(&HashMap::new()),
         )?;
         let carried: Vec<Vec<(Slot, Place)>> = round
             .frames

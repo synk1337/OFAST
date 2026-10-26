@@ -359,7 +359,8 @@ struct Step {
     /// `ladder_angle_yaw` and `ladder_angle_yaw_backwards` ([`super::states::ladder_angles`]).
     ladder_angle: f32,
     ladder_back: f32,
-    /// View yaw relative to the body (positive left) and pitch (positive down).
+    /// The aim (the eyes plus [`BODY_AIM_PUNCH`] × the aim punch): yaw relative to the body (positive left) and
+    /// pitch (positive down).
     aim_yaw: f32,
     aim_pitch: f32,
     movement: MovementSegment,
@@ -391,14 +392,28 @@ pub fn body_relative(velocity: [f32; 3], yaw: f32) -> [f32; 2] {
     ]
 }
 
+/// What the body's aim takes of the aim punch on `tick` ([`BODY_AIM_PUNCH`]).
+fn body_punch(aim_punch: &HashMap<u32, [f32; 2]>, tick: u32) -> [f32; 2] {
+    aim_punch
+        .get(&tick)
+        .map_or([0.0; 2], |p| p.map(|a| a * BODY_AIM_PUNCH))
+}
+
 /// An angle in −180 … 180.
 fn normalize_angle(degrees: f32) -> f32 {
     (degrees + 180.0).rem_euclid(360.0) - 180.0
 }
 
+/// How much of the aim punch the body's aim takes on top of the eye angles: as much as the bullets
+/// ([`crate::demo::recoil::BULLET_SCALE`]), so a third-person gun points where its shots go. Measured in CS2 (side
+/// views of two sprays on de_nuke, decision 019): the barrel keeps to the bullets' line while the eyes are pulled 11°
+/// under it; Source 2 Viewer's body animator adds the punch once (`PlayerBodyAnimator.cs`), which tilts it 5° off.
+pub const BODY_AIM_PUNCH: f32 = crate::demo::recoil::BULLET_SCALE;
+
 /// One player's poses (clip-skeleton bones) at `fps` frames per second from the round's first tick to its last:
 /// `None` while the player has no living pawn. Without `upper`, the locomotion alone; without `graphs`, no
-/// graph-evaluated states (moving and standing only, no actions).
+/// graph-evaluated states (moving and standing only, no actions). `aim_punch`: the player's aim punch (pitch, yaw)
+/// by tick ([`crate::export::punch`]), which the body's aim follows ([`BODY_AIM_PUNCH`]); empty for none.
 pub fn bake_player(
     track: &RoundTrack,
     controller: u32,
@@ -406,6 +421,7 @@ pub fn bake_player(
     upper: Option<&UpperBody>,
     graphs: Option<&GraphRig>,
     fps: f32,
+    aim_punch: &HashMap<u32, [f32; 2]>,
 ) -> Result<Vec<Option<Vec<Transform>>>, AnimError> {
     let baker = Baker {
         track,
@@ -413,6 +429,7 @@ pub fn bake_player(
         upper,
         graphs,
         eval: graphs.map(|g| Evaluator::new(&g.library)),
+        aim_punch,
     };
     let steps = baker.steps(controller)?;
     let frames = frame_samples(track, fps);
@@ -436,12 +453,15 @@ pub fn timeline(
     upper: Option<&UpperBody>,
     graphs: Option<&GraphRig>,
 ) -> Result<Vec<(u32, String)>, AnimError> {
+    // The aim does not decide anything.
+    let no_punch = HashMap::new();
     let baker = Baker {
         track,
         sets,
         upper,
         graphs,
         eval: graphs.map(|g| Evaluator::new(&g.library)),
+        aim_punch: &no_punch,
     };
     let mut out = Vec::new();
     let mut last: Option<&Step> = None;
@@ -565,6 +585,7 @@ struct Baker<'a> {
     upper: Option<&'a UpperBody>,
     graphs: Option<&'a GraphRig>,
     eval: Option<Evaluator<'a>>,
+    aim_punch: &'a HashMap<u32, [f32; 2]>,
 }
 
 impl Baker<'_> {
@@ -758,6 +779,7 @@ impl Baker<'_> {
 
             let air_height = run.map_or(0.0, |r| r.height(player.position[2], rig.velocity[2]));
             let ladder = bearings[i].map_or((0.0, 180.0), |b| ladder_angles(b, rig.body_yaw));
+            let punch = body_punch(self.aim_punch, tick);
             let mut step = Step {
                 tick,
                 set,
@@ -775,8 +797,8 @@ impl Baker<'_> {
                 ladder_cycle: (player.position[2] / LADDER_CYCLE_HEIGHT).rem_euclid(1.0),
                 ladder_angle: ladder.0,
                 ladder_back: ladder.1,
-                aim_yaw: normalize_angle(player.yaw - rig.body_yaw),
-                aim_pitch: player.pitch,
+                aim_yaw: normalize_angle(player.yaw - rig.body_yaw + punch[1]),
+                aim_pitch: player.pitch + punch[0],
                 movement: MovementSegment {
                     state: desired,
                     start: tick,
@@ -1749,6 +1771,14 @@ mod tests {
         assert_eq!(normalize_angle(190.0), -170.0);
         assert_eq!(normalize_angle(-200.0), 160.0);
         assert_eq!(normalize_angle(45.0), 45.0);
+    }
+
+    #[test]
+    fn the_body_aims_where_the_bullets_go() {
+        let punch = HashMap::from([(5, [-1.5, 0.25])]);
+        // Twice the punch, as the bullets take it; nothing on a tick without one.
+        assert_eq!(body_punch(&punch, 5), [-3.0, 0.5]);
+        assert_eq!(body_punch(&punch, 6), [0.0, 0.0]);
     }
 
     #[test]
