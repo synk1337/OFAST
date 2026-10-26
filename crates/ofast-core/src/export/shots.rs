@@ -53,6 +53,7 @@ use super::gltf::write_png;
 use super::players::Muzzle;
 use crate::content::Content;
 use crate::demo::players::{RoundTrack, ViewmodelSettings};
+use crate::demo::recoil::RecoilKeys;
 use crate::demo::shots::{PlayerHit, Shot, bullet_direction, shot_times, spread_offset};
 use crate::items::item_names;
 use crate::kv3::Value;
@@ -93,6 +94,8 @@ pub struct WeaponShots {
     /// `m_szWorldModel`: the gun's model (`weapons/models/ak47/weapon_rif_ak47.vmdl`; CS2's viewmodels draw it
     /// too), whose shoot sequence throws its cases ([`super::brass`]).
     pub model: Option<String>,
+    /// Its recoil keys ([`crate::demo::recoil::RecoilPattern`]).
+    pub recoil: RecoilKeys,
 }
 
 /// What a bullet does to a surface, from `scripts/surfaceproperties_impact_effects.txt`.
@@ -291,6 +294,19 @@ fn weapons_of(root: &Value) -> HashMap<String, WeaponShots> {
                     .and_then(Value::as_f64)
                     .map_or(default, |n| n as f32)
             };
+            // A pair of numbers per mode (a single number is both).
+            let pair = |key: &str| -> [f32; 2] {
+                let value = field(name, key);
+                let at = |i: usize| {
+                    value
+                        .and_then(|v| match v.as_array() {
+                            Some(modes) => modes.get(i).or(modes.first()).and_then(Value::as_f64),
+                            None => v.as_f64(),
+                        })
+                        .unwrap_or(0.0) as f32
+                };
+                [at(0), at(1)]
+            };
             let tracer_frequency = match field(name, "m_nTracerFrequency") {
                 Some(v) => match v.as_array() {
                     Some(modes) => {
@@ -323,6 +339,18 @@ fn weapons_of(root: &Value) -> HashMap<String, WeaponShots> {
                     .and_then(Value::as_str)
                     .filter(|p| !p.is_empty())
                     .map(str::to_owned),
+                recoil: RecoilKeys {
+                    seed: field(name, "m_nRecoilSeed")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0) as i32,
+                    full_auto: field(name, "m_bIsFullAuto")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    angle: pair("m_flRecoilAngle"),
+                    angle_variance: pair("m_flRecoilAngleVariance"),
+                    magnitude: pair("m_flRecoilMagnitude"),
+                    magnitude_variance: pair("m_flRecoilMagnitudeVariance"),
+                },
             };
             (name.to_owned(), shots)
         })
@@ -1775,6 +1803,7 @@ mod tests {
             headshot_multiplier: 4.0,
             armor_ratio: 1.55,
             model: None,
+            recoil: RecoilKeys::default(),
         }
     }
 

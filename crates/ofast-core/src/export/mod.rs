@@ -16,6 +16,7 @@
 //! - [`effects`]: CS2's sprite sheets for the grenades' effects (flames, fireballs, flares) as PNGs with their sequences.
 //! - [`shots`]: each bullet of a round traced through the map, walls and players, with what it met.
 //! - [`brass`]: the cases the guns throw out, flown as CS2's casing particles fly.
+//! - [`punch`]: how far recoil turns each player's first-person camera and viewmodel off their eye angles.
 
 pub mod brass;
 pub mod deaths;
@@ -26,6 +27,7 @@ mod light_cookie;
 pub mod loadout;
 pub mod map;
 pub mod players;
+pub mod punch;
 pub mod replay;
 pub mod shots;
 pub mod sky;

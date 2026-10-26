@@ -19,6 +19,7 @@
 //! | grenades | [`grenades`] | thrown grenades and the fires they light, per tick |
 //! | smokes | [`smoke`] | a smoke's voxel log decoded, and its cloud simulated |
 //! | shots | [`shots`] | each gun shot's fire-bullets message, and its bullets' directions from its seed |
+//! | recoil | [`recoil`] | the aim punch a gun's shots build, rebuilt from its recoil keys |
 //!
 //! The full format description, with sources, is in `docs/formats/demo.md`.
 //!
@@ -50,6 +51,7 @@ pub mod grenades;
 pub mod parser;
 pub mod players;
 pub mod proto;
+pub mod recoil;
 pub mod serializer;
 pub mod shots;
 pub mod smoke;

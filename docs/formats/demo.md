@@ -600,10 +600,44 @@ that spectators see the viewmodel as the player does:
 Pawns that never send them read as CS2's defaults. CS2's notes say the FOV only reaches spectators correctly since
 2026-05-07; OFAST uses what the demo carries. For the viewmodel the weapon also tells `m_bSilencerOn` (the M4A1-S
 and USP-S, `ActiveWeapon::silenced`) and its reserve ammunition (`m_pReserveAmmo[0]`, `ActiveWeapon::reserve`: the
-graphs' empty pose, slide back, is for a gun out of everything). The pawn also sends the view punch
-(`m_vecCsViewPunchAngle`, with the tick it was set and a sub-tick ratio) and `m_pAimPunchServices`, which the client
-decays itself; OFAST does not read them yet. The inspect fields (`m_bInspectPending`, `m_bInspectShouldLoop`,
+graphs' empty pose, slide back, is for a gun out of everything). The inspect fields (`m_bInspectPending`, `m_bInspectShouldLoop`,
 `m_flInspectCancelCompleteTime`) stay at their defaults in this demo: inspects show only in the animation state.
+
+### Recoil on the view
+
+CS2 turns a player's own view off their eye angles by recoil (`demo::recoil`, `export::punch`):
+
+- **The view punch** is in the demo: `m_pCameraServices.m_vecCsViewPunchAngle` (pitch, yaw), set on each shot with the
+  game tick it was set (`m_nCsViewPunchAngleTick`) and a sub-tick ratio (`m_flCsViewPunchAngleTickRatio`)
+  (`RigInputs::view_punch`). It decays exponentially at 18 per second (CS:GO's `view_punch_decay`), and each shot adds
+  0.055 of its kick to what is left: during an AK spray of round 5 (ticks 37807 – 37832) the jumps over what is left
+  are 0.055 × the AK table's first kick (22.5, to 0.0001°), then 22.2, 23.7, 26.0, 28.8 against the table's 21.6,
+  23.0, 25.2, 27.8 (Source 2 Viewer's ramp, which compounds: 3 % under; one that does not would give 24.4, 26.3, 28.1,
+  30). Its tick and ratio are the shot's moment: on the local match demo exactly the shot's (attack tick − 1 + the
+  attack's sub-tick fraction, [Shots](#shots)), on tournament demos 0.6 – 1.9 ticks after the start of the shot's tick
+  interval, where OFAST places a shot without its sub-tick moment.
+- **The aim punch** is not: `m_pAimPunchServices`' fields stay unsent on SourceTV. Every shot shows it: the
+  fire-bullets message's aim is the eye angles plus twice the punch. It is rebuilt as Source 2 Viewer rebuilds it: each
+  shot's kick pushes a velocity (decaying at 4.5 per second) that the punch integrates while it decays back to nothing
+  (8 per second exponentially, 18° per second linearly). The kick is the gun's recoil table's at the shot's recoil
+  index (from `m_nRecoilSeed`, `m_flRecoilAngle` / `Magnitude` and their variances in `weapons.vdata`; a full-auto
+  gun's kicks drift and ramp up), and a spray's first view punch jump is that kick × 0.055 to 0.0001°; but CS2's
+  semi-automatic pistols (the Glock, the Five-SeveN) take each kick from another entry of their table (their jumps
+  match entries 5, 47, 11, 17…, exactly, at recoil indices 0 – 1.4), so OFAST takes each shot's kick from its view
+  punch jump (the first one not yet taken from 0.5 tick before the shot to 2.5 after that kicks up and as hard as the
+  table's kick within a factor of 2: a landing's push down is not a shot's), at the jump's moment, and the table only
+  without one.
+- Checked (`examples/aim_punch.rs`): at every shot the rebuilt aim punch is within a median 0.07 – 0.09° of what the
+  shot shows (eye angles taken at the shot's moment, between two ticks; 4 rounds of 3 demos); a full-auto spray's later
+  shots run about 3 % above the rebuilt punch (Source 2 Viewer's order of decay and integration gives 3 % less, the
+  exact integral 3 % more).
+- The camera turns by 0.45 of the punch's offset to the bullets (0.9 × the punch) plus the view punch; the viewmodel
+  another 0.325 of it (0.65 × the punch) past the camera. Checked against CS2's first-person view of YEKINDAR's spray
+  (round 5, ticks 37703 and 37709): the A sign's centre sits at 47.6 % and 47.4 % of the frame's height in CS2,
+  47.45 % and 47.35 % in OFAST (about 44 % without the recoil: the camera tilts 3 – 4° down with the player's
+  pull); after the spray's first shot (37685) 49.0 % in CS2, 49.2 % in OFAST, 47.9 % without the recoil; across, the
+  two agree to 0.1 % of the width. The viewmodel's muzzle sits 4 % of the height above CS2's (6 % on a single shot
+  before any recoil, at tick 37685: the firing animation's pose, not the punch).
 
 ## Grenades
 

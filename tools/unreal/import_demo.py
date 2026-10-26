@@ -805,12 +805,14 @@ def spawn_viewmodel(player, mesh, camera):
     return actor
 
 
-def key_viewmodel_hand(binding, frames, hands, offset, end_frame):
+def key_viewmodel_hand(binding, frames, hands, offset, end_frame, punch=None):
     """The viewmodel's transform on its camera: moved by the player's viewmodel_offset_x / _y / _z (inches in view
     space: right, forward, up; Unreal's camera looks along +X with +Y to the right), and mirrored from every tick the
     player holds it in the left hand (m_bLeftHanded, which the switch-hands key flips during a round), the sideways
     offset with it — CS2 mirrors the whole viewmodel (cl_righthand 0; the mirrored offset is not checked against CS2
-    yet). Step keys: the hand changes from one tick to the next."""
+    yet). Step keys: the hand changes from one tick to the next. Turned past the camera by recoil on the ticks
+    `punch` (per frame: export::punch's (camera pitch, yaw, viewmodel pitch, yaw), or None) has it, linear keys, the
+    yaw mirrored with the viewmodel."""
     right, forward, up = offset
     track = binding.add_track(unreal.MovieScene3DTransformTrack)
     section = track.add_section()
@@ -830,6 +832,27 @@ def key_viewmodel_hand(binding, frames, hands, offset, end_frame):
             channels[name].add_key(unreal.FrameNumber(frame), value, 0.0, unreal.MovieSceneTimeUnit.DISPLAY_RATE,
                                    constant)
         previous = left
+    # Recoil: Source's pitch and yaw negated, as the camera's are; keyed while turned, with a key of nothing on the
+    # tick before and the tick after each stretch (a channel holds its first key's value before it, and a linear
+    # segment between two stretches would drift).
+    linear = unreal.MovieSceneKeyInterpolation.LINEAR
+    turned = False
+    left = False
+    before = None
+    for frame, hand, turn in zip(frames, hands, punch or []):
+        left = left if hand is None else hand
+        now = turn is not None and (abs(turn[2]) > 0.0 or abs(turn[3]) > 0.0)
+        keyed = []
+        if now and not turned and before is not None:
+            keyed.append((before, 0.0, 0.0))
+        if now or turned:
+            keyed.append((frame, -turn[2], -turn[3]) if now else (frame, 0.0, 0.0))
+        for at, pitch, yaw in keyed:
+            for name, value in (("Rotation.Y", pitch), ("Rotation.Z", -yaw if left else yaw)):
+                channels[name].add_key(unreal.FrameNumber(at), value, 0.0,
+                                       unreal.MovieSceneTimeUnit.DISPLAY_RATE, linear)
+        turned = now
+        before = frame
 
 
 def spawn_agent(player, mesh):
@@ -982,6 +1005,10 @@ def build(replay):
     cuts = camera_cut_plan(replay, {p["controller"] for p in replay["players"]}, end_frame, fps)
     agents = import_agents(replay)
     viewmodels = import_viewmodels(replay)
+    manifest = agents_manifest(replay)
+    # Recoil on each player's own view (export::punch): tick -> (camera pitch, yaw, viewmodel pitch, yaw), Source's.
+    punches = {int(c): {k[0]: k[1:] for k in keys}
+               for c, keys in ((manifest[2] if manifest else {}).get("punch") or {}).items()}
     for player in replay["players"]:
         track = replay["samples"]["players"][str(player["controller"])]
         positions = [None if p is None else to_unreal(p) for p in track["position"]]
@@ -1025,7 +1052,12 @@ def build(replay):
         eyes = [None if p is None or h is None else (p[0], p[1], p[2] + h * UNITS_TO_CM)
                 for p, h in zip(positions, track["eye_height"])]
         camera_binding = sequence.add_possessable(camera)
-        keys += key_transform(camera_binding, frames, eyes, rotations, (1.0, 1.0, 1.0), end_frame)
+        # The camera turned off the eye angles by recoil (the punch's Source angles: negated as the eye angles are).
+        punch = punches.get(player["controller"], {})
+        view_rotations = [None if r is None else (r[0] - punch.get(t, (0.0, 0.0))[0],
+                                                  r[1] - punch.get(t, (0.0, 0.0))[1])
+                          for r, t in zip(rotations, ticks)]
+        keys += key_transform(camera_binding, frames, eyes, view_rotations, (1.0, 1.0, 1.0), end_frame)
         cameras[player["controller"]] = (camera, camera_binding)
         # The arms and the weapon in hand, on the camera, while the camera looks through this player's eyes.
         viewmodel = viewmodels.get(player["controller"])
@@ -1035,7 +1067,8 @@ def build(replay):
             vm_binding = sequence.add_possessable(vm)
             key_animation(vm_binding, viewmodel[1], end_frame)
             offset = (player.get("viewmodel") or {}).get("offset", [1.0, 1.0, -1.0])
-            key_viewmodel_hand(vm_binding, frames, track.get("left_handed", []), offset, end_frame)
+            key_viewmodel_hand(vm_binding, frames, track.get("left_handed", []), offset, end_frame,
+                               [punch.get(t) for t in ticks])
             living = [bool(a) and p is not None for a, p in zip(track["alive"], positions)]
             vm_changes = visibility_changes(frames, living, own_view, first_person=True)
             viewmodel_visibility[player["controller"]] = vm_changes
@@ -1047,7 +1080,6 @@ def build(replay):
     # a smoke still has its fires and flashes).
     smoke_volumes.key_replay_tick(sequence, replay, end_frame)
     smoke_volumes.place_smokes(sequence, replay, REPLAY_PATH, end_frame, spawn_tagged)
-    manifest = agents_manifest(replay)
     grenade_effects.place_effects(sequence, replay, REPLAY_PATH, end_frame, manifest[2] if manifest else {},
                                   {controller: camera for controller, (camera, _) in cameras.items()}, spawn_tagged)
     shot_effects.place_shots(sequence, replay, REPLAY_PATH, end_frame, manifest[2] if manifest else {}, spawn_tagged,

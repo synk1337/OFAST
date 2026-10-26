@@ -279,6 +279,10 @@ pub struct RigInputs {
     pub flash_duration: f32,
     /// How white the latest flash makes the screen at most, 0 – 255 (`m_flFlashMaxAlpha`).
     pub flash_max_alpha: f32,
+    /// The view punch as last set: (pitch, yaw) degrees, negative pitch up (`m_vecCsViewPunchAngle`), and when, in
+    /// demo ticks to a fraction (`m_nCsViewPunchAngleTick` + `m_flCsViewPunchAngleTickRatio`, a game tick); `None`
+    /// before any. It decays from then on ([`super::recoil::view_punch_at`]).
+    pub view_punch: Option<super::recoil::ViewPunch>,
 }
 
 /// Whether a pawn's flash duration ([`RigInputs::flash_duration`]) going from `seen` to `duration` is a new blinding.
@@ -628,6 +632,7 @@ struct RigPaths {
     active_weapon: Option<FieldPath>,
     flash_duration: Option<FieldPath>,
     flash_max_alpha: Option<FieldPath>,
+    view_punch: Option<[FieldPath; 3]>,
     /// Per weapon class id: every class with an item definition index (each weapon has its own serializer, so the
     /// same field sits at a different path in each).
     weapons: HashMap<u32, WeaponPaths>,
@@ -710,6 +715,13 @@ impl RigPaths {
             active_weapon: path("m_pWeaponServices.m_hActiveWeapon"),
             flash_duration: path("m_flFlashDuration"),
             flash_max_alpha: path("m_flFlashMaxAlpha"),
+            view_punch: (|| {
+                Some([
+                    path("m_pCameraServices.m_vecCsViewPunchAngle")?,
+                    path("m_pCameraServices.m_nCsViewPunchAngleTick")?,
+                    path("m_pCameraServices.m_flCsViewPunchAngleTickRatio")?,
+                ])
+            })(),
             weapons,
         }
     }
@@ -1463,6 +1475,13 @@ fn read_rig(parser: &DemoParser<'_>, paths: &RigPaths, pawn: &Entity) -> RigInpu
         flash_max_alpha: get(&paths.flash_max_alpha)
             .and_then(FieldValue::as_f32)
             .unwrap_or(0.0),
+        view_punch: paths.view_punch.as_ref().and_then(|[angle, tick, ratio]| {
+            let angle = pawn.get(angle)?.as_vector3()?;
+            let tick = pawn.get(tick)?.as_i64().filter(|&t| t > 0)?;
+            let tick = parser.game_tick_to_demo(u32::try_from(tick).ok()?)?;
+            let ratio = pawn.get(ratio).and_then(FieldValue::as_f32).unwrap_or(0.0);
+            Some(([angle[0], angle[1]], f64::from(tick) + f64::from(ratio)))
+        }),
     }
 }
 

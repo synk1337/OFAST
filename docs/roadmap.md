@@ -214,8 +214,12 @@ player and round.
 - [x] **Checked against CS2's first-person view**: four kills (right- and left-handed, FOV 60 – 68, three offsets),
   two reloads, two knife inspects match in size, angle, place and pose; on the local match demo every frame follows
   the weapon in hand, the arms keep their lengths, every shot starts on its tick.
-- [ ] Sway behind turns, bob while running, landing dip (CS2's client code); view punch on the camera; ironsights;
-  shotguns' staged reloads; `FirstPersonScale` against walls; grenade throws and knife swings checked against CS2.
+- [x] **Recoil on the view** ([decision 019](decisions/019-recoil-on-the-view.md)): the camera turned by the aim
+  punch (rebuilt from the shots: each kick from the view punch the demo sends, or the gun's recoil table) and the view
+  punch, the viewmodel past it; YEKINDAR's view mid-spray frames as CS2's does.
+- [ ] Sway behind turns, bob while running, landing dip (CS2's client code); ironsights; shotguns' staged reloads;
+  `FirstPersonScale` against walls; grenade throws and knife swings checked against CS2; the viewmodel's place
+  mid-spray (its muzzle 4 % of the frame higher than CS2's); the aim punch on the third-person body's aim.
 
 ## M6 progress
 

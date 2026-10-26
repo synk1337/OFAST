@@ -44,6 +44,7 @@ use super::loadout::{
     AgentMounts, Place, Slot, WeaponFrames, WeaponLook, carried_places, hide_changes, key_places,
     skeleton_with_slots, slot_target,
 };
+use super::punch::punch_json;
 use super::shots::{
     Body, Capsule, Doors, ShotData, earlier_holes_json, export_decals, hitbox_check, shots_json,
 };
@@ -497,6 +498,7 @@ pub fn export_players(
             "earlier_holes": earlier_holes,
             "decals": decals,
             "brass": brass,
+            "punch": punch_json(track, &shot_data),
             "cases": cases,
         }))
         .expect("JSON serializes"),
