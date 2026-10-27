@@ -24,7 +24,7 @@ use super::gltf::{
     Binding, BoneAnimation, ExportReport, MergedModel, export_character, load_model, resource_data,
 };
 use super::loadout::{Finish, WeaponFrames, WeaponLook};
-use super::paint::Paints;
+use super::paint::{Paint, Paints};
 use super::players::{Muzzle, shown_groups, stem};
 use crate::anim::bake::frame_samples;
 use crate::anim::eval::Library;
@@ -200,9 +200,9 @@ pub type ViewmodelExport = (ExportReport, Vec<WeaponLook>, Vec<Muzzle>);
 /// One player's baked frames and the weapon look in hand at each: `(controller, frames, looks)`.
 type Baked = (u32, Vec<Option<ViewmodelFrame>>, Vec<Option<WeaponLook>>);
 
-/// Writes one viewmodel look's glTF (see the module docs): `agent` with glove skin `gloves` for `players`, the
-/// round's frames at `fps`. `models` names the weapon models by resource id; `paints` paints their skins; `arms` is
-/// [`ARMS_MODEL`].
+/// Writes one viewmodel look's glTF (see the module docs): `agent` with glove skin `gloves` (the glove model and its
+/// paint, M10) for `players`, the round's frames at `fps`. `models` names the weapon models by resource id; `paints`
+/// paints their skins; `arms` is [`ARMS_MODEL`].
 ///
 /// [`ARMS_MODEL`]: crate::anim::viewmodel::ARMS_MODEL
 #[allow(clippy::too_many_arguments)]
@@ -215,13 +215,17 @@ pub fn export_viewmodel_look(
     models: &HashMap<u64, String>,
     paints: &Paints,
     agent: &str,
-    gloves: Option<&str>,
+    gloves: Option<(&str, Option<Paint>)>,
     players: &[u32],
     out_dir: &Path,
     file_name: &str,
 ) -> Result<ViewmodelExport, ExportError> {
     let mut warnings = Vec::new();
     let agent_model = load_model(content, agent)?;
+    let (gloves, glove_paint) = match gloves {
+        Some((path, paint)) => (Some(path), paint),
+        None => (None, None),
+    };
     let glove_model = match gloves {
         Some(path) => match load_model(content, path) {
             Ok(model) => Some(model),
@@ -375,7 +379,7 @@ pub fn export_viewmodel_look(
             model,
             mesh_groups: groups,
             binding: Binding::ByName,
-            paint: None,
+            paint: glove_paint.clone(),
         });
     }
     for (n, slot) in slots.iter().enumerate() {

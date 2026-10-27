@@ -36,8 +36,15 @@ fn main() {
             v.container, v.name, v.value, v.bounds
         );
     }
-    for (container, name, n) in &recipe.rolls {
-        println!("  roll {container}.{name} ×{n}");
+    for roll in &recipe.rolls {
+        let (container, name) = &roll.seed;
+        println!(
+            "  roll seeded by {container}.{name} ({} conditions):",
+            roll.conditions.len()
+        );
+        for (container, name, n) in &roll.variables {
+            println!("    {container}.{name} ×{n}");
+        }
     }
     println!("rolled with seed {seed}: {:?}", recipe.roll(seed));
     let params = weapon_params(&content, &recipe, material, seed, wear).expect("params");

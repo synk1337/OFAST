@@ -147,6 +147,8 @@ struct Look {
     mesh_groups: u64,
     /// Glove world model path, when the players wear glove skins.
     gloves: Option<String>,
+    /// The gloves' finish (M10): painted when the gloves have one.
+    glove_finish: Option<Finish>,
 }
 
 /// What every look's export shares.
@@ -397,10 +399,13 @@ pub fn export_players(
                 p.appearance.gloves
             ));
         }
+        let [kit, seed, wear] = p.appearance.glove_finish;
+        let glove_finish = (gloves.is_some() && kit != 0).then_some(Finish { kit, seed, wear });
         let look = Look {
             agent,
             mesh_groups,
             gloves,
+            glove_finish,
         };
         groups.entry(look).or_default().push(controller);
     }
@@ -432,6 +437,12 @@ pub fn export_players(
         );
         if let Some(gloves) = &look.gloves {
             name = format!("{name}_{}", stem(gloves));
+        }
+        if let Some(paint) = look
+            .glove_finish
+            .and_then(|f| round.paints.paint(round.content, f, &mut report.warnings))
+        {
+            name = format!("{name}_{}", paint.label);
         }
         let (written, weapons, falls, look_muzzles, look_bodies) =
             export_look(&round, look, players, out_dir, &name, &mut recipe_ticks)?;
@@ -476,6 +487,7 @@ pub fn export_players(
             "model": look.agent,
             "mesh_groups": look.mesh_groups,
             "gloves": look.gloves,
+            "glove_finish": look.glove_finish.map(finish_json),
             "players": players,
             "ragdolls": ragdolls,
             "weapons": weapons.iter().map(|s| json!({
@@ -570,11 +582,14 @@ pub fn export_players(
     Ok(report)
 }
 
+/// A first-person look: the agent, the glove model, the glove skin.
+type ViewLook<'a> = (&'a str, Option<&'a str>, Option<Finish>);
+
 /// Writes the players' first-person views ([`super::viewmodel`]): one glTF per agent and glove skin of the looks
-/// in `groups`, `<demo>_r<round>_viewmodel_<agent>[_<gloves>].gltf`. Returns the manifest entries (file, agent,
-/// gloves, players, and the weapon looks it holds), and where the barrel was at each shot in first person
-/// ([`super::viewmodel::ViewmodelExport`]). Without the upper-body data (no weapon names) or CS2's viewmodel files
-/// there is none, with a warning; a look that fails is left out with a warning too.
+/// in `groups`, `<demo>_r<round>_viewmodel_<agent>[_<gloves>[_<glove skin>]].gltf`. Returns the manifest entries
+/// (file, agent, gloves, glove skin, players, and the weapon looks it holds), and where the barrel was at each shot
+/// in first person ([`super::viewmodel::ViewmodelExport`]). Without the upper-body data (no weapon names) or CS2's
+/// viewmodel files there is none, with a warning; a look that fails is left out with a warning too.
 fn export_viewmodels(
     round: &Round<'_>,
     groups: &BTreeMap<Look, Vec<u32>>,
@@ -612,17 +627,21 @@ fn export_viewmodels(
             return (Vec::new(), Vec::new());
         }
     };
-    // The defuse kit makes no difference in first person: one file per agent and gloves.
-    let mut looks: BTreeMap<(&str, Option<&str>), Vec<u32>> = BTreeMap::new();
+    // The defuse kit makes no difference in first person: one file per agent and glove skin.
+    let mut looks: BTreeMap<ViewLook<'_>, Vec<u32>> = BTreeMap::new();
     for (look, players) in groups {
         looks
-            .entry((look.agent.as_str(), look.gloves.as_deref()))
+            .entry((
+                look.agent.as_str(),
+                look.gloves.as_deref(),
+                look.glove_finish,
+            ))
             .or_default()
             .extend(players);
     }
     let mut entries = Vec::new();
     let mut muzzles = Vec::new();
-    for ((agent, gloves), mut players) in looks {
+    for ((agent, gloves, glove_finish), mut players) in looks {
         players.sort_unstable();
         let mut name = format!(
             "{demo_name}_r{}_viewmodel_{}",
@@ -631,6 +650,11 @@ fn export_viewmodels(
         );
         if let Some(gloves) = gloves {
             name = format!("{name}_{}", stem(gloves));
+        }
+        let glove_paint =
+            glove_finish.and_then(|f| round.paints.paint(round.content, f, &mut report.warnings));
+        if let Some(paint) = &glove_paint {
+            name = format!("{name}_{}", paint.label);
         }
         match export_viewmodel_look(
             round.content,
@@ -641,7 +665,7 @@ fn export_viewmodels(
             &round.models,
             &round.paints,
             agent,
-            gloves,
+            gloves.map(|path| (path, glove_paint)),
             &players,
             out_dir,
             &name,
@@ -652,6 +676,7 @@ fn export_viewmodels(
                     "file": format!("{name}.gltf"),
                     "model": agent,
                     "gloves": gloves,
+                    "glove_finish": glove_finish.map(finish_json),
                     "players": players,
                     "weapons": weapons.iter().map(|w| json!({
                         "model": w.model,
@@ -1065,7 +1090,9 @@ fn export_look(
             model,
             mesh_groups: model.default_mesh_group_mask,
             binding: Binding::ByName,
-            paint: None,
+            paint: look
+                .glove_finish
+                .and_then(|f| round.paints.paint(content, f, &mut warnings)),
         }),
         // No glove skin to merge: the agent's own gloves, even if the pawn asked to hide them.
         None => mesh_groups = with_own_gloves(&agent, mesh_groups),

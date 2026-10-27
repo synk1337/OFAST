@@ -25,6 +25,7 @@ pub mod cameras;
 pub mod deaths;
 pub mod effects;
 mod environment;
+mod gloves;
 pub mod gltf;
 mod light_cookie;
 pub mod loadout;

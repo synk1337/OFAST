@@ -35,6 +35,9 @@ param(
     [string]$CloseShots = "",
     # For import_demo.py: views from cameras placed as CS2's getpos prints them, "tick:x:y:z:pitch:yaw,...".
     [string]$ViewShots = "",
+    # Without a renderer (-nullrhi): no GPU memory, so a big round imports where a drawn one ran out of video memory;
+    # nothing can be shot (shoot_sequence.py shoots the saved round afterwards).
+    [switch]$NullRhi,
     [string]$Engine = "C:\Program Files\Epic Games\UE_5.8"
 )
 
@@ -72,5 +75,6 @@ if ($Shot) {
     }
 }
 
-& $editor $project "-ExecutePythonScript=$(& $resolve $Script)" -unattended -nosplash -stdout -FullStdOutLogOutput -NoSound 2>&1 |
+$extra = @(if ($NullRhi) { "-nullrhi" })
+& $editor $project "-ExecutePythonScript=$(& $resolve $Script)" -unattended -nosplash -stdout -FullStdOutLogOutput -NoSound @extra 2>&1 |
     Where-Object { $_ -match "OFAST:" }

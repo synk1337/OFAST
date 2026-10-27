@@ -708,6 +708,8 @@ pub(crate) struct MaterialInfo {
     /// String attributes (`m_stringAttributes`): a weapon material's `composite_inputs`, the material its skins are
     /// painted with (M10, [`crate::paint`]).
     pub(crate) strings: BTreeMap<String, String>,
+    /// Integer attributes (`m_intAttributes`): a glove material's `left` and `seed_offset` (M10).
+    pub(crate) int_attributes: BTreeMap<String, i64>,
 }
 
 impl MaterialInfo {
@@ -1460,11 +1462,15 @@ impl<'c> GltfWriter<'c> {
     fn material(&mut self, path: &str, tint: [f32; 4]) -> usize {
         let tint_key = tint.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
         // CS2 paints a skin on the materials that name their composite inputs (the weapon's body, not its sticker
-        // gaps or scope glass). Looked up only while a skin is painted: the cache below serves every other call.
+        // gaps or scope glass) and on a glove's, composite targets themselves. Looked up only while a skin is
+        // painted: the cache below serves every other call.
         let paint = match self.paint.clone() {
             Some(paint) => self
                 .material_info(path)
-                .filter(|i| i.strings.contains_key("composite_inputs"))
+                .filter(|i| {
+                    i.strings.contains_key("composite_inputs")
+                        || i.strings.contains_key("composite_target")
+                })
                 .map(|_| paint),
             None => None,
         };
@@ -2478,6 +2484,18 @@ pub(crate) fn read_material(content: &Content, path: &str) -> Result<MaterialInf
             info.strings.insert(name.to_owned(), value.to_owned());
         }
     }
+    for param in root
+        .get("m_intAttributes")
+        .and_then(Value::as_array)
+        .unwrap_or_default()
+    {
+        if let (Some(name), Some(value)) = (
+            param.get("m_name").and_then(Value::as_str),
+            param.get("m_nValue").and_then(Value::as_i64),
+        ) {
+            info.int_attributes.insert(name.to_owned(), value);
+        }
+    }
     Ok(info)
 }
 
@@ -3464,6 +3482,7 @@ mod tests {
             floats: BTreeMap::from([("g_flSheenScale".to_owned(), 0.5)]),
             vectors: BTreeMap::from([("g_flSheenTintColor".to_owned(), [1.0, 0.5, 0.25, 0.0])]),
             strings: BTreeMap::new(),
+            int_attributes: BTreeMap::new(),
         };
         // A knit with a cloth mask; the same without the flag; a glove with the flag but a constant with no mask.
         writer.cloth_masks.insert("knit_cloth.vtex".into(), true);

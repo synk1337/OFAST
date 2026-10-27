@@ -79,7 +79,11 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   and grunge textures again for each skin, and again for the viewmodel): fine at a round's 30 skins, a cache if it
   grows.
 - Weapons lying in the world are painted too (their own glTFs, one per model and skin).
-- Not painted yet: gloves (their own shader, `csgo_customglove`), stickers, keychains, name tags, StatTrak counters.
+- Gloves are painted with their own shader (`csgo_customglove`, its default combo, ported the same way:
+  `export::gloves`), 7 of round 17's 10 glove skins; 2025's kits (the height-blended combo) keep the glove model's own
+  textures, with a warning. Each glove skin bakes in about 15 s a hand (derivatives read at three texels): the round's
+  players now export in about 4 minutes.
+- Not painted yet: stickers, keychains, name tags, StatTrak counters.
 - To check against CS2: the roll (whether a variable a kit does not define still takes its draw), which size scale
   the UV placements use (`g_flUvScale1`, or `g_flWeaponLength1 / 36`: the vertex stage declares both; OFAST takes
   the first, and the second for the projected patterns, whose own declarations name it), the look at each wear.

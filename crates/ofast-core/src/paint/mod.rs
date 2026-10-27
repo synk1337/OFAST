@@ -140,13 +140,33 @@ pub enum VariableValue {
 pub struct Recipe {
     /// The paint material (the `paint` container): `…/vmats/cu_fireserpent_ak47_bravo.vmat`.
     pub paint_material: Option<String>,
+    /// Other containers holding a specific material: `(alias, path)` (a newer glove kit's `paint_compositor`).
+    pub other_materials: Vec<(String, String)>,
     /// The loose variables, in the order read (includes first; a later one replaces an earlier of the same container
     /// and name).
     pub variables: Vec<Variable>,
-    /// The variables the seed rolls, in order: `(container, name, components)`.
-    pub rolls: Vec<(String, String, usize)>,
+    /// The random rolls, in order (one for a weapon; a glove's two, by which seed its material takes).
+    pub rolls: Vec<Roll>,
+    /// Containers holding one of the target material's attributes (`CONTAINER_SOURCE_TYPE_VARIABLE_FROM_TARGET_ATTR`):
+    /// `(alias, attribute)`, a glove's `handedness` ← `left`, `material_seed` ← `seed_offset`.
+    pub attribute_containers: Vec<(String, String)>,
+    /// Copies into a container's own variable before the textures are generated (a `COPY_PROPERTY` whose target is
+    /// `container.variable`: a left glove's pattern offset).
+    pub container_copies: Vec<Step>,
     /// The textures it generates, each with its steps (a later one replaces an earlier for the same texture).
     pub generated: Vec<Generated>,
+}
+
+/// A random roll (`COMP_MAT_PROPERTY_MUTATOR_RANDOM_ROLL_INPUT_VARIABLES`): a uniform random stream seeded by a
+/// container's variable draws each listed variable in order, when the conditions hold.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Roll {
+    /// The seed: `(container, variable)`, `econ_instance.g_nRandomSeed`.
+    pub seed: (String, String),
+    /// When (all of them).
+    pub conditions: Vec<Condition>,
+    /// The variables drawn, in order: `(container, name, components)`.
+    pub variables: Vec<(String, String, usize)>,
 }
 
 /// A texture a composite material generates into the weapon's material (`COMP_MAT_PROPERTY_MUTATOR_GENERATE_TEXTURE`):
@@ -218,11 +238,13 @@ pub struct WeaponParams {
     pub color: BTreeMap<String, Param>,
     /// Its roughness and metalness's (`g_tMetalness`).
     pub surface: BTreeMap<String, Param>,
+    /// Painted with the gloves' shader (`csgo_customglove.vfx`), not the weapons'.
+    pub glove: bool,
 }
 
-/// The parameters weapon material `material` (one of the weapon model's, `…/ak47.vmat`) is painted with for `recipe`
-/// at `seed` and `wear` (step 4 of the [module docs](self)): the material's `composite_inputs` attribute names the weapon's
-/// composite inputs.
+/// The parameters weapon material `material` (one of the weapon model's, `…/ak47.vmat`, or a glove model's) is
+/// painted with for `recipe` at `seed` and `wear` (step 4 of the [module docs](self)): the material's
+/// `composite_inputs` attribute names the weapon's composite inputs; a glove's material is its own composite target.
 pub fn weapon_params(
     content: &Content,
     recipe: &Recipe,
@@ -237,33 +259,48 @@ pub fn weapon_params(
         })
     };
     let weapon = read(material)?;
-    let inputs = weapon
-        .strings
-        .get("composite_inputs")
-        .ok_or_else(|| PaintError::NotPainted(material.to_owned()))?;
-    let inputs = read(inputs)?;
+    let inputs = match weapon.strings.get("composite_inputs") {
+        Some(path) => read(path)?,
+        // A glove's materials are composite targets themselves, with no inputs of their own.
+        None if weapon.strings.contains_key("composite_target") => MaterialInfo::default(),
+        None => return Err(PaintError::NotPainted(material.to_owned())),
+    };
     let paint = match &recipe.paint_material {
         Some(path) => read(path)?,
         None => MaterialInfo::default(),
     };
-    let containers = recipe.containers(
-        &[
-            ("paint", &paint),
-            ("composite_inputs", &inputs),
-            ("target", &weapon),
-            ("target_instance", &weapon),
-        ],
-        seed,
-        wear,
-    );
+    let others = recipe
+        .other_materials
+        .iter()
+        .map(|(alias, path)| Ok((alias.as_str(), read(path)?)))
+        .collect::<Result<Vec<_>, PaintError>>()?;
+    let mut materials = vec![
+        ("paint", &paint),
+        ("composite_inputs", &inputs),
+        ("target", &weapon),
+        ("target_instance", &weapon),
+    ];
+    materials.extend(others.iter().map(|(alias, info)| (*alias, info)));
+    let containers = recipe.containers(&materials, seed, wear);
     let texture = |target: &str| {
         recipe
             .generate(target, &containers)
             .unwrap_or_else(|| recipe.params(&paint, Some(&inputs), seed, wear))
     };
+    // The shader the colour is rendered with: its first container's material.
+    let initial = recipe
+        .generated
+        .iter()
+        .find(|g| g.target == "g_tColor")
+        .map_or("paint", |g| g.initial.as_str());
+    let shader = materials
+        .iter()
+        .find(|(alias, _)| *alias == initial)
+        .map_or(paint.shader.as_str(), |(_, info)| info.shader.as_str());
     Ok(WeaponParams {
         color: texture("g_tColor"),
         surface: texture("g_tMetalness"),
+        glove: shader == "csgo_customglove.vfx",
     })
 }
 
@@ -418,12 +455,27 @@ fn add_container(container: &Value, recipe: &mut Recipe) {
             .unwrap_or_default()
     };
     let alias = text("m_strAlias");
-    if alias == "paint"
-        && let Some(material) = container
-            .get("m_strSpecificContainerMaterial")
-            .and_then(Value::as_str)
+    if let Some(material) = container
+        .get("m_strSpecificContainerMaterial")
+        .and_then(Value::as_str)
     {
-        recipe.paint_material = Some(material.to_owned());
+        if alias == "paint" {
+            recipe.paint_material = Some(material.to_owned());
+        } else {
+            recipe.other_materials.retain(|(a, _)| a != alias);
+            recipe
+                .other_materials
+                .push((alias.to_owned(), material.to_owned()));
+        }
+    }
+    if text("m_nCompositeMaterialInputContainerSourceType")
+        == "CONTAINER_SOURCE_TYPE_VARIABLE_FROM_TARGET_ATTR"
+    {
+        let attribute = text("m_strAttrNameForVar").to_owned();
+        recipe.attribute_containers.retain(|(a, _)| a != alias);
+        recipe
+            .attribute_containers
+            .push((alias.to_owned(), attribute));
     }
     for variable in container
         .get("m_vecLooseVariables")
@@ -502,15 +554,36 @@ fn add_mutators(mutators: &[Value], recipe: &mut Recipe) {
         };
         match mutator.get("m_nMutatorCommandType").and_then(Value::as_str) {
             Some("COMP_MAT_PROPERTY_MUTATOR_RANDOM_ROLL_INPUT_VARIABLES") => {
-                for target in mutator
-                    .get("m_vecRandomRollInputVars_InputVarsToRoll")
-                    .and_then(Value::as_array)
-                    .unwrap_or_default()
-                {
-                    if let Some(roll) = target.as_str().and_then(parse_roll) {
-                        recipe.rolls.push(roll);
-                    }
-                }
+                let seed = text("m_strRandomRollInputVars_SeedInputVar");
+                let seed = match seed.split_once('.') {
+                    Some((container, name)) => (container.to_owned(), name.to_owned()),
+                    None => ("econ_instance".to_owned(), "g_nRandomSeed".to_owned()),
+                };
+                recipe.rolls.push(Roll {
+                    seed,
+                    conditions: conditions_of(mutator),
+                    variables: mutator
+                        .get("m_vecRandomRollInputVars_InputVarsToRoll")
+                        .and_then(Value::as_array)
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|target| target.as_str().and_then(parse_roll))
+                        .collect(),
+                });
+            }
+            // Into a container's own variable (`container.variable`), before the textures; a plain property is the
+            // final material's, not read.
+            Some("COMP_MAT_PROPERTY_MUTATOR_COPY_PROPERTY")
+                if text("m_strCopyProperty_TargetProperty").contains('.') =>
+            {
+                recipe.container_copies.push(Step {
+                    action: Action::CopyProperty(
+                        text("m_strCopyProperty_InputContainerSrc"),
+                        text("m_strCopyProperty_InputContainerProperty"),
+                        text("m_strCopyProperty_TargetProperty"),
+                    ),
+                    conditions: conditions_of(mutator),
+                });
             }
             Some("COMP_MAT_PROPERTY_MUTATOR_GENERATE_TEXTURE") => {
                 let mut steps = Vec::new();
@@ -552,14 +625,7 @@ fn add_steps(instructions: &[Value], inherited: &[Condition], steps: &mut Vec<St
                 .to_owned()
         };
         let mut conditions = inherited.to_vec();
-        conditions.extend(
-            instruction
-                .get("m_vecConditions")
-                .and_then(Value::as_array)
-                .unwrap_or_default()
-                .iter()
-                .map(read_condition),
-        );
+        conditions.extend(conditions_of(instruction));
         let action = match instruction
             .get("m_nMutatorCommandType")
             .and_then(Value::as_str)
@@ -596,6 +662,17 @@ fn add_steps(instructions: &[Value], inherited: &[Condition], steps: &mut Vec<St
         };
         steps.push(Step { action, conditions });
     }
+}
+
+/// A mutator's own conditions (`m_vecConditions`).
+fn conditions_of(mutator: &Value) -> Vec<Condition> {
+    mutator
+        .get("m_vecConditions")
+        .and_then(Value::as_array)
+        .unwrap_or_default()
+        .iter()
+        .map(read_condition)
+        .collect()
 }
 
 fn read_condition(condition: &Value) -> Condition {
@@ -665,17 +742,18 @@ impl Recipe {
     /// within its bounds; a variable the kit does not define, or without bounds, still takes its draws and keeps
     /// its value (see "Not verified yet" in the [module docs](self)).
     pub fn roll(&self, seed: u32) -> BTreeMap<String, [f32; 2]> {
-        self.rolled(seed)
-            .into_iter()
+        self.rolls
+            .iter()
+            .flat_map(|roll| self.draw(roll, seed))
             .map(|((_, name), value)| (name, value))
             .collect()
     }
 
-    /// [`Recipe::roll`] by container and name.
-    fn rolled(&self, seed: u32) -> BTreeMap<(String, String), [f32; 2]> {
+    /// `roll`'s draws from a stream seeded with `seed`, by container and name.
+    fn draw(&self, roll: &Roll, seed: u32) -> BTreeMap<(String, String), [f32; 2]> {
         let mut random = UniformRandom::new(seed as i32);
         let mut rolled = BTreeMap::new();
-        for (container, name, components) in &self.rolls {
+        for (container, name, components) in &roll.variables {
             let variable = self.variable(container, name);
             let mut value = match variable.map(|v| &v.value) {
                 Some(VariableValue::Float(xy)) => *xy,
@@ -698,8 +776,12 @@ impl Recipe {
         rolled
     }
 
-    /// The containers a generated texture's steps read, by alias: `materials`' parameters, and the loose variables'
-    /// — rolled with `seed`, `econ_instance` holding the seed and `wear`.
+    /// The containers a generated texture's steps read, by alias: `materials`' parameters (the `target`'s attributes
+    /// too, in [`Recipe::attribute_containers`]), and the loose variables' — `econ_instance` holding the seed and
+    /// `wear`, then each roll whose conditions hold drawn from its seed variable, then the copies into containers.
+    ///
+    /// `g_nRandomSeedAlt` (the second glove's seed) is set by the game, not by any file: OFAST takes the pattern seed
+    /// until it is checked against CS2.
     pub(crate) fn containers(
         &self,
         materials: &[(&str, &MaterialInfo)],
@@ -710,24 +792,63 @@ impl Recipe {
             .iter()
             .map(|(alias, info)| ((*alias).to_owned(), material_params(info)))
             .collect();
+        let target = materials
+            .iter()
+            .find(|(alias, _)| *alias == "target")
+            .map(|(_, info)| info);
+        for (alias, attribute) in &self.attribute_containers {
+            let container = containers.entry(alias.clone()).or_default();
+            if let Some(value) = target.and_then(|t| t.int_attributes.get(attribute)) {
+                container.insert(attribute.clone(), Param::Int(*value));
+            }
+        }
         for variable in &self.variables {
             containers
                 .entry(variable.container.clone())
                 .or_default()
                 .insert(variable.name.clone(), Param::from(&variable.value));
         }
-        for ((container, name), [x, y]) in self.rolled(seed) {
-            containers
-                .entry(container)
-                .or_default()
-                .insert(name, Param::Floats([x, y, 0.0, 0.0]));
-        }
         let econ = containers.entry("econ_instance".into()).or_default();
-        econ.insert("g_nRandomSeed".into(), Param::Int(i64::from(seed)));
+        for name in ["g_nRandomSeed", "g_nRandomSeedAlt"] {
+            econ.insert(name.into(), Param::Int(i64::from(seed)));
+        }
         econ.insert(
             "g_flWearAmount".into(),
             Param::Floats([wear, 0.0, 0.0, 0.0]),
         );
+        for roll in &self.rolls {
+            if !roll.conditions.iter().all(|c| c.holds(&containers)) {
+                continue;
+            }
+            let roll_seed = match containers
+                .get(&roll.seed.0)
+                .and_then(|c| c.get(&roll.seed.1))
+            {
+                Some(Param::Int(s)) => *s as u32,
+                _ => seed,
+            };
+            for ((container, name), [x, y]) in self.draw(roll, roll_seed) {
+                containers
+                    .entry(container)
+                    .or_default()
+                    .insert(name, Param::Floats([x, y, 0.0, 0.0]));
+            }
+        }
+        for step in &self.container_copies {
+            if let Action::CopyProperty(source, property, target) = &step.action
+                && step.conditions.iter().all(|c| c.holds(&containers))
+                && let Some((container, name)) = target.split_once('.')
+                && let Some(value) = containers
+                    .get(source)
+                    .and_then(|c| c.get(property))
+                    .cloned()
+            {
+                containers
+                    .entry(container.to_owned())
+                    .or_default()
+                    .insert(name.to_owned(), value);
+            }
+        }
         containers
     }
 

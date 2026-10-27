@@ -399,9 +399,17 @@ player and round.
   (Royal Guard in its blue and gold).
 - [x] **Weapons lying in the world painted**: one glTF per model and skin (the replay's and the manifest's
   `finish`); round 17: 13 of its 31 dropped stretches carry a skin, each matched to its file.
-- [ ] Gloves (their own shader, `csgo_customglove`: four material layers, curvature wear, an 8-colour palette);
-  patina age, trilinear case hardening; pearlescence, the paints' normal maps; stickers, keychains, name tags;
-  checked against CS2 screenshots.
+- [x] **Gloves painted** ([research](research/cs2-skins.md), "Gloves", `export::gloves`): the demo's glove finish,
+  the glove composite (the target's attributes, a roll per hand, the left hand's copies) and its own shader
+  (`csgo_customglove` combo 0: four material layers, an 8-tint palette, the pattern's paint, curvature damage, edges
+  by derivatives) ported; third and first person keyed by glove skin. Round 17: 7 of 10 (Crimson Kimono, Emerald
+  Web, Vice, Foundation).
+- [ ] 2025's glove kits (the height-blended combo 1), the second hand's seed; patina age, trilinear case
+  hardening; pearlescence, the paints' normal maps; stickers, keychains, name tags; checked against CS2
+  screenshots.
+- [ ] Textures shared across a round's glTFs imported once in Unreal: each look's import makes its own copy of the
+  same painted weapon textures, and with a look per glove skin (round 17: 10 players' and 10 first-person files) a
+  drawn import runs out of video memory (the Studio imports without a renderer; `run_ue.ps1 -NullRhi` for checks).
 
 ## Order from here
 

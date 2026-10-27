@@ -151,6 +151,9 @@ pub struct Appearance {
     pub mesh_groups: u64,
     /// Item definition index of the gloves (`m_EconGloves.m_iItemDefinitionIndex`); 0 = the agent's own.
     pub gloves: u32,
+    /// The gloves' finish (`m_EconGloves`' attributes, as a weapon's: [`super::skins`]): paint kit, pattern seed and
+    /// the wear's bits; kit 0 = none.
+    pub glove_finish: [u32; 3],
 }
 
 /// A weapon a player carries: in hand, holstered or slung.
@@ -611,6 +614,8 @@ struct AppearancePaths {
     model: Option<FieldPath>,
     mesh_groups: Option<FieldPath>,
     gloves: Option<FieldPath>,
+    /// The gloves' econ attributes (their length; each entry's index and value one level deeper).
+    glove_attributes: Option<FieldPath>,
     /// The weapon handle array (its length; the handles one level deeper).
     weapons: Option<FieldPath>,
     /// The ammo counts by ammo type (a fixed array: element `i` one level deeper).
@@ -625,6 +630,7 @@ impl AppearancePaths {
             model: path(MODEL_FIELD),
             mesh_groups: path(MESH_GROUPS_FIELD),
             gloves: path("m_EconGloves.m_iItemDefinitionIndex"),
+            glove_attributes: path("m_EconGloves.m_NetworkedDynamicAttributes.m_Attributes"),
             weapons: path("m_pWeaponServices.m_hMyWeapons"),
             ammo: path("m_pWeaponServices.m_iAmmo"),
         }
@@ -1271,11 +1277,40 @@ fn read_appearance(paths: &AppearancePaths, pawn: &Entity) -> Appearance {
             .and_then(FieldValue::as_u64)
             .unwrap_or(0)
     };
+    let gloves = number(&paths.gloves) as u32;
+    let finish = paths
+        .glove_attributes
+        .as_ref()
+        .map(|list| skin_from_attributes(gloves, &read_attributes(pawn, list), ""))
+        .filter(|skin| skin.paint_kit != 0)
+        .map_or([0; 3], |skin| {
+            [skin.paint_kit, skin.seed, skin.wear.to_bits()]
+        });
     Appearance {
         model: number(&paths.model),
         mesh_groups: number(&paths.mesh_groups),
-        gloves: number(&paths.gloves) as u32,
+        gloves,
+        glove_finish: finish,
     }
+}
+
+/// An econ item's attributes from its `m_Attributes` list at `list` (definition index, raw 32-bit value: a float
+/// field holds the bits as they were sent).
+fn read_attributes(entity: &Entity, list: &FieldPath) -> Vec<(u32, u32)> {
+    let count = entity.get(list).and_then(FieldValue::as_u64).unwrap_or(0);
+    let mut attributes = Vec::new();
+    for k in 0..count.min(64) as i32 {
+        let entry = |member: i32| list.child(k)?.child(member);
+        let index = entry(0).and_then(|p| entity.get(&p)?.as_u64());
+        let bits = entry(1).and_then(|p| match entity.get(&p)? {
+            FieldValue::Float(f) => Some(f.to_bits()),
+            value => value.as_u64().map(|v| v as u32),
+        });
+        if let (Some(index), Some(bits)) = (index, bits) {
+            attributes.push((index as u32, bits));
+        }
+    }
+    attributes
 }
 
 /// The weapons in the pawn's `m_hMyWeapons` whose entities exist and have an item definition index.
@@ -1328,21 +1363,11 @@ fn read_skin(parser: &DemoParser<'_>, paths: &Paths, entity: u32) -> Option<Skin
     let weapon = parser.entities().get(entity)?;
     let fields = paths.rig.weapons.get(&weapon.class_id)?;
     let item = weapon.get(&fields.item)?.as_u64()? as u32;
-    let mut attributes = Vec::new();
-    if let Some(list) = &fields.attributes {
-        let count = weapon.get(list).and_then(FieldValue::as_u64).unwrap_or(0);
-        for k in 0..count.min(64) as i32 {
-            let entry = |member: i32| list.child(k)?.child(member);
-            let index = entry(0).and_then(|p| weapon.get(&p)?.as_u64());
-            let bits = entry(1).and_then(|p| match weapon.get(&p)? {
-                FieldValue::Float(f) => Some(f.to_bits()),
-                value => value.as_u64().map(|v| v as u32),
-            });
-            if let (Some(index), Some(bits)) = (index, bits) {
-                attributes.push((index as u32, bits));
-            }
-        }
-    }
+    let attributes = fields
+        .attributes
+        .as_ref()
+        .map(|list| read_attributes(weapon, list))
+        .unwrap_or_default();
     let name_tag = fields
         .name_tag
         .as_ref()
@@ -2265,6 +2290,7 @@ mod tests {
                 model: agent_model(),
                 mesh_groups: AGENT_GROUPS,
                 gloves: GLOVES as u32,
+                glove_finish: [0; 3],
             }
         );
         assert_eq!(

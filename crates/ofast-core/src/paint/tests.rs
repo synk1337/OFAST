@@ -88,8 +88,15 @@ fn a_legacy_kit_adds_its_paint_and_range_to_the_shared_procedure() {
     let rolls: Vec<(&str, usize)> = recipe
         .rolls
         .iter()
+        .flat_map(|roll| &roll.variables)
         .map(|(_, n, c)| (n.as_str(), *c))
         .collect();
+    // One roll, seeded by the pattern seed.
+    assert_eq!(recipe.rolls.len(), 1);
+    assert_eq!(
+        recipe.rolls[0].seed,
+        ("econ_instance".to_owned(), "g_nRandomSeed".to_owned())
+    );
     assert_eq!(
         rolls,
         [
@@ -237,6 +244,61 @@ fn generated_textures_follow_their_steps_and_conditions() {
     assert!(!params.contains_key("F_PEARLESCENCE_MASK"));
     // A texture the recipe does not generate has no steps.
     assert_eq!(recipe.generate("g_tMetalness", &containers), None);
+}
+
+/// The gloves' shared recipe, trimmed: the target's attributes as containers, a roll per seed, the left hand's copy.
+const GLOVES: &str = r#"<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->
+{
+    m_Points = [ { m_vecCompositeMaterialAssemblyProcedures = [ {
+        m_vecCompositeInputContainers = [
+            { m_nCompositeMaterialInputContainerSourceType = "CONTAINER_SOURCE_TYPE_VARIABLE_FROM_TARGET_ATTR" m_strAlias = "handedness" m_strAttrNameForVar = "left" },
+            { m_nCompositeMaterialInputContainerSourceType = "CONTAINER_SOURCE_TYPE_VARIABLE_FROM_TARGET_ATTR" m_strAlias = "material_seed" m_strAttrNameForVar = "seed_offset" },
+            { m_strAlias = "instance_params" m_vecLooseVariables = [
+                { m_strName = "g_fPatternTexCoordRotation" m_nVariableType = "LOOSE_VARIABLE_TYPE_FLOAT1" m_bHasFloatBounds = true m_flValueFloatX = 0.0 m_flValueFloatX_Min = 0.0 m_flValueFloatX_Max = 360.0 },
+                { m_strName = "g_fPatternTexCoordRotationLeft" m_nVariableType = "LOOSE_VARIABLE_TYPE_FLOAT1" m_flValueFloatX = 7.0 },
+            ] },
+        ]
+        m_vecPropertyMutators = [
+            { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_RANDOM_ROLL_INPUT_VARIABLES"
+              m_strRandomRollInputVars_SeedInputVar = "econ_instance.g_nRandomSeed"
+              m_vecRandomRollInputVars_InputVarsToRoll = [ "instance_params.g_fPatternTexCoordRotation.x" ]
+              m_vecConditions = [ { m_nMutatorCondition = "COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EQUALS" m_strMutatorConditionContainerName = "material_seed" m_strMutatorConditionContainerVarName = "seed_offset" m_strMutatorConditionContainerVarValue = "1" m_bPassWhenTrue = false } ] },
+            { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_RANDOM_ROLL_INPUT_VARIABLES"
+              m_strRandomRollInputVars_SeedInputVar = "econ_instance.g_nRandomSeedAlt"
+              m_vecRandomRollInputVars_InputVarsToRoll = [ "instance_params.g_fPatternTexCoordRotation.x" ]
+              m_vecConditions = [ { m_nMutatorCondition = "COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EQUALS" m_strMutatorConditionContainerName = "material_seed" m_strMutatorConditionContainerVarName = "seed_offset" m_strMutatorConditionContainerVarValue = "1" } ] },
+            { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_COPY_PROPERTY"
+              m_strCopyProperty_InputContainerSrc = "instance_params" m_strCopyProperty_InputContainerProperty = "g_fPatternTexCoordRotationLeft" m_strCopyProperty_TargetProperty = "instance_params.g_fPatternTexCoordRotation"
+              m_vecConditions = [ { m_nMutatorCondition = "COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EQUALS" m_strMutatorConditionContainerName = "handedness" m_strMutatorConditionContainerVarName = "left" m_strMutatorConditionContainerVarValue = "1" } ] },
+        ]
+    } ] } ]
+}"#;
+
+#[test]
+fn a_gloves_hands_take_their_attributes_rolls_and_copies() {
+    let recipe = recipe_of(GLOVES);
+    assert_eq!(recipe.rolls.len(), 2);
+    assert_eq!(recipe.rolls[1].seed.1, "g_nRandomSeedAlt");
+    assert_eq!(
+        recipe.attribute_containers,
+        [
+            ("handedness".to_owned(), "left".to_owned()),
+            ("material_seed".to_owned(), "seed_offset".to_owned())
+        ]
+    );
+    let rotation = |target: &MaterialInfo| match &recipe.containers(&[("target", target)], 400, 0.2)
+        ["instance_params"]["g_fPatternTexCoordRotation"]
+    {
+        Param::Floats(v) => v[0],
+        other => panic!("{other:?}"),
+    };
+    // A hand without the attributes rolls with the pattern seed; one with `left` takes the left's own value.
+    let plain = rotation(&MaterialInfo::default());
+    assert!((0.0..360.0).contains(&plain) && plain != 0.0, "{plain}");
+    let mut left = MaterialInfo::default();
+    left.int_attributes.insert("left".into(), 1);
+    left.int_attributes.insert("seed_offset".into(), 1);
+    assert_eq!(rotation(&left), 7.0);
 }
 
 #[test]

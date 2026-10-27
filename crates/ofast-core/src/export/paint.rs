@@ -199,7 +199,7 @@ const MAX_SIZE: usize = 2048;
 /// How a texture repeats past 0 – 1 (`RsTextureAddressMode_t`: wrap 0, mirror 1, clamp 2, border 3, mirror once 4;
 /// border is read as clamp).
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Address {
+pub(super) enum Address {
     Wrap,
     Mirror,
     Clamp,
@@ -238,24 +238,24 @@ impl Address {
 }
 
 /// Bilinear samples of a decoded texture at UV coordinates.
-struct Sampler {
-    image: Image,
+pub(super) struct Sampler {
+    pub(super) image: Image,
 }
 
 impl Sampler {
-    fn load(content: &Content, path: &str) -> Result<Self, ExportError> {
+    pub(super) fn load(content: &Content, path: &str) -> Result<Self, ExportError> {
         Ok(Self {
             image: decode_raw(content, path)?.1,
         })
     }
 
     /// Channels 0 – 3 at (`u`, `v`), each 0 – 1 as stored, wrapping around.
-    fn at(&self, u: f32, v: f32) -> [f32; 4] {
+    pub(super) fn at(&self, u: f32, v: f32) -> [f32; 4] {
         self.at_with(u, v, [Address::Wrap; 2])
     }
 
     /// Channels 0 – 3 at (`u`, `v`), with an address mode per axis.
-    fn at_with(&self, u: f32, v: f32, address: [Address; 2]) -> [f32; 4] {
+    pub(super) fn at_with(&self, u: f32, v: f32, address: [Address; 2]) -> [f32; 4] {
         let (w, h) = (self.image.width, self.image.height);
         let (x0, x1, fx) = address[0].texels(u, w);
         let (y0, y1, fy) = address[1].texels(v, h);
@@ -280,7 +280,7 @@ fn load_f32(content: &Content, path: &str) -> Result<Option<ImageF32>, ExportErr
 /// translation is the shader's own expression of the three: the offset itself at 0° and 90°, the offset plus a
 /// rotation-dependent shift in between.
 #[derive(Debug, Clone, Copy)]
-struct Placement {
+pub(super) struct Placement {
     rows: [[f32; 3]; 2],
 }
 
@@ -291,9 +291,16 @@ fn hundredths(x: f32) -> f32 {
 
 impl Placement {
     fn new(scale: f32, rotation: f32, offset: [f32; 2]) -> Self {
-        let s = hundredths(scale);
-        let angle = hundredths(rotation) * std::f32::consts::PI / 180.0;
-        let [ou, ov] = offset.map(hundredths);
+        Self::exact(
+            hundredths(scale),
+            hundredths(rotation),
+            offset.map(hundredths),
+        )
+    }
+
+    /// The same construction without the rounding, as the gloves' shader builds its placements.
+    pub(super) fn exact(s: f32, rotation: f32, [ou, ov]: [f32; 2]) -> Self {
+        let angle = rotation * std::f32::consts::PI / 180.0;
         let (sin, cos) = angle.sin_cos();
         // The expression's v6 – v10, as written.
         let half = 0.5 / if s != 0.0 { s } else { 1.0 };
@@ -308,43 +315,43 @@ impl Placement {
         }
     }
 
-    fn apply(&self, u: f32, v: f32) -> (f32, f32) {
+    pub(super) fn apply(&self, u: f32, v: f32) -> (f32, f32) {
         let [x, y] = self.rows.map(|r| r[0] * u + r[1] * v + r[2]);
         (x, y)
     }
 }
 
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
+pub(super) fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+pub(super) fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     std::array::from_fn(|c| lerp(a[c], b[c], t))
 }
 
-fn mul3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+pub(super) fn mul3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     std::array::from_fn(|c| a[c] * b[c])
 }
 
-fn scale3(a: [f32; 3], k: f32) -> [f32; 3] {
+pub(super) fn scale3(a: [f32; 3], k: f32) -> [f32; 3] {
     a.map(|x| x * k)
 }
 
-fn clamp3(a: [f32; 3]) -> [f32; 3] {
+pub(super) fn clamp3(a: [f32; 3]) -> [f32; 3] {
     a.map(|x| x.clamp(0.0, 1.0))
 }
 
-fn rgb(a: [f32; 4]) -> [f32; 3] {
+pub(super) fn rgb(a: [f32; 4]) -> [f32; 3] {
     [a[0], a[1], a[2]]
 }
 
 /// The shaders' luminance weights.
-fn luminance(c: [f32; 3]) -> f32 {
+pub(super) fn luminance(c: [f32; 3]) -> f32 {
     c[0] * 0.2125 + c[1] * 0.7154 + c[2] * 0.0721
 }
 
 /// GLSL's `smoothstep`, also with `low` above `high` (a falling edge, as the shader uses it); equal edges step.
-fn smoothstep(low: f32, high: f32, x: f32) -> f32 {
+pub(super) fn smoothstep(low: f32, high: f32, x: f32) -> f32 {
     if low == high {
         return if x >= low { 1.0 } else { 0.0 };
     }
@@ -359,7 +366,7 @@ fn cutout(alpha: f32) -> f32 {
 
 /// `values` picked by three weights in turn: `lerp(lerp(lerp(v0, v1, t0), v2, t1), v3, t2)` — the shader's way to
 /// choose per-colour values by paint masks or pattern channels.
-fn pick(values: [f32; 4], t: [f32; 3]) -> f32 {
+pub(super) fn pick(values: [f32; 4], t: [f32; 3]) -> f32 {
     lerp(
         lerp(lerp(values[0], values[1], t[0]), values[2], t[1]),
         values[3],
@@ -1673,8 +1680,12 @@ pub(crate) fn job(content: &Content, material: &str, paint: &Paint) -> Result<Pa
     let params =
         crate::paint::weapon_params(content, &paint.recipe, material, paint.seed, paint.wear)
             .map_err(|e| e.to_string())?;
-    if let Some(why) = unpainted_reason(&params.color).or_else(|| unpainted_reason(&params.surface))
-    {
+    let reason = if params.glove {
+        super::gloves::unpainted_reason(&params.color)
+    } else {
+        unpainted_reason(&params.color).or_else(|| unpainted_reason(&params.surface))
+    };
+    if let Some(why) = reason {
         return Err(why);
     }
     Ok(PaintJob {
@@ -1694,6 +1705,9 @@ pub fn bake(content: &Content, material: &str, paint: &Paint) -> Result<(Image, 
 
 /// The painted colour texture of `job` (sRGB; alpha the weapon colour's): see the [module docs](self).
 pub(crate) fn bake_color(content: &Content, job: &PaintJob) -> Result<Image, ExportError> {
+    if job.params.glove {
+        return super::gloves::bake_color(content, &job.params.color);
+    }
     let inputs = Inputs::read(content, &job.params.color)?;
     let (width, height) = inputs.size();
     let mut rgba = Vec::with_capacity(width * height * 4);
@@ -1718,6 +1732,11 @@ pub(crate) fn bake_color(content: &Content, job: &PaintJob) -> Result<Image, Exp
 /// The painted metallic-roughness texture of `job` (glTF channels: G roughness, B metalness): see the
 /// [module docs](self).
 pub(crate) fn bake_surface(content: &Content, job: &PaintJob) -> Result<Image, ExportError> {
+    if job.params.glove {
+        // The glove's roughness comes with its normal output, its metalness with the cloth: both from the colour's
+        // parameters but for the output mode.
+        return super::gloves::bake_surface(content, &job.params.color);
+    }
     let inputs = Inputs::read(content, &job.params.surface)?;
     let (width, height) = inputs.size();
     let mut rgba = Vec::with_capacity(width * height * 4);
