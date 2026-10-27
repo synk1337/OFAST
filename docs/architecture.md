@@ -14,14 +14,15 @@ ofast-studio (Rust + Tauri 2, web UI)       ofast-capture (Rust DLL injected int
  ├─ demo browser: rounds, kills, 2D radar    ├─ field offsets read at runtime from CS2's schema system
  ├─ highlight picker → shot settings         ├─ D3D11 hooks: free cam, campath overlay, streams
  ├─ launches CS2 + capture for recording     └─ bone capture → high-fidelity animation mode
- └─ "Send to Unreal"
+ ├─ "Send to Unreal"
+ └─ "Render" (Movie Render Queue presets)
 
 ofast-unreal (UE 5.8 plugin: thin C++ shell over ofast-core)
  ├─ imports scene package (maps, models, materials, lights)
  ├─ CS2 → UE master materials
  ├─ replay rig AnimBP (demo data → locomotion, aim, fire/reload/death)
  ├─ Level Sequence builder (tracks, camera cuts, FOV)
- └─ Lumen + Movie Render Graph presets
+ └─ Lumen + Movie Render Queue presets
 ```
 
 ## Data flow: demo → Unreal

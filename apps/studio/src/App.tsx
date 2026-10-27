@@ -6,10 +6,11 @@ import {
   CameraPlan,
   DemoEntry,
   Environment,
+  RenderPreset,
   RoundSummary,
-  Sent,
   environment,
   listDemos,
+  renderRound,
   sendToUnreal,
   updateCameras,
 } from "./api";
@@ -22,27 +23,42 @@ export function App() {
   const [demos, setDemos] = useState<DemoEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [opened, setOpened] = useState<DemoEntry | null>(null);
-  // The round on its way to Unreal (one at a time), kept while the user browses. Each sending gets its own bar.
+  // The round on its way to Unreal or being rendered (one at a time: one Unreal), kept while the user browses. Each
+  // job gets its own bar.
   const [job, setJob] = useState<SendJob | null>(null);
-  const sending = job !== null && !job.sent && !job.error;
-  const canSend = Boolean(env?.unreal && env?.project) && !sending;
-  // Counts the sendings done: the demo page looks up the rounds in Unreal again.
+  const busy = job !== null && !job.sent && !job.folder && !job.error;
+  const canSend = Boolean(env?.unreal && env?.project) && !busy;
+  // Counts the jobs done: the demo page looks up the rounds in Unreal again.
   const [version, setVersion] = useState(0);
-  const run = (title: string, work: Promise<Sent>) => {
+  const run = (heading: string, title: string, work: Promise<Pick<SendJob, "sent" | "folder">>) => {
     const id = Date.now();
-    setJob({ id, title });
+    setJob({ id, heading, title });
     work.then(
-      (sent) => {
-        setJob({ id, title, sent });
+      (done) => {
+        setJob({ id, heading, title, ...done });
         setVersion((v) => v + 1);
       },
-      (e) => setJob({ id, title, error: String(e) }),
+      (e) => setJob({ id, heading, title, error: String(e) }),
     );
   };
   const send = (demo: DemoEntry, round: RoundSummary, plan: CameraPlan) =>
-    run(`${demo.name}, round ${round.round}`, sendToUnreal(demo.path, round.start_tick, plan));
+    run(
+      "Send to Unreal",
+      `${demo.name}, round ${round.round}`,
+      sendToUnreal(demo.path, round.start_tick, plan).then((sent) => ({ sent })),
+    );
   const cameras = (demo: DemoEntry, round: RoundSummary, plan: CameraPlan) =>
-    run(`${demo.name}, round ${round.round}: cameras`, updateCameras(demo.path, round.start_tick, plan));
+    run(
+      "Send to Unreal",
+      `${demo.name}, round ${round.round}: cameras`,
+      updateCameras(demo.path, round.start_tick, plan).then((sent) => ({ sent })),
+    );
+  const render = (demo: DemoEntry, round: RoundSummary, preset: RenderPreset, ticks: [number, number] | null) =>
+    run(
+      "Render",
+      `${demo.name}, round ${round.round}, ${preset}`,
+      renderRound(demo.path, round.round, preset, ticks).then((folder) => ({ folder })),
+    );
 
   useEffect(() => {
     environment().then(
@@ -92,6 +108,7 @@ export function App() {
             unreal={{
               send: canSend ? (round, plan) => send(opened, round, plan) : undefined,
               updateCameras: canSend ? (round, plan) => cameras(opened, round, plan) : undefined,
+              render: canSend ? (round, preset, ticks) => render(opened, round, preset, ticks) : undefined,
               version,
             }}
           />

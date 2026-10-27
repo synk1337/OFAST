@@ -8,6 +8,7 @@ import {
   DemoSummary,
   Kill,
   NO_PLAN,
+  RenderPreset,
   RoundSummary,
   ShotKind,
   Side,
@@ -17,6 +18,7 @@ import {
 import { RadarView } from "./RadarView";
 import {
   HIGHLIGHT_FILTERS,
+  RENDER_PRESETS,
   SHOTS,
   SMOOTHING,
   WEAPON_FILTERS,
@@ -34,7 +36,9 @@ export interface UnrealActions {
   send?: (round: RoundSummary, plan: CameraPlan) => void;
   /** Changes the cameras of a round sent before. */
   updateCameras?: (round: RoundSummary, plan: CameraPlan) => void;
-  /** Changes when a sending ends: the rounds in Unreal are looked up again. */
+  /** Renders a round sent before, between two demo ticks or whole (null). */
+  render?: (round: RoundSummary, preset: RenderPreset, ticks: [number, number] | null) => void;
+  /** Changes when a job ends: the rounds in Unreal are looked up again. */
   version: number;
 }
 
@@ -184,6 +188,11 @@ function DemoView({ summary, path, unreal }: { summary: DemoSummary; path: strin
               onUpdateCameras={
                 unreal.updateCameras && sent.includes(round.round)
                   ? () => unreal.updateCameras?.(round, plan)
+                  : undefined
+              }
+              onRender={
+                unreal.render && sent.includes(round.round)
+                  ? (preset, ticks) => unreal.render?.(round, preset, ticks)
                   : undefined
               }
               onKill={replay ? (tick) => setSeek((s) => ({ tick, n: (s?.n ?? 0) + 1 })) : undefined}
@@ -377,6 +386,7 @@ function RoundFeed({
   onKill,
   onSend,
   onUpdateCameras,
+  onRender,
 }: {
   summary: DemoSummary;
   teams: Teams;
@@ -394,6 +404,8 @@ function RoundFeed({
   onSend?: () => void;
   /** Changes its cameras in Unreal (missing when it cannot be now, or the round was not sent). */
   onUpdateCameras?: () => void;
+  /** Renders it in Unreal (missing when it cannot be now, or the round was not sent). */
+  onRender?: (preset: RenderPreset, ticks: [number, number] | null) => void;
 }) {
   const setShot = (tick: number, kind: ShotKind) => {
     const shots = { ...plan.shots };
@@ -484,6 +496,7 @@ function RoundFeed({
           Update cameras
         </button>
       </div>
+      <RenderRow key={round.start_tick} summary={summary} round={round} marked={marked} onRender={onRender} />
       {round.kills.length === 0 && <p className="muted">No kills.</p>}
       {round.kills.map((k, i) => (
         <div
@@ -530,5 +543,74 @@ function RoundFeed({
         </div>
       ))}
     </section>
+  );
+}
+
+/** Seconds a render "around the kills" starts before a round's first kill (a shot camera's length) and ends after
+ * its last. */
+const BEFORE_KILLS_S = 4;
+const AFTER_KILLS_S = 2;
+
+/** A round's render: the preset, how much of the round (around the kills marked by the finder, else all of them),
+ * and the button (Movie Render Queue, in Unreal). */
+function RenderRow({
+  summary,
+  round,
+  marked,
+  onRender,
+}: {
+  summary: DemoSummary;
+  round: RoundSummary;
+  /** The finder's kills in the round (indices into its kills). */
+  marked: number[];
+  onRender?: (preset: RenderPreset, ticks: [number, number] | null) => void;
+}) {
+  const [preset, setPreset] = useState<RenderPreset>("preview");
+  const [whole, setWhole] = useState(false);
+  const kills = (marked.length ? marked.map((i) => round.kills[i]) : round.kills).map((k) => k.tick);
+  const seconds = (s: number) => Math.round(s / summary.tick_interval);
+  const ticks: [number, number] | null =
+    whole || kills.length === 0
+      ? null
+      : [
+          Math.max(round.start_tick, Math.min(...kills) - seconds(BEFORE_KILLS_S)),
+          Math.min(round.end_tick, Math.max(...kills) + seconds(AFTER_KILLS_S)),
+        ];
+  const length = (ticks ? ticks[1] - ticks[0] : round.end_tick - round.start_tick) * summary.tick_interval;
+  return (
+    <div className="cameras-row">
+      <label title={RENDER_PRESETS.find(([p]) => p === preset)?.[2]}>
+        Render{" "}
+        <select value={preset} onChange={(e) => setPreset(e.target.value as RenderPreset)}>
+          {RENDER_PRESETS.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <select
+        value={ticks ? "kills" : "round"}
+        onChange={(e) => setWhole(e.target.value === "round")}
+        title={`From ${BEFORE_KILLS_S} seconds before the first kill to ${AFTER_KILLS_S} after the last, or all of it`}
+      >
+        <option value="kills" disabled={kills.length === 0}>
+          {marked.length ? "around the marked kills" : "around the kills"}
+        </option>
+        <option value="round">the whole round</option>
+      </select>
+      <span className="muted">{clock(length)}</span>
+      <button
+        onClick={onRender && (() => onRender(preset, ticks))}
+        disabled={!onRender}
+        title={
+          onRender
+            ? "Render this round with its cameras in Unreal, into OFAST in your Videos folder (Unreal must be closed)"
+            : "For a round already sent to Unreal, while nothing else runs in Unreal"
+        }
+      >
+        Render
+      </button>
+    </div>
   );
 }

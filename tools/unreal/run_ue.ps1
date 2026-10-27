@@ -25,8 +25,10 @@ param(
     [string]$Cameras = "",
     # For export_camera.py and shoot_sequence.py: the round's sequence, /Game/OFAST/Replays/<demo>_r<round>.
     [string]$Sequence = "",
-    # For shoot_sequence.py: demo ticks to screenshot, "153200,154050".
+    # For shoot_sequence.py: demo ticks to screenshot, "153200,154050"; for render_round.py: the range, "start,end".
     [string]$Ticks = "",
+    # For render_round.py: preview, final or 4k.
+    [string]$Preset = "",
     # For import_demo.py: extra screenshots through players' eyes, "tick:controller,tick:controller".
     [string]$PovShots = "",
     # For import_demo.py: close-ups of players, "tick:controller,tick:controller".
@@ -56,6 +58,7 @@ $env:OFAST_REPLAY = if ($Replay) { & $resolve $Replay } else { "" }
 $env:OFAST_CAMERAS = if ($Cameras) { & $resolve $Cameras } else { "" }
 $env:OFAST_SEQUENCE = $Sequence
 $env:OFAST_TICKS = $Ticks
+$env:OFAST_PRESET = $Preset
 $env:OFAST_POV_SHOTS = $PovShots
 $env:OFAST_CLOSE_SHOTS = $CloseShots
 $env:OFAST_VIEW_SHOTS = $ViewShots

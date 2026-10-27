@@ -1,5 +1,5 @@
 // Names for people: weapons as the game's kill feed shows them, highlights, round ends.
-import type { Highlight, KillTag, RoundEnd, RoundSummary, ShotKind, WeaponClass } from "./api";
+import type { Highlight, KillTag, RenderPreset, RoundEnd, RoundSummary, ShotKind, WeaponClass } from "./api";
 
 /** The game's own names for the weapons of the kill feed (`player_death`'s `weapon` key). */
 const WEAPONS: Record<string, string> = {
@@ -151,4 +151,16 @@ export const SMOOTHING: [number, string][] = [
   [0, "as played"],
   [0.35, "smoothed"],
   [0.7, "very smooth"],
+];
+
+/** Render presets (`tools/unreal/render_round.py`, also listed in `src-tauri/src/unreal.rs`): name, label, what it
+ * makes. */
+export const RENDER_PRESETS: [RenderPreset, string, string][] = [
+  ["preview", "Preview", "1280 × 720 PNG frames, quick: to check the cuts and the timing"],
+  [
+    "final",
+    "Final",
+    "1920 × 1080 with motion blur, PNG and EXR frames, the players on a layer of their own and the depth",
+  ],
+  ["4k", "4K", "3840 × 2160, as Final: about four times as long"],
 ];

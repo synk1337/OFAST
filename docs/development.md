@@ -89,6 +89,18 @@ round and its players exported into the app's data folder, the map exported and 
 cameras" exports the round's cameras again and runs `import_cameras.py` (`OFAST_CAMERAS`). "Open in Unreal" starts
 the editor with `tools/unreal/open_sequence.py` (`OFAST_LEVEL`, `OFAST_SEQUENCE`).
 
+Renders (M9, [decision 023](decisions/023-render-presets.md), [render.md](formats/render.md)):
+
+```bash
+powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/render_round.py -Sequence /Game/OFAST/Replays/<demo>_r17 -Preset final -Ticks 153320,153391 -Shot test-data/renders
+```
+
+`-Preset` is `preview`, `final` or `4k`; `-Ticks` the demo ticks to render (the end left out; the whole round
+without); frames go to `<-Shot>/<demo>_r17_final_153320-153391/`. From Git Bash, prefix `MSYS_NO_PATHCONV=1` (it
+rewrites `/Game/...` arguments into Windows paths). The editor renders with a renderer (not `-nullrhi`) and opens
+Movie Render Queue's progress window; it quits once the frames are written. The Studio's "Render" runs the same
+script into `Videos\OFAST`.
+
 CS2 capture (M8, `apps/capture`, [README](../apps/capture/README.md)): `cargo build -p ofast-capture --release`,
 start CS2 through Steam with `-insecure` (check its command line: `Get-CimInstance Win32_Process -Filter
 "name='cs2.exe'"`), then `target/release/ofast-attach.exe`; the DLL logs to `%LOCALAPPDATA%\OFAST\capture.log` and

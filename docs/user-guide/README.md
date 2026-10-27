@@ -120,6 +120,45 @@ When it is done, **Open in Unreal** opens the project at the map's level with th
 (the timeline at the bottom of Unreal's window); the viewport shows the sequence's cameras. Press the space bar
 in Sequencer to play it. The sequence is `Content/OFAST/Replays/<demo>_r<round>` in Unreal's Content Browser.
 
+## Rendering a round
+
+Once a round is in Unreal, **Render** (under the round's cameras) renders it to images you import into your editor
+(After Effects, Premiere, DaVinci Resolve, Vegas), through the cameras and cuts of its sequence. Pick:
+
+- **Preview**: 1280 × 720, quick, to check the cuts and the timing.
+- **Final**: 1920 × 1080 with motion blur, plus what compositing needs: the players on a layer of their own (to put
+  text or effects behind them, or to colour them alone), the world without them, and the depth (for fog or depth of
+  field).
+- **4K**: as Final at 3840 × 2160, about four times as long.
+
+and how much of the round: **around the kills** (from 4 seconds before the first to 2 seconds after the last; if you
+opened the round from a highlight in the finder, only that highlight's kills) or **the whole round**. The length is
+shown beside it. Close Unreal first (the render needs OFAST's project to itself), and if you can, close CS2: the
+render needs the graphics card's memory. Unreal loads the map without a window (a minute or two), then opens one
+that shows the frames as they render (closing it stops the render); the bar counts the percent done. Final takes
+about 2 seconds a frame on a recent graphics card, at 60 frames a second (a 20-second highlight: 1200 frames, about
+40 minutes).
+
+The images go to `Videos\OFAST`, a folder per render, and **Open folder** in the bar shows it. In it, a folder per
+pass, each an image sequence your editor imports in one go (pick the first image and tick "image sequence"):
+
+- `FinalImage`: the picture.
+- `FinalImagePlayers`: the players alone, the rest transparent (Final and 4K).
+- `FinalImageDefaultLayer`: the world, transparent where the players are (Final and 4K).
+- `FinalImageWorldDepth`: ignore it; the depth is in the EXR files.
+
+Final and 4K also write an EXR file a frame beside the folders, with all the passes as layers in 16-bit colour, and
+the depth in centimetres (in After Effects, read its layers with the EXtractoR effect; the depth is
+`FinalImageWorldDepth`, channel R). The [render format page](../formats/render.md) has the details.
+
+The motion blur is part of the Final images; sharp frames for slow motion and speed ramps come later.
+
+In Unreal itself, the same presets are Movie Render Queue settings: `Content/OFAST/Render/OFAST_preview`,
+`OFAST_final`, `OFAST_4k` (Window → Cinematics → Movie Render Queue, add the round's sequence, then pick one under
+Settings). They exist once the Studio has rendered with them.
+
+## Sending a round again
+
 Sending the same round again rebuilds its sequence; anything you changed in it by hand is replaced. A map's level
 holds one round at a time: sending another round of the same map replaces the players and effects of the one before
 in the level (its sequence stays, but no longer plays them). If something goes wrong, the bar says what and where
@@ -133,6 +172,9 @@ Unreal's own log is; a map whose first import did not finish is imported again t
 - What is imported into Unreal is in `unreal/Sandbox/Content/OFAST` in the OFAST folder: each map once, and each
   round sent with its players' agents (close to a gigabyte per agent look). `Replays` can be emptied from Unreal's
   Content Browser when it grows.
+- Renders are in `Videos\OFAST`, a folder per render, and they are big: Preview about 1 MB a frame (a 20-second
+  highlight, 1200 frames: over a gigabyte), Final about 20 MB a frame (the same highlight: about 25 GB), 4K about
+  four times that. Delete the folders you no longer need.
 
 Everything OFAST makes comes from your own CS2 install and is for your own videos: never share the exported files
 (they are Valve's content).

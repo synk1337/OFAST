@@ -26,6 +26,8 @@ pub fn run() {
             unreal::update_cameras,
             unreal::sent_rounds,
             unreal::open_in_unreal,
+            unreal::render_round,
+            unreal::open_render_folder,
         ])
         .build(tauri::generate_context!())
         .expect("OFAST Studio failed to start")

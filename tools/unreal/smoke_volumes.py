@@ -46,8 +46,8 @@ SMOKE_NOISE = 0.12
 SMOKE_NOISE_SCALE = 1.0 / 60.0
 # Console variables the smoke volumes need: indirect light from Lumen's translucency volume (single scattering), so a
 # smoke in the shade is lit by the room around it, not black. import_demo.py and probe_smoke.py set them for their
-# own screenshots; console variables end with the editor session, so for working in the editor and for renders set
-# them in the project (DefaultEngine.ini, [ConsoleVariables]) or in the Movie Render Queue job.
+# own screenshots; console variables end with the editor session, so for working in the editor set them in the
+# project (DefaultEngine.ini, [ConsoleVariables]); render_round.py's Movie Render Queue presets carry them.
 SMOKE_CVARS = [
     "r.HeterogeneousVolumes.IndirectLighting 1",
     "r.HeterogeneousVolumes.IndirectLighting.Mode 2",

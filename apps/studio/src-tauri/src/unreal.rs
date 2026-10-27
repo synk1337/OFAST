@@ -7,13 +7,14 @@
 //! 3. import the round (`tools/unreal/import_demo.py`): a Level Sequence in the map's level.
 //!
 //! "Update cameras" changes the cameras of a round already sent, without importing it again: its cameras exported
-//! (`export::cameras`), then `tools/unreal/import_cameras.py` (decision 021).
+//! (`export::cameras`), then `tools/unreal/import_cameras.py` (decision 021). "Render" renders a round already sent
+//! with Movie Render Queue (`tools/unreal/render_round.py`, decision 023) into the user's Videos folder.
 //!
 //! The Unreal steps run `UnrealEditor-Cmd` without a window; its `OFAST:` log lines come to the UI as progress
 //! ([`PROGRESS_EVENT`]), and a step counts as done only once its script logged its last line. Imports draw nothing,
-//! so the editor runs without a renderer (`-nullrhi`): it takes no GPU memory. Exports go to the app's
-//! data folder (`exports/demos`, `exports/maps/<map>`) and are deleted once imported: they are made from the user's
-//! CS2 files and are big (a map: gigabytes).
+//! so the editor runs without a renderer (`-nullrhi`): it takes no GPU memory; renders need one. Exports go to the
+//! app's data folder (`exports/demos`, `exports/maps/<map>`) and are deleted once imported: they are made from the
+//! user's CS2 files and are big (a map: gigabytes).
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -45,7 +46,7 @@ const LOG: &str = r"unreal\Sandbox\Saved\Logs\OFASTSandbox.log";
 
 /// The environment variables OFAST's Unreal scripts read: all are set for each run (empty when unused), so none
 /// leaks from the Studio's own environment.
-const SCRIPT_VARIABLES: [&str; 16] = [
+const SCRIPT_VARIABLES: [&str; 17] = [
     "OFAST_CAMERAS",
     "OFAST_GLTF",
     "OFAST_SHOT",
@@ -54,6 +55,7 @@ const SCRIPT_VARIABLES: [&str; 16] = [
     "OFAST_STYLE",
     "OFAST_DISABLE",
     "OFAST_ONLY",
+    "OFAST_PRESET",
     "OFAST_TRY",
     "OFAST_REPLAY",
     "OFAST_POV_SHOTS",
@@ -78,6 +80,8 @@ pub enum Step {
     RoundImport,
     /// Changing the cameras of a round already in Unreal.
     Cameras,
+    /// Rendering a round already in Unreal.
+    Render,
 }
 
 /// One line of a sending's progress.
@@ -100,9 +104,15 @@ pub struct Sent {
     pub sequence: String,
 }
 
-/// One sending at a time: two imports into one project would trip over each other.
+/// One sending (or render) at a time: two editors on one project would trip over each other.
 #[derive(Debug, Default)]
 pub struct Sending(AsyncMutex<()>);
+
+/// Why a sending or a render cannot start: another one runs.
+const BUSY: &str = "Unreal is busy with another round (sent or rendered): wait for it to finish.";
+
+/// The presets of `tools/unreal/render_round.py` (listed there, and in the UI's `names.ts`, too).
+const PRESETS: [&str; 3] = ["preview", "final", "4k"];
 
 /// The `UnrealEditor-Cmd` running for a sending, so that closing the Studio stops it ([`stop_sending`]) rather than
 /// leaving a hidden editor importing on its own.
@@ -119,9 +129,7 @@ pub async fn send_to_unreal(
     app: AppHandle,
     sending: tauri::State<'_, Sending>,
 ) -> Result<Sent, String> {
-    let _only = sending.0.try_lock().map_err(|_| {
-        "A round is being sent to Unreal already: wait for it to finish.".to_owned()
-    })?;
+    let _only = sending.0.try_lock().map_err(|_| BUSY.to_owned())?;
     blocking(move || send(&app, &path, start_tick, &plan)).await?
 }
 
@@ -135,10 +143,121 @@ pub async fn update_cameras(
     app: AppHandle,
     sending: tauri::State<'_, Sending>,
 ) -> Result<Sent, String> {
-    let _only = sending.0.try_lock().map_err(|_| {
-        "A round is being sent to Unreal already: wait for it to finish.".to_owned()
-    })?;
+    let _only = sending.0.try_lock().map_err(|_| BUSY.to_owned())?;
     blocking(move || cameras(&app, &path, start_tick, &plan)).await?
+}
+
+/// Renders round `round` of the demo at `path`, already sent, with Movie Render Queue (see the
+/// [module docs](self)): `preset`'s frames and passes between the demo ticks `ticks` (the end left out; the whole
+/// round without them), into a folder of its own in `Videos\OFAST`. Returns that folder. About two seconds a frame
+/// for `final` on a recent graphics card, after a minute or two of Unreal starting.
+#[tauri::command]
+pub async fn render_round(
+    path: String,
+    round: u32,
+    preset: String,
+    ticks: Option<[u32; 2]>,
+    app: AppHandle,
+    sending: tauri::State<'_, Sending>,
+) -> Result<String, String> {
+    let _only = sending.0.try_lock().map_err(|_| BUSY.to_owned())?;
+    blocking(move || render(&app, &path, round, &preset, ticks)).await?
+}
+
+/// Shows a render's folder (as [`render_round`] returned it) in Windows' Explorer; no other folder.
+#[tauri::command]
+pub async fn open_render_folder(folder: String, app: AppHandle) -> Result<(), String> {
+    blocking(move || {
+        let root = renders_dir(&app)?;
+        let folder = PathBuf::from(folder);
+        // `file_name` is None for a path ending in "..", which would climb out of the renders.
+        if folder.file_name().is_none()
+            || folder.parent() != Some(root.as_path())
+            || !folder.is_dir()
+        {
+            return Err(format!("{} is not a render's folder.", folder.display()));
+        }
+        let system = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+        Command::new(Path::new(&system).join("explorer.exe"))
+            .arg(&folder)
+            .spawn()
+            .map(drop)
+            .map_err(|e| format!("Explorer did not start: {e}"))
+    })
+    .await?
+}
+
+/// Where renders go: `OFAST` in the user's Videos folder, a folder per render in it.
+fn renders_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let videos = app.path().video_dir().map_err(|e| e.to_string())?;
+    Ok(videos.join("OFAST"))
+}
+
+fn render(
+    app: &AppHandle,
+    path: &str,
+    round: u32,
+    preset: &str,
+    ticks: Option<[u32; 2]>,
+) -> Result<String, String> {
+    let report = |message: String, warning: bool| emit(app, Step::Render, message, warning);
+    if !PRESETS.contains(&preset) {
+        return Err(format!("There is no render preset \"{preset}\"."));
+    }
+    let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
+    let repo = repository().ok_or("OFAST's Unreal project was not found.")?;
+    unreal_closed()?;
+    let prefix = format!("{}_r{round}", asset_name(stem(path)));
+    if !repo
+        .join(REPLAYS)
+        .join(format!("{prefix}.uasset"))
+        .is_file()
+    {
+        return Err("This round is not in Unreal yet: send it first.".into());
+    }
+    if running("cs2.exe") {
+        report(
+            "CS2 is open: rendering needs the graphics card's memory, close CS2 if Unreal fails."
+                .into(),
+            true,
+        );
+    }
+    let out = renders_dir(app)?;
+    std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let sequence = format!("/Game/OFAST/Replays/{prefix}");
+    let range = ticks
+        .map(|[start, end]| format!("{start},{end}"))
+        .unwrap_or_default();
+    report(
+        "Starting Unreal (it loads the map first: a minute or two)…".into(),
+        false,
+    );
+    let mut folder = None;
+    run_script(
+        &engine,
+        &repo,
+        "render_round.py",
+        // Movie Render Queue renders in Play In Editor, which needs a renderer.
+        true,
+        &[
+            ("OFAST_SEQUENCE", sequence.as_ref()),
+            ("OFAST_PRESET", preset.as_ref()),
+            ("OFAST_TICKS", range.as_ref()),
+            ("OFAST_SHOT", out.as_os_str()),
+        ],
+        "rendered ",
+        |line| {
+            // "rendered <folder>: ok", the script's last line.
+            if let Some(done) = line
+                .strip_prefix("rendered ")
+                .and_then(|l| l.strip_suffix(": ok"))
+            {
+                folder = Some(done.to_owned());
+            }
+            report(line, false);
+        },
+    )?;
+    folder.ok_or_else(|| "Unreal did not say where it put the frames.".into())
 }
 
 /// The rounds of the demo at `path` whose sequence is in OFAST's Unreal project (round numbers): sent before, their
@@ -208,7 +327,6 @@ fn cameras(
     let report = |message: String, warning: bool| emit(app, Step::Cameras, message, warning);
     let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
     let repo = repository().ok_or("OFAST's Unreal project was not found.")?;
-    let project = repo.join(PROJECT);
     unreal_closed()?;
     let install = Cs2Install::locate().ok_or("CS2 was not found.")?;
     report("Reading the round…".into(), false);
@@ -242,8 +360,8 @@ fn cameras(
     let result = run_script(
         &engine,
         &repo,
-        &project,
         "import_cameras.py",
+        false,
         &[("OFAST_CAMERAS", made.path.as_os_str())],
         "cameras updated ",
         |line| report(line, false),
@@ -271,7 +389,6 @@ fn send(app: &AppHandle, path: &str, start_tick: u32, plan: &CameraPlan) -> Resu
     let report = |step: Step, message: String| emit(app, step, message, false);
     let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
     let repo = repository().ok_or("OFAST's Unreal project was not found.")?;
-    let project = repo.join(PROJECT);
     unreal_closed()?;
     let install = Cs2Install::locate().ok_or("CS2 was not found.")?;
     let exports = app
@@ -349,8 +466,8 @@ fn send(app: &AppHandle, path: &str, start_tick: u32, plan: &CameraPlan) -> Resu
         run_script(
             &engine,
             &repo,
-            &project,
             "import_map.py",
+            false,
             &[
                 ("OFAST_GLTF", gltf.as_os_str()),
                 ("OFAST_NAME", map.as_ref()),
@@ -371,8 +488,8 @@ fn send(app: &AppHandle, path: &str, start_tick: u32, plan: &CameraPlan) -> Resu
     run_script(
         &engine,
         &repo,
-        &project,
         "import_demo.py",
+        false,
         &[("OFAST_REPLAY", replay.path.as_os_str())],
         "built ",
         |line| report(Step::RoundImport, line),
@@ -420,19 +537,19 @@ fn unreal_closed() -> Result<(), String> {
 
 /// Runs one of OFAST's Unreal scripts (`tools/unreal/<script>`) in `UnrealEditor-Cmd` on the project, with
 /// `variables` set (the others empty), handing each `OFAST:` log line to `line`. Done once the script logged a line
-/// starting with `last`; an error when it says `FAILED` or stops before.
+/// starting with `last`; an error when it says `FAILED` or stops before. Without `draws`, the editor has no renderer.
 fn run_script(
     engine: &Path,
     repo: &Path,
-    project: &Path,
     script: &str,
+    draws: bool,
     variables: &[(&str, &std::ffi::OsStr)],
     last: &str,
     mut line: impl FnMut(String),
 ) -> Result<(), String> {
     let mut command = Command::new(engine.join(EDITOR_CMD));
     command
-        .arg(project)
+        .arg(repo.join(PROJECT))
         .arg(format!(
             "-ExecutePythonScript={}",
             repo.join(r"tools\unreal").join(script).display()
@@ -443,11 +560,13 @@ fn run_script(
             "-stdout",
             "-FullStdOutLogOutput",
             "-NoSound",
-            // Nothing is drawn (no screenshots): no renderer, so the GPU's memory cannot run out.
-            "-nullrhi",
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    if !draws {
+        // Nothing is drawn (no screenshots): no renderer, so the GPU's memory cannot run out.
+        command.arg("-nullrhi");
+    }
     for name in SCRIPT_VARIABLES {
         command.env(name, "");
     }

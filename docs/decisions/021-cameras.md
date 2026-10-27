@@ -24,8 +24,9 @@ Two things stood in the way:
   third-person flashes, the blood of hits on them, their cases in the world while their view shows the first-person
   ones): those primitives are `bOwnerNoSee`; their viewmodel and what rides on it are `bOnlyOwnerSee`. Unreal then
   hides them in that camera only, whichever camera a cut uses (checked 2026-10-26 on de_dust2 round 17: through
-  XANTARES's eyes the view is clear; with the flag off his head fills it; from behind him his body shows).
-  Visibility keys keep only life and death. Lights cannot be hidden per view: the two muzzle lights (the
+  XANTARES's eyes the view is clear; with the flag off his head fills it; from behind him his body shows). Movie
+  Render Queue renders through the cut's camera too (checked 2026-10-27 with M9's renders, decision 023: through
+  YEKINDAR's eyes, his arms and gun only). Visibility keys keep only life and death. Lights cannot be hidden per view: the two muzzle lights (the
   third-person one, the first-person one on the viewmodel) stay keyed by the cuts, and are keyed again when the
   cameras change.
 - **Every camera of a round is computed in Rust** (`camera`, `export::cameras`) and written to the round's cameras
@@ -62,6 +63,4 @@ Two things stood in the way:
   was checked in CS2 itself with ofast-capture (2026-10-27, decision 022): `curtime × 64 − demo tick` is the demo's
   server tick offset (134067 on the Aurora vs FURIA de_dust2 demo) plus up to 2 ticks (CS2 draws a little behind
   its clock).
-- Movie Render Queue's view of owner visibility: it renders through the player controller's view target, the cut's
-  camera, which `bOwnerNoSee` checks; to be checked with M9's renders.
 - CS2 draws a player's own shadow in first person or not: with owner visibility Unreal draws it.

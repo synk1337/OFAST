@@ -21,6 +21,8 @@ What it does so far:
   map exported and imported the first time, the round built as a Level Sequence in the map's level, with progress),
   changes the cameras of a round already there ("Update cameras"), then opens it ("Open in Unreal": the level, and
   the sequence in Sequencer)
+- Renders a round already there ("Render": Movie Render Queue, a preset, around the kills or the whole round, into
+  `Videos\OFAST`; `docs/formats/render.md`)
 
 How to use it, for beginners: [docs/user-guide](../../docs/user-guide/README.md).
 
@@ -49,8 +51,8 @@ install they do not list, set `OFAST_CS2_DIR` or `OFAST_UE_DIR` to its folder.
 ## Layout
 
 - `src/`: the web UI (`App.tsx`: setup and demo list; `DemoPage.tsx`: a demo's page; `RadarView.tsx`: the 2D
-  replay; `SendBar.tsx`: "Send to Unreal" while it runs; `names.ts`: weapons and highlights as people say them;
-  `api.ts` types the commands)
+  replay; `SendBar.tsx`: "Send to Unreal" and "Render" while they run; `names.ts`: weapons and highlights as people
+  say them; `api.ts` types the commands)
 - `src-tauri/`: the Rust side (`commands.rs`: setup, demos, summaries, radar; `unreal.rs`: sending a round to
-  Unreal and opening it), its configuration (`tauri.conf.json`), its permissions (`capabilities/`) and icons
+  Unreal, rendering it and opening it), its configuration (`tauri.conf.json`), its permissions (`capabilities/`) and icons
   (`icons/source.png`, the source image; the rest are made from it with `npx tauri icon`)

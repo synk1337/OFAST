@@ -155,7 +155,7 @@ export const radarImage = (map: string, section: string) => invoke<ArrayBuffer>(
 
 // "Send to Unreal" (`unreal.rs`).
 
-export type SendStep = "round" | "map_export" | "map_import" | "round_import" | "cameras";
+export type SendStep = "round" | "map_export" | "map_import" | "round_import" | "cameras" | "render";
 
 /** Which camera a kill is shown through (`camera::shots::ShotKind`). */
 export type ShotKind = "pov" | "victim" | "behind" | "orbit" | "tripod" | "above";
@@ -195,5 +195,12 @@ export const updateCameras = (path: string, startTick: number, plan: CameraPlan)
 /** The round numbers of a demo already in OFAST's Unreal project. */
 export const sentRounds = (path: string) => invoke<number[]>("sent_rounds", { path });
 export const openInUnreal = (sent: Sent) => invoke<void>("open_in_unreal", { ...sent });
+
+/** Movie Render Queue presets (`tools/unreal/render_round.py`). */
+export type RenderPreset = "preview" | "final" | "4k";
+/** Renders a round already in Unreal between two demo ticks (the whole round with null); gives the frames' folder. */
+export const renderRound = (path: string, round: number, preset: RenderPreset, ticks: [number, number] | null) =>
+  invoke<string>("render_round", { path, round, preset, ticks });
+export const openRenderFolder = (folder: string) => invoke<void>("open_render_folder", { folder });
 export const onSendProgress = (handler: (progress: SendProgress) => void) =>
   listen<SendProgress>("unreal-progress", (event) => handler(event.payload));

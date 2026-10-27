@@ -13,7 +13,7 @@ Ordered so that **Demo → Unreal scene** works first. Every milestone ends in s
 | M6 | Grenades & FX | Trajectories; smokes / molotovs / flashes / HE / tracers / impacts in Niagara. |
 | M7 | Camera tools | Campath editor, smoothing, cinematic presets; HLAE `.cam` import. |
 | M8 | ofast-capture | Free cam, campaths, multi-pass streams + FFmpeg; then live bone capture. |
-| M9 | Render presets | Movie Render Graph, depth/matte passes for compositing. |
+| M9 | Render presets | Movie Render Queue presets, depth/matte passes for compositing. |
 | M10 | Skins (stretch) | Default finishes, then paint kits / wear / seed / stickers. |
 
 ## M0 progress
@@ -351,6 +351,24 @@ player and round.
 - [ ] FFmpeg (frames are images until FFmpeg is installed), extra passes (depth, mattes), the Studio's buttons
   (attach, play a camera, record a shot), detaching without quitting CS2.
 - [ ] Live bone capture for exact player animation (no prior art in CS2).
+
+## M9 progress
+
+- [x] **Design** ([decision 023](decisions/023-render-presets.md)): Movie Render Queue's classic configuration built
+  by script (`tools/unreal/render_round.py`), three presets (preview 720p, final 1080p with 8 samples, 4k) saved as
+  assets for Unreal's own Movie Render Queue window; 60 frames a second.
+- [x] **Passes** ([render.md](formats/render.md)): the picture, a players layer by stencil (bodies, visors,
+  viewmodels, with alpha), the world without them, depth in centimetres; PNG folders per pass and one multi-layer
+  EXR a frame.
+- [x] **Checked** (de_dust2 round 17, 2026-10-27): a first-person cut renders without its player's body (decision
+  021's owner visibility holds in Movie Render Queue), a fixed camera's kill puts both players in the players layer,
+  the depth reads true distances; final at about 2 s and 20 MB a frame on an RTX 5070, preview 1.4 to 7 frames a
+  second. The `4k` preset is not rendered yet.
+- [x] **Studio**: "Render" on a round already sent, a preset, around the kills (the finder's highlight, or all of
+  them) or the whole round, into `Videos\OFAST`, progress in the bar, "Open folder" at the end.
+- [ ] Movie Render Graph (the classic configuration is "legacy" in 5.8's own code), a depth pass readable in 8 bits,
+  sharp frames for velocity edits (no motion blur), the linear (HDR) picture in the EXR, the players layer without
+  the effects near them, other passes (normals, motion vectors, one matte per player).
 
 ## Order from here
 
