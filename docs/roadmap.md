@@ -335,6 +335,23 @@ player and round.
 - [ ] Shots in tight places: a camera behind the killer pulled in by close walls (a stairwell: 20 – 30 units) should
   rise over his head instead; a fixed camera can frame its killer's back up close early in its shot.
 
+## M8 progress
+
+- [x] **Research** ([notes](research/hlae-cs2-capture.md)): how HLAE gets into CS2, finds its insides, overrides
+  the camera and records passes to FFmpeg.
+- [x] **Design** ([decision 022](decisions/022-capture-attach.md)): attached to a CS2 started with `-insecure`
+  (checked by the launcher and again by the DLL), CS2's own interfaces, every slot, offset and pattern checked
+  before use.
+- [x] **Attach and clock** (`apps/capture`, `ofast-attach`): the DLL in CS2, the client's frame hooked, the game's
+  clock read; it matches the demo's server tick offset OFAST reads (M7's HLAE time mapping, checked in the game).
+- [x] **Frames**: `Present` hooked, the back buffer read through a staging texture, written as TGA; demo-timed with
+  `host_framerate`, started by demo tick.
+- [x] **OFAST's cameras in CS2**: the view setup patched, a cameras file's camera (or a player's eyes) played at the
+  game's clock; OFAST's eyes of a player match CS2's own view of him to a few pixels (2026-10-27).
+- [ ] FFmpeg (frames are images until FFmpeg is installed), extra passes (depth, mattes), the Studio's buttons
+  (attach, play a camera, record a shot), detaching without quitting CS2.
+- [ ] Live bone capture for exact player animation (no prior art in CS2).
+
 ## Order from here
 
 A first pass on each milestone left, M7 to M10, then a second pass through every milestone to fix, tweak and

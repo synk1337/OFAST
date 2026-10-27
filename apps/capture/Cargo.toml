@@ -1,0 +1,45 @@
+[package]
+name = "ofast-capture"
+description = "OFAST's CS2 capture: a DLL loaded into an insecure CS2 to film demos, and the launcher that attaches it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "ofast_capture"
+# The DLL loaded into CS2, and a library for the launcher (and later the Studio) to attach it with.
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+# Not "ofast-capture": a binary and a library of the same name would write the same debug file (ofast_capture.pdb).
+name = "ofast-attach"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+ofast-core = { path = "../../crates/ofast-core" } # cameras files and camera maths
+serde_json = "1"                                  # cameras files (players' eyes)
+# Direct3D 11 and DXGI through COM wrappers (the frame capture).
+windows = { version = "0.62", features = [
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-sys = { version = "0.61", features = [
+    "Wdk_System_Threading",                 # NtQueryInformationProcess: another process's command line
+    "Win32_Foundation",
+    "Win32_Security",                       # CreateRemoteThread's attributes
+    "Win32_System_Diagnostics_Debug",       # WriteProcessMemory
+    "Win32_System_Diagnostics_ToolHelp",    # finding cs2.exe and its modules
+    "Win32_System_Environment",             # GetCommandLineW
+    "Win32_System_LibraryLoader",           # GetModuleHandleW, GetProcAddress
+    "Win32_System_Memory",                  # VirtualAllocEx, VirtualProtect
+    "Win32_System_SystemServices",          # DLL_PROCESS_ATTACH
+    "Win32_System_Threading",               # OpenProcess, CreateRemoteThread
+] }
+
+[lints]
+workspace = true

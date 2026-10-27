@@ -2366,6 +2366,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ofast-capture"
+version = "0.0.1"
+dependencies = [
+ "ofast-core",
+ "serde_json",
+ "windows",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "ofast-cli"
 version = "0.0.1"
 dependencies = [

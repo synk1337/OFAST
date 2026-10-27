@@ -58,8 +58,10 @@ Two things stood in the way:
 ## Not verified yet
 
 - HLAE was not installed: the formats follow its source (`shared/CamPath.cpp`, `shared/CamIO.cpp`,
-  `shared/AfxMath.cpp`, `AfxHookSource2/main.cpp`), and the time mapping (`curtime` = server tick × tick interval)
-  its CS2 code (`CMirvTime::curtime_get`, CS2's globals); a campath made in CS2 has not been imported yet.
+  `shared/AfxMath.cpp`, `AfxHookSource2/main.cpp`); a campath made in CS2 has not been imported yet. The time mapping
+  was checked in CS2 itself with ofast-capture (2026-10-27, decision 022): `curtime × 64 − demo tick` is the demo's
+  server tick offset (134067 on the Aurora vs FURIA de_dust2 demo) plus up to 2 ticks (CS2 draws a little behind
+  its clock).
 - Movie Render Queue's view of owner visibility: it renders through the player controller's view target, the cut's
   camera, which `bOwnerNoSee` checks; to be checked with M9's renders.
 - CS2 draws a player's own shadow in first person or not: with owner visibility Unreal draws it.

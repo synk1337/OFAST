@@ -89,6 +89,11 @@ round and its players exported into the app's data folder, the map exported and 
 cameras" exports the round's cameras again and runs `import_cameras.py` (`OFAST_CAMERAS`). "Open in Unreal" starts
 the editor with `tools/unreal/open_sequence.py` (`OFAST_LEVEL`, `OFAST_SEQUENCE`).
 
+CS2 capture (M8, `apps/capture`, [README](../apps/capture/README.md)): `cargo build -p ofast-capture --release`,
+start CS2 through Steam with `-insecure` (check its command line: `Get-CimInstance Win32_Process -Filter
+"name='cs2.exe'"`), then `target/release/ofast-attach.exe`; the DLL logs to `%LOCALAPPDATA%\OFAST\capture.log` and
+reads commands from `%LOCALAPPDATA%\OFAST\capture\command.txt`. Attaching again needs a fresh CS2.
+
 Developer tools for game files: `cargo run --release --example resource_dump -- find <text>` lists archive paths,
 `cargo run --release --example resource_dump -- <path>_c` dumps a compiled file's blocks (KV3 as text), and
 `cargo run --release --example kv3_inspect -- <path>_c` prints raw KV3 headers.

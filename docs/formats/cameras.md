@@ -81,7 +81,14 @@ Read and written by `camera::hlae`, from HLAE's source (advancedfx, MIT): `share
 
 **Time.** HLAE's times are CS2's game clock, `curtime` (`CMirvTime::curtime_get`: the client's globals), which counts
 the server's ticks: `curtime = (demo tick + server_tick_offset) × tick_interval`. The offset is constant within a demo
-(2403 ticks on the local match demo).
+(2403 ticks on the local match demo). Checked in CS2 with ofast-capture (2026-10-27, apps/capture): playing the
+Aurora vs FURIA de_dust2 demo, `curtime × 64 − demo tick` was 134067 plus a fraction, the server tick offset OFAST
+reads from that demo, and after a seek up to 2 ticks more (the demo tick moves in whole steps, the clock smoothly,
+and CS2 draws a little behind its clock): an HLAE time and an OFAST tick agree within 2 ticks (30 ms).
+
+The cameras of a cameras file also play inside CS2 itself, through ofast-capture (`camera <file> <number>`,
+`camera <file> eyes <controller>`): a player's eyes from the file and CS2's own first-person view of that player
+frame the same picture to a few pixels.
 
 **Campath** (`mirv_campath save`): an XML `<campath>` with optional attributes `positionInterp` and `fovInterp`
 (`default`, `linear`, `cubic`), `rotationInterp` (`default`, `sLinear`, `sCubic`), `offset` (seconds, added to the
