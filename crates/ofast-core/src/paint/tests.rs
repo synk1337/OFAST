@@ -187,6 +187,9 @@ const EXTENDED: &str = r#"<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977
                 { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_COPY_PROPERTY"
                   m_strCopyProperty_InputContainerSrc = "exposed_params" m_strCopyProperty_InputContainerProperty = "g_tPaintByNumberMasks" m_strCopyProperty_TargetProperty = "g_tMasks"
                   m_vecConditions = [ { m_nMutatorCondition = "COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EQUALS" m_strMutatorConditionContainerName = "exposed_params" m_strMutatorConditionContainerVarName = "g_bOverrideDefaultMasks" m_strMutatorConditionContainerVarValue = "1" } ] },
+                { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_SET_VALUE"
+                  m_nSetValue_Value = { m_strName = "F_PEARLESCENCE_MASK" m_nVariableType = "LOOSE_VARIABLE_TYPE_INTEGER1" m_nValueIntX = 1 }
+                  m_vecConditions = [ { m_nMutatorCondition = "COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EQUALS" m_strMutatorConditionContainerName = "exposed_params" m_strMutatorConditionContainerVarName = "g_bUseMetalness" m_strMutatorConditionContainerVarValue = "0" m_bPassWhenTrue = false } ] },
                 { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_CONDITIONAL_MUTATORS" m_vecConditionalMutators = [
                     { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_SET_VALUE"
                       m_nSetValue_Value = { m_strName = "F_ROUGHNESS_PER_COLOR" m_nVariableType = "LOOSE_VARIABLE_TYPE_INTEGER1" m_nValueIntX = 1 }
@@ -203,9 +206,9 @@ fn generated_textures_follow_their_steps_and_conditions() {
     let recipe = recipe_of(EXTENDED);
     assert_eq!(recipe.generated.len(), 1);
     let steps = &recipe.generated[0].steps;
-    assert_eq!(steps.len(), 6);
+    assert_eq!(steps.len(), 7);
     // The conditional group's step carries the group's condition and its own.
-    assert_eq!(steps[5].conditions.len(), 2);
+    assert_eq!(steps[6].conditions.len(), 2);
     let mut paint = MaterialInfo::default();
     paint.ints.insert("F_METALNESS_TEXTURE".into(), 1);
     paint.ints.insert("F_PAINT_STYLE".into(), 0);
@@ -230,6 +233,8 @@ fn generated_textures_follow_their_steps_and_conditions() {
     assert_eq!(params["g_nRandomSeed"], Param::Int(700));
     // No `override_vars` container: the group's step is not done.
     assert!(!params.contains_key("F_ROUGHNESS_PER_COLOR"));
+    // A condition passing when false: metalness is not used, so this one is not set.
+    assert!(!params.contains_key("F_PEARLESCENCE_MASK"));
     // A texture the recipe does not generate has no steps.
     assert_eq!(recipe.generate("g_tMetalness", &containers), None);
 }

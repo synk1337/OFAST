@@ -95,7 +95,8 @@ instructions in order: `COPY_MATCHING_KEYS` (a container's parameters: the compo
 `g_tPaintByNumberMasks` over the weapon's `g_tMasks` when `g_bOverrideDefaultMasks`), `SET_VALUE` (a newer kit's
 template switches a feature off when its `g_bUse*` is: overlay, metalness, roughness and pearlescence textures;
 roughness per colour on), each under conditions (`INPUT_CONTAINER_VALUE_EQUALS`, written `1`, `0`, `true`;
-`…_VALUE_EXISTS`; `INPUT_CONTAINER_EXISTS`), groups of them inside `CONDITIONAL_MUTATORS`. A newer kit's colours are
+`…_VALUE_EXISTS`; `INPUT_CONTAINER_EXISTS`; any of them negated by `m_bPassWhenTrue = false`, in 187 weapon
+composites), groups of them inside `CONDITIONAL_MUTATORS`. A newer kit's colours are
 `LOOSE_VARIABLE_TYPE_COLOR4` variables (`m_cValueColor4`, bytes), 750 of them over the composites.
 
 ## Stickers

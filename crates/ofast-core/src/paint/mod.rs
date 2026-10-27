@@ -191,6 +191,8 @@ pub enum Condition {
     Exists(String, String),
     /// A container exists: `INPUT_CONTAINER_EXISTS`.
     Container(String),
+    /// The other way round (`m_bPassWhenTrue = false`).
+    Not(Box<Condition>),
     /// A condition not read: never holds.
     Unknown(String),
 }
@@ -324,6 +326,7 @@ impl Condition {
             }
             Condition::Exists(container, name) => value(container, name).is_some(),
             Condition::Container(container) => containers.contains_key(container),
+            Condition::Not(condition) => !condition.holds(containers),
             Condition::Unknown(_) => false,
         }
     }
@@ -605,7 +608,7 @@ fn read_condition(condition: &Value) -> Condition {
     };
     let container = text("m_strMutatorConditionContainerName");
     let name = text("m_strMutatorConditionContainerVarName");
-    match condition.get("m_nMutatorCondition").and_then(Value::as_str) {
+    let read = match condition.get("m_nMutatorCondition").and_then(Value::as_str) {
         Some("COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EQUALS") => Condition::Equals(
             container,
             name,
@@ -618,6 +621,16 @@ fn read_condition(condition: &Value) -> Condition {
             Condition::Container(container)
         }
         other => Condition::Unknown(other.unwrap_or_default().to_owned()),
+    };
+    let pass_when_true = condition
+        .get("m_bPassWhenTrue")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    // A condition not read never holds, either way round.
+    if pass_when_true || matches!(read, Condition::Unknown(_)) {
+        read
+    } else {
+        Condition::Not(Box::new(read))
     }
 }
 
