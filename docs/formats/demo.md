@@ -716,6 +716,42 @@ bottom pair: tick 40290 of Aurora vs FURIA round 5, from CS2's own Chase Cam pos
 AK-47 lies in Unreal where CS2 draws it, on its side, stock towards the doorway (CS2's carries its skin; Unreal shows
 the default finish).
 
+## Weapon finishes (skins)
+
+Every weapon entity networks its econ item under `m_AttributeManager.m_Item`: the item definition index, the owner's
+account (`m_iAccountID`), item id, quality (`m_iEntityQuality`), the name tag (`m_szCustomName`, up to 160 bytes of
+UTF-8) and two attribute lists, `m_AttributeList.m_Attributes` (empty in the demos seen) and
+`m_NetworkedDynamicAttributes.m_Attributes`, which holds the finish. Each entry is a `CEconItemAttribute`: element 0
+`m_iAttributeDefinitionIndex` (uint16), element 1 `m_iRawValue32` (32 bits, sent as a `float32` whose bits are the
+value), element 2 `m_flInitialValue` (the same). The weapon's own `m_nFallbackPaintKit`, `m_nFallbackSeed`,
+`m_flFallbackWear` and `m_nFallbackStatTrak` (−1) stay unset in tournament demos.
+
+`items_game.txt` → `attributes` names the indices and says how the bits are stored (`stored_as_integer`): `"1"` an
+integer in the bits, `"0"` a float, `"float_floor_to_integer"` a float holding a whole number.
+
+| Index | Attribute | Stored |
+|---|---|---|
+| 6 | paint kit (`set item texture prefab`, → `paint_kits`) | float, whole |
+| 7 | pattern seed (sent as a float, sometimes fractional: 242.30241, floored) | float, whole |
+| 8 | wear, 0 – 1 | float |
+| 80 | StatTrak count (`kill eater`) | integer |
+| 113 + 4n … 116 + 4n | sticker slot n (0 – 5): id (→ `sticker_kits`), wear, scale, rotation (degrees) | integer, floats |
+| 278 + 2n, 279 + 2n | sticker slot n offset x, y (CS2's free placement) | floats |
+| 290 + n | sticker slot n schema | integer |
+| 299; 300 – 302; 306 | keychain slot 0: id (→ `keychain_definitions`); offset x, y, z; seed | integer; floats; integer |
+| 137, 138 | tournament event, stage (souvenirs) | integers |
+
+Only what differs from the defaults is sent: of a weapon's stickers, the id always, the rest when set (older
+stickers send wear 0, scale 1, rotation 0; most send none). OFAST reads every weapon carried or lying in a round
+once, when first seen (`RoundTrack::skins` by entity index, read again if the index comes back as another item;
+`demo::skins`), so a weapon picked up keeps its buyer's finish, as in CS2.
+
+**Seen** (`examples/round_skins.rs`, Aurora vs FURIA de_dust2 round 17, 67 weapons): MAJ3R's AK-47, Fire Serpent
+(180) seed 245 wear 0.1434 with the name tag "VICTORIA SIEMPRE" and Boston 2018 stickers in slots 1 – 3;
+YEKINDAR's StatTrak (1471) M4A1-S Asiimov with four Cologne 2015 stickers; Doppler and Crimson Web knives with name
+tags; FalleN's USP-S Royal Guard with five stickers placed freely (rotations −90° to 111°, offsets) and a keychain;
+grenades plain.
+
 ## Doors
 
 A map's rotating doors (`prop_door_rotating`) are `CPropDoorRotating` entities, created again every round

@@ -32,7 +32,7 @@
 //! physics objects and sends their origin (cell and offset, like a pawn's) and rotation (`m_angRotation`: pitch,
 //! yaw, roll) on every tick they move; carried weapons send zeros (they follow their owner's hand).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::decoder::FieldValue;
 use super::entity::{Entity, ServerClass, handle_to_index};
@@ -42,6 +42,7 @@ use super::grenades::{FireSample, GrenadePaths, GrenadeSample, SmokeLog, origin}
 use super::parser::{DemoError, DemoParser, RawMessage};
 use super::serializer::Serializers;
 use super::shots::{self, PlayerHit, Shot};
+use super::skins::{Skin, skin_from_attributes};
 
 /// Width of one position grid cell, in world units.
 pub const CELL_WIDTH: f32 = 512.0;
@@ -399,6 +400,10 @@ pub struct RoundTrack {
     /// demo, [`DemoParser::server_tick`]), from the round's first tick that had both; `None` without any. CS2's game
     /// clock (`curtime`, which HLAE's camera files use) is the server tick times the tick interval.
     pub server_tick_offset: Option<i64>,
+    /// Each weapon's finish by entity index, read when the weapon is first seen carried or lying in the round (read
+    /// again when the entity index comes back as another item). A weapon picked up keeps its finish: CS2 shows the
+    /// buyer's skin in anyone's hands.
+    pub skins: BTreeMap<u32, Skin>,
 }
 
 /// Where one round is in the demo.
@@ -670,6 +675,9 @@ struct WeaponPaths {
     cell: Option<[FieldPath; 3]>,
     offset: Option<[FieldPath; 3]>,
     rotation: Option<FieldPath>,
+    /// Its finish ([`super::skins`]): the econ attribute list and the name tag.
+    attributes: Option<FieldPath>,
+    name_tag: Option<FieldPath>,
 }
 
 impl RigPaths {
@@ -705,6 +713,10 @@ impl RigPaths {
                     cell: axes("CBodyComponent.m_cell"),
                     offset: axes("CBodyComponent.m_vec"),
                     rotation: field("CBodyComponent.m_angRotation"),
+                    attributes: field(
+                        "m_AttributeManager.m_Item.m_NetworkedDynamicAttributes.m_Attributes",
+                    ),
+                    name_tag: field("m_AttributeManager.m_Item.m_szCustomName"),
                 };
                 Some((class.id, paths))
             })
@@ -1009,6 +1021,7 @@ fn track_round_where(
                     earlier_shots: Vec::new(),
                     earlier_hits: Vec::new(),
                     server_tick_offset: None,
+                    skins: BTreeMap::new(),
                 };
                 for m in earlier.drain(..).filter(|m| m.tick < tick) {
                     if m.kind == shots::FIRE_BULLETS {
@@ -1049,6 +1062,20 @@ fn track_round_where(
                     .grenades(parser, &pawn_controllers(parser, paths)),
                 fires: paths.grenades.fires(parser),
             };
+            let weapons = sample.players.iter().flat_map(|p| &p.weapons);
+            let seen = weapons
+                .map(|w| (w.entity, w.item))
+                .chain(sample.dropped.iter().map(|w| (w.entity, w.item)));
+            for (entity, item) in seen {
+                if track
+                    .skins
+                    .get(&entity)
+                    .is_none_or(|skin| skin.item != item)
+                    && let Some(skin) = read_skin(parser, paths, entity)
+                {
+                    track.skins.insert(entity, skin);
+                }
+            }
             // A smoke's log, read again only when its update counter moved and kept when its bytes changed.
             for g in &sample.grenades {
                 let Some(cloud) = g.smoke else { continue };
@@ -1292,6 +1319,36 @@ fn read_weapons(parser: &DemoParser<'_>, paths: &Paths, pawn: &Entity) -> Vec<Ca
             })
         })
         .collect()
+}
+
+/// The finish of the weapon entity `entity` ([`super::skins`]): its econ attributes (definition index, raw 32-bit
+/// value: a float field holds the bits as they were sent) and name tag. `None` when the entity or its class's item
+/// field is missing.
+fn read_skin(parser: &DemoParser<'_>, paths: &Paths, entity: u32) -> Option<Skin> {
+    let weapon = parser.entities().get(entity)?;
+    let fields = paths.rig.weapons.get(&weapon.class_id)?;
+    let item = weapon.get(&fields.item)?.as_u64()? as u32;
+    let mut attributes = Vec::new();
+    if let Some(list) = &fields.attributes {
+        let count = weapon.get(list).and_then(FieldValue::as_u64).unwrap_or(0);
+        for k in 0..count.min(64) as i32 {
+            let entry = |member: i32| list.child(k)?.child(member);
+            let index = entry(0).and_then(|p| weapon.get(&p)?.as_u64());
+            let bits = entry(1).and_then(|p| match weapon.get(&p)? {
+                FieldValue::Float(f) => Some(f.to_bits()),
+                value => value.as_u64().map(|v| v as u32),
+            });
+            if let (Some(index), Some(bits)) = (index, bits) {
+                attributes.push((index as u32, bits));
+            }
+        }
+    }
+    let name_tag = fields
+        .name_tag
+        .as_ref()
+        .and_then(|p| weapon.get(p)?.as_str())
+        .unwrap_or("");
+    Some(skin_from_attributes(item, &attributes, name_tag))
 }
 
 /// The weapons nobody carries: weapon entities whose owner and parent are both the invalid handle (or were never

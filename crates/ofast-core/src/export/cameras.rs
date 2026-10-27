@@ -645,6 +645,7 @@ mod tests {
             earlier_shots: Vec::new(),
             earlier_hits: Vec::new(),
             server_tick_offset: Some(2403),
+            skins: Default::default(),
         }
     }
 

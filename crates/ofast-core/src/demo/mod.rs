@@ -21,6 +21,7 @@
 //! | smokes | [`smoke`] | a smoke's voxel log decoded, and its cloud simulated |
 //! | shots | [`shots`] | each gun shot's fire-bullets message, and its bullets' directions from its seed |
 //! | recoil | [`recoil`] | the aim punch a gun's shots build, rebuilt from its recoil keys |
+//! | skins | [`skins`] | a weapon's finish (paint kit, seed, wear, stickers…) from its econ attributes |
 //!
 //! The full format description, with sources, is in `docs/formats/demo.md`.
 //!
@@ -56,6 +57,7 @@ pub mod recipe;
 pub mod recoil;
 pub mod serializer;
 pub mod shots;
+pub mod skins;
 pub mod smoke;
 pub mod stringtable;
 pub mod summary;

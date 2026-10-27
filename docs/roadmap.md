@@ -370,6 +370,15 @@ player and round.
   sharp frames for velocity edits (no motion blur), the linear (HDR) picture in the EXR, the players layer without
   the effects near them, other passes (normals, motion vectors, one matte per player).
 
+## M10 progress
+
+- [x] **Skins in the demo** (`demo::skins`, [demo.md](formats/demo.md), "Weapon finishes"): each weapon's paint kit,
+  seed, wear, StatTrak, name tag, stickers (with CS2's free placement) and keychain from its econ attributes, per
+  round (`RoundTrack::skins`); names from `items_game.txt` and `csgo_english.txt` (`items::section_values`,
+  `language_tokens`). Seen on Aurora vs FURIA round 17: 67 weapons, Fire Serpent, Asiimov, Dopplers, Fades.
+- [ ] How CS2 paints a weapon (composite materials, `.vcompmat`: the paint kit's material run over the weapon's
+  composite inputs, the seed rolling the pattern's place), rebuilt; stickers and keychains on the weapons.
+
 ## Order from here
 
 A first pass on each milestone left, M7 to M10, then a second pass through every milestone to fix, tweak and

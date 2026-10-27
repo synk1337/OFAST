@@ -1707,6 +1707,7 @@ mod tests {
                 point: [100.0, 20.0, 0.0],
             }],
             server_tick_offset: None,
+            skins: Default::default(),
         };
         let muzzles = [Muzzle {
             controller: 2,
@@ -1964,6 +1965,7 @@ mod tests {
             earlier_shots: Vec::new(),
             earlier_hits: Vec::new(),
             server_tick_offset: None,
+            skins: Default::default(),
         };
         let line =
             |tick: u32| doors.crossings(&track, tick, [0.0, 20.0, 10.0], [1.0, 0.0, 0.0], REACH);

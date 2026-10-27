@@ -928,6 +928,7 @@ mod tests {
             earlier_shots: Vec::new(),
             earlier_hits: Vec::new(),
             server_tick_offset: None,
+            skins: Default::default(),
         };
         let replay = replay_json(&track, "demo");
         assert_eq!(replay["samples"]["ticks"], json!([100, 101, 102]));
