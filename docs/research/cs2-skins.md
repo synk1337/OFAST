@@ -44,9 +44,16 @@ container instead.
 MIT-licensed fade calculator (github.com/chescos/csgo-fade-percentage-calculator, after
 github.com/Step7750/UniformRandom), still kept up for CS2. To check against CS2 screenshots.
 
-**Unknown**: the pixel maths of `csgo_customweapon`'s nine styles (solid, hydrographic, spray, three anodized,
-custom paint job, patina, gunsmith): how wear, grunge, cavity, masks and colours combine. It is only in the compiled
-shaders (`shaders_pc_dir.vpk`: `csgo_customweapon`, `csgo_composite_inputs`, `csgo_weapon`, `csgo_weapon_sticker`).
+**Known** (decision 024): the pixel maths of `csgo_customweapon` is in the compiled shaders
+(`shaders_vulkan_dir.vpk`, `shaders_pc_dir.vpk`: `csgo_customweapon`, `csgo_composite_inputs`, `csgo_weapon`,
+`csgo_weapon_sticker`). GameTracking-CS2 tracks Source 2 Viewer's decompilation of each shader's default variant
+(`game/csgo/shaders_vulkan_dir/shaders/vfx/csgo_customweapon.slang`): the vertex stage (the placements) and the
+solid style, whose wear, grunge and surface maths `export::paint` ports. The file also lists every style's
+parameters, defaults and texture formats (`#if (S_PAINT_STYLE == n)` blocks), but not their code.
+
+**Unknown**: the code of the other eight styles (hydrographic, spray, three anodized, custom paint job, patina,
+gunsmith), overlays and case hardening — other static combos of the same `.vcs`, which Source 2 Viewer decompiles
+one at a time (its current release: CS2's files are format 72, beyond the October 2025 release's 70).
 ValveResourceFormat reads `.vcompmat` as KV3 but does not composite ("Source 2 Viewer cannot show or export a weapon
 with a skin applied", its CS2 notes); Skinshotter (closed source) ported the shaders to WGSL.
 

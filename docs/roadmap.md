@@ -380,14 +380,19 @@ player and round.
   their composite materials read (includes, containers, loose variables, rolls), the seed's roll (a uniform random
   stream), and the parameters a weapon material gets (`weapon_params`; `examples/paint_params.rs`: MAJ3R's Fire
   Serpent, style 6 on the legacy AK's composite inputs, wear texture at scale 1.706, rotation 183°).
-- [x] **Skins painted** ([decision 024](decisions/024-skins.md), `export::paint`): OFAST's own bake of the paint
-  styles over each weapon material's UV layout (pattern placed by the roll, no-paint mask, wear against the wear
-  texture and edges, grunge), a colour and a metallic-roughness texture per skin in the players' and viewmodels'
-  glTFs, for custom paint jobs and gunsmith finishes. Round 17: 12 of its 28 skins (Fire Serpent, Asiimov, Gungnir…),
-  seen in Unreal in first and third person.
-- [ ] The other styles' colour maps (solid, hydrographic, spray paint, anodized: Dopplers, Fades; patina), case
-  hardening, pearlescence, the paints' normal maps; weapons lying in the world, gloves; stickers, keychains, name
-  tags; checked against CS2 screenshots.
+- [x] **Skins painted** ([decision 024](decisions/024-skins.md), `export::paint`): a bake over each weapon material's
+  UV layout, a colour and a metallic-roughness texture per skin in the players' and viewmodels' glTFs, for custom
+  paint jobs and gunsmith finishes. Round 17: 12 of its 28 skins (Fire Serpent, Asiimov, Gungnir…), seen in Unreal
+  in first and third person.
+- [x] **CS2's paint shader as the reference** (the user's choice, 2026-10-27): the bake ported from the decompiled
+  `csgo_customweapon` in GameTracking-CS2 — the placements, the wear, the grunge and the surface every style
+  shares, and the solid style (the decompiled default variant). Round 17: 13 of 28 (Whiteout added).
+- [ ] The other styles' code (hydrographic, spray paint, anodized: Dopplers, Fades; patina), overlays, case
+  hardening: their variants are not in the tracked file, and the Source 2 Viewer on hand (October 2025) cannot read
+  CS2's current shader files (format 72; it stops at 70); the current release, the one GameTracking-CS2 runs,
+  does.
+- [ ] Pearlescence, the paints' normal maps; weapons lying in the world, gloves; stickers, keychains, name tags;
+  checked against CS2 screenshots.
 
 ## Order from here
 
