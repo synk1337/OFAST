@@ -122,6 +122,10 @@ struct Inputs {
     flip: f32,
     patterned: bool,
     pattern_mode: i64,
+    /// The mask region the pattern paints over (modes 0 and 2): `g_nPatternReplaceIndex` − 1. It is authored 1 – 8
+    /// and the decompiled code indexes the regions (0 – 7) with the uniform as is, but CS2 paints Crimson Kimono's 1
+    /// over region 0 (the back of the hand; region 1, its knuckle panel, keeps its tint): checked side by side
+    /// (Aurora vs FURIA, round 17).
     replace_index: usize,
     paint_thickness: f32,
     paint_durability: f32,
@@ -275,7 +279,7 @@ impl Inputs {
             flip: if flipped { -1.0 } else { 1.0 },
             patterned: int("F_PATTERN", 0) != 0,
             pattern_mode: int("g_nPatternMode", 0),
-            replace_index: int("g_nPatternReplaceIndex", 1).clamp(0, 7) as usize,
+            replace_index: (int("g_nPatternReplaceIndex", 1) - 1).clamp(0, 7) as usize,
             paint_thickness: float("g_fPaintThickness", 1.0),
             paint_durability: float("g_fPaintDurability", 0.5),
             pattern_detail_influence: float("g_fPatternDetailInfluence", 0.0),

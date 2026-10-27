@@ -127,6 +127,8 @@ pub enum VariableValue {
     Float([f32; 2]),
     /// A colour (`COLOR4`: bytes, as a material's colour parameters hold them, 0 – 1; alpha 1 when not written).
     Color([f32; 4]),
+    /// Three or four floats (`FLOAT3`, `FLOAT4`: per-colour metalness and roughness; w 0 for three).
+    Vector([f32; 4]),
     /// An integer (`INTEGER1`).
     Int(i64),
     /// A switch (`BOOLEAN`).
@@ -329,7 +331,7 @@ impl From<&VariableValue> for Param {
     fn from(value: &VariableValue) -> Self {
         match value {
             VariableValue::Float([x, y]) => Param::Floats([*x, *y, 0.0, 0.0]),
-            VariableValue::Color(rgba) => Param::Floats(*rgba),
+            VariableValue::Color(rgba) | VariableValue::Vector(rgba) => Param::Floats(*rgba),
             VariableValue::Int(value) => Param::Int(*value),
             VariableValue::Bool(value) => Param::Int(i64::from(*value)),
             VariableValue::Texture(path) => Param::Texture(path.clone()),
@@ -499,6 +501,12 @@ fn read_variable(container: &str, v: &Value) -> Option<Variable> {
         "LOOSE_VARIABLE_TYPE_FLOAT1" | "LOOSE_VARIABLE_TYPE_FLOAT2" => {
             VariableValue::Float([float("m_flValueFloatX"), float("m_flValueFloatY")])
         }
+        "LOOSE_VARIABLE_TYPE_FLOAT3" | "LOOSE_VARIABLE_TYPE_FLOAT4" => VariableValue::Vector([
+            float("m_flValueFloatX"),
+            float("m_flValueFloatY"),
+            float("m_flValueFloatZ"),
+            float("m_flValueFloatW"),
+        ]),
         "LOOSE_VARIABLE_TYPE_COLOR4" => {
             let bytes = v
                 .get("m_cValueColor4")

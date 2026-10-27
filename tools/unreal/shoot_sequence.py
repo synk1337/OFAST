@@ -9,6 +9,8 @@ Run with tools/unreal/run_ue.ps1:
 Inputs (environment variables):
     OFAST_SEQUENCE   the round's sequence (import_demo.py stores its demo clock and map on it)
     OFAST_TICKS      demo ticks, "153200,154050"
+    OFAST_POV_SHOTS  optional views through players' eyes, "tick:name,tick:name" (their "POV <name>" cameras, as
+                     CS2's spec_player shows them: -PovShots "150500:XANTARES")
     OFAST_SHOT       the folder for the screenshots: <sequence>_tick<tick>_<camera label>.png
 """
 
@@ -65,6 +67,17 @@ def main():
             continue
         safe = re.sub(r"[^A-Za-z0-9]+", "_", label)[:40]
         shots.append((tick - tick0, camera, os.path.join(folder, "%s_tick%d_%s.png" % (name, tick, safe))))
+    for item in os.environ.get("OFAST_POV_SHOTS", "").split(","):
+        if ":" not in item:
+            continue
+        tick, player = item.split(":", 1)
+        label = "POV %s" % player.strip()
+        camera = by_label.get(label)
+        if camera is None:
+            log("tick %s: no camera %s" % (tick, label))
+            continue
+        safe = re.sub(r"[^A-Za-z0-9]+", "_", label)[:40]
+        shots.append((int(tick) - tick0, camera, os.path.join(folder, "%s_tick%s_%s.png" % (name, tick, safe))))
     state = {"ticks": 0, "index": 0, "requested": None}
 
     def tick(_delta):

@@ -178,6 +178,8 @@ const EXTENDED: &str = r#"<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977
                 { m_strName = "g_bOverrideDefaultMasks" m_nVariableType = "LOOSE_VARIABLE_TYPE_BOOLEAN" m_bValueBoolean = true },
                 { m_strName = "g_tPaintByNumberMasks" m_nVariableType = "LOOSE_VARIABLE_TYPE_RESOURCE_TEXTURE" m_strTextureRuntimeResourcePath = "usps_anodized_masks.vtex" },
                 { m_strName = "g_bUseRoughnessByColor" m_nVariableType = "LOOSE_VARIABLE_TYPE_BOOLEAN" m_bValueBoolean = true },
+                { m_strName = "g_vPaintMetalness" m_nVariableType = "LOOSE_VARIABLE_TYPE_FLOAT4" m_flValueFloatX = 0.0 m_flValueFloatY = 0.5 m_flValueFloatZ = 1.0 m_flValueFloatW = 0.4 },
+                { m_strName = "g_vColor2" m_nVariableType = "LOOSE_VARIABLE_TYPE_COLOR4" m_cValueColor4 = [ 235, 208, 161 ] },
             ] },
         ]
         m_vecPropertyMutators = [
@@ -238,6 +240,15 @@ fn generated_textures_follow_their_steps_and_conditions() {
     );
     assert_eq!(params["F_SEPARATE_CHANNEL_INPUTS"], Param::Int(1));
     assert_eq!(params["g_nRandomSeed"], Param::Int(700));
+    // Its own per-colour metalness (FLOAT4) and colours (COLOR4 bytes, alpha 1 when not written).
+    assert_eq!(
+        params["g_vPaintMetalness"],
+        Param::Floats([0.0, 0.5, 1.0, 0.4])
+    );
+    assert_eq!(
+        params["g_vColor2"],
+        Param::Floats([235.0 / 255.0, 208.0 / 255.0, 161.0 / 255.0, 1.0])
+    );
     // No `override_vars` container: the group's step is not done.
     assert!(!params.contains_key("F_ROUGHNESS_PER_COLOR"));
     // A condition passing when false: metalness is not used, so this one is not set.

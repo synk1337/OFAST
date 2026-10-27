@@ -97,7 +97,10 @@ template switches a feature off when its `g_bUse*` is: overlay, metalness, rough
 roughness per colour on), each under conditions (`INPUT_CONTAINER_VALUE_EQUALS`, written `1`, `0`, `true`;
 `…_VALUE_EXISTS`; `INPUT_CONTAINER_EXISTS`; any of them negated by `m_bPassWhenTrue = false`, in 187 weapon
 composites), groups of them inside `CONDITIONAL_MUTATORS`. A newer kit's colours are
-`LOOSE_VARIABLE_TYPE_COLOR4` variables (`m_cValueColor4`, bytes), 750 of them over the composites.
+`LOOSE_VARIABLE_TYPE_COLOR4` variables (`m_cValueColor4`, bytes), 750 of them over the composites; its per-colour
+metalness and roughness (`g_vPaintMetalness`, `g_vPaintRoughness`) `FLOAT4` (`m_flValueFloatX` – `W`, in 152
+composites; `FLOAT3` in 29). Missed, Royal Guard's slide came out as matte paint where CS2 shows half-metal blue
+and fully metal gold (checked side by side, 2026-10-28).
 
 ## Gloves
 
@@ -133,6 +136,10 @@ seeded and conditional rolls and copies into containers (`paint`), the combo-0 b
 viewmodels keyed by the glove finish. Round 17: 7 of its 10 players' glove skins painted (Crimson Kimono, Emerald
 Web, Vice, Foundation); the 3 others are 2025's kits (`gloves/paints/volatile_02/glove_*`), whose recipe renders a
 `workshop/paintkits/templates/glove_compositor.vmat` (`paint_compositor`) with the height-blended combo 1.
+
+**Checked against CS2** (2026-10-28): a pattern paints over mask region `g_nPatternReplaceIndex − 1` (authored 1 –
+8; the decompiled code indexes the regions with the uniform as is, so the material system must store it 0-based):
+Crimson Kimono's 1 covers the back of the hand (region 0) and leaves its knuckle panel (region 1) its slate tint.
 
 **Not done yet**: combo 1 (height blending: the newer kits) and the anisotropic combo; `g_nRandomSeedAlt`'s value
 (OFAST takes the pattern seed; to read from CS2: a left and right glove of one skin side by side).
