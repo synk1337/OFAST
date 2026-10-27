@@ -397,8 +397,11 @@ player and round.
   case hardening, spray paint's halftone and all-masks variants ported from their combos
   (`examples/paint_bake.rs` bakes any kit, `examples/paint_census.rs` counts what kits use). Round 17: 28 of 28
   (Royal Guard in its blue and gold).
-- [ ] Patina age, trilinear case hardening; pearlescence, the paints' normal maps; weapons lying in the world,
-  gloves; stickers, keychains, name tags; checked against CS2 screenshots.
+- [x] **Weapons lying in the world painted**: one glTF per model and skin (the replay's and the manifest's
+  `finish`); round 17: 13 of its 31 dropped stretches carry a skin, each matched to its file.
+- [ ] Gloves (their own shader, `csgo_customglove`: four material layers, curvature wear, an 8-colour palette);
+  patina age, trilinear case hardening; pearlescence, the paints' normal maps; stickers, keychains, name tags;
+  checked against CS2 screenshots.
 
 ## Order from here
 

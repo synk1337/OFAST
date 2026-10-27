@@ -78,8 +78,8 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
 - Each skin's colour and surface decode their inputs separately (the weapon's composite inputs and the shared wear
   and grunge textures again for each skin, and again for the viewmodel): fine at a round's 30 skins, a cache if it
   grows.
-- Not painted yet: weapons lying in the world (their own glTFs), gloves, stickers, keychains, name tags, StatTrak
-  counters.
+- Weapons lying in the world are painted too (their own glTFs, one per model and skin).
+- Not painted yet: gloves (their own shader, `csgo_customglove`), stickers, keychains, name tags, StatTrak counters.
 - To check against CS2: the roll (whether a variable a kit does not define still takes its draw), which size scale
   the UV placements use (`g_flUvScale1`, or `g_flWeaponLength1 / 36`: the vertex stage declares both; OFAST takes
   the first, and the second for the projected patterns, whose own declarations name it), the look at each wear.

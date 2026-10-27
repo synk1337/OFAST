@@ -15,7 +15,7 @@
 //!   on its holster, or scaled to 0; from each death on, the body falling as the agent's ragdoll ([`super::deaths`]).
 //!
 //! The weapons lying in the world (a dead player's gun, a dropped one: the replay's `dropped_weapons`) get one glTF
-//! per look, the weapon model alone: `<demo>_r<round>_dropped_<model>_<mesh groups>.gltf`.
+//! per look and skin, the weapon model alone, painted: `<demo>_r<round>_dropped_<model>_<mesh groups>[_<skin>].gltf`.
 //!
 //! The players' first-person views (their arms and the weapon in hand, as CS2 draws them in a POV shot) get one
 //! glTF per agent and glove skin: `<demo>_r<round>_viewmodel_<agent>[_<gloves>].gltf` ([`super::viewmodel`]).
@@ -686,7 +686,7 @@ fn export_cases(
         let name = format!("{demo_name}_r{}_case_{}", round.track.round, stem(path));
         let written = load_model(round.content, path).and_then(|model| {
             let shown = shown_groups(&model, 0);
-            export_model_static(round.content, &model, shown, out_dir, &name)
+            export_model_static(round.content, &model, shown, out_dir, &name, None)
         });
         match written {
             Ok(written) => {
@@ -702,20 +702,23 @@ fn export_cases(
 
 /// Writes one glTF per look of the weapons lying in the world during the round (the replay's `dropped_weapons`) and
 /// of the thrown grenades in flight (its `grenades`, mesh-group mask 0: the model's default groups):
-/// `<demo>_r<round>_dropped_<model file stem>_<mesh groups shown>.gltf`, the weapon model alone in its mesh groups
-/// and rigid (a static mesh: it does not animate), so Unreal can place it where the demo has it. Returns the
-/// manifest entries: file, model path, model id, and every mesh-group mask the replay names that shows this file
-/// (grenades send every bit, which shows the model's default groups). A model that cannot be read is left out with
-/// a warning, like a carried weapon's.
+/// `<demo>_r<round>_dropped_<model file stem>_<mesh groups shown>[_<skin>].gltf`, the weapon model alone in its mesh
+/// groups, painted with its skin (M10), and rigid (a static mesh: it does not animate), so Unreal can place it where
+/// the demo has it. Returns the manifest entries: file, model path, model id, the finish, and every mesh-group mask
+/// the replay names that shows this file (grenades send every bit, which shows the model's default groups). A model
+/// that cannot be read is left out with a warning, like a carried weapon's.
 fn export_dropped(
     round: &Round<'_>,
     demo_name: &str,
     out_dir: &Path,
     report: &mut PlayersReport,
 ) -> Vec<serde_json::Value> {
-    let mut looks: BTreeMap<u64, BTreeSet<u64>> = BTreeMap::new();
+    let mut looks: BTreeMap<(u64, Option<Finish>), BTreeSet<u64>> = BTreeMap::new();
     for w in round.track.samples.iter().flat_map(|s| &s.dropped) {
-        looks.entry(w.model).or_default().insert(w.mesh_groups);
+        looks
+            .entry((w.model, dropped_finish(round.track, w)))
+            .or_default()
+            .insert(w.mesh_groups);
     }
     // Thrown grenades fly as their own model in its default mesh groups (mask 0).
     for g in round
@@ -725,11 +728,11 @@ fn export_dropped(
         .flat_map(|s| &s.grenades)
         .filter(|g| g.model != 0)
     {
-        looks.entry(g.model).or_default().insert(0);
+        looks.entry((g.model, None)).or_default().insert(0);
     }
     let mut entries = Vec::new();
     let mut names = HashSet::new();
-    for (id, masks) in looks {
+    for ((id, finish), masks) in looks {
         let Some(path) = round.models.get(&id) else {
             report.warnings.push(format!(
                 "dropped weapon model {id:016x} is not a known model: not shown"
@@ -753,23 +756,28 @@ fn export_dropped(
                 .or_default()
                 .push(mask);
         }
+        let paint = finish.and_then(|f| round.paints.paint(round.content, f, &mut report.warnings));
         for (shown, masks) in by_shown {
             let mut name = format!(
                 "{demo_name}_r{}_dropped_{}_{shown}",
                 round.track.round,
                 stem(path)
             );
+            if let Some(paint) = &paint {
+                name = format!("{name}_{}", paint.label);
+            }
             // Another model with the same file stem: keep the files apart.
             if !names.insert(name.clone()) {
                 name = format!("{name}_{id:016x}");
                 names.insert(name.clone());
             }
-            match export_model_static(round.content, &model, shown, out_dir, &name) {
+            match export_model_static(round.content, &model, shown, out_dir, &name, paint.clone()) {
                 Ok(written) => {
                     entries.push(json!({
                         "file": format!("{name}.gltf"),
                         "model": path,
                         "model_id": format!("{id:016x}"),
+                        "finish": finish.map(finish_json),
                         "mesh_groups": masks,
                     }));
                     report.files.push(written.gltf);
@@ -783,6 +791,19 @@ fn export_dropped(
         }
     }
     entries
+}
+
+/// The finish of a weapon lying in the world: its entity's skin (read when first seen, carried or not), if the
+/// entity is still that weapon.
+pub(crate) fn dropped_finish(
+    track: &crate::demo::players::RoundTrack,
+    w: &crate::demo::players::DroppedWeapon,
+) -> Option<Finish> {
+    track
+        .skins
+        .get(&w.entity)
+        .filter(|s| s.item == w.item)
+        .and_then(Finish::of)
 }
 
 /// What [`export_look`] returns: the glTF export's report, the weapon slots it holds, each death baked as a
@@ -1299,7 +1320,7 @@ fn in_hand(player: &PlayerSample, tick: f32, interval: f32) -> Option<u32> {
 }
 
 /// A weapon's finish in the players' manifest: `{"kit": 180, "seed": 245, "wear": 0.1434}`.
-fn finish_json(finish: Finish) -> serde_json::Value {
+pub(crate) fn finish_json(finish: Finish) -> serde_json::Value {
     json!({ "kit": finish.kit, "seed": finish.seed, "wear": finish.wear() })
 }
 

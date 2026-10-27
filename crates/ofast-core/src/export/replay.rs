@@ -578,6 +578,8 @@ fn dropped_json(track: &RoundTrack) -> Vec<Json> {
             // As text, like the Steam ids: a 64-bit resource id.
             "model": format!("{:016x}", s.item.model),
             "mesh_groups": s.item.mesh_groups,
+            // Its skin, as the agents manifest's `dropped_weapons` files name theirs (M10).
+            "finish": super::players::dropped_finish(track, s.item).map(super::players::finish_json),
             "first_tick": s.first,
             "last_tick": s.last,
             "keys": s.keys,

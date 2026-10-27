@@ -208,15 +208,18 @@ pub fn export_model_animated(
 
 /// Writes `model`'s meshes in mesh groups `mesh_groups` rigid, without a skin (each vertex where the bind pose has
 /// it), as `<file_name>.gltf`: a static mesh in Unreal, for a model shown without animation (a weapon lying on the
-/// ground). Skinned, Unreal also made a physics asset per weapon, and rendering the AWP's thumbnail crashed the GPU.
+/// ground), its weapon materials painted with `paint` (M10). Skinned, Unreal also made a physics asset per weapon, and
+/// rendering the AWP's thumbnail crashed the GPU.
 pub fn export_model_static(
     content: &Content,
     model: &Model,
     mesh_groups: u64,
     out_dir: &Path,
     file_name: &str,
+    paint: Option<paint::Paint>,
 ) -> Result<ExportReport, ExportError> {
     let mut writer = GltfWriter::new(content, out_dir, ExportOptions::default())?;
+    writer.paint = paint;
     let mut roots = Vec::new();
     for mesh in model.meshes_in_groups(mesh_groups) {
         let draws: Vec<&DrawCall> = mesh.draw_calls.iter().collect();

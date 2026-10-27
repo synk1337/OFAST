@@ -345,9 +345,14 @@ def import_gltf(replay, path, look, pipelines):
     return objects
 
 
+def finish_key(finish):
+    """A weapon's skin as a key: (kit, seed, wear), or None for none (the replay's and the manifest's `finish`)."""
+    return None if finish is None else (finish["kit"], finish["seed"], finish["wear"])
+
+
 def import_dropped_weapons(replay):
     """Imports the models of the weapons lying in the world (the agents manifest's `dropped_weapons`, one glTF per
-    look). Returns (model id, mesh groups) -> mesh, as the replay's `dropped_weapons` name them."""
+    look and skin). Returns (model id, mesh groups, finish) -> mesh, as the replay's `dropped_weapons` name them."""
     loaded = agents_manifest(replay)
     if loaded is None:
         return {}
@@ -364,7 +369,7 @@ def import_dropped_weapons(replay):
             continue
         # Every mesh-group mask the replay uses for this file (grenades send every bit).
         for groups in entry["mesh_groups"]:
-            meshes[(entry["model_id"], groups)] = mesh
+            meshes[(entry["model_id"], groups, finish_key(entry.get("finish")))] = mesh
     if meshes:
         log("dropped weapons: %d models" % len(meshes))
     return meshes
@@ -458,7 +463,7 @@ def place_dropped_weapons(sequence, replay, meshes, end_frame):
     number of keys."""
     keys, placed = place_keyed_models(
         sequence, replay, end_frame, replay.get("dropped_weapons", []),
-        lambda s: meshes.get((s["model"], s["mesh_groups"])),
+        lambda s: meshes.get((s["model"], s["mesh_groups"], finish_key(s.get("finish")))),
         lambda s: "dropped %s #%d at %d" % (s["class"], s["entity"], s["first_tick"]))
     if placed:
         log("dropped weapons: %d placed, %d keys" % (placed, keys))
@@ -471,7 +476,7 @@ def place_grenades(sequence, replay, meshes, end_frame):
     expiry, a molotov's landing. Returns the number of keys."""
     keys, placed = place_keyed_models(
         sequence, replay, end_frame, replay.get("grenades", []),
-        lambda g: meshes.get((g["model"], 0)),
+        lambda g: meshes.get((g["model"], 0, None)),
         lambda g: "grenade %s #%d at %d" % (g["kind"], g["entity"], g["first_tick"]))
     if placed:
         log("grenades: %d placed, %d keys" % (placed, keys))
