@@ -44,18 +44,39 @@ container instead.
 MIT-licensed fade calculator (github.com/chescos/csgo-fade-percentage-calculator, after
 github.com/Step7750/UniformRandom), still kept up for CS2. To check against CS2 screenshots.
 
-**Known** (decision 024): the pixel maths of `csgo_customweapon` is in the compiled shaders
-(`shaders_vulkan_dir.vpk`, `shaders_pc_dir.vpk`: `csgo_customweapon`, `csgo_composite_inputs`, `csgo_weapon`,
-`csgo_weapon_sticker`). GameTracking-CS2 tracks Source 2 Viewer's decompilation of each shader's default variant
-(`game/csgo/shaders_vulkan_dir/shaders/vfx/csgo_customweapon.slang`): the vertex stage (the placements) and the
-solid style, whose wear, grunge and surface maths `export::paint` ports. The file also lists every style's
-parameters, defaults and texture formats (`#if (S_PAINT_STYLE == n)` blocks), but not their code.
+**Known** (decision 024): the pixel maths of `csgo_customweapon`, read from CS2's compiled shader and ported in
+`export::paint` (its module docs give the formulas). GameTracking-CS2 tracks Source 2 Viewer's decompilation of the
+default variant only (`game/csgo/shaders_vulkan_dir/shaders/vfx/csgo_customweapon.slang`: the vertex stage, the
+solid style, every style's parameters and texture formats); the other styles are other static combos of the same
+file, read as below. ValveResourceFormat reads `.vcompmat` as KV3 but does not composite ("Source 2 Viewer cannot
+show or export a weapon with a skin applied", its CS2 notes); Skinshotter (closed source) ported the shaders to WGSL.
 
-**Unknown**: the code of the other eight styles (hydrographic, spray, three anodized, custom paint job, patina,
-gunsmith), overlays and case hardening — other static combos of the same `.vcs`, which Source 2 Viewer decompiles
-one at a time (its current release: CS2's files are format 72, beyond the October 2025 release's 70).
-ValveResourceFormat reads `.vcompmat` as KV3 but does not composite ("Source 2 Viewer cannot show or export a weapon
-with a skin applied", its CS2 notes); Skinshotter (closed source) ported the shaders to WGSL.
+### Reading CS2's paint shader
+
+`csgo_customweapon_vulkan_50_ps.vcs` (in `shaders_vulkan_dir.vpk`, 5.8 MB, format 72) is a resource whose `DATA`
+block (KV3) describes the static combos and is followed by their bytecode, zstd-compressed with a dictionary.
+Format 72 needs Source 2 Viewer 20.1 or newer (October 2025's 15.0 reads 59 – 70). The steps are in
+`tools/shaders/vcs_combos.py` (with `examples/shader_blocks.rs`):
+
+- **Static combo id** = Σ value × stride over `m_staticComboArray` in order, each stride the product of the ranges
+  before: `S_PAINT_STYLE` (0 – 8) stride 1, `S_OVERRIDE_NORMAL` 9, `S_USE_ALL_MASKS` 18, `S_ROUGHNESS_TEXTURE` 36,
+  `S_PEARLESCENCE_MASK` 72, `S_METALNESS_TEXTURE` 144, `S_SEPARATE_CHANNEL_INPUTS` 288, `S_OVERLAY_TEXTURE` 576,
+  `S_CASE_HARDENING` 1152, `S_CASE_HARDENING_TRILINEAR` 2304, `S_PATINA_AGE` 4608. Only valid combos are stored
+  (`m_staticComboIDs`).
+- **Its code**: `m_staticComboData[i].m_nByteCodeDataIdx` → `m_byteCodeData[k]` (`m_nOffs`, `m_nSize`, `m_offs`
+  per shader in the block); the block at the resource's size + `m_nOffs`, `[−5][uncompressed][compressed]` + zstd
+  with dictionary `0x255df362`; in it, at `m_offs[m_byteCodeIndex[0]]`, `[version][size]` and the SPIR-V.
+- **Names**: SPIR-V keeps none; Source 2 Viewer's rules restore them from the combo's `m_allVars` (each entry
+  `variable index | set << 12` in the high 16 bits, a destination in the low 16): the globals' members by byte
+  offset / 4, textures by binding − 30. Style 0 decompiled this way matches GameTracking-CS2's file, names included.
+- **Which combos matter**: the nine styles (0 – 8) and the same with `F_SEPARATE_CHANNEL_INPUTS` (288 – 296): CS2's
+  own weapon models (Glock, USP-S, AWP, MP9…) set it, the CS:GO-era ones (knives, the legacy AK) do not. It changes
+  the cavity (`0.96 R^1.5`), the wear curve and threshold, and gunsmith's and patina's scratches. The paint textures
+  (36 + n, 144 + n) only swap a value for a texture; `S_OVERRIDE_NORMAL` only adds the normal output.
+
+**Not read yet**: overlays (576 + n), case hardening (1152 + n), patina age (4608 + n), spray paint's all-masks
+variant (18 + 2), and the halftone path inside the spray styles' code (`bSpraypaintHalftone`); pearlescence and the
+normal-map pass, which the weapon material uses after the composite.
 
 ## Stickers
 

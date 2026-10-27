@@ -15,9 +15,12 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
 ## Decision
 
 - **CS2's shader as the reference** (the user's choice, 2026-10-27, replacing their first choice of OFAST's own
-  version once the decompiled shader turned out to be public): Valve's compiled `csgo_customweapon` as decompiled by
-  Source 2 Viewer and tracked in SteamDatabase's GameTracking-CS2 (`csgo_customweapon.slang`), rewritten as
-  OFAST's own Rust, as the tint and environment shaders were (decisions 007, 008, 011, 012).
+  version once the decompiled shader turned out to be public): Valve's compiled `csgo_customweapon`, rewritten as
+  OFAST's own Rust, as the tint and environment shaders were (decisions 007, 008, 011, 012). GameTracking-CS2
+  tracks its default variant (`csgo_customweapon.slang`); the other styles are read from CS2's own shader file, each
+  static combo's SPIR-V decompiled with SPIRV-Cross and named as Source 2 Viewer names it (the user approved
+  downloading Source 2 Viewer 20.1, which reads CS2's current format; `docs/research/cs2-skins.md`, "Reading CS2's
+  paint shader").
 - **Read like CS2** (`paint`): the paint kit from `items_game.txt`, its composite material and what it includes, the
   roll with a uniform random stream seeded by the pattern seed, and the parameters in the order the generator copies
   them (paint material, the weapon's composite inputs, the loose variables, the roll, seed and wear).
@@ -26,17 +29,17 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   the glTF (`TextureJob::PaintColor`, `PaintSurface`), so Unreal (and any glTF reader) shows the skin with no
   material of its own. Third person and first person both (the weapon looks carry the finish:
   `loadout::WeaponLook::finish`).
-- **What the tracked file holds** is the vertex stage and the pixel stage's default variant (every static combo 0):
-  the solid style with no overlay, case hardening or paint textures. From it, exact: the placements of pattern,
-  wear and grunge (rounded to hundredths, the shader's own translation, the weapon's size scale on all three), where
-  the paint is gone (wear texture × cavity, plus the no-paint mask, against `0.58 – 0.68` as the wear grows, per-mask
-  durability and softness), the grunge (colour and roughness), the surface (roughness and metalness per mask), the
-  solid colours and their albedo levels. The module docs of `export::paint` give the formulas.
-- **Custom paint jobs and gunsmith** (styles 6, 8) are not in that variant: their pattern's colour takes the solid
-  colours' place under the same shared maths, OFAST's reading until their own variants are read.
-- **Only what it paints right**: solid, custom paint jobs and gunsmith, without overlays, case hardening or patina
-  age. The others (hydrographic, spray paint, the three anodized: Dopplers, Fades; patina) colour masks their own
-  way: their weapons keep their own finish, with a warning — a wrong skin looks worse than none.
+- **The nine styles, both input layouts**: static combos 0 – 8 (solid, hydrographic, spray paint, anodized,
+  anodized multicolour, anodized airbrushed, custom paint job, patina, gunsmith) and 288 – 296, the same with
+  `F_SEPARATE_CHANNEL_INPUTS` (CS2's own weapon models; the CS:GO-era ones and the knives use the first). Shared:
+  the placements (rounded to hundredths, the shader's own translation, the weapon's size scale), where the paint is
+  gone (wear texture against the cavity, the no-paint mask, durability and softness, `0.58 – 0.68`; `0.56 – 0.74`
+  and a wear-dependent cavity curve with separate channels), the grunge, the albedo levels. Then each style's own
+  colour, roughness and metalness; spray paint and Fades project their pattern from the weapon's 3D position. The
+  module docs of `export::paint` give the formulas.
+- **Only what it paints right**: overlays, case hardening, patina age and spray paint's halftone and all-masks
+  variants are not read yet; those weapons keep their own finish, with a warning — a wrong skin looks worse than
+  none.
 - **Legacy kits** use the CS:GO-era model (`use_legacy_model`), which the demo's mesh groups already show; its
   material names its own composite inputs, in the layout the kit's pattern was painted for. Their composite
   materials roll no pattern offset or rotation (Fire Serpent's pattern sits the same at every seed; its wear and
@@ -45,9 +48,12 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
 ## Alternatives considered
 
 - **OFAST's own version, checked against CS2 screenshots** — the user's first choice, the earlier bake (pattern
-  rotated about the centre, paint worn where the wear passed the wear texture's resistance, grunge by wear alone).
-  The decompiled shader showed each of these differently: placements turn about the layout's corner, the wear
-  texture and the cavity together decide, the grunge also sits in recesses.
+  rotated about the centre, paint worn where the wear passed the wear texture's resistance, grunge by wear alone,
+  the pattern's colour as is). The decompiled shader showed each of these differently: placements turn about the
+  layout's corner, the wear texture and the cavity together decide, the grunge also sits in recesses, a custom
+  paint job's alpha is its durability, gunsmith paints metal parts their own way.
+- **Driving Source 2 Viewer's window** to read each combo: not allowed for this (the user declined control of the
+  app); its command line does not decompile shaders, so OFAST reads the combos itself and calls SPIRV-Cross.
 - **Painting in Unreal** (a material per style reading the same textures): the same work in a graph, and every glTF
   reader but Unreal would see bare weapons.
 - **Stickers baked into the colour**: CS2 draws them in the weapon's own material (five slots), over the paint;
@@ -55,15 +61,12 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
 
 ## Consequences
 
-- Seen on Aurora vs FURIA's round 17 (2026-10-27): of the round's 28 skins, 13 painted in third and first person
-  (MAJ3R's and KSCERATO's Fire Serpents, YEKINDAR's Asiimov, KSCERATO's Whiteout, Wild Lotus, Bloodsport, Gungnir,
-  Printstream, Kill Confirmed, Water Elemental, Autotronic…), in Unreal through the players' and viewmodels' glTFs;
-  the 15 others (Dopplers, Fades, Crimson Web, Hot Rod, Royal Guard's overlay…) keep their weapon's own finish.
-  The round's players export in about 75 s.
-- **Dead end, for now**: the other styles' variants are in CS2's own shader files (`shaders_vulkan_dir.vpk`,
-  `csgo_customweapon_vulkan_50_ps.vcs`), which the Source 2 Viewer on hand (15.0, October 2025) cannot open: CS2's
-  files are format 72, it reads 59 – 70. The current release (the one GameTracking-CS2 runs) reads them, and
-  decompiles any variant.
+- Seen on Aurora vs FURIA's round 17 (2026-10-27): of the round's 28 skins, 27 painted in third and first person
+  (Fire Serpents, Asiimov, Whiteout, Gungnir, Printstream; the Dopplers, Gamma Dopplers, Fades, Crimson Web, Hot
+  Rod, Slaughter, Radiation Hazard…), in Unreal through the players' and viewmodels' glTFs; Royal Guard (an overlay)
+  keeps its weapon's own finish. The round's players export in about 105 s.
+- The Source 2 Viewer of October 2025 (15.0) cannot open CS2's shader files (format 72; it reads 59 – 70): 20.1
+  (October 2026) can.
 - Pearlescence, the paints' normal maps and AO overrides are not read yet.
 - Each skin's colour and surface decode their inputs separately (the weapon's composite inputs and the shared wear
   and grunge textures again for each skin, and again for the viewmodel): fine at a round's 30 skins, a cache if it
@@ -71,4 +74,5 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
 - Not painted yet: weapons lying in the world (their own glTFs), gloves, stickers, keychains, name tags, StatTrak
   counters.
 - To check against CS2: the roll (whether a variable a kit does not define still takes its draw), which size scale
-  the placements use (`g_flUvScale1`, or `g_flWeaponLength1 / 36`: the file declares both), the look at each wear.
+  the UV placements use (`g_flUvScale1`, or `g_flWeaponLength1 / 36`: the vertex stage declares both; OFAST takes
+  the first, and the second for the projected patterns, whose own declarations name it), the look at each wear.

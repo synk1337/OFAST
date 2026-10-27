@@ -387,12 +387,13 @@ player and round.
 - [x] **CS2's paint shader as the reference** (the user's choice, 2026-10-27): the bake ported from the decompiled
   `csgo_customweapon` in GameTracking-CS2 — the placements, the wear, the grunge and the surface every style
   shares, and the solid style (the decompiled default variant). Round 17: 13 of 28 (Whiteout added).
-- [ ] The other styles' code (hydrographic, spray paint, anodized: Dopplers, Fades; patina), overlays, case
-  hardening: their variants are not in the tracked file, and the Source 2 Viewer on hand (October 2025) cannot read
-  CS2's current shader files (format 72; it stops at 70); the current release, the one GameTracking-CS2 runs,
-  does.
-- [ ] Pearlescence, the paints' normal maps; weapons lying in the world, gloves; stickers, keychains, name tags;
-  checked against CS2 screenshots.
+- [x] **Every paint style** ([research](research/cs2-skins.md), "Reading CS2's paint shader"): the nine styles'
+  code read from CS2's own shader file (each static combo's SPIR-V decompiled with SPIRV-Cross;
+  `tools/shaders/vcs_combos.py`, `examples/shader_blocks.rs`), both input layouts (CS2's own weapons use separate
+  channels), ported: Dopplers, Fades (projected from the weapon's 3D position), Crimson Web, Hot Rod, gunsmith's
+  metal parts. Round 17: 27 of 28.
+- [ ] Overlays (Royal Guard), case hardening, patina age, spray paint's halftone; pearlescence, the paints' normal
+  maps; weapons lying in the world, gloves; stickers, keychains, name tags; checked against CS2 screenshots.
 
 ## Order from here
 
