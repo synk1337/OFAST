@@ -160,6 +160,89 @@ fn parameters_layer_paint_inputs_variables_and_the_roll() {
     );
 }
 
+/// A newer kit's composite, as Royal Guard's, trimmed: its exposed parameters and the colour's generation steps.
+const EXTENDED: &str = r#"<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->
+{
+    m_Points = [ { m_vecCompositeMaterialAssemblyProcedures = [ {
+        m_vecCompositeInputContainers = [
+            { m_strSpecificContainerMaterial = "workshop/paintkits/templates/so_extended_template.vmat" m_strAlias = "paint" },
+            { m_strAlias = "exposed_params" m_vecLooseVariables = [
+                { m_strName = "g_bUseMetalness" m_nVariableType = "LOOSE_VARIABLE_TYPE_BOOLEAN" m_bValueBoolean = false },
+                { m_strName = "g_bOverrideDefaultMasks" m_nVariableType = "LOOSE_VARIABLE_TYPE_BOOLEAN" m_bValueBoolean = true },
+                { m_strName = "g_tPaintByNumberMasks" m_nVariableType = "LOOSE_VARIABLE_TYPE_RESOURCE_TEXTURE" m_strTextureRuntimeResourcePath = "usps_anodized_masks.vtex" },
+                { m_strName = "g_bUseRoughnessByColor" m_nVariableType = "LOOSE_VARIABLE_TYPE_BOOLEAN" m_bValueBoolean = true },
+            ] },
+        ]
+        m_vecPropertyMutators = [
+            { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_GENERATE_TEXTURE"
+              m_strGenerateTexture_TargetParam = "g_tColor"
+              m_strGenerateTexture_InitialContainer = "paint"
+              m_vecTexGenInstructions = [
+                { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_COPY_MATCHING_KEYS" m_strCopyMatchingKeys_InputContainerSrc = "composite_inputs" },
+                { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_COPY_MATCHING_KEYS" m_strCopyMatchingKeys_InputContainerSrc = "econ_instance" },
+                { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_SET_VALUE"
+                  m_nSetValue_Value = { m_strName = "F_METALNESS_TEXTURE" m_nVariableType = "LOOSE_VARIABLE_TYPE_INTEGER1" m_nValueIntX = 0 }
+                  m_vecConditions = [ { m_nMutatorCondition = "COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EQUALS" m_strMutatorConditionContainerName = "exposed_params" m_strMutatorConditionContainerVarName = "g_bUseMetalness" m_strMutatorConditionContainerVarValue = "0" } ] },
+                { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_COPY_MATCHING_KEYS" m_strCopyMatchingKeys_InputContainerSrc = "exposed_params" },
+                { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_COPY_PROPERTY"
+                  m_strCopyProperty_InputContainerSrc = "exposed_params" m_strCopyProperty_InputContainerProperty = "g_tPaintByNumberMasks" m_strCopyProperty_TargetProperty = "g_tMasks"
+                  m_vecConditions = [ { m_nMutatorCondition = "COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EQUALS" m_strMutatorConditionContainerName = "exposed_params" m_strMutatorConditionContainerVarName = "g_bOverrideDefaultMasks" m_strMutatorConditionContainerVarValue = "1" } ] },
+                { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_CONDITIONAL_MUTATORS" m_vecConditionalMutators = [
+                    { m_nMutatorCommandType = "COMP_MAT_PROPERTY_MUTATOR_SET_VALUE"
+                      m_nSetValue_Value = { m_strName = "F_ROUGHNESS_PER_COLOR" m_nVariableType = "LOOSE_VARIABLE_TYPE_INTEGER1" m_nValueIntX = 1 }
+                      m_vecConditions = [ { m_nMutatorCondition = "COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EQUALS" m_strMutatorConditionContainerName = "exposed_params" m_strMutatorConditionContainerVarName = "g_bUseRoughnessByColor" m_strMutatorConditionContainerVarValue = "true" } ] },
+                  ]
+                  m_vecConditions = [ { m_nMutatorCondition = "COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_EXISTS" m_strMutatorConditionContainerName = "override_vars" } ] },
+              ] },
+        ]
+    } ] } ]
+}"#;
+
+#[test]
+fn generated_textures_follow_their_steps_and_conditions() {
+    let recipe = recipe_of(EXTENDED);
+    assert_eq!(recipe.generated.len(), 1);
+    let steps = &recipe.generated[0].steps;
+    assert_eq!(steps.len(), 6);
+    // The conditional group's step carries the group's condition and its own.
+    assert_eq!(steps[5].conditions.len(), 2);
+    let mut paint = MaterialInfo::default();
+    paint.ints.insert("F_METALNESS_TEXTURE".into(), 1);
+    paint.ints.insert("F_PAINT_STYLE".into(), 0);
+    let mut inputs = MaterialInfo::default();
+    inputs
+        .textures
+        .insert("g_tMasks".into(), "usp_masks.vtex".into());
+    inputs.ints.insert("F_SEPARATE_CHANNEL_INPUTS".into(), 1);
+    let containers = recipe.containers(
+        &[("paint", &paint), ("composite_inputs", &inputs)],
+        700,
+        0.0513,
+    );
+    let params = recipe.generate("g_tColor", &containers).expect("generated");
+    // The template's switch is off, the kit's own masks replace the weapon's, the inputs' feature came through.
+    assert_eq!(params["F_METALNESS_TEXTURE"], Param::Int(0));
+    assert_eq!(
+        params["g_tMasks"],
+        Param::Texture("usps_anodized_masks.vtex".into())
+    );
+    assert_eq!(params["F_SEPARATE_CHANNEL_INPUTS"], Param::Int(1));
+    assert_eq!(params["g_nRandomSeed"], Param::Int(700));
+    // No `override_vars` container: the group's step is not done.
+    assert!(!params.contains_key("F_ROUGHNESS_PER_COLOR"));
+    // A texture the recipe does not generate has no steps.
+    assert_eq!(recipe.generate("g_tMetalness", &containers), None);
+}
+
+#[test]
+fn conditions_compare_values_as_written() {
+    assert!(Param::Int(1).is("1") && Param::Int(1).is("true"));
+    assert!(Param::Int(0).is("false") && !Param::Int(0).is("true"));
+    assert!(Param::Floats([0.1, 0.0, 0.0, 0.0]).is("0.1"));
+    assert!(!Param::Floats([0.1, 0.0, 0.0, 0.0]).is("0.2"));
+    assert!(Param::Texture("masks.vtex".into()).is("masks.vtex_c"));
+}
+
 #[test]
 fn paint_kits_come_with_their_style_range_and_composite_material() {
     let items = r##"

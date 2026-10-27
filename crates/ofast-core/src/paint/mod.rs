@@ -15,9 +15,13 @@
 //! 3. **The roll** ([`Recipe::roll`]): a [`random::UniformRandom`] seeded with the pattern seed draws each listed
 //!    variable in order, within its bounds (pattern offset and rotation, then wear and grunge scale, offset,
 //!    rotation).
-//! 4. **The parameters** ([`weapon_params`]): the paint material's, then the composite inputs', then the loose
-//!    variables' — the generator copies matching keys in that order (`COMP_MAT_PROPERTY_MUTATOR_COPY_MATCHING_KEYS`)
-//!    — with the rolled values, the seed and the wear.
+//! 4. **The parameters** ([`weapon_params`]): a set per texture the recipe generates ([`Generated`]: the colour,
+//!    `g_tColor`; roughness and metalness, `g_tMetalness`), from its initial container (the paint material) through
+//!    its steps, each done when its conditions hold: copy every parameter of a container (the composite inputs, the
+//!    loose variables: `COMP_MAT_PROPERTY_MUTATOR_COPY_MATCHING_KEYS`), copy one (`COPY_PROPERTY`: a newer kit's own
+//!    paint masks over the weapon's), set one (`SET_VALUE`: a texture switch off when the kit's `g_bUse*` is). The
+//!    loose variables hold the rolled values, the seed and the wear. A recipe that generates neither: the paint
+//!    material's, the composite inputs', the loose variables', in that order.
 //!
 //! What each paint style then does with them is the bake's part (next in M10).
 //!
@@ -121,6 +125,8 @@ pub struct Variable {
 pub enum VariableValue {
     /// One or two floats (`FLOAT1`, `FLOAT2`; y is 0 for one).
     Float([f32; 2]),
+    /// A colour (`COLOR4`: bytes, as a material's colour parameters hold them, 0 – 1; alpha 1 when not written).
+    Color([f32; 4]),
     /// An integer (`INTEGER1`).
     Int(i64),
     /// A switch (`BOOLEAN`).
@@ -139,6 +145,54 @@ pub struct Recipe {
     pub variables: Vec<Variable>,
     /// The variables the seed rolls, in order: `(container, name, components)`.
     pub rolls: Vec<(String, String, usize)>,
+    /// The textures it generates, each with its steps (a later one replaces an earlier for the same texture).
+    pub generated: Vec<Generated>,
+}
+
+/// A texture a composite material generates into the weapon's material (`COMP_MAT_PROPERTY_MUTATOR_GENERATE_TEXTURE`):
+/// the paint material's parameters for it are its initial container's, then each step's whose conditions hold, in
+/// order.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Generated {
+    /// The weapon parameter it fills: `g_tColor`, `g_tMetalness` (roughness and metalness).
+    pub target: String,
+    /// The container it starts from: `paint`.
+    pub initial: String,
+    /// The steps (`m_vecTexGenInstructions`; a conditional group's steps carry its conditions too).
+    pub steps: Vec<Step>,
+}
+
+/// One step of a generated texture, done when all its conditions hold.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Step {
+    /// What it does.
+    pub action: Action,
+    /// When (all of them).
+    pub conditions: Vec<Condition>,
+}
+
+/// What a step does to the parameters.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    /// Copies every parameter of a container (`COPY_MATCHING_KEYS`).
+    CopyKeys(String),
+    /// Copies one parameter of a container under a name (`COPY_PROPERTY`): container, its parameter, the name.
+    CopyProperty(String, String, String),
+    /// Sets a value (`SET_VALUE`).
+    Set(String, VariableValue),
+}
+
+/// When a step is done.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Condition {
+    /// A container's parameter has a value, as written (`1`, `0`, `true`): `INPUT_CONTAINER_VALUE_EQUALS`.
+    Equals(String, String, String),
+    /// A container has a parameter: `INPUT_CONTAINER_VALUE_EXISTS`.
+    Exists(String, String),
+    /// A container exists: `INPUT_CONTAINER_EXISTS`.
+    Container(String),
+    /// A condition not read: never holds.
+    Unknown(String),
 }
 
 /// Errors reading a composite material.
@@ -155,6 +209,15 @@ pub enum PaintError {
     NotPainted(String),
 }
 
+/// The parameters a weapon material's two generated textures are painted with.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct WeaponParams {
+    /// Its colour's (`g_tColor`).
+    pub color: BTreeMap<String, Param>,
+    /// Its roughness and metalness's (`g_tMetalness`).
+    pub surface: BTreeMap<String, Param>,
+}
+
 /// The parameters weapon material `material` (one of the weapon model's, `…/ak47.vmat`) is painted with for `recipe`
 /// at `seed` and `wear` (step 4 of the [module docs](self)): the material's `composite_inputs` attribute names the weapon's
 /// composite inputs.
@@ -164,7 +227,7 @@ pub fn weapon_params(
     material: &str,
     seed: u32,
     wear: f32,
-) -> Result<BTreeMap<String, Param>, PaintError> {
+) -> Result<WeaponParams, PaintError> {
     let read = |path: &str| {
         read_material(content, path).map_err(|e| match e {
             ExportError::Vpk(_) => PaintError::Missing(path.to_owned()),
@@ -181,7 +244,89 @@ pub fn weapon_params(
         Some(path) => read(path)?,
         None => MaterialInfo::default(),
     };
-    Ok(recipe.params(&paint, Some(&inputs), seed, wear))
+    let containers = recipe.containers(
+        &[
+            ("paint", &paint),
+            ("composite_inputs", &inputs),
+            ("target", &weapon),
+            ("target_instance", &weapon),
+        ],
+        seed,
+        wear,
+    );
+    let texture = |target: &str| {
+        recipe
+            .generate(target, &containers)
+            .unwrap_or_else(|| recipe.params(&paint, Some(&inputs), seed, wear))
+    };
+    Ok(WeaponParams {
+        color: texture("g_tColor"),
+        surface: texture("g_tMetalness"),
+    })
+}
+
+/// Every container's parameters, by alias.
+type Containers = BTreeMap<String, BTreeMap<String, Param>>;
+
+/// A material's parameters as painting reads them.
+fn material_params(info: &MaterialInfo) -> BTreeMap<String, Param> {
+    let mut params = BTreeMap::new();
+    for (name, path) in &info.textures {
+        params.insert(name.clone(), Param::Texture(path.clone()));
+    }
+    for (name, value) in &info.ints {
+        params.insert(name.clone(), Param::Int(*value));
+    }
+    for (name, value) in &info.floats {
+        params.insert(name.clone(), Param::Floats([*value as f32, 0.0, 0.0, 0.0]));
+    }
+    for (name, value) in &info.vectors {
+        params.insert(name.clone(), Param::Floats(value.map(|c| c as f32)));
+    }
+    params
+}
+
+impl From<&VariableValue> for Param {
+    fn from(value: &VariableValue) -> Self {
+        match value {
+            VariableValue::Float([x, y]) => Param::Floats([*x, *y, 0.0, 0.0]),
+            VariableValue::Color(rgba) => Param::Floats(*rgba),
+            VariableValue::Int(value) => Param::Int(*value),
+            VariableValue::Bool(value) => Param::Int(i64::from(*value)),
+            VariableValue::Texture(path) => Param::Texture(path.clone()),
+        }
+    }
+}
+
+impl Param {
+    /// Whether this is the value a condition writes (`1`, `0.5`, `true`, a texture's path).
+    fn is(&self, written: &str) -> bool {
+        let number = match written {
+            "true" => Some(1.0),
+            "false" => Some(0.0),
+            n => n.parse::<f64>().ok(),
+        };
+        match self {
+            Param::Int(i) => number == Some(*i as f64),
+            // As stored: a written 0.1 is the f32 nearest it.
+            Param::Floats(v) => number.map(|n| n as f32) == Some(v[0]),
+            Param::Texture(path) => path == written || written.strip_suffix("_c") == Some(path),
+        }
+    }
+}
+
+impl Condition {
+    fn holds(&self, containers: &Containers) -> bool {
+        let value = |container: &str, name: &str| containers.get(container)?.get(name);
+        match self {
+            Condition::Equals(container, name, written) => {
+                value(container, name).is_some_and(|v| v.is(written))
+            }
+            Condition::Exists(container, name) => value(container, name).is_some(),
+            Condition::Container(container) => containers.contains_key(container),
+            Condition::Unknown(_) => false,
+        }
+    }
 }
 
 /// How deep composite materials may include each other.
@@ -299,6 +444,16 @@ fn read_variable(container: &str, v: &Value) -> Option<Variable> {
         "LOOSE_VARIABLE_TYPE_FLOAT1" | "LOOSE_VARIABLE_TYPE_FLOAT2" => {
             VariableValue::Float([float("m_flValueFloatX"), float("m_flValueFloatY")])
         }
+        "LOOSE_VARIABLE_TYPE_COLOR4" => {
+            let bytes = v
+                .get("m_cValueColor4")
+                .and_then(Value::as_array)
+                .unwrap_or_default();
+            let byte = |i: usize, default: f64| {
+                bytes.get(i).and_then(Value::as_f64).unwrap_or(default) as f32 / 255.0
+            };
+            VariableValue::Color([byte(0, 0.0), byte(1, 0.0), byte(2, 0.0), byte(3, 255.0)])
+        }
         "LOOSE_VARIABLE_TYPE_INTEGER1" => {
             VariableValue::Int(v.get("m_nValueIntX").and_then(Value::as_i64).unwrap_or(0))
         }
@@ -332,20 +487,47 @@ fn read_variable(container: &str, v: &Value) -> Option<Variable> {
     })
 }
 
-/// The random rolls among `mutators` (also inside conditional ones), in order.
+/// The random rolls and generated textures among `mutators` (also inside conditional ones), in order.
 fn add_mutators(mutators: &[Value], recipe: &mut Recipe) {
     for mutator in mutators {
-        let kind = mutator.get("m_nMutatorCommandType").and_then(Value::as_str);
-        if kind == Some("COMP_MAT_PROPERTY_MUTATOR_RANDOM_ROLL_INPUT_VARIABLES") {
-            for target in mutator
-                .get("m_vecRandomRollInputVars_InputVarsToRoll")
-                .and_then(Value::as_array)
+        let text = |key: &str| {
+            mutator
+                .get(key)
+                .and_then(Value::as_str)
                 .unwrap_or_default()
-            {
-                if let Some(roll) = target.as_str().and_then(parse_roll) {
-                    recipe.rolls.push(roll);
+                .to_owned()
+        };
+        match mutator.get("m_nMutatorCommandType").and_then(Value::as_str) {
+            Some("COMP_MAT_PROPERTY_MUTATOR_RANDOM_ROLL_INPUT_VARIABLES") => {
+                for target in mutator
+                    .get("m_vecRandomRollInputVars_InputVarsToRoll")
+                    .and_then(Value::as_array)
+                    .unwrap_or_default()
+                {
+                    if let Some(roll) = target.as_str().and_then(parse_roll) {
+                        recipe.rolls.push(roll);
+                    }
                 }
             }
+            Some("COMP_MAT_PROPERTY_MUTATOR_GENERATE_TEXTURE") => {
+                let mut steps = Vec::new();
+                add_steps(
+                    mutator
+                        .get("m_vecTexGenInstructions")
+                        .and_then(Value::as_array)
+                        .unwrap_or_default(),
+                    &[],
+                    &mut steps,
+                );
+                let generated = Generated {
+                    target: text("m_strGenerateTexture_TargetParam"),
+                    initial: text("m_strGenerateTexture_InitialContainer"),
+                    steps,
+                };
+                recipe.generated.retain(|g| g.target != generated.target);
+                recipe.generated.push(generated);
+            }
+            _ => {}
         }
         if let Some(inner) = mutator
             .get("m_vecConditionalMutators")
@@ -353,6 +535,89 @@ fn add_mutators(mutators: &[Value], recipe: &mut Recipe) {
         {
             add_mutators(inner, recipe);
         }
+    }
+}
+
+/// The steps of a generated texture's `instructions`, each with `inherited` conditions and its own.
+fn add_steps(instructions: &[Value], inherited: &[Condition], steps: &mut Vec<Step>) {
+    for instruction in instructions {
+        let text = |key: &str| {
+            instruction
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let mut conditions = inherited.to_vec();
+        conditions.extend(
+            instruction
+                .get("m_vecConditions")
+                .and_then(Value::as_array)
+                .unwrap_or_default()
+                .iter()
+                .map(read_condition),
+        );
+        let action = match instruction
+            .get("m_nMutatorCommandType")
+            .and_then(Value::as_str)
+        {
+            Some("COMP_MAT_PROPERTY_MUTATOR_COPY_MATCHING_KEYS") => {
+                Action::CopyKeys(text("m_strCopyMatchingKeys_InputContainerSrc"))
+            }
+            Some("COMP_MAT_PROPERTY_MUTATOR_COPY_PROPERTY") => Action::CopyProperty(
+                text("m_strCopyProperty_InputContainerSrc"),
+                text("m_strCopyProperty_InputContainerProperty"),
+                text("m_strCopyProperty_TargetProperty"),
+            ),
+            Some("COMP_MAT_PROPERTY_MUTATOR_SET_VALUE") => {
+                match instruction
+                    .get("m_nSetValue_Value")
+                    .and_then(|v| read_variable("", v))
+                {
+                    Some(v) => Action::Set(v.name, v.value),
+                    None => continue,
+                }
+            }
+            Some("COMP_MAT_PROPERTY_MUTATOR_CONDITIONAL_MUTATORS") => {
+                add_steps(
+                    instruction
+                        .get("m_vecConditionalMutators")
+                        .and_then(Value::as_array)
+                        .unwrap_or_default(),
+                    &conditions,
+                    steps,
+                );
+                continue;
+            }
+            _ => continue,
+        };
+        steps.push(Step { action, conditions });
+    }
+}
+
+fn read_condition(condition: &Value) -> Condition {
+    let text = |key: &str| {
+        condition
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let container = text("m_strMutatorConditionContainerName");
+    let name = text("m_strMutatorConditionContainerVarName");
+    match condition.get("m_nMutatorCondition").and_then(Value::as_str) {
+        Some("COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EQUALS") => Condition::Equals(
+            container,
+            name,
+            text("m_strMutatorConditionContainerVarValue"),
+        ),
+        Some("COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_VALUE_EXISTS") => {
+            Condition::Exists(container, name)
+        }
+        Some("COMP_MAT_MUTATOR_CONDITION_INPUT_CONTAINER_EXISTS") => {
+            Condition::Container(container)
+        }
+        other => Condition::Unknown(other.unwrap_or_default().to_owned()),
     }
 }
 
@@ -387,6 +652,14 @@ impl Recipe {
     /// within its bounds; a variable the kit does not define, or without bounds, still takes its draws and keeps
     /// its value (see "Not verified yet" in the [module docs](self)).
     pub fn roll(&self, seed: u32) -> BTreeMap<String, [f32; 2]> {
+        self.rolled(seed)
+            .into_iter()
+            .map(|((_, name), value)| (name, value))
+            .collect()
+    }
+
+    /// [`Recipe::roll`] by container and name.
+    fn rolled(&self, seed: u32) -> BTreeMap<(String, String), [f32; 2]> {
         let mut random = UniformRandom::new(seed as i32);
         let mut rolled = BTreeMap::new();
         for (container, name, components) in &self.rolls {
@@ -406,10 +679,78 @@ impl Recipe {
                 }
             }
             if variable.is_some() {
-                rolled.insert(name.clone(), value);
+                rolled.insert((container.clone(), name.clone()), value);
             }
         }
         rolled
+    }
+
+    /// The containers a generated texture's steps read, by alias: `materials`' parameters, and the loose variables'
+    /// — rolled with `seed`, `econ_instance` holding the seed and `wear`.
+    pub(crate) fn containers(
+        &self,
+        materials: &[(&str, &MaterialInfo)],
+        seed: u32,
+        wear: f32,
+    ) -> Containers {
+        let mut containers: Containers = materials
+            .iter()
+            .map(|(alias, info)| ((*alias).to_owned(), material_params(info)))
+            .collect();
+        for variable in &self.variables {
+            containers
+                .entry(variable.container.clone())
+                .or_default()
+                .insert(variable.name.clone(), Param::from(&variable.value));
+        }
+        for ((container, name), [x, y]) in self.rolled(seed) {
+            containers
+                .entry(container)
+                .or_default()
+                .insert(name, Param::Floats([x, y, 0.0, 0.0]));
+        }
+        let econ = containers.entry("econ_instance".into()).or_default();
+        econ.insert("g_nRandomSeed".into(), Param::Int(i64::from(seed)));
+        econ.insert(
+            "g_flWearAmount".into(),
+            Param::Floats([wear, 0.0, 0.0, 0.0]),
+        );
+        containers
+    }
+
+    /// The parameters texture `target` (`g_tColor`, `g_tMetalness`) is generated with: its initial container's,
+    /// then each step whose conditions hold; `None` when the recipe does not generate it.
+    pub(crate) fn generate(
+        &self,
+        target: &str,
+        containers: &Containers,
+    ) -> Option<BTreeMap<String, Param>> {
+        let generated = self.generated.iter().find(|g| g.target == target)?;
+        let mut params = containers
+            .get(&generated.initial)
+            .cloned()
+            .unwrap_or_default();
+        for step in &generated.steps {
+            if !step.conditions.iter().all(|c| c.holds(containers)) {
+                continue;
+            }
+            match &step.action {
+                Action::CopyKeys(container) => {
+                    if let Some(source) = containers.get(container) {
+                        params.extend(source.iter().map(|(k, v)| (k.clone(), v.clone())));
+                    }
+                }
+                Action::CopyProperty(container, property, name) => {
+                    if let Some(value) = containers.get(container).and_then(|c| c.get(property)) {
+                        params.insert(name.clone(), value.clone());
+                    }
+                }
+                Action::Set(name, value) => {
+                    params.insert(name.clone(), Param::from(value));
+                }
+            }
+        }
+        Some(params)
     }
 
     /// The parameters the paint style reads, by name: the paint material's (`paint`), then the weapon's composite
@@ -424,27 +765,10 @@ impl Recipe {
     ) -> BTreeMap<String, Param> {
         let mut params = BTreeMap::new();
         for info in std::iter::once(paint).chain(inputs) {
-            for (name, path) in &info.textures {
-                params.insert(name.clone(), Param::Texture(path.clone()));
-            }
-            for (name, value) in &info.ints {
-                params.insert(name.clone(), Param::Int(*value));
-            }
-            for (name, value) in &info.floats {
-                params.insert(name.clone(), Param::Floats([*value as f32, 0.0, 0.0, 0.0]));
-            }
-            for (name, value) in &info.vectors {
-                params.insert(name.clone(), Param::Floats(value.map(|c| c as f32)));
-            }
+            params.extend(material_params(info));
         }
         for variable in &self.variables {
-            let param = match &variable.value {
-                VariableValue::Float([x, y]) => Param::Floats([*x, *y, 0.0, 0.0]),
-                VariableValue::Int(value) => Param::Int(*value),
-                VariableValue::Bool(value) => Param::Int(i64::from(*value)),
-                VariableValue::Texture(path) => Param::Texture(path.clone()),
-            };
-            params.insert(variable.name.clone(), param);
+            params.insert(variable.name.clone(), Param::from(&variable.value));
         }
         for (name, [x, y]) in self.roll(seed) {
             params.insert(name, Param::Floats([x, y, 0.0, 0.0]));

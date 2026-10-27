@@ -41,7 +41,21 @@ fn main() {
     }
     println!("rolled with seed {seed}: {:?}", recipe.roll(seed));
     let params = weapon_params(&content, &recipe, material, seed, wear).expect("params");
-    for (name, value) in params {
+    println!("colour (g_tColor):");
+    for (name, value) in &params.color {
         println!("  {name} = {value:?}");
+    }
+    println!("roughness and metalness (g_tMetalness), where they differ:");
+    for (name, value) in &params.surface {
+        if params.color.get(name) != Some(value) {
+            println!("  {name} = {value:?}");
+        }
+    }
+    for name in params
+        .color
+        .keys()
+        .filter(|n| !params.surface.contains_key(*n))
+    {
+        println!("  {name}: not set");
     }
 }

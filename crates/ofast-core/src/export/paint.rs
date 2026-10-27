@@ -39,8 +39,26 @@
 //! parts (8), scratched and patinated by cavity, ambient occlusion and grunge. The paint textures
 //! (`F_ROUGHNESS_TEXTURE`, `F_METALNESS_TEXTURE`) replace the roughness and metalness values, as their variants do.
 //!
-//! **Not baked**: overlays, case hardening, patina age, spray paint's halftone and all-masks variants — those
-//! weapons keep their own finish (`unpainted_reason`). Pearlescence and the normal-map pass are not read.
+//! The variants, each its own static combos (576 + n, 1152 + n, 18 + 2; the halftone a switch in the spray styles'
+//! code):
+//!
+//! - **Overlays** (`F_OVERLAY_TEXTURE`, on solid, hydrographic, spray paint, custom and gunsmith: the styles CS2's
+//!   kits put one on): `g_tOverlay` (sRGB) on the weapon's UVs, the pattern's or its own placement, its alpha masked
+//!   by a paint colour's region (`F_OVERLAY_MASK` 1 – 5: by the masks or the pattern's channels, as the style picks
+//!   its colours), the pattern, or `g_tOverlayMask` (8). Its durability scales the paint's wear under it; with mask 0
+//!   it is a layer of its own whose wear (`wear × cavity × growth × durability`) keeps the paint it covers. Blended
+//!   over the paint's colour (`blend`: normal, colour, multiply, add, layer) before the grunge and the levels, its
+//!   roughness and metalness taking a share; the patterned styles first mix the paint towards the weapon where gone.
+//! - **Halftone** (`F_SPRAYPAINT_HALFTONE`, spray paint and airbrushed): the projected pattern darkened by cavity ×
+//!   occlusion, × three more projections' dots turned by their rotation offsets, then thresholded.
+//! - **All masks** (`F_USE_ALL_MASKS`, spray paint): colours 2 and 3 also by the paint masks' G and B.
+//! - **Case hardening** (`F_CASE_HARDENING`, solid, patina, gunsmith): a colour ramp read across by the weapon's
+//!   shape (cavity, occlusion, the normal map's flatness) and the pattern's R, down by its G; solid's colours take it
+//!   by their `g_vCaseHardening` share, patina's pattern is it, gunsmith's where the masks' G is. Its alpha scales the
+//!   metalness, its brightness lowers the roughness.
+//!
+//! **Not baked**: patina age (`F_PATINA_AGE`, 4 kits) and trilinear case hardening (1) — those weapons keep their own
+//! finish (`unpainted_reason`). Pearlescence and the normal-map pass are not read.
 //!
 //! **Size**: the weapon's colour texture's or the pattern's, the larger, 2048 at most; the alpha is the weapon
 //! colour's (alpha-tested parts keep their cut-outs). Each colour and surface job decodes its inputs on its own (the
@@ -56,7 +74,7 @@ use crate::export::ExportError;
 use crate::export::environment::{SRGB_TO_LINEAR, linear_to_srgb};
 use crate::export::gltf::{decode_raw, srgb_to_linear};
 use crate::export::loadout::Finish;
-use crate::paint::{PaintKit, Param, Recipe, kit_recipe, paint_kits};
+use crate::paint::{PaintKit, Param, Recipe, WeaponParams, kit_recipe, paint_kits};
 use crate::resource::Resource;
 use crate::texture::{Image, ImageF32, Texture};
 
@@ -141,12 +159,12 @@ impl Paints {
     }
 }
 
-/// One weapon material painted with one skin: the parameters to bake from ([`crate::paint::weapon_params`]). Two
-/// jobs are the same when their keys are (material, kit, seed, wear).
+/// One weapon material painted with one skin: the parameters to bake from ([`crate::paint::weapon_params`]: the
+/// colour's and the surface's). Two jobs are the same when their keys are (material, kit, seed, wear).
 #[derive(Debug, Clone)]
 pub(crate) struct PaintJob {
     pub(crate) key: String,
-    pub(crate) params: Arc<BTreeMap<String, Param>>,
+    pub(crate) params: Arc<WeaponParams>,
 }
 
 impl PartialEq for PaintJob {
@@ -405,6 +423,172 @@ fn albedo_levels(base: [f32; 3], painted: [f32; 3], metal: f32, wear: f32) -> [f
     std::array::from_fn(|i| painted[i] + (hue[i] * level / top - painted[i]) * wear)
 }
 
+/// `g_vAlbedoLevels` as its expression makes it from (−0.045, 0.4, 1.15): a floor, an exponent (`−log2(1 − 0.4)`)
+/// and a ceiling — the levels the overlay's colour, multiply and add blends land in.
+const OVERLAY_LEVELS: [f32; 3] = [0.045, 0.736_966, 0.85];
+
+/// The hue the overlay blends keep: `normalize(max(0.0003, c)) × 1.06`.
+fn blend_hue(c: [f32; 3]) -> [f32; 3] {
+    let c = c.map(|x| x.max(0.0003));
+    let length = c.iter().map(|x| x * x).sum::<f32>().sqrt();
+    c.map(|x| x / length * 1.06)
+}
+
+/// A blend's hue `h` brought to the levels: `max(h × floor × 1.732 / |h| / luminance(h), h × lerp(floor, ceiling,
+/// saturate(top^exponent)))`.
+fn blend_toned(h: [f32; 3], top: f32) -> [f32; 3] {
+    let [floor, exponent, ceiling] = OVERLAY_LEVELS;
+    let length = h.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let dim = floor * 1.732 / length / luminance(h);
+    let level = lerp(floor, ceiling, top.powf(exponent).clamp(0.0, 1.0));
+    h.map(|x| (x * dim).max(x * level))
+}
+
+/// From the floor grey to `target` as luminance `lum` rises past the floor: `lerp(floor, target,
+/// smoothstep(0.0003, floor, lum)^0.5)`.
+fn blend_settled(target: [f32; 3], lum: f32) -> [f32; 3] {
+    let floor = OVERLAY_LEVELS[0];
+    let t = smoothstep(0.0003, floor, lum).sqrt();
+    target.map(|x| lerp(floor, x, t))
+}
+
+/// The overlay's colour `o` blended over the paint's `c` by `alpha` (`F_OVERLAY_BLEND_MODE`): normal and layer (0,
+/// 4) mix it in; colour (1) takes the hue of `o × c` at `c`'s brightness, multiply (2) `o × c`'s own, add (3)
+/// `o + c` lifted towards the ceiling — each brought to `g_vAlbedoLevels`.
+fn blend(c: [f32; 3], o: [f32; 3], alpha: f32, mode: i64) -> [f32; 3] {
+    let largest = |c: [f32; 3]| c[0].max(c[1]).max(c[2]);
+    let target = match mode {
+        0 | 4 => o,
+        1 => blend_settled(
+            blend_toned(blend_hue(mul3(o, c)), largest(c)),
+            luminance(clamp3(c)),
+        ),
+        2 => {
+            let m = mul3(c, o);
+            blend_settled(blend_toned(blend_hue(m), largest(m)), luminance(clamp3(m)))
+        }
+        3 => {
+            let s: [f32; 3] = std::array::from_fn(|i| c[i] + o[i]);
+            let lum = luminance(clamp3(scale3(s, 2.0)));
+            let toned = blend_toned(blend_hue(s), largest(s) * 2.0);
+            let ceiling = OVERLAY_LEVELS[2];
+            let lifted = toned.map(|x| lerp(x, ceiling.min(x + lum * 2.0), 1.0 / 63.0));
+            blend_settled(lifted, lum)
+        }
+        _ => return c,
+    };
+    lerp3(c, target, alpha)
+}
+
+/// The share of an overlay a paint colour's region gets (`F_OVERLAY_MASK` 1 – 5: colour 0's, 1's, 2's, 3's, any but
+/// 0's), from the weights that pick the colours (paint masks or pattern channels); 1 for the other modes.
+fn overlay_region(mode: i64, [r, g, b]: [f32; 3]) -> f32 {
+    match mode {
+        1 => 1.0 - r.max(g).max(b),
+        2 => r * (1.0 - g.max(b)),
+        3 => g * (1.0 - b),
+        4 => b,
+        5 => r.max(g).max(b),
+        _ => 1.0,
+    }
+}
+
+/// Where an overlay sits: the weapon's UVs, the pattern's (`g_bOverlayUsesPatternUVs`), or its own placement
+/// (`g_bOverlayUsesUniqueUVs`).
+enum OverlayAt {
+    Weapon,
+    Pattern,
+    Own(Placement),
+}
+
+/// An overlay over the paint (`F_OVERLAY_TEXTURE`): a decal or second layer with its own wear.
+struct Overlay {
+    /// `g_tOverlay`, read as sRGB.
+    image: Sampler,
+    /// `g_tOverlayMask` R, for mask mode 8.
+    mask: Option<Sampler>,
+    at: OverlayAt,
+    /// `F_OVERLAY_MASK`: 0 its own layer (its wear protects the paint), 1 – 5 a paint colour's region, 6 the paint,
+    /// 7 the pattern, 8 its own mask; 6 – 8 wear with the paint.
+    mask_mode: i64,
+    /// `F_OVERLAY_BLEND_MODE` ([`blend`]); layer (4) also fades as its own wear takes it.
+    blend: i64,
+    strength: f32,
+    brightness: f32,
+    /// `1 − g_fOverlayDurability`, as its expression makes it.
+    durability: f32,
+    /// How much of the paint's roughness and metalness the overlay replaces.
+    material_strength: f32,
+    roughness: f32,
+    metalness: f32,
+}
+
+/// The overlay at a texel: colour (linear, × brightness) and alpha, masked, before the strength.
+#[derive(Debug, Clone, Copy)]
+struct OverlayTexel {
+    color: [f32; 3],
+    alpha: f32,
+}
+
+/// What the overlay does at a texel once the paint's wear is known.
+#[derive(Debug, Clone, Copy, Default)]
+struct Cover {
+    /// Where the paint is gone, the overlay's own wear counted (mask mode 0: it protects what it covers).
+    gone: f32,
+    /// What is left of the overlay against its own wear (`1 −` its gone).
+    kept: f32,
+    color: [f32; 3],
+    /// Its alpha to blend with, and its share of the roughness and metalness.
+    alpha: f32,
+    share: f32,
+    mode: i64,
+    roughness: f32,
+    metalness: f32,
+}
+
+impl Cover {
+    fn blend(&self, c: [f32; 3]) -> [f32; 3] {
+        blend(c, self.color, self.alpha, self.mode)
+    }
+
+    fn roughness(&self, r: f32) -> f32 {
+        lerp(r, self.roughness, self.share)
+    }
+
+    fn metalness(&self, m: f32) -> f32 {
+        lerp(m, self.metalness, self.share)
+    }
+}
+
+/// The halftone of spray paint and anodized airbrushed (`F_SPRAYPAINT_HALFTONE`): the projected pattern darkened
+/// by the cavity and occlusion, then thresholded through three more projections' dots.
+struct Halftone {
+    /// `g_bHalftoneInCavity` and `g_fHalftoneCavityCutoff`.
+    in_cavity: bool,
+    cutoff: f32,
+    /// `g_vHalftonePatternLevels` as its expression makes it: low edge, exponent, high edge.
+    levels: [f32; 3],
+    /// `g_vHalftoneThresholds`.
+    thresholds: [f32; 2],
+    /// The dots' placements: the pattern's, turned by `g_flHalftoneRotationOffsetA`, `B`, `C`.
+    dots: [Placement; 3],
+}
+
+/// Case hardening (`F_CASE_HARDENING`): a colour ramp (`g_tCaseHardeningColorRamp`) read across by the weapon's
+/// shape and the pattern's R, down by the pattern's G.
+struct CaseHardening {
+    /// The ramp, read as sRGB, clamped.
+    ramp: Sampler,
+    /// `g_tNormal`: its flat parts count as less shaped.
+    normal: Option<Sampler>,
+    /// `g_flCaseHardeningPatternInfluence`, `GeometricInfluence`, `RampOffset`.
+    pattern: f32,
+    geometric: f32,
+    offset: f32,
+    /// `g_vCaseHardening`: how much the ramp replaces each paint colour (solid).
+    weights: [f32; 4],
+}
+
 /// The paint styles (`F_PAINT_STYLE`).
 const SOLID: i64 = 0;
 const HYDROGRAPHIC: i64 = 1;
@@ -461,6 +645,11 @@ struct Inputs {
     adjust_all: bool,
     bias_spray: bool,
     spray_blend: [f32; 2],
+    overlay: Option<Overlay>,
+    halftone: Option<Halftone>,
+    /// `F_USE_ALL_MASKS`: spray paint's colours 2 and 3 also by the paint masks' G and B.
+    all_masks: bool,
+    case_hardening: Option<CaseHardening>,
 }
 
 /// What every style reads at a texel of the weapon's layout.
@@ -553,10 +742,73 @@ impl Inputs {
             [c[0], c[1], c[2]].map(srgb_to_linear)
         });
         let spray_blend = floats("g_vSprayBlend", [1.0; 4]);
+        let pattern_at = placement("Pattern", size_scale);
+        let projection_scale = if ignore_size {
+            1.0
+        } else {
+            float("g_flWeaponLength1", 36.0) / 36.0
+        };
+        let overlay = match params.get("g_tOverlay") {
+            Some(Param::Texture(path)) if int("F_OVERLAY_TEXTURE", 0) != 0 => Some(Overlay {
+                image: Sampler::load(content, path)?,
+                mask: texture("g_tOverlayMask")?,
+                at: match (
+                    int("g_bOverlayUsesPatternUVs", 0) != 0,
+                    int("g_bOverlayUsesUniqueUVs", 0) != 0,
+                ) {
+                    (_, true) => OverlayAt::Own(placement("Overlay", size_scale)),
+                    (true, false) => OverlayAt::Pattern,
+                    (false, false) => OverlayAt::Weapon,
+                },
+                mask_mode: int("F_OVERLAY_MASK", 0),
+                blend: int("F_OVERLAY_BLEND_MODE", 0),
+                strength: float("g_fOverlayStrength", 1.0),
+                brightness: float("g_fOverlayBrightness", 1.0),
+                durability: 1.0 - float("g_fOverlayDurability", 0.0),
+                material_strength: float("g_fOverlayMaterialStrength", 1.0),
+                roughness: float("g_fOverlayRoughness", 0.0),
+                metalness: float("g_fOverlayMetalness", 0.0),
+            }),
+            _ => None,
+        };
+        let halftone = (int("F_SPRAYPAINT_HALFTONE", 0) != 0 && projected).then(|| {
+            let [x, y, z, _] = floats("g_vHalftonePatternLevels", [0.0, 0.5, 0.0, 0.0]);
+            let [low, high, _, _] = floats("g_vHalftoneThresholds", [0.0; 4]);
+            let offset = floats("g_vPatternTexCoordOffset", [0.0; 4]);
+            let dot = |name: &str, default: f32| {
+                Placement::new(
+                    float("g_flPatternTexCoordScale", 1.0) * projection_scale,
+                    float(name, default) + float("g_flPatternTexCoordRotation", 0.0),
+                    [offset[0], offset[1]],
+                )
+            };
+            Halftone {
+                in_cavity: int("g_bHalftoneInCavity", 1) != 0,
+                cutoff: float("g_fHalftoneCavityCutoff", 1.0),
+                levels: [-x, -(1.0 - y).max(0.0001).log2(), 2.0 - z],
+                thresholds: [low, high],
+                dots: [
+                    dot("g_flHalftoneRotationOffsetA", 0.0),
+                    dot("g_flHalftoneRotationOffsetB", 4.0),
+                    dot("g_flHalftoneRotationOffsetC", -4.0),
+                ],
+            }
+        });
+        let case_hardening = match params.get("g_tCaseHardeningColorRamp") {
+            Some(Param::Texture(path)) if int("F_CASE_HARDENING", 0) != 0 => Some(CaseHardening {
+                ramp: Sampler::load(content, path)?,
+                normal: texture("g_tNormal")?,
+                pattern: float("g_flCaseHardeningPatternInfluence", 0.5),
+                geometric: float("g_flCaseHardeningGeometricInfluence", 1.0),
+                offset: float("g_flCaseHardeningRampOffset", 0.0),
+                weights: floats("g_vCaseHardening", [0.0; 4]),
+            }),
+            _ => None,
+        };
         Ok(Self {
             style,
             separate: int("F_SEPARATE_CHANNEL_INPUTS", 0) != 0,
-            pattern: if style == SOLID || style == ANODIZED {
+            pattern: if (style == SOLID && case_hardening.is_none()) || style == ANODIZED {
                 None
             } else {
                 texture("g_tPattern")?
@@ -591,15 +843,8 @@ impl Inputs {
             },
             roughness_on_pattern: int("g_bRoughnessUsesPatternUVs", 1) != 0,
             metalness_on_pattern: int("g_bMetalnessUsesPatternUVs", 0) != 0,
-            pattern_at: placement("Pattern", size_scale),
-            projection_at: placement(
-                "Pattern",
-                if ignore_size {
-                    1.0
-                } else {
-                    float("g_flWeaponLength1", 36.0) / 36.0
-                },
-            ),
+            pattern_at,
+            projection_at: placement("Pattern", projection_scale),
             wear_at: placement("Wear", size_scale),
             grunge_at: placement("Grunge", size_scale),
             wear: float("g_flWearAmount", 0.0).clamp(0.0, 1.0),
@@ -618,6 +863,10 @@ impl Inputs {
             adjust_all: int("g_nColorAdjustmentMode", 1) != 0,
             bias_spray: int("g_bBiasSpray", 0) != 0,
             spray_blend: [spray_blend[0], spray_blend[1]],
+            overlay,
+            halftone,
+            all_masks: int("F_USE_ALL_MASKS", 0) != 0,
+            case_hardening,
         })
     }
 
@@ -701,7 +950,11 @@ impl Inputs {
     /// averaged over 17 taps, × 2, the pattern placed on its (y, z), (x, z) and (y, x) planes, blended towards the
     /// second and third by the surface normal's |y|⁷ and |z|⁷ (× `g_vSprayBlend`). With separate channels and
     /// `g_bBiasSpray`, the normal texture is read through an sRGB encode first.
-    fn pattern_projected(&self, u: f32, v: f32) -> [f32; 4] {
+    ///
+    /// With the halftone (z mirrored): the colour channels × a level of cavity × occlusion × 2 (`smoothstep` of its
+    /// power; inverted when the thresholds fall, the other way out of the cavity), × the alpha of three more
+    /// projections turned by the dots' rotations, then thresholded.
+    fn pattern_projected(&self, t: &Texel, u: f32, v: f32) -> [f32; 4] {
         let Some(position) = &self.position else {
             return self.pattern_at(u, v);
         };
@@ -713,6 +966,7 @@ impl Inputs {
             }
         }
         let [x, y, z, _] = sum.map(|c| c * 2.0);
+        let z = if self.halftone.is_some() { -z } else { z };
         let stored = self.surface.as_ref().map_or([0.5, 0.5, 1.0], |s| {
             rgb(s.at_with(u, v, [Address::Clamp; 2]))
         });
@@ -724,14 +978,154 @@ impl Inputs {
         let n = stored.map(|c| c * 2.0 - 1.0);
         let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-6);
         let n = n.map(|c| c / length);
-        let at = |a: f32, b: f32| {
-            let (pu, pv) = self.projection_at.apply(a, b);
-            self.pattern_sample(pu, pv)
-        };
-        let (yz, xz, yx) = (at(y, z), at(x, z), at(y, x));
         let to_xz = self.spray_blend[0] * n[1].abs().powi(7);
         let to_yx = self.spray_blend[1] * n[2].abs().powi(7);
-        std::array::from_fn(|c| lerp(lerp(yz[c], xz[c], to_xz), yx[c], to_yx))
+        let project = |placement: &Placement| -> [f32; 4] {
+            let at = |a: f32, b: f32| {
+                let (pu, pv) = placement.apply(a, b);
+                self.pattern_sample(pu, pv)
+            };
+            let (yz, xz, yx) = (at(y, z), at(x, z), at(y, x));
+            std::array::from_fn(|c| lerp(lerp(yz[c], xz[c], to_xz), yx[c], to_yx))
+        };
+        let p = project(&self.projection_at);
+        let Some(h) = &self.halftone else {
+            return p;
+        };
+        let cavity = if h.in_cavity {
+            t.cavity.min(h.cutoff)
+        } else {
+            t.cavity
+        };
+        let level = smoothstep(
+            h.levels[0],
+            h.levels[2],
+            (cavity * t.occlusion * 2.0).powf(h.levels[1]),
+        );
+        let factor = if (h.thresholds[0] > h.thresholds[1]) == h.in_cavity {
+            level
+        } else {
+            1.0 - level
+        };
+        let dots = h.dots.each_ref().map(|at| project(at)[3]);
+        let [low, high] = h.thresholds;
+        [
+            smoothstep(low, high, p[0] * factor * dots[0]),
+            smoothstep(low, high, p[1] * factor * dots[1]),
+            smoothstep(low, high, p[2] * factor * dots[2]),
+            p[3],
+        ]
+    }
+
+    /// The overlay at (u, v), its alpha × `region` of its mask mode (`g_tOverlayMask` for mode 8); `None` without
+    /// one.
+    fn overlay_texel(
+        &self,
+        u: f32,
+        v: f32,
+        region: impl FnOnce(i64) -> f32,
+    ) -> Option<OverlayTexel> {
+        let overlay = self.overlay.as_ref()?;
+        let (ou, ov) = match &overlay.at {
+            OverlayAt::Weapon => (u, v),
+            OverlayAt::Pattern => self.pattern_at.apply(u, v),
+            OverlayAt::Own(placement) => placement.apply(u, v),
+        };
+        let s = overlay.image.at(ou, ov);
+        let mask = match overlay.mask_mode {
+            8 => overlay.mask.as_ref().map_or(1.0, |m| m.at(u, v)[0]),
+            mode => region(mode),
+        };
+        Some(OverlayTexel {
+            color: rgb(s).map(|c| srgb_to_linear(c) * overlay.brightness),
+            alpha: s[3] * mask,
+        })
+    }
+
+    /// How the overlay's durability scales the paint's wear under it: `lerp(1, durability, alpha)`.
+    fn overlay_durability(&self, texel: Option<OverlayTexel>) -> f32 {
+        match (&self.overlay, texel) {
+            (Some(overlay), Some(texel)) => lerp(1.0, overlay.durability, texel.alpha),
+            _ => 1.0,
+        }
+    }
+
+    /// The overlay against its own wear (the wear texture × cavity × growth × its durability, past the paint's
+    /// threshold with softness `k`), where the paint `gone` is: mask mode 0 keeps the paint it covers
+    /// (`lerp(gone, min(gone, its gone), strength)`); the layer blend fades with its wear; its share of roughness and
+    /// metalness is what is left × alpha × `g_fOverlayMaterialStrength`.
+    fn cover(&self, texel: Option<OverlayTexel>, t: &Texel, k: f32, gone: f32) -> Cover {
+        let (Some(overlay), Some(texel)) = (&self.overlay, texel) else {
+            return Cover {
+                gone,
+                ..Cover::default()
+            };
+        };
+        let strength = texel.alpha * overlay.strength;
+        let own = self.gone(self.worn(t) * self.growth() * overlay.durability, k);
+        let alpha = if overlay.blend == 4 {
+            strength * (1.0 - own).clamp(0.0, 1.0)
+        } else {
+            strength
+        };
+        Cover {
+            gone: if overlay.mask_mode == 0 {
+                lerp(gone, gone.min(own), strength).max(0.0)
+            } else {
+                gone
+            },
+            kept: 1.0 - own,
+            color: texel.color,
+            alpha,
+            share: (1.0 - own) * alpha * overlay.material_strength,
+            mode: overlay.blend,
+            roughness: overlay.roughness,
+            metalness: overlay.metalness,
+        }
+    }
+
+    /// The case-hardening ramp at (u, v) (sRGB-decoded; `None` without it): across by the shape — `lerp(0.5,
+    /// cavity^0.85, G) × lerp(1, occlusion × 2 × flatness of g_tNormal, G)`, 2× it or itself + the pattern's R by
+    /// `P` — and down by `max(pattern G × P, (1 − occlusion) × 0.2 × G) + offset`; averaged over five pattern taps
+    /// (±1/2048) when `taps`.
+    fn ramp(&self, t: &Texel, u: f32, v: f32, taps: bool) -> Option<[f32; 4]> {
+        let ch = self.case_hardening.as_ref()?;
+        let n = ch.normal.as_ref().map_or([0.5; 4], |s| s.at(u, v));
+        let flat = |c: f32| smoothstep(0.85, 0.2, c.min(1.0 - c));
+        let shape = lerp(0.5, t.cavity.powf(0.85), ch.geometric)
+            * lerp(
+                1.0,
+                t.occlusion * flat(n[0]).min(flat(n[1])) * 2.0,
+                ch.geometric,
+            );
+        let (pu, pv) = self.pattern_at.apply(u, v);
+        let p = self.pattern_sample(pu, pv);
+        let row = (p[1] * ch.pattern).max((1.0 - t.occlusion) * 0.2 * ch.geometric) + ch.offset;
+        let at = |x: f32| {
+            let s = ch.ramp.at_with(
+                lerp(shape * 2.0, shape + x, ch.pattern),
+                row,
+                [Address::Clamp; 2],
+            );
+            [
+                srgb_to_linear(s[0]),
+                srgb_to_linear(s[1]),
+                srgb_to_linear(s[2]),
+                s[3],
+            ]
+        };
+        if !taps {
+            return Some(at(p[0]));
+        }
+        const D: f32 = 1.0 / 2048.0;
+        let mut sum = at(p[0]);
+        for (du, dv) in [(D, D), (-D, -D), (-D, D), (D, -D)] {
+            let s = at(self.pattern_sample(pu + du, pv + dv)[0]);
+            for c in 0..4 {
+                sum[c] += s[c];
+            }
+        }
+        Some(sum.map(|c| c * 0.2))
     }
 
     /// The paint's roughness at (u, v): its texture where it has one, else `per_color` of the per-colour values,
@@ -849,22 +1243,34 @@ impl Inputs {
         }
     }
 
-    /// Solid (0): colours by paint mask.
+    /// Solid (0): colours by paint mask; with case hardening each colour takes the ramp by its `g_vCaseHardening`
+    /// share. An overlay's regions are the masks'.
     fn solid(&self, t: &Texel, u: f32, v: f32) -> Shade {
-        let d = pick(self.durability, rgb(t.masks));
+        let masks = rgb(t.masks);
+        let over = self.overlay_texel(u, v, |mode| overlay_region(mode, masks));
+        let d = pick(self.durability, masks);
         let k = self.softness * d;
-        let gone = self.gone((t.no_paint + self.worn(t)) * self.growth() * d, k);
+        let worn = (t.no_paint + self.worn(t)) * self.growth() * self.overlay_durability(over) * d;
+        let cover = self.cover(over, t, k, self.gone(worn, k));
         let grime = self.grime(t);
-        let metal = self.paint_metalness(u, v, pick(self.metalness, rgb(t.masks)));
-        let base = std::array::from_fn(|c| pick(channel(&self.colors, c), rgb(t.masks)));
-        let painted = mul3(base, rgb(grime));
-        let roughness = self.paint_roughness(u, v, |r| pick(r, rgb(t.masks)));
-        let (roughness, metalness) = self.painted_surface(t, grime, roughness, metal, gone);
+        let metal = self.paint_metalness(u, v, pick(self.metalness, masks));
+        let colors = match (self.ramp(t, u, v, true), &self.case_hardening) {
+            (Some(ramp), Some(ch)) => {
+                std::array::from_fn(|i| lerp3(self.colors[i], rgb(ramp), ch.weights[i]))
+            }
+            _ => self.colors,
+        };
+        let base = std::array::from_fn(|c| pick(channel(&colors, c), masks));
+        let blended = cover.blend(base);
+        let painted = mul3(blended, rgb(grime));
+        let roughness = cover.roughness(self.paint_roughness(u, v, |r| pick(r, masks)));
+        let (roughness, metalness) =
+            self.painted_surface(t, grime, roughness, cover.metalness(metal), cover.gone);
         Shade {
             color: lerp3(
-                albedo_levels(base, painted, metal, self.wear),
+                albedo_levels(blended, painted, metal, self.wear),
                 t.weapon,
-                gone,
+                cover.gone,
             ),
             roughness,
             metalness,
@@ -873,28 +1279,48 @@ impl Inputs {
 
     /// Hydrographic and spray paint (1, 2): the pattern's channels pick the colours, and the wear peels them off
     /// layer by layer (R, then G, then B) before the paint goes.
+    ///
+    /// Spray paint with `F_USE_ALL_MASKS` also takes colours 2 and 3 by the paint masks, as hydrographic does. An
+    /// overlay's regions are the pattern's channels (hydrographic's with the masks over them); its durability scales
+    /// the wear (hydrographic: the reach), and the paint is mixed towards the weapon where gone before it is laid on.
     fn layered(&self, t: &Texel, u: f32, v: f32) -> Shade {
         let w = self.wear;
         let spray = self.style == SPRAY;
+        let masked = !spray || self.all_masks;
         let p = if spray {
-            self.pattern_projected(u, v)
+            self.pattern_projected(t, u, v)
         } else {
             self.pattern_at(u, v)
         };
         let cut = cutout(p[3]);
-        // Hydrographic also by the paint masks G and B, and it paints only where they or the pattern's alpha are.
-        let (d, worn) = if spray {
-            let d = pick(self.durability, rgb(p));
-            (d, (t.no_paint + self.worn(t)) * self.growth() * d)
+        let [mg, mb] = [t.masks[1], t.masks[2]];
+        let over = self.overlay_texel(u, v, |mode| match (spray, mode) {
+            (true, _) => overlay_region(mode, rgb(p)),
+            (false, 1) => (1.0 - p[0].max(p[1]).max(p[2])) * (1.0 - mg.max(mb)),
+            (false, 2) => p[0] * (1.0 - p[1].max(p[2])) * (1.0 - mg.max(mb)),
+            (false, 3) => (p[1] * (1.0 - p[2])).max(mg) * (1.0 - mb),
+            (false, 4) => (p[2] * (1.0 - mg)).max(mb),
+            (false, 5) => p[0].max(p[1]).max(p[2]).max(mg).max(mb),
+            (false, 7) => 1.0 - mg.max(mb),
+            _ => 1.0,
+        });
+        let held = self.overlay_durability(over);
+        let d = if masked {
+            pick_masked(self.durability, rgb(p), t.masks)
         } else {
-            let d = pick_masked(self.durability, rgb(p), t.masks);
-            let reach = (t.masks[1] + t.masks[2])
-                .clamp(0.0, 1.0)
-                .max(smoothstep(0.0, 0.5, p[3]));
-            (
-                d,
-                ((t.no_paint + self.worn(t)) * self.growth() + cut) * reach * d,
-            )
+            pick(self.durability, rgb(p))
+        };
+        // Hydrographic paints only where the masks G and B or the pattern's alpha are.
+        let worn = if spray {
+            (t.no_paint + self.worn(t)) * self.growth() * held * d
+        } else {
+            let masks = (mg + mb).clamp(0.0, 1.0);
+            let alpha = smoothstep(0.0, 0.5, p[3]);
+            let reach = match self.overlay.as_ref().map(|o| o.mask_mode) {
+                Some(mode) if mode > 0 => masks.max(alpha * held),
+                _ => masks.max(alpha) * held,
+            };
+            ((t.no_paint + self.worn(t)) * self.growth() + cut) * reach * d
         };
         let k = self.softness * d;
         let (first, second, third) = (0.56 - 0.06 * w, 0.54 - 0.12 * w, 0.52 - 0.18 * w);
@@ -903,22 +1329,30 @@ impl Inputs {
             p[1] * smoothstep(first + k, second - k, worn),
             p[2] * smoothstep(second + k, third - k, worn),
         ];
-        let gone = self.gone(worn, k);
+        let gone_paint = self.gone(worn, k);
+        let cover = self.cover(over, t, k, gone_paint);
+        let gone = cover.gone;
         let grime = self.grime(t);
         let by_layer = |values: [f32; 4]| {
-            if spray {
-                pick(values, layers)
-            } else {
+            if masked {
                 pick_masked(values, layers, t.masks)
+            } else {
+                pick(values, layers)
             }
         };
         let metal = self.paint_metalness(u, v, by_layer(self.metalness));
         let base: [f32; 3] = std::array::from_fn(|c| by_layer(channel(&self.colors, c)));
-        let edge = self.edge(gone, worn, k) * (1.0 - cut);
+        let base = if self.overlay.is_some() {
+            cover.blend(lerp3(base, t.weapon, gone))
+        } else {
+            base
+        };
+        let edge = self.edge(gone_paint, worn, k) * (1.0 - cut);
         let color = clamp3(scale3(base, lerp(self.brightness, 1.0, edge)));
         let painted = mul3(color, rgb(grime));
-        let roughness = self.paint_roughness(u, v, by_layer);
-        let (roughness, metalness) = self.painted_surface(t, grime, roughness, metal, gone);
+        let roughness = cover.roughness(self.paint_roughness(u, v, by_layer));
+        let (roughness, metalness) =
+            self.painted_surface(t, grime, roughness, cover.metalness(metal), gone);
         Shade {
             color: lerp3(albedo_levels(color, painted, metal, w), t.weapon, gone),
             roughness,
@@ -934,7 +1368,7 @@ impl Inputs {
             ANODIZED => (self.colors[0], 0.0, 1.0, 1.0),
             style => {
                 let p = if style == AIRBRUSHED {
-                    self.pattern_projected(u, v)
+                    self.pattern_projected(t, u, v)
                 } else {
                     self.pattern_at(u, v)
                 };
@@ -995,21 +1429,32 @@ impl Inputs {
         }
     }
 
-    /// Custom paint job (6): the pattern's own colours, its alpha the paint's durability (and a cut-out band).
+    /// Custom paint job (6): the pattern's own colours, its alpha the paint's durability (and a cut-out band). An
+    /// overlay's durability scales that one, and the paint is mixed towards the weapon where gone before it is laid
+    /// on.
     fn custom(&self, t: &Texel, u: f32, v: f32) -> Shade {
         let p = self.pattern_at(u, v);
-        let d = smoothstep(0.0, 0.5, p[3]).max(0.0);
+        let over = self.overlay_texel(u, v, |_| 1.0);
+        let d = smoothstep(0.0, 0.5, p[3]).max(0.0) * self.overlay_durability(over);
         let k = self.softness * d;
-        let gone = self.gone(
+        let gone_paint = self.gone(
             ((t.no_paint + self.worn(t)) * self.growth() + cutout(p[3])) * d,
             k,
         );
+        let cover = self.cover(over, t, k, gone_paint);
+        let gone = cover.gone;
         let grime = self.grime(t);
         let metal = self.paint_metalness(u, v, self.metalness_flat);
         let color = clamp3(scale3(rgb(p), self.brightness));
+        let color = if self.overlay.is_some() {
+            cover.blend(lerp3(color, t.weapon, gone))
+        } else {
+            color
+        };
         let painted = mul3(color, rgb(grime));
-        let roughness = self.paint_roughness(u, v, |_| self.roughness);
-        let (roughness, metalness) = self.painted_surface(t, grime, roughness, metal, gone);
+        let roughness = cover.roughness(self.paint_roughness(u, v, |_| self.roughness));
+        let (roughness, metalness) =
+            self.painted_surface(t, grime, roughness, cover.metalness(metal), gone);
         Shade {
             color: lerp3(
                 albedo_levels(color, painted, metal, self.wear),
@@ -1054,10 +1499,25 @@ impl Inputs {
 
     /// Patina and gunsmith (7, 8): bare metal where the paint masks' R is — the pattern tinted by colours 1 – 3 as
     /// it patinates and wears, colour 0 in scratches — and, for gunsmith, the pattern painted elsewhere.
+    ///
+    /// Case hardening replaces the pattern with its ramp (patina; gunsmith by the paint masks' G, over five taps):
+    /// the ramp's alpha scales the metalness, its brightness lowers the roughness (× `1 − luminance / 4`). Gunsmith's
+    /// overlay goes over its metal by what its own wear leaves, and over its paint, mixed towards the weapon where
+    /// gone.
     fn metal(&self, t: &Texel, u: f32, v: f32) -> Shade {
         let w = self.wear;
         let m = t.masks[0];
         let p = self.pattern_at(u, v);
+        let (p, hardened) = match self.ramp(t, u, v, self.style == GUNSMITH) {
+            Some(ramp) if self.style == PATINA => (ramp, 1.0),
+            Some(ramp) => (
+                std::array::from_fn(|c| lerp(p[c], ramp[c], t.masks[1])),
+                t.masks[1],
+            ),
+            None => (p, 0.0),
+        };
+        let ramp_metal = lerp(1.0, p[3], hardened);
+        let soften = |r: f32| lerp(r, r * (1.0 - 0.25 * luminance(rgb(p))), hardened);
         let (scratch, patina, grime) = self.metal_wear(t);
         let [c0, c1, c2, c3] = self.colors;
         let pattern = lerp3(
@@ -1076,7 +1536,7 @@ impl Inputs {
         let lum_g = luminance(rgb(grime));
         let dull = (1.0 - grime[3]) * w;
         let metalness = lerp(
-            lerp(1.0, (patina * grime[3] * lum_g).sqrt(), w),
+            ramp_metal * lerp(1.0, (patina * grime[3] * lum_g).sqrt(), w),
             1.0,
             scratch,
         );
@@ -1088,9 +1548,9 @@ impl Inputs {
                 .clamp(0.0, 1.0)
         };
         if self.style == PATINA {
-            let roughness = rough_with(self.paint_roughness(u, v, |_| self.roughness));
+            let roughness = rough_with(soften(self.paint_roughness(u, v, |_| self.roughness)));
             let painted = mul3(metal_color, rgb(grime));
-            let levels = albedo_levels(mul3(pattern, c1), painted, 1.0, w);
+            let levels = albedo_levels(mul3(pattern, c1), painted, ramp_metal, w);
             let edge = if t.no_paint <= 0.996 { m } else { 0.0 };
             return Shade {
                 color: lerp3(levels, t.weapon, 1.0 - m),
@@ -1105,21 +1565,36 @@ impl Inputs {
         // Gunsmith: the pattern's alpha is the paint's durability; the metal parts (masks R above 0.99) wear
         // without the threshold.
         let a = p[3];
-        let d = smoothstep(0.0, 0.5, a).max(0.0);
+        let over = self.overlay_texel(u, v, |_| 1.0);
+        let d = smoothstep(0.0, 0.5, a).max(0.0) * self.overlay_durability(over);
         let k = self.softness * d;
         let worn = ((t.no_paint.min(1.0 - m) + self.worn(t)) * self.growth() + cutout(a)) * d;
         let metal_part = m > 0.99;
-        let gone = if metal_part { worn } else { self.gone(worn, k) };
+        let gone_paint = if metal_part { worn } else { self.gone(worn, k) };
+        let cover = self.cover(over, t, k, gone_paint);
+        let gone = cover.gone;
         let paint_metal = self.paint_metalness(u, v, self.metalness_flat);
-        let painted = mul3(lerp3(pattern, metal_color, m), rgb(grime));
+        let (paint_color, metal_color) = if self.overlay.is_some() {
+            let on_metal = Cover {
+                alpha: cover.alpha * cover.kept,
+                ..cover
+            };
+            (
+                cover.blend(lerp3(clamp3(pattern), t.weapon, gone)),
+                on_metal.blend(metal_color),
+            )
+        } else {
+            (pattern, metal_color)
+        };
+        let painted = mul3(lerp3(paint_color, metal_color, m), rgb(grime));
         let levels = albedo_levels(
             lerp3(pattern, mul3(pattern, c1), m),
             painted,
-            lerp(paint_metal, 1.0, m),
+            lerp(paint_metal, ramp_metal, m),
             w,
         );
         let r = 1.0 - (a * 2.0).min(1.0);
-        let base_rough = self.paint_roughness(u, v, |_| self.roughness);
+        let base_rough = soften(self.paint_roughness(u, v, |_| self.roughness));
         let roughness = rough_with(lerp(
             base_rough,
             lerp(r * r * 0.85 + 0.15, base_rough, f32::from(a >= 0.5)),
@@ -1127,7 +1602,7 @@ impl Inputs {
         ));
         Shade {
             color: lerp3(levels, t.weapon, gone * (1.0 - m)),
-            roughness: lerp(
+            roughness: cover.roughness(lerp(
                 t.surface[0],
                 lerp((roughness + dull * w * 0.5).min(1.0), roughness, m),
                 if metal_part {
@@ -1135,14 +1610,17 @@ impl Inputs {
                 } else {
                     (1.0 - gone).max(0.0)
                 },
-            ),
-            metalness: lerp(lerp(paint_metal, t.surface[1], gone), metalness, m),
+            )),
+            metalness: cover.metalness(lerp(lerp(paint_metal, t.surface[1], gone), metalness, m)),
         }
     }
 }
 
 /// Every paint style (`F_PAINT_STYLE` 0 – 8) is baked.
 pub(crate) const PAINTED_STYLES: std::ops::RangeInclusive<i64> = SOLID..=GUNSMITH;
+
+/// The styles an overlay is baked on: those CS2's kits put one on (no kit has one on anodized or patina).
+const OVERLAID_STYLES: [i64; 5] = [SOLID, HYDROGRAPHIC, SPRAY, CUSTOM, GUNSMITH];
 
 /// Why a weapon material is not painted with these parameters (a style or variant not baked yet, an input missing),
 /// or `None`.
@@ -1158,15 +1636,23 @@ pub(crate) fn unpainted_reason(params: &BTreeMap<String, Param>) -> Option<Strin
         return Some(format!("paint style {style} not baked yet"));
     }
     for (feature, what) in [
-        ("F_OVERLAY_TEXTURE", "overlay"),
-        ("F_CASE_HARDENING", "case hardening"),
         ("F_PATINA_AGE", "patina age"),
-        ("F_SPRAYPAINT_HALFTONE", "halftone"),
-        ("F_USE_ALL_MASKS", "all-masks spray paint"),
+        ("F_CASE_HARDENING_TRILINEAR", "trilinear case hardening"),
     ] {
         if int(feature) != 0 {
             return Some(format!("{what} not baked yet"));
         }
+    }
+    if int("F_OVERLAY_TEXTURE") != 0 {
+        if !OVERLAID_STYLES.contains(&style) {
+            return Some(format!("overlay on paint style {style} not baked yet"));
+        }
+        if !named("g_tOverlay") {
+            return Some("no overlay texture".into());
+        }
+    }
+    if int("F_CASE_HARDENING") != 0 && !named("g_tCaseHardeningColorRamp") {
+        return Some("no case-hardening ramp".into());
     }
     match style {
         // Solid and anodized name their colours (a recipe without a paint material would otherwise paint the
@@ -1181,9 +1667,34 @@ pub(crate) fn unpainted_reason(params: &BTreeMap<String, Param>) -> Option<Strin
     }
 }
 
+/// The job that paints weapon material `material` with `paint`, or why it is not painted (its skin's parameters
+/// unreadable, its style or a variant not baked yet, an input missing).
+pub(crate) fn job(content: &Content, material: &str, paint: &Paint) -> Result<PaintJob, String> {
+    let params =
+        crate::paint::weapon_params(content, &paint.recipe, material, paint.seed, paint.wear)
+            .map_err(|e| e.to_string())?;
+    if let Some(why) = unpainted_reason(&params.color).or_else(|| unpainted_reason(&params.surface))
+    {
+        return Err(why);
+    }
+    Ok(PaintJob {
+        key: format!("{material}|{}", paint.label),
+        params: Arc::new(params),
+    })
+}
+
+/// Weapon material `material` painted with `paint` as an export bakes it: its colour and metallic-roughness
+/// textures, or why it is not painted. A developer's check (`examples/paint_bake.rs`).
+pub fn bake(content: &Content, material: &str, paint: &Paint) -> Result<(Image, Image), String> {
+    let job = job(content, material, paint)?;
+    let color = bake_color(content, &job).map_err(|e| e.to_string())?;
+    let surface = bake_surface(content, &job).map_err(|e| e.to_string())?;
+    Ok((color, surface))
+}
+
 /// The painted colour texture of `job` (sRGB; alpha the weapon colour's): see the [module docs](self).
 pub(crate) fn bake_color(content: &Content, job: &PaintJob) -> Result<Image, ExportError> {
-    let inputs = Inputs::read(content, &job.params)?;
+    let inputs = Inputs::read(content, &job.params.color)?;
     let (width, height) = inputs.size();
     let mut rgba = Vec::with_capacity(width * height * 4);
     for y in 0..height {
@@ -1207,7 +1718,7 @@ pub(crate) fn bake_color(content: &Content, job: &PaintJob) -> Result<Image, Exp
 /// The painted metallic-roughness texture of `job` (glTF channels: G roughness, B metalness): see the
 /// [module docs](self).
 pub(crate) fn bake_surface(content: &Content, job: &PaintJob) -> Result<Image, ExportError> {
-    let inputs = Inputs::read(content, &job.params)?;
+    let inputs = Inputs::read(content, &job.params.surface)?;
     let (width, height) = inputs.size();
     let mut rgba = Vec::with_capacity(width * height * 4);
     for y in 0..height {
@@ -1322,7 +1833,117 @@ mod tests {
             adjust_all: true,
             bias_spray: false,
             spray_blend: [1.0; 2],
+            overlay: None,
+            halftone: None,
+            all_masks: false,
+            case_hardening: None,
         }
+    }
+
+    /// An opaque overlay of colour `rgba` (sRGB bytes) on the weapon's UVs, normal blend, mask mode `mask_mode`,
+    /// durability as authored `durability` (0 lasts like the paint).
+    fn overlay(rgba: [u8; 4], mask_mode: i64, durability: f32) -> Option<Overlay> {
+        Some(Overlay {
+            image: pixel(rgba)?,
+            mask: None,
+            at: OverlayAt::Weapon,
+            mask_mode,
+            blend: 0,
+            strength: 1.0,
+            brightness: 1.0,
+            durability: 1.0 - durability,
+            material_strength: 1.0,
+            roughness: 0.25,
+            metalness: 0.75,
+        })
+    }
+
+    #[test]
+    fn an_overlay_covers_the_paint_and_its_own_wear_can_keep_it() {
+        // Black solid paint under a white overlay, nothing worn: white, with the overlay's roughness and metalness.
+        let mut covered = inputs(SOLID, 0.0, 0, 128, 0);
+        covered.overlay = overlay([255; 4], 0, 0.0);
+        let shade = covered.shade(0.5, 0.5);
+        assert!(shade.color.iter().all(|c| *c > 0.99), "{:?}", shade.color);
+        assert!((shade.roughness - 0.25).abs() < 1e-6 && (shade.metalness - 0.75).abs() < 1e-6);
+        // Where the paint wears off (white wear texel on an edge), a durable overlay (as authored 0.9 → 0.1) keeps
+        // it, red over the black paint.
+        let mut durable = inputs(SOLID, 0.0, 255, 255, 0);
+        durable.overlay = overlay([255, 0, 0, 255], 6, 0.9);
+        let kept = durable.shade(0.5, 0.5).color;
+        assert!(kept[0] > 0.99 && kept[1] < 0.01, "{kept:?}");
+        // Where the weapon takes no paint, an overlay of its own layer (mask mode 0) stays; one on the paint (mode
+        // 6) goes with it.
+        let bare = |mask_mode: i64| {
+            let mut inputs = inputs(SOLID, 0.0, 0, 255, 255);
+            inputs.overlay = overlay([255, 0, 0, 255], mask_mode, 0.0);
+            inputs.shade(0.5, 0.5).color
+        };
+        let stays = bare(0);
+        assert!(stays[0] > 0.99 && stays[1] < 0.01, "{stays:?}");
+        assert_eq!(bare(6), [1.0; 3]);
+        // A region mask: colour 1's region (R mask) gets the overlay, colour 0's does not.
+        assert_eq!(overlay_region(2, [1.0, 0.0, 0.0]), 1.0);
+        assert_eq!(overlay_region(2, [0.0, 0.0, 0.0]), 0.0);
+        assert_eq!(overlay_region(1, [0.0, 0.0, 0.0]), 1.0);
+    }
+
+    #[test]
+    fn blends_mix_or_tone_the_overlay_into_the_paint() {
+        let (c, o) = ([0.2, 0.4, 0.6], [0.9, 0.1, 0.1]);
+        // No alpha: the paint as it is; normal and layer at full alpha: the overlay.
+        for mode in 0..5 {
+            assert_eq!(blend(c, o, 0.0, mode), c);
+        }
+        let near = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-6);
+        assert!(near(blend(c, o, 1.0, 0), o));
+        assert!(near(blend(c, o, 1.0, 4), o));
+        // Multiply by white keeps the hue of the paint; colour takes the overlay's hue × the paint's.
+        let white = blend(c, [1.0; 3], 1.0, 2);
+        assert!(white[2] > white[1] && white[1] > white[0], "{white:?}");
+        let tinted = blend(c, o, 1.0, 1);
+        assert!(tinted[0] > tinted[2], "{tinted:?}");
+        // Add brightens.
+        assert!(luminance(blend(c, o, 1.0, 3)) > luminance(c));
+    }
+
+    #[test]
+    fn case_hardening_takes_colours_from_its_ramp() {
+        // A blue ramp replacing colour 0 entirely: the unmasked paint is blue.
+        let mut hardened = inputs(SOLID, 0.0, 0, 128, 0);
+        hardened.case_hardening = Some(CaseHardening {
+            ramp: pixel([0, 0, 255, 255]).expect("ramp"),
+            normal: None,
+            pattern: 0.5,
+            geometric: 1.0,
+            offset: 0.0,
+            weights: [1.0, 0.0, 0.0, 0.0],
+        });
+        hardened.masks = pixel([0, 0, 0, 255]);
+        let shade = hardened.shade(0.5, 0.5);
+        assert!(
+            shade.color[2] > 0.9 && shade.color[0] < 0.1,
+            "{:?}",
+            shade.color
+        );
+        // Colour 1 keeps its own (black) where the R mask picks it.
+        hardened.masks = pixel([255, 0, 0, 255]);
+        assert!(hardened.shade(0.5, 0.5).color[2] < 0.1);
+    }
+
+    #[test]
+    fn all_masks_spray_paint_takes_colours_2_and_3_by_the_masks() {
+        // A spray paint with an empty pattern paints colour 0; with all masks, the masks' B picks colour 3.
+        let spray = |all_masks: bool| {
+            let mut inputs = inputs(SPRAY, 0.0, 0, 128, 0);
+            inputs.pattern = pixel([0, 0, 0, 255]);
+            inputs.colors[3] = [1.0, 1.0, 0.0];
+            inputs.masks = pixel([0, 0, 255, 255]);
+            inputs.all_masks = all_masks;
+            inputs.shade(0.5, 0.5).color
+        };
+        assert!(spray(false)[0] < 0.01);
+        assert!(spray(true)[0] > 0.9);
     }
 
     /// How much of a black solid paint is gone over a white weapon: its colour's red.
@@ -1443,7 +2064,7 @@ mod tests {
         assert_eq!(unpainted_reason(&params(8, Some("gungnir.vtex"))), None);
         assert_eq!(unpainted_reason(&params(1, Some("webs.vtex"))), None);
         assert_eq!(unpainted_reason(&params(4, Some("doppler.vtex"))), None);
-        // Solid needs its colours but no pattern (Whiteout); with an overlay (Royal Guard) it waits.
+        // Solid needs its colours but no pattern (Whiteout); an overlay (Royal Guard) its texture.
         let mut solid = params(0, None);
         solid.insert("g_vColor0".into(), Param::Floats([0.86, 0.85, 0.83, 1.0]));
         assert_eq!(unpainted_reason(&solid), None);
@@ -1451,6 +2072,27 @@ mod tests {
         let mut overlay = solid.clone();
         overlay.insert("F_OVERLAY_TEXTURE".into(), Param::Int(1));
         assert!(unpainted_reason(&overlay).is_some());
+        overlay.insert(
+            "g_tOverlay".into(),
+            Param::Texture("usp_blue_cavity_overlay.vtex".into()),
+        );
+        assert_eq!(unpainted_reason(&overlay), None);
+        // No kit puts one on an anodized or patina finish; patina age is not baked yet.
+        let mut anodized = overlay.clone();
+        anodized.insert("F_PAINT_STYLE".into(), Param::Int(3));
+        assert!(unpainted_reason(&anodized).is_some());
+        let mut aged = params(7, Some("bronze.vtex"));
+        aged.insert("F_PATINA_AGE".into(), Param::Int(1));
+        assert!(unpainted_reason(&aged).is_some());
+        // Case hardening needs its ramp.
+        let mut hardened = params(7, Some("oiled.vtex"));
+        hardened.insert("F_CASE_HARDENING".into(), Param::Int(1));
+        assert!(unpainted_reason(&hardened).is_some());
+        hardened.insert(
+            "g_tCaseHardeningColorRamp".into(),
+            Param::Texture("ramp.vtex".into()),
+        );
+        assert_eq!(unpainted_reason(&hardened), None);
         // Fades project their pattern from the weapon's position texture.
         assert!(unpainted_reason(&params(5, Some("fade.vtex"))).is_some());
         let mut fade = params(5, Some("fade.vtex"));

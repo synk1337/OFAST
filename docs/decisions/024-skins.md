@@ -22,8 +22,9 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   downloading Source 2 Viewer 20.1, which reads CS2's current format; `docs/research/cs2-skins.md`, "Reading CS2's
   paint shader").
 - **Read like CS2** (`paint`): the paint kit from `items_game.txt`, its composite material and what it includes, the
-  roll with a uniform random stream seeded by the pattern seed, and the parameters in the order the generator copies
-  them (paint material, the weapon's composite inputs, the loose variables, the roll, seed and wear).
+  roll with a uniform random stream seeded by the pattern seed, and each generated texture's steps (colour,
+  roughness and metalness: copy a container's parameters, copy one, set one, each under its conditions), so a newer
+  kit's own masks, colours and switches (`g_bUseOverlay`, `g_bUseMetalness`…) reach the shader as CS2 sends them.
 - **Baked in the export** (`export::paint`), per weapon material that names its `composite_inputs` and per skin:
   a colour texture and a metallic-roughness one in the weapon's UV layout, at the pattern's size (2048 at most), in
   the glTF (`TextureJob::PaintColor`, `PaintSurface`), so Unreal (and any glTF reader) shows the skin with no
@@ -37,9 +38,11 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   and a wear-dependent cavity curve with separate channels), the grunge, the albedo levels. Then each style's own
   colour, roughness and metalness; spray paint and Fades project their pattern from the weapon's 3D position. The
   module docs of `export::paint` give the formulas.
-- **Only what it paints right**: overlays, case hardening, patina age and spray paint's halftone and all-masks
-  variants are not read yet; those weapons keep their own finish, with a warning — a wrong skin looks worse than
-  none.
+- **The variants CS2's kits use**: overlays (on the five styles kits put one on: 70 kits), spray paint's halftone (16)
+  and all-masks (37) variants, case hardening on solid, patina and gunsmith (23), read the same way (static combos
+  576 + n, 1152 + n, 18 + 2).
+- **Only what it paints right**: patina age (4 kits) and trilinear case hardening (1) are not read yet; those weapons
+  keep their own finish, with a warning — a wrong skin looks worse than none.
 - **Legacy kits** use the CS:GO-era model (`use_legacy_model`), which the demo's mesh groups already show; its
   material names its own composite inputs, in the layout the kit's pattern was painted for. Their composite
   materials roll no pattern offset or rotation (Fire Serpent's pattern sits the same at every seed; its wear and
@@ -61,10 +64,14 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
 
 ## Consequences
 
-- Seen on Aurora vs FURIA's round 17 (2026-10-27): of the round's 28 skins, 27 painted in third and first person
+- Seen on Aurora vs FURIA's round 17 (2026-10-27): all 28 of the round's skins painted in third and first person
   (Fire Serpents, Asiimov, Whiteout, Gungnir, Printstream; the Dopplers, Gamma Dopplers, Fades, Crimson Web, Hot
-  Rod, Slaughter, Radiation Hazard…), in Unreal through the players' and viewmodels' glTFs; Royal Guard (an overlay)
-  keeps its weapon's own finish. The round's players export in about 105 s.
+  Rod, Slaughter, Radiation Hazard; Royal Guard, an overlay), in Unreal through the players' and viewmodels' glTFs.
+  The round's players export in about 100 s. Kits outside the round baked with `examples/paint_bake.rs` (Pink
+  Tiger, Ghost Protocol, Djinn, a case-hardened Five-SeveN, halftone P2000, wax-rub Bizon…).
+- Before the composite steps were read, newer kits got their template's grey colours and the weapon's own masks
+  (Royal Guard was grey-blue, not blue and gold): their colours are `COLOR4` loose variables, their masks copied
+  in by a conditional step.
 - The Source 2 Viewer of October 2025 (15.0) cannot open CS2's shader files (format 72; it reads 59 – 70): 20.1
   (October 2026) can.
 - Pearlescence, the paints' normal maps and AO overrides are not read yet.

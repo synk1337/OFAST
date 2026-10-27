@@ -72,11 +72,31 @@ Format 72 needs Source 2 Viewer 20.1 or newer (October 2025's 15.0 reads 59 – 
 - **Which combos matter**: the nine styles (0 – 8) and the same with `F_SEPARATE_CHANNEL_INPUTS` (288 – 296): CS2's
   own weapon models (Glock, USP-S, AWP, MP9…) set it, the CS:GO-era ones (knives, the legacy AK) do not. It changes
   the cavity (`0.96 R^1.5`), the wear curve and threshold, and gunsmith's and patina's scratches. The paint textures
-  (36 + n, 144 + n) only swap a value for a texture; `S_OVERRIDE_NORMAL` only adds the normal output.
+  (36 + n, 144 + n) only swap a value for a texture; `S_OVERRIDE_NORMAL` only adds the normal output. Then the
+  variants CS2's kits use (`examples/paint_census.rs` counts them over every kit): overlays (576 + n, 864 + n; 70
+  kits, on solid, hydrographic, spray paint, custom and gunsmith), case hardening (1152 + n, on solid, patina,
+  gunsmith; 23 kits), spray paint's all-masks variant (20, 308; 37 kits); the halftone (16 kits) is a switch
+  (`bSpraypaintHalftone`) inside the spray styles' own code. The overlay's UVs come from the vertex stage (one
+  program for every combo): the weapon's, the pattern's (`g_bOverlayUsesPatternUVs`), or its own placement
+  (`g_bOverlayUsesUniqueUVs`).
+- **Colour space**: a texture variable's `m_nTypeSpecificBits` low bit is its sRGB read. The combos name different
+  entries of the same texture: `g_tPattern` is linear in styles 1, 2, 4, 5 and solid's case hardening, sRGB in 6,
+  7, 8; the overlay, the case-hardening ramp and the grunge are sRGB; the masks linear.
 
-**Not read yet**: overlays (576 + n), case hardening (1152 + n), patina age (4608 + n), spray paint's all-masks
-variant (18 + 2), and the halftone path inside the spray styles' code (`bSpraypaintHalftone`); pearlescence and the
-normal-map pass, which the weapon material uses after the composite.
+**Not read yet**: patina age (4608 + n; its own ramp and remap, 4 kits) and trilinear case hardening (2304 + n, 1
+kit); pearlescence and the normal-map pass, which the weapon material uses after the composite.
+
+### The composite's steps
+
+Each texture a composite material generates (`COMP_MAT_PROPERTY_MUTATOR_GENERATE_TEXTURE`: `g_tColor`, then
+`g_tMetalness` in roughness mode) starts from a container's parameters (the paint material) and runs its
+instructions in order: `COPY_MATCHING_KEYS` (a container's parameters: the composite inputs, `econ_instance`,
+`exposed_params`, `grunge_wear`), `COPY_PROPERTY` (one parameter under another name: a newer kit's
+`g_tPaintByNumberMasks` over the weapon's `g_tMasks` when `g_bOverrideDefaultMasks`), `SET_VALUE` (a newer kit's
+template switches a feature off when its `g_bUse*` is: overlay, metalness, roughness and pearlescence textures;
+roughness per colour on), each under conditions (`INPUT_CONTAINER_VALUE_EQUALS`, written `1`, `0`, `true`;
+`…_VALUE_EXISTS`; `INPUT_CONTAINER_EXISTS`), groups of them inside `CONDITIONAL_MUTATORS`. A newer kit's colours are
+`LOOSE_VARIABLE_TYPE_COLOR4` variables (`m_cValueColor4`, bytes), 750 of them over the composites.
 
 ## Stickers
 

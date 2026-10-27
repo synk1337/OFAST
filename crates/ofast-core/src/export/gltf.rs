@@ -1517,31 +1517,15 @@ impl<'c> GltfWriter<'c> {
     /// [`paint::bake_surface`]); the material stays as it is, with a warning, when its skin cannot be read or its
     /// style is not baked yet ([`paint::unpainted_reason`]).
     fn paint_material(&mut self, material: &mut Json, path: &str, paint: &paint::Paint) {
-        let params = match crate::paint::weapon_params(
-            self.content,
-            &paint.recipe,
-            path,
-            paint.seed,
-            paint.wear,
-        ) {
-            Ok(params) => params,
-            Err(e) => {
-                self.report
-                    .warnings
-                    .push(format!("{path}: skin {}: {e}", paint.label));
+        let job = match paint::job(self.content, path, paint) {
+            Ok(job) => job,
+            Err(why) => {
+                self.report.warnings.push(format!(
+                    "{path}: skin {}: {why}, left unpainted",
+                    paint.label
+                ));
                 return;
             }
-        };
-        if let Some(why) = paint::unpainted_reason(&params) {
-            self.report.warnings.push(format!(
-                "{path}: skin {}: {why}, left unpainted",
-                paint.label
-            ));
-            return;
-        }
-        let job = paint::PaintJob {
-            key: format!("{path}|{}", paint.label),
-            params: std::sync::Arc::new(params),
         };
         let name = format!("{}_{}", stem(path), paint.label);
         let color = self.register(TextureJob::PaintColor(job.clone()), name.clone());

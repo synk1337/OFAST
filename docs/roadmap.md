@@ -392,8 +392,13 @@ player and round.
   `tools/shaders/vcs_combos.py`, `examples/shader_blocks.rs`), both input layouts (CS2's own weapons use separate
   channels), ported: Dopplers, Fades (projected from the weapon's 3D position), Crimson Web, Hot Rod, gunsmith's
   metal parts. Round 17: 27 of 28.
-- [ ] Overlays (Royal Guard), case hardening, patina age, spray paint's halftone; pearlescence, the paints' normal
-  maps; weapons lying in the world, gloves; stickers, keychains, name tags; checked against CS2 screenshots.
+- [x] **The composite's steps and the variants** ([research](research/cs2-skins.md), "The composite's steps"): each
+  generated texture's steps run with their conditions (a newer kit's own colours, masks and switches); overlays,
+  case hardening, spray paint's halftone and all-masks variants ported from their combos
+  (`examples/paint_bake.rs` bakes any kit, `examples/paint_census.rs` counts what kits use). Round 17: 28 of 28
+  (Royal Guard in its blue and gold).
+- [ ] Patina age, trilinear case hardening; pearlescence, the paints' normal maps; weapons lying in the world,
+  gloves; stickers, keychains, name tags; checked against CS2 screenshots.
 
 ## Order from here
 
