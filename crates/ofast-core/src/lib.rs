@@ -19,6 +19,7 @@
 //! | [`physics`] | Rubikon physics (`PHYS` blocks): agents' ragdolls, maps' world collision | `docs/formats/model.md` |
 //! | [`bytes`] | Shared little-endian byte cursor (and varints) used by every binary reader | — |
 //! | [`camera`] | Cameras: first-person smoothing, shot cameras, HLAE's campath and `.cam` files | `docs/formats/cameras.md` |
+//! | [`paint`] | Weapon finishes: paint kits, their composite materials (`.vcompmat`), the seed's roll | `docs/research/cs2-skins.md` |
 //!
 //! More modules (textures, meshes, materials, maps…) arrive milestone by milestone — see
 //! `docs/roadmap.md`.
@@ -46,6 +47,7 @@ pub mod kv3;
 pub mod map;
 pub mod meshopt;
 pub mod model;
+pub mod paint;
 pub mod physics;
 pub mod resource;
 pub mod texture;

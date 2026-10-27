@@ -376,8 +376,11 @@ player and round.
   seed, wear, StatTrak, name tag, stickers (with CS2's free placement) and keychain from its econ attributes, per
   round (`RoundTrack::skins`); names from `items_game.txt` and `csgo_english.txt` (`items::section_values`,
   `language_tokens`). Seen on Aurora vs FURIA round 17: 67 weapons, Fire Serpent, Asiimov, Dopplers, Fades.
-- [ ] How CS2 paints a weapon (composite materials, `.vcompmat`: the paint kit's material run over the weapon's
-  composite inputs, the seed rolling the pattern's place), rebuilt; stickers and keychains on the weapons.
+- [x] **What a skin is painted with** (`paint`, [research](research/cs2-skins.md)): paint kits from `items_game.txt`,
+  their composite materials read (includes, containers, loose variables, rolls), the seed's roll (a uniform random
+  stream), and the parameters a weapon material gets (`weapon_params`; `examples/paint_params.rs`: MAJ3R's Fire
+  Serpent, style 6 on the legacy AK's composite inputs, wear texture at scale 1.706, rotation 183°).
+- [ ] The paint styles baked over the weapon's UVs, in the export and Unreal; stickers and keychains.
 
 ## Order from here
 

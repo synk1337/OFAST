@@ -692,6 +692,9 @@ pub(crate) struct MaterialInfo {
     pub(crate) floats: BTreeMap<String, f64>,
     /// `g_v*` parameters (colours, UV scales…), always four components.
     pub(crate) vectors: BTreeMap<String, [f64; 4]>,
+    /// String attributes (`m_stringAttributes`): a weapon material's `composite_inputs`, the material its skins are
+    /// painted with (M10, [`crate::paint`]).
+    pub(crate) strings: BTreeMap<String, String>,
 }
 
 impl MaterialInfo {
@@ -2397,6 +2400,18 @@ pub(crate) fn read_material(content: &Content, path: &str) -> Result<MaterialInf
             info.vectors.insert(name.to_owned(), vector);
         }
     }
+    for param in root
+        .get("m_stringAttributes")
+        .and_then(Value::as_array)
+        .unwrap_or_default()
+    {
+        if let (Some(name), Some(value)) = (
+            param.get("m_name").and_then(Value::as_str),
+            param.get("m_value").and_then(Value::as_str),
+        ) {
+            info.strings.insert(name.to_owned(), value.to_owned());
+        }
+    }
     Ok(info)
 }
 
@@ -3382,6 +3397,7 @@ mod tests {
             ints: BTreeMap::from([("F_CLOTH_SHADING".to_owned(), i64::from(cloth))]),
             floats: BTreeMap::from([("g_flSheenScale".to_owned(), 0.5)]),
             vectors: BTreeMap::from([("g_flSheenTintColor".to_owned(), [1.0, 0.5, 0.25, 0.0])]),
+            strings: BTreeMap::new(),
         };
         // A knit with a cloth mask; the same without the flag; a glove with the flag but a constant with no mask.
         writer.cloth_masks.insert("knit_cloth.vtex".into(), true);
