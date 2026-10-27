@@ -23,7 +23,8 @@ use super::ExportError;
 use super::gltf::{
     Binding, BoneAnimation, ExportReport, MergedModel, export_character, load_model, resource_data,
 };
-use super::loadout::{WeaponFrames, WeaponLook};
+use super::loadout::{Finish, WeaponFrames, WeaponLook};
+use super::paint::Paints;
 use super::players::{Muzzle, shown_groups, stem};
 use crate::anim::bake::frame_samples;
 use crate::anim::eval::Library;
@@ -200,7 +201,8 @@ pub type ViewmodelExport = (ExportReport, Vec<WeaponLook>, Vec<Muzzle>);
 type Baked = (u32, Vec<Option<ViewmodelFrame>>, Vec<Option<WeaponLook>>);
 
 /// Writes one viewmodel look's glTF (see the module docs): `agent` with glove skin `gloves` for `players`, the
-/// round's frames at `fps`. `models` names the weapon models by resource id; `arms` is [`ARMS_MODEL`].
+/// round's frames at `fps`. `models` names the weapon models by resource id; `paints` paints their skins; `arms` is
+/// [`ARMS_MODEL`].
 ///
 /// [`ARMS_MODEL`]: crate::anim::viewmodel::ARMS_MODEL
 #[allow(clippy::too_many_arguments)]
@@ -211,6 +213,7 @@ pub fn export_viewmodel_look(
     track: &RoundTrack,
     fps: f32,
     models: &HashMap<u64, String>,
+    paints: &Paints,
     agent: &str,
     gloves: Option<&str>,
     players: &[u32],
@@ -261,6 +264,11 @@ pub fn export_viewmodel_look(
                 Some(WeaponLook {
                     model: models.get(&carried.model)?.clone(),
                     mesh_groups: carried.mesh_groups,
+                    finish: track
+                        .skins
+                        .get(&carried.entity)
+                        .filter(|s| s.item == carried.item)
+                        .and_then(Finish::of),
                 })
             })
             .collect();
@@ -359,6 +367,7 @@ pub fn export_viewmodel_look(
         model: &agent_model,
         mesh_groups: agent_groups,
         binding: Binding::ByName,
+        paint: None,
     }];
     if let (Some(model), Some(groups)) = (&glove_model, glove_groups) {
         merged.push(MergedModel {
@@ -366,6 +375,7 @@ pub fn export_viewmodel_look(
             model,
             mesh_groups: groups,
             binding: Binding::ByName,
+            paint: None,
         });
     }
     for (n, slot) in slots.iter().enumerate() {
@@ -377,6 +387,10 @@ pub fn export_viewmodel_look(
                 first: slot.first,
                 placement: placements[n],
             },
+            paint: slot
+                .look
+                .finish
+                .and_then(|f| paints.paint(content, f, &mut warnings)),
         });
     }
 

@@ -26,15 +26,46 @@
 use std::collections::BTreeMap;
 
 use crate::demo::players::CarriedWeapon;
+use crate::demo::skins::Skin;
 use crate::model::{Affine, Model, Skeleton, compose, invert_rigid};
 
-/// A weapon model as carried: its path (without `_c`) and its mesh groups (`m_MeshGroupMask`).
+/// A weapon model as carried: its path (without `_c`), its mesh groups (`m_MeshGroupMask`) and its skin.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WeaponLook {
     /// `weapons/models/ak47/weapon_rif_ak47.vmdl`, …
     pub model: String,
     /// Bit per mesh group of the model (guns: 1 the current model, 2 the CS:GO-era one).
     pub mesh_groups: u64,
+    /// Its paint, when it has one (M10): two players' AKs with different skins are two looks.
+    pub finish: Option<Finish>,
+}
+
+/// What a weapon's paint looks like: paint kit, pattern seed and wear (the demo's attributes 6, 7, 8,
+/// [`crate::demo::skins`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Finish {
+    /// Paint kit.
+    pub kit: u32,
+    /// Pattern seed.
+    pub seed: u32,
+    /// Wear's bits (`f32::to_bits`: compared exactly).
+    pub wear: u32,
+}
+
+impl Finish {
+    /// The finish of a weapon's skin; `None` without a paint kit.
+    pub fn of(skin: &Skin) -> Option<Self> {
+        (skin.paint_kit != 0).then_some(Self {
+            kit: skin.paint_kit,
+            seed: skin.seed,
+            wear: skin.wear.to_bits(),
+        })
+    }
+
+    /// The wear, 0 – 1.
+    pub fn wear(&self) -> f32 {
+        f32::from_bits(self.wear)
+    }
 }
 
 /// One weapon bone on an agent: it carries the `instance`-th weapon of look `look` a player has at once (a second
@@ -376,6 +407,7 @@ mod tests {
                 Some(WeaponLook {
                     model: if w.item == 7 { ak } else { flash }.into(),
                     mesh_groups: w.mesh_groups,
+                    finish: None,
                 })
             },
             |item| names.iter().find(|(i, _)| *i == item).map(|(_, k)| *k),
@@ -405,6 +437,7 @@ mod tests {
             Some(WeaponLook {
                 model: flash.into(),
                 mesh_groups: w.mesh_groups,
+                finish: None,
             })
         };
         let kind = |_| Some(("weapon_flashbang", "weapon_category_grenade"));

@@ -105,8 +105,10 @@ body and shows only their arms and gun, so a camera outside the players always s
 **Send to Unreal** builds the round in OFAST's Unreal project. A bar at the bottom of the window follows it, and
 you can keep browsing meanwhile. It:
 
-1. exports the round: every player's movement and animation (CS2's own poses), their agent and weapons, the
-   grenades, the shots;
+1. exports the round: every player's movement and animation (CS2's own poses), their agent and weapons with
+   their skins (the paint, its pattern and wear, as the demo records them: custom paint jobs such as Fire Serpent
+   and Asiimov, and gunsmith finishes such as Gungnir; Dopplers, Fades and the other styles, stickers and name
+   tags not yet), the grenades, the shots;
 2. the first time a map is used, exports the map from CS2's files and imports it into Unreal (this can take a long
    time: Unreal compiles its shaders the first time);
 3. builds the round in Unreal: a **Level Sequence** in the map's level, with a camera through each player's eyes,

@@ -380,7 +380,14 @@ player and round.
   their composite materials read (includes, containers, loose variables, rolls), the seed's roll (a uniform random
   stream), and the parameters a weapon material gets (`weapon_params`; `examples/paint_params.rs`: MAJ3R's Fire
   Serpent, style 6 on the legacy AK's composite inputs, wear texture at scale 1.706, rotation 183°).
-- [ ] The paint styles baked over the weapon's UVs, in the export and Unreal; stickers and keychains.
+- [x] **Skins painted** ([decision 024](decisions/024-skins.md), `export::paint`): OFAST's own bake of the paint
+  styles over each weapon material's UV layout (pattern placed by the roll, no-paint mask, wear against the wear
+  texture and edges, grunge), a colour and a metallic-roughness texture per skin in the players' and viewmodels'
+  glTFs, for custom paint jobs and gunsmith finishes. Round 17: 12 of its 28 skins (Fire Serpent, Asiimov, Gungnir…),
+  seen in Unreal in first and third person.
+- [ ] The other styles' colour maps (solid, hydrographic, spray paint, anodized: Dopplers, Fades; patina), case
+  hardening, pearlescence, the paints' normal maps; weapons lying in the world, gloves; stickers, keychains, name
+  tags; checked against CS2 screenshots.
 
 ## Order from here
 

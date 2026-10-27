@@ -41,9 +41,10 @@ use super::gltf::{
     resource_data,
 };
 use super::loadout::{
-    AgentMounts, Place, Slot, WeaponFrames, WeaponLook, carried_places, hide_changes, key_places,
-    skeleton_with_slots, slot_target,
+    AgentMounts, Finish, Place, Slot, WeaponFrames, WeaponLook, carried_places, hide_changes,
+    key_places, skeleton_with_slots, slot_target,
 };
+use super::paint::Paints;
 use super::punch::{punch_json, recoil_by_tick};
 use super::shots::{
     Body, Capsule, Doors, ShotData, earlier_holes_json, export_decals, hitbox_check, shots_json,
@@ -171,6 +172,8 @@ struct Round<'a> {
     aim_punch: BTreeMap<u32, HashMap<u32, [f32; 2]>>,
     /// The skeleton's bone masks in its order, for the pose recipes.
     masks: Vec<BoneMask>,
+    /// The paint kits, for the weapons' skins (M10).
+    paints: Paints,
     /// The round's pose-recipe clip table (CS2's own poses, decision 020; `None` with `OFAST_RECIPE=0`).
     clip_table: Option<ClipTable>,
 }
@@ -325,6 +328,7 @@ pub fn export_players(
         collision,
         aim_punch,
         masks,
+        paints: Paints::new(items_text.as_deref()),
         clip_table: None,
     };
     // CS2's own poses from the demo's pose recipes, where its clip table names their clips (decision 020): the default
@@ -477,6 +481,7 @@ pub fn export_players(
             "weapons": weapons.iter().map(|s| json!({
                 "model": s.look.model,
                 "mesh_groups": s.look.mesh_groups,
+                "finish": s.look.finish.map(finish_json),
                 "instance": s.instance,
             })).collect::<Vec<_>>(),
         }));
@@ -634,6 +639,7 @@ fn export_viewmodels(
             round.track,
             round.fps,
             &round.models,
+            &round.paints,
             agent,
             gloves,
             &players,
@@ -650,6 +656,7 @@ fn export_viewmodels(
                     "weapons": weapons.iter().map(|w| json!({
                         "model": w.model,
                         "mesh_groups": w.mesh_groups,
+                        "finish": w.finish.map(finish_json),
                     })).collect::<Vec<_>>(),
                 }));
                 report.files.push(written.gltf);
@@ -910,6 +917,11 @@ fn export_look(
         Some(WeaponLook {
             model: round.models.get(&w.model)?.clone(),
             mesh_groups: w.mesh_groups,
+            finish: track
+                .skins
+                .get(&w.entity)
+                .filter(|s| s.item == w.item)
+                .and_then(Finish::of),
         })
     };
     let kind = |item: u32| {
@@ -1010,6 +1022,10 @@ fn export_look(
                 bone,
                 placement: compose(&bind[bone], &invert_rigid(&frames.weapon_bone)),
             },
+            paint: slot
+                .look
+                .finish
+                .and_then(|f| round.paints.paint(content, f, &mut warnings)),
         });
     }
     let gloves = match &look.gloves {
@@ -1028,6 +1044,7 @@ fn export_look(
             model,
             mesh_groups: model.default_mesh_group_mask,
             binding: Binding::ByName,
+            paint: None,
         }),
         // No glove skin to merge: the agent's own gloves, even if the pawn asked to hide them.
         None => mesh_groups = with_own_gloves(&agent, mesh_groups),
@@ -1279,6 +1296,11 @@ fn in_hand(player: &PlayerSample, tick: f32, interval: f32) -> Option<u32> {
             .state_tick
             .is_some_and(|start| (tick - start as f32) * interval < DRAW_FROM_HOLSTER);
     (!drawing).then_some(weapon.entity)
+}
+
+/// A weapon's finish in the players' manifest: `{"kit": 180, "seed": 245, "wear": 0.1434}`.
+fn finish_json(finish: Finish) -> serde_json::Value {
+    json!({ "kit": finish.kit, "seed": finish.seed, "wear": finish.wear() })
 }
 
 /// A model path's file name without its extension (`agents/models/ctm_sas/ctm_sas.vmdl` → `ctm_sas`).

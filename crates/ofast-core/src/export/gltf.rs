@@ -56,7 +56,7 @@ use rayon::prelude::*;
 use serde_json::{Value as Json, json};
 
 use super::{ExportError, ExportOptions};
-use super::{environment, tint};
+use super::{environment, paint, tint};
 use crate::anim::{BoneConstraints, Clip, NmSkeleton, Retargeter};
 use crate::content::Content;
 use crate::coords;
@@ -238,6 +238,8 @@ pub struct MergedModel<'m> {
     pub mesh_groups: u64,
     /// How its meshes follow the character's skeleton.
     pub binding: Binding,
+    /// The skin painted on it (a weapon's, M10), if any.
+    pub paint: Option<paint::Paint>,
 }
 
 /// How a merged model's meshes follow the character's skeleton.
@@ -332,6 +334,7 @@ pub fn export_character(
         )?;
     }
     for part in merged {
+        writer.paint = part.paint.clone();
         for mesh in part.model.meshes_in_groups(part.mesh_groups) {
             let name = format!("{}_{}", part.label, mesh.name);
             match part.binding {
@@ -372,6 +375,7 @@ pub fn export_character(
             }
         }
     }
+    writer.paint = None;
     for animation in animations {
         writer.animation(skeleton, skin_index, animation);
     }
@@ -622,6 +626,10 @@ enum TextureJob {
     /// A cloth-shaded character material's specular, 1 − its cloth mask in A, from its `g_tMetalness`
     /// ([`assemble_cloth_specular`]).
     ClothSpecular(String),
+    /// A weapon material's colour painted with a skin ([`paint::bake_color`]).
+    PaintColor(paint::PaintJob),
+    /// A weapon material's metallic-roughness painted with a skin ([`paint::bake_surface`]).
+    PaintSurface(paint::PaintJob),
 }
 
 impl TextureJob {
@@ -635,6 +643,8 @@ impl TextureJob {
                 | TextureJob::TwoTexture(..)
                 | TextureJob::ClothSheen(_)
                 | TextureJob::ClothSpecular(_)
+                | TextureJob::PaintColor(_)
+                | TextureJob::PaintSurface(_)
         )
     }
 }
@@ -804,8 +814,11 @@ pub(crate) struct GltfWriter<'c> {
     animations: Vec<Json>,
     lights: Vec<Json>,
     materials: Vec<Json>,
-    /// (material path, tint in 0–255) → material index.
-    material_ids: BTreeMap<(String, [u8; 4]), usize>,
+    /// (material path, tint in 0–255, the skin's label or "") → material index.
+    material_ids: BTreeMap<(String, [u8; 4], String), usize>,
+    /// The skin painted on the meshes being added ([`MergedModel::paint`]): their materials with `composite_inputs`
+    /// get a painted variant.
+    paint: Option<paint::Paint>,
     /// material path → parsed info (or None when unreadable).
     material_infos: BTreeMap<String, Option<MaterialInfo>>,
     /// `g_tMetalness` texture path → whether it holds a cloth mask ([`GltfWriter::has_cloth_mask`]).
@@ -894,6 +907,7 @@ impl<'c> GltfWriter<'c> {
             lights: Vec::new(),
             materials: Vec::new(),
             material_ids: BTreeMap::new(),
+            paint: None,
             material_infos: BTreeMap::new(),
             cloth_masks: BTreeMap::new(),
             texture_ids: BTreeMap::new(),
@@ -1442,26 +1456,48 @@ impl<'c> GltfWriter<'c> {
     /// Returns the glTF material for a CS2 material path and tint, creating it on first use.
     fn material(&mut self, path: &str, tint: [f32; 4]) -> usize {
         let tint_key = tint.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
-        let key = (path.to_owned(), tint_key);
+        // CS2 paints a skin on the materials that name their composite inputs (the weapon's body, not its sticker
+        // gaps or scope glass). Looked up only while a skin is painted: the cache below serves every other call.
+        let paint = match self.paint.clone() {
+            Some(paint) => self
+                .material_info(path)
+                .filter(|i| i.strings.contains_key("composite_inputs"))
+                .map(|_| paint),
+            None => None,
+        };
+        let key = (
+            path.to_owned(),
+            tint_key,
+            paint.as_ref().map(|p| p.label.clone()).unwrap_or_default(),
+        );
         if let Some(&id) = self.material_ids.get(&key) {
             return id;
         }
         let info = self.material_info(path);
         let base = self.unique_material_name(path);
         // Tinted variants get their own name so Unreal's material slots can be told apart; a variant with less
-        // than full opacity (a draw call's `m_flAlpha`: de_nuke's scuff decals) adds its alpha byte.
-        let name = match tint_key {
+        // than full opacity (a draw call's `m_flAlpha`: de_nuke's scuff decals) adds its alpha byte. Painted ones
+        // add the skin's label.
+        let mut name = match tint_key {
             [255, 255, 255, 255] => base,
             [r, g, b, 255] => format!("{base}_tint{r:02x}{g:02x}{b:02x}"),
             [r, g, b, a] => format!("{base}_tint{r:02x}{g:02x}{b:02x}{a:02x}"),
         };
+        if let Some(paint) = &paint {
+            name = format!("{name}_{}", paint.label);
+        }
         let mut material = json!({
             "name": name,
             "pbrMetallicRoughness": { "metallicFactor": 0.0, "roughnessFactor": 1.0 },
         });
         match info {
             // The material decides what the tint does (fill_material).
-            Some(info) => self.fill_material(&mut material, &info, tint_key),
+            Some(info) => {
+                self.fill_material(&mut material, &info, tint_key);
+                if let Some(paint) = &paint {
+                    self.paint_material(&mut material, path, paint);
+                }
+            }
             // Unreadable: the tint on the whole surface (sRGB authored, glTF factors linear).
             None if tint_key != [255; 4] => {
                 let mut linear = [tint[0], tint[1], tint[2]].map(srgb_to_linear).to_vec();
@@ -1475,6 +1511,47 @@ impl<'c> GltfWriter<'c> {
         self.material_ids.insert(key, id);
         self.report.materials += 1;
         id
+    }
+
+    /// Replaces a weapon material's colour and metallic-roughness with `paint`'s ([`paint::bake_color`],
+    /// [`paint::bake_surface`]); the material stays as it is, with a warning, when its skin cannot be read or its
+    /// style is not baked yet ([`paint::unpainted_reason`]).
+    fn paint_material(&mut self, material: &mut Json, path: &str, paint: &paint::Paint) {
+        let params = match crate::paint::weapon_params(
+            self.content,
+            &paint.recipe,
+            path,
+            paint.seed,
+            paint.wear,
+        ) {
+            Ok(params) => params,
+            Err(e) => {
+                self.report
+                    .warnings
+                    .push(format!("{path}: skin {}: {e}", paint.label));
+                return;
+            }
+        };
+        if let Some(why) = paint::unpainted_reason(&params) {
+            self.report.warnings.push(format!(
+                "{path}: skin {}: {why}, left unpainted",
+                paint.label
+            ));
+            return;
+        }
+        let job = paint::PaintJob {
+            key: format!("{path}|{}", paint.label),
+            params: std::sync::Arc::new(params),
+        };
+        let name = format!("{}_{}", stem(path), paint.label);
+        let color = self.register(TextureJob::PaintColor(job.clone()), name.clone());
+        let surface = self.register(TextureJob::PaintSurface(job), format!("{name}_orm"));
+        let pbr = &mut material["pbrMetallicRoughness"];
+        pbr["baseColorTexture"] = json!({ "index": color });
+        pbr["metallicRoughnessTexture"] = json!({ "index": surface });
+        pbr["metallicFactor"] = json!(1.0);
+        pbr["roughnessFactor"] = json!(1.0);
+        material["extras"]["ofast"]["paint"] = json!(paint.label);
     }
 
     /// The file name of a material, made unique: two CS2 materials can share a file name in different folders
@@ -2052,6 +2129,8 @@ impl<'c> GltfWriter<'c> {
                         bake_two_texture(content, first, second, *keep_alpha)
                     }
                     TextureJob::ClothSheen(job) => assemble_cloth_sheen(content, job),
+                    TextureJob::PaintColor(job) => paint::bake_color(content, job),
+                    TextureJob::PaintSurface(job) => paint::bake_surface(content, job),
                     TextureJob::ClothSpecular(metalness) => {
                         assemble_cloth_specular(content, metalness)
                     }

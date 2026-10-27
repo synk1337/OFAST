@@ -12,6 +12,7 @@
 //! - [`loadout`]: where each weapon a player carries sits on the agent, frame by frame.
 //! - [`deaths`]: each death as CS2's ragdoll of the agent, simulated and written onto its bones.
 //! - [`viewmodel`]: the players' first-person arms and weapons (one glTF per agent and glove skin).
+//! - [`paint`]: skins painted onto weapon textures (paint kit, seed, wear), as CS2's composite materials generate them.
 //! - [`smoke`]: each smoke's simulated cloud, every step, as one grayscale atlas texture.
 //! - [`effects`]: CS2's sprite sheets for the grenades' effects (flames, fireballs, flares) as PNGs with their sequences.
 //! - [`shots`]: each bullet of a round traced through the map, walls and players, with what it met.
@@ -28,6 +29,7 @@ pub mod gltf;
 mod light_cookie;
 pub mod loadout;
 pub mod map;
+pub mod paint;
 pub mod players;
 pub mod punch;
 pub mod replay;
