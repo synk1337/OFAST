@@ -141,6 +141,24 @@ Web, Vice, Foundation); the 3 others are 2025's kits (`gloves/paints/volatile_02
 8; the decompiled code indexes the regions with the uniform as is, so the material system must store it 0-based):
 Crimson Kimono's 1 covers the back of the hand (region 0) and leaves its knuckle panel (region 1) its slate tint.
 
+**2025's kits** (`gloves/paints/volatile_02/glove_*.vcompmat`, 22; read 2026-10-28, not ported yet): the `paint`
+container is loose variables holding one `LOOSE_VARIABLE_TYPE_RESOURCE_MATERIAL` (`m_strResourceMaterial`: the
+kit's own `items/assets/paintkits/volatile_02/textiles/<kit>.vmat`, shader `csgo_customglove_preview.vfx`, ~260
+parameters); conditions read that material's parameters through it (`paint.F_PATTERN`), and `COPY_MATCHING_KEYS
+paint` copies them. Textures generate from `paint_compositor` (`workshop/paintkits/templates/glove_compositor.vmat`),
+with `F_ANISOTROPIC_GLOSS` and `F_CLOTH_SHADING` set at the procedure; the kit's `F_PATTERN`, `F_PATTERN_PAINT`,
+`F_PUFFY_PAINT`, `F_TINT_ID` kept only when the kit sets them. Rolls per layer (`g_vUvOffset1` – `4`, each unless
+`bSyncMaterialPlacement*`), the pattern's, then damage and grime placements; the alternate seed's roll first draws
+`consumable_random_numbers.xyz` and four `.xy` (13 draws that only advance the stream: a roll's component count is
+its swizzle's length, up to 4). The shader's height-blended program: combo 1 (and 3), with tint ids combo 5 (and
+7), ~1,800 and ~2,100 lines of GLSL; inputs per layer: substrate and surface (`g_tSubstrate*`, `g_tSurface*` colour
++ tint mask, `…Normal*`, `…Properties*` AO/metal/cloth/height), damage height, grime colour; `g_tLayerId`,
+`g_tTintId`, `g_tObjectProperties` (AO, curvature, high-touch), `g_tPattern` (sRGB) and `g_tPatternProperties`.
+Its colour-adjust uniforms are 4×4 matrices from the material system's expressions
+(`MatrixMultiply(MatrixColorTint2(tint, 1), MatrixColorCorrect2(float3(contrast, saturation, brightness),
+TextureAverageColor(texture)))`), whose definitions no file holds: to reconstruct and check against CS2 (KSCERATO's
+Dragon Blue, yuurih's tech gradient, soulfly's quilted white in round 17's references).
+
 **Not done yet**: combo 1 (height blending: the newer kits) and the anisotropic combo; `g_nRandomSeedAlt`'s value
 (OFAST takes the pattern seed; to read from CS2: a left and right glove of one skin side by side).
 

@@ -135,6 +135,9 @@ pub enum VariableValue {
     Bool(bool),
     /// A texture (`RESOURCE_TEXTURE`: its compiled resource, without `_c`).
     Texture(String),
+    /// A material (`RESOURCE_MATERIAL`): its container holds that material's parameters too (a 2025 glove kit's
+    /// `paint`).
+    Material(String),
 }
 
 /// What a kit's composite material says about painting it: see the [module docs](self).
@@ -271,10 +274,18 @@ pub fn weapon_params(
         Some(path) => read(path)?,
         None => MaterialInfo::default(),
     };
+    // Other specific materials, and the materials loose variables name (their containers hold their parameters: a
+    // 2025 glove kit's `paint`; listed later, they replace an empty `paint`).
+    let named = recipe.variables.iter().filter_map(|v| match &v.value {
+        VariableValue::Material(path) => Some((v.container.as_str(), path)),
+        _ => None,
+    });
     let others = recipe
         .other_materials
         .iter()
-        .map(|(alias, path)| Ok((alias.as_str(), read(path)?)))
+        .map(|(alias, path)| (alias.as_str(), path))
+        .chain(named)
+        .map(|(alias, path)| Ok((alias, read(path)?)))
         .collect::<Result<Vec<_>, PaintError>>()?;
     let mut materials = vec![
         ("paint", &paint),
@@ -334,7 +345,9 @@ impl From<&VariableValue> for Param {
             VariableValue::Color(rgba) | VariableValue::Vector(rgba) => Param::Floats(*rgba),
             VariableValue::Int(value) => Param::Int(*value),
             VariableValue::Bool(value) => Param::Int(i64::from(*value)),
-            VariableValue::Texture(path) => Param::Texture(path.clone()),
+            VariableValue::Texture(path) | VariableValue::Material(path) => {
+                Param::Texture(path.clone())
+            }
         }
     }
 }
@@ -530,6 +543,9 @@ fn read_variable(container: &str, v: &Value) -> Option<Variable> {
                 .as_str()?
                 .to_owned(),
         ),
+        "LOOSE_VARIABLE_TYPE_RESOURCE_MATERIAL" => {
+            VariableValue::Material(v.get("m_strResourceMaterial")?.as_str()?.to_owned())
+        }
         _ => return None,
     };
     let bounds = v
@@ -723,7 +739,8 @@ fn read_condition(condition: &Value) -> Condition {
 fn parse_roll(target: &str) -> Option<(String, String, usize)> {
     let mut parts = target.split('.');
     let (container, name) = (parts.next()?, parts.next()?);
-    let components = parts.next().map_or(1, |swizzle| swizzle.len().clamp(1, 2));
+    // Up to four draws: a 2025 glove kit rolls `consumable_random_numbers.xyz` only to advance the stream.
+    let components = parts.next().map_or(1, |swizzle| swizzle.len().clamp(1, 4));
     Some((container.to_owned(), name.to_owned(), components))
 }
 
@@ -767,12 +784,14 @@ impl Recipe {
                 Some(VariableValue::Float(xy)) => *xy,
                 _ => [0.0; 2],
             };
-            for (c, slot) in value.iter_mut().enumerate().take(*components) {
-                let draw =
-                    |random: &mut UniformRandom, [low, high]: [f32; 2]| random.float(low, high);
-                match variable.and_then(|v| v.bounds) {
-                    Some(bounds) => *slot = draw(&mut random, bounds[c]),
-                    None => {
+            // Each component takes a draw: within its bounds into the value (x and y), else only advancing the stream.
+            for c in 0..*components {
+                match (variable.and_then(|v| v.bounds), value.get_mut(c)) {
+                    (Some(bounds), Some(slot)) => {
+                        let [low, high] = bounds[c];
+                        *slot = random.float(low, high);
+                    }
+                    _ => {
                         random.next_int();
                     }
                 }
