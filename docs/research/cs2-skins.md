@@ -188,8 +188,45 @@ texture, holographic / glitter / paper / metallic flags, wear bias, scratches). 
 weapon's own material (`F_STICKERS`) draws five slots, each with an enable flag, offset, scale, rotation and wear
 (the AK-47's defaults: slot 0 at (0.148, −0.434), scale 14.1) through a per-weapon sticker mask texture;
 `weapons/stickers/dev/_shared_sticker_generic.vcompmat` copies each sticker material's `*Sticker0` keys into its
-slot. **Unknown**: whether the demo's offsets (attributes 278 – 289) replace the slot's default or add to it, and
-their units.
+slot (`COPY_KEYS_WITH_SUFFIX`, `Sticker0` → `StickerN`, when the item's `g_bEnableStickerN` loose variable is set).
+
+**The weapon shader's sticker code** (read 2026-10-28: `csgo_weapon_vulkan_50_ps.vcs`, static combo 512 =
+`S_STICKERS`, every other combo a single bit; GameTracking-CS2 tracks only combo 0; 5,125 lines of GLSL, the five
+slots unrolled):
+
+- **Placement**: in `TEXCOORD 1` (the vertex stage passes it untouched beside `TEXCOORD 0`): sticker coordinates =
+  `rotate(((uv₁ − 0.5) − g_vStickerNOffset) × |g_vStickerNScale.x|, g_flStickerNRotation × 2π) + 0.5`, drawn inside
+  the unit square, where `uv₁.x > −1` and the weapon's `g_tStickerWepInputs` (in `TEXCOORD 0`, R mask, G cavity) is
+  above 0. Offset, scale, rotation and wear are the material's unless the instance sets the attribute
+  (`Expression(exists(Sticker0Offset) ? Sticker0Offset : this)`): the client turns the item's sticker attributes
+  into those.
+- **Blend**: alpha = clamp(sticker A × 12.75) × mask, applied squared; colour, roughness (the sticker's
+  normal-roughness B), metalness and the normal lerp by it, slot 0 first.
+- **Colour**: every sticker material read sets `g_bAutomaticPBRColorFittingSticker0`: the colour (tinted and
+  desaturated by the metalness when metallic) fitted to albedo levels, `g_vAlbedoLevels` (0.045, 0.737, 0.85) or,
+  for metallic stickers (foil, gold: `g_bMetallicSticker0`), `g_vMetallicAlbedoLevels` / `…DarkMetallic…` by
+  brightness. Holographic ones mix in `g_tHoloSpectrumSticker0` at (mask G + view·normal + view·(a camera vector),
+  mask B), fitted to `g_vHoloAlbedoLevels`, and are not metallic where the mask is; glitter adds view-dependent
+  sparkles and half metalness.
+- **Wear** (`g_flStickerNWear` > 0): `g_tStickerScratches` (capped by `g_fWearScratchesSticker0`) and the cavity
+  against a threshold from the sticker's alpha and `g_vWearBiasSticker0`; paper stickers (`g_bPaperBacking…`) show
+  a grey backing, others roughen to 0.8 unless metallic.
+
+**Where the slots are**: the model's keyvalues (`m_modelInfo.m_keyValueText`) hold a `StickerMarkup` list, per
+mesh (`body_hd`, `body_legacy`) and slot: `Offset`, `Scale`, `Rotation` (turns), a `SpecialIdentifier` (`Map`,
+`Autograph`, `Team1`…) and the polygons a sticker's centre may be placed in, in the same offset space. The client
+sets the material's slot attributes from it: the USP-S material's slot 4 has scale 0 (never drawn), its markup 10.16,
+and CS2 draws FalleN's slot-4 sticker. The material's own slot values are only defaults.
+
+**The sticker UV set** is a planar side projection (`examples/sticker_where.rs`: the USP-S's points at one offset sit
+at the same x, z on both sides of the gun, about 18.5 inches per offset unit; the mask keeps one side).
+
+**The item's values** (attributes 113 – 116 + 4n, 278 – 289): old stickers send scale 1 and rotation 0 (or
+nothing), free placements an offset and a rotation in degrees. Taken as offsets in the UV set, FalleN's land below
+the gun (on no triangle); taken as a shift from the markup's slot in sticker units (÷ the slot's scale), all five
+land in the markup's polygons, along the slide where CS2 shows them (tick 150500). OFAST reads them that way: offset
+= markup + item ÷ scale, rotation = markup + item ÷ 360, scale = markup ÷ item. The signs (which way a shift moves)
+are not checked yet.
 
 ## Wear tiers
 

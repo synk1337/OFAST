@@ -50,13 +50,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use rayon::prelude::*;
 use serde_json::{Value as Json, json};
 
 use super::{ExportError, ExportOptions};
-use super::{environment, paint, tint};
+use super::{environment, paint, stickers, tint};
 use crate::anim::{BoneConstraints, Clip, NmSkeleton, Retargeter};
 use crate::content::Content;
 use crate::coords;
@@ -633,6 +633,9 @@ enum TextureJob {
     PaintColor(paint::PaintJob),
     /// A weapon material's metallic-roughness painted with a skin ([`paint::bake_surface`]).
     PaintSurface(paint::PaintJob),
+    /// A weapon material's colour or metallic-roughness with stickers drawn over it ([`stickers::apply`]): the
+    /// texture the material had (painted or its own), then its stickers.
+    Stickered(Box<TextureJob>, stickers::StickerJob),
 }
 
 impl TextureJob {
@@ -648,6 +651,7 @@ impl TextureJob {
                 | TextureJob::ClothSpecular(_)
                 | TextureJob::PaintColor(_)
                 | TextureJob::PaintSurface(_)
+                | TextureJob::Stickered(..)
         )
     }
 }
@@ -822,8 +826,11 @@ pub(crate) struct GltfWriter<'c> {
     /// (material path, tint in 0–255, the skin's label or "") → material index.
     material_ids: BTreeMap<(String, [u8; 4], String), usize>,
     /// The skin painted on the meshes being added ([`MergedModel::paint`]): their materials with `composite_inputs`
-    /// get a painted variant.
+    /// get a painted variant, those that draw stickers (`F_STICKERS`) the paint's stickers.
     paint: Option<paint::Paint>,
+    /// material path → where stickers go on it (its triangles and its model's slots), for the materials stickers are
+    /// drawn on ([`stickers::apply`]).
+    sticker_places: HashMap<String, stickers::Places>,
     /// material path → parsed info (or None when unreadable).
     material_infos: BTreeMap<String, Option<MaterialInfo>>,
     /// `g_tMetalness` texture path → whether it holds a cloth mask ([`GltfWriter::has_cloth_mask`]).
@@ -913,6 +920,7 @@ impl<'c> GltfWriter<'c> {
             materials: Vec::new(),
             material_ids: BTreeMap::new(),
             paint: None,
+            sticker_places: HashMap::new(),
             material_infos: BTreeMap::new(),
             cloth_masks: BTreeMap::new(),
             texture_ids: BTreeMap::new(),
@@ -1285,6 +1293,17 @@ impl<'c> GltfWriter<'c> {
                 continue;
             }
             self.report.triangles += g.indices.len() / 3;
+            // Stickers are placed in the second UV set over the texture's layout in the first: keep the triangles.
+            if self.paint.as_ref().is_some_and(|p| !p.stickers.is_empty())
+                && self
+                    .material_info(&draw.material)
+                    .is_some_and(|i| i.flag("F_STICKERS"))
+            {
+                self.sticker_places
+                    .entry(draw.material.clone())
+                    .or_default()
+                    .add(mesh, &g);
+            }
             if let Some(m) = placement {
                 let rotate = |v: [f32; 3]| -> [f32; 3] {
                     std::array::from_fn(|i| (0..3).map(|k| m[i][k] * v[k]).sum())
@@ -1464,12 +1483,13 @@ impl<'c> GltfWriter<'c> {
         // CS2 paints a skin on the materials that name their composite inputs (the weapon's body, not its sticker
         // gaps or scope glass) and on a glove's, composite targets themselves. Looked up only while a skin is
         // painted: the cache below serves every other call.
+        // Stickers go on the materials that draw them (`F_STICKERS`), painted or not.
         let paint = match self.paint.clone() {
             Some(paint) => self
                 .material_info(path)
                 .filter(|i| {
-                    i.strings.contains_key("composite_inputs")
-                        || i.strings.contains_key("composite_target")
+                    (paint.recipe.is_some() && is_painted(i))
+                        || (!paint.stickers.is_empty() && i.flag("F_STICKERS"))
                 })
                 .map(|_| paint),
             None => None,
@@ -1526,25 +1546,59 @@ impl<'c> GltfWriter<'c> {
     /// [`paint::bake_surface`]); the material stays as it is, with a warning, when its skin cannot be read or its
     /// style is not baked yet ([`paint::unpainted_reason`]).
     fn paint_material(&mut self, material: &mut Json, path: &str, paint: &paint::Paint) {
-        let job = match paint::job(self.content, path, paint) {
-            Ok(job) => job,
-            Err(why) => {
-                self.report.warnings.push(format!(
-                    "{path}: skin {}: {why}, left unpainted",
-                    paint.label
-                ));
-                return;
-            }
+        let Some(info) = self.material_info(path) else {
+            return;
         };
         let name = format!("{}_{}", stem(path), paint.label);
-        let color = self.register(TextureJob::PaintColor(job.clone()), name.clone());
-        let surface = self.register(TextureJob::PaintSurface(job), format!("{name}_orm"));
-        let pbr = &mut material["pbrMetallicRoughness"];
-        pbr["baseColorTexture"] = json!({ "index": color });
-        pbr["metallicRoughnessTexture"] = json!({ "index": surface });
-        pbr["metallicFactor"] = json!(1.0);
-        pbr["roughnessFactor"] = json!(1.0);
-        material["extras"]["ofast"]["paint"] = json!(paint.label);
+        if paint.recipe.is_some() && is_painted(&info) {
+            match paint::job(self.content, path, paint) {
+                Ok(job) => {
+                    let color = self.register(TextureJob::PaintColor(job.clone()), name.clone());
+                    let surface =
+                        self.register(TextureJob::PaintSurface(job), format!("{name}_orm"));
+                    let pbr = &mut material["pbrMetallicRoughness"];
+                    pbr["baseColorTexture"] = json!({ "index": color });
+                    pbr["metallicRoughnessTexture"] = json!({ "index": surface });
+                    pbr["metallicFactor"] = json!(1.0);
+                    pbr["roughnessFactor"] = json!(1.0);
+                    material["extras"]["ofast"]["paint"] = json!(paint.label);
+                }
+                Err(why) => self.report.warnings.push(format!(
+                    "{path}: skin {}: {why}, left unpainted",
+                    paint.label
+                )),
+            }
+        }
+        if paint.stickers.is_empty() || !info.flag("F_STICKERS") {
+            return;
+        }
+        // The stickers over whatever the material shows (painted or its own textures).
+        let stickers = Arc::new(paint.stickers.clone());
+        for (slot, target, suffix) in [
+            ("baseColorTexture", stickers::Target::Color, ""),
+            (
+                "metallicRoughnessTexture",
+                stickers::Target::Surface,
+                "_orm",
+            ),
+        ] {
+            let Some(index) = material["pbrMetallicRoughness"][slot]["index"].as_u64() else {
+                continue;
+            };
+            let base = self.texture_jobs[index as usize].job.clone();
+            let job = stickers::StickerJob {
+                material: path.to_owned(),
+                label: paint.label.clone(),
+                stickers: stickers.clone(),
+                target,
+            };
+            let id = self.register(
+                TextureJob::Stickered(Box::new(base), job),
+                format!("{name}{suffix}"),
+            );
+            material["pbrMetallicRoughness"][slot]["index"] = json!(id);
+        }
+        material["extras"]["ofast"]["stickers"] = json!(paint.stickers.len());
     }
 
     /// The file name of a material, made unique: two CS2 materials can share a file name in different folders
@@ -2099,6 +2153,7 @@ impl<'c> GltfWriter<'c> {
         let textures_dir = self.out_dir.join("textures");
         let part = |index: usize| textures_dir.join(format!("{index}.part"));
         let content = self.content;
+        let sticker_places = &self.sticker_places;
         // Pixel hash → the texture whose thread wrote the image.
         let writers: Mutex<HashMap<blake3::Hash, usize>> = Mutex::default();
         let hashes: Vec<blake3::Hash> = self
@@ -2112,26 +2167,11 @@ impl<'c> GltfWriter<'c> {
                         .expect("lock")
                         .push(format!("texture {}: {e}", texture.name));
                 };
-                let image = match &texture.job {
-                    TextureJob::Single(path, role) => decode_texture(content, path, *role),
-                    TextureJob::Orm(source) => assemble_orm(content, source),
-                    TextureJob::EnvColor(job) => environment::bake_color(content, job),
-                    TextureJob::EnvSurface(job) => environment::bake_surface(content, job),
-                    TextureJob::TintColor(job) => tint::bake_color(content, job),
-                    TextureJob::TwoTexture(first, second, keep_alpha) => {
-                        bake_two_texture(content, first, second, *keep_alpha)
-                    }
-                    TextureJob::ClothSheen(job) => assemble_cloth_sheen(content, job),
-                    TextureJob::PaintColor(job) => paint::bake_color(content, job),
-                    TextureJob::PaintSurface(job) => paint::bake_surface(content, job),
-                    TextureJob::ClothSpecular(metalness) => {
-                        assemble_cloth_specular(content, metalness)
-                    }
-                }
-                .unwrap_or_else(|e| {
-                    warn(&e);
-                    Image::new(1, 1, vec![128, 128, 255, 255]) // neutral stand-in
-                });
+                let image =
+                    bake_job(content, &texture.job, sticker_places, &warn).unwrap_or_else(|e| {
+                        warn(&e);
+                        Image::new(1, 1, vec![128, 128, 255, 255]) // neutral stand-in
+                    });
                 let hash = pixel_hash(&image);
                 let first = match writers.lock().expect("lock").entry(hash) {
                     std::collections::hash_map::Entry::Vacant(entry) => {
@@ -2506,6 +2546,51 @@ pub(crate) fn decode_raw(content: &Content, path: &str) -> Result<(Texture, Imag
     let header = Texture::parse(&resource)?;
     let image = header.decode_rgba8(&data)?;
     Ok((header, image))
+}
+
+/// Whether a material is painted with a skin: a weapon's that names its composite inputs (its body, not its sticker
+/// gaps or scope glass), a glove's that is a composite target itself.
+fn is_painted(info: &MaterialInfo) -> bool {
+    info.strings.contains_key("composite_inputs") || info.strings.contains_key("composite_target")
+}
+
+/// The image a texture job makes. Stickers are drawn over their base job's image where the writer found their
+/// material (`places`); a sticker that cannot be drawn is reported to `warn`.
+fn bake_job(
+    content: &Content,
+    job: &TextureJob,
+    places: &HashMap<String, stickers::Places>,
+    warn: &dyn Fn(&dyn std::fmt::Display),
+) -> Result<Image, ExportError> {
+    match job {
+        TextureJob::Single(path, role) => decode_texture(content, path, *role),
+        TextureJob::Orm(source) => assemble_orm(content, source),
+        TextureJob::EnvColor(job) => environment::bake_color(content, job),
+        TextureJob::EnvSurface(job) => environment::bake_surface(content, job),
+        TextureJob::TintColor(job) => tint::bake_color(content, job),
+        TextureJob::TwoTexture(first, second, keep_alpha) => {
+            bake_two_texture(content, first, second, *keep_alpha)
+        }
+        TextureJob::ClothSheen(job) => assemble_cloth_sheen(content, job),
+        TextureJob::PaintColor(job) => paint::bake_color(content, job),
+        TextureJob::PaintSurface(job) => paint::bake_surface(content, job),
+        TextureJob::ClothSpecular(metalness) => assemble_cloth_specular(content, metalness),
+        TextureJob::Stickered(base, job) => {
+            let mut image = bake_job(content, base, places, warn)?;
+            let none = stickers::Places::default();
+            for warning in stickers::apply(
+                content,
+                &job.material,
+                &job.stickers,
+                places.get(&job.material).unwrap_or(&none),
+                &mut image,
+                job.target,
+            )? {
+                warn(&warning);
+            }
+            Ok(image)
+        }
+    }
 }
 
 /// Decodes a CS2 texture for a role (see [`TextureRole`]).
@@ -3410,6 +3495,7 @@ mod tests {
             attachments: Vec::new(),
             skin_bones: Vec::new(),
             hitboxes: Vec::new(),
+            sticker_slots: Vec::new(),
         };
         let content = Content::new();
         let dir = temp_folder("draw-tint");

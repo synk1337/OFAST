@@ -400,7 +400,8 @@ pub fn export_players(
             ));
         }
         let [kit, seed, wear] = p.appearance.glove_finish;
-        let glove_finish = (gloves.is_some() && kit != 0).then_some(Finish { kit, seed, wear });
+        let glove_finish = (gloves.is_some() && kit != 0)
+            .then(|| Finish::painted(kit, seed, f32::from_bits(wear)));
         let look = Look {
             agent,
             mesh_groups,
@@ -1348,7 +1349,29 @@ fn in_hand(player: &PlayerSample, tick: f32, interval: f32) -> Option<u32> {
 
 /// A weapon's finish in the players' manifest: `{"kit": 180, "seed": 245, "wear": 0.1434}`.
 pub(crate) fn finish_json(finish: Finish) -> serde_json::Value {
-    json!({ "kit": finish.kit, "seed": finish.seed, "wear": finish.wear() })
+    let mut out = json!({ "kit": finish.kit, "seed": finish.seed, "wear": finish.wear() });
+    let stickers: Vec<_> = finish
+        .stickers
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, s)| {
+            s.map(|s| {
+                let float = |bits: Option<u32>| bits.map(f32::from_bits);
+                json!({
+                    "slot": slot,
+                    "id": s.id,
+                    "wear": float(s.wear),
+                    "scale": float(s.scale),
+                    "rotation": float(s.rotation),
+                    "offset": s.offset.map(|o| o.map(f32::from_bits)),
+                })
+            })
+        })
+        .collect();
+    if !stickers.is_empty() {
+        out["stickers"] = json!(stickers);
+    }
+    out
 }
 
 /// A model path's file name without its extension (`agents/models/ctm_sas/ctm_sas.vmdl` → `ctm_sas`).

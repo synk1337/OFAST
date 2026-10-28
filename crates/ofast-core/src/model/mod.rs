@@ -205,6 +205,52 @@ pub struct Mesh {
     pub skin_bones: Vec<(String, Affine)>,
     /// The shapes bullets hit on a player (`MDAT` → `m_hitboxsets`), every set's.
     pub hitboxes: Vec<Hitbox>,
+    /// Where a weapon's sticker slots sit on this mesh (the model's keyvalues, `StickerMarkup`).
+    pub sticker_slots: Vec<StickerSlot>,
+}
+
+/// A weapon's sticker slot as its model marks it up (keyvalues `StickerMarkup`, per mesh): what CS2 sets the weapon
+/// material's `g_vStickerNOffset`, `g_vStickerNScale` and `g_flStickerNRotation` from, in the sticker UV set
+/// (`TEXCOORD 1` − 0.5). Free placements move a sticker from here (M10, `export::stickers`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StickerSlot {
+    /// Slot, 0 – 4.
+    pub index: usize,
+    /// The sticker's centre.
+    pub offset: [f32; 2],
+    /// How many stickers fit across the UV set (the sticker spans 1 / scale).
+    pub scale: f32,
+    /// Turns.
+    pub rotation: f32,
+}
+
+/// The sticker slots of `mesh` in a model's keyvalues text (none without `StickerMarkup`).
+fn sticker_slots(key_values: &str, mesh: &str) -> Vec<StickerSlot> {
+    if !key_values.contains("StickerMarkup") {
+        return Vec::new();
+    }
+    let Ok(file) = crate::kv3::text::parse(key_values) else {
+        return Vec::new();
+    };
+    let entries = file
+        .root
+        .get("StickerMarkup")
+        .and_then(Value::as_array)
+        .unwrap_or_default();
+    let float = |v: Option<&Value>| v.and_then(Value::as_f64).unwrap_or(0.0) as f32;
+    entries
+        .iter()
+        .filter(|e| e.get("Mesh").and_then(Value::as_str) == Some(mesh))
+        .filter_map(|e| {
+            let offset = e.get("Offset").and_then(Value::as_array)?;
+            Some(StickerSlot {
+                index: e.get("Index").and_then(Value::as_i64)? as usize,
+                offset: [float(offset.first()), float(offset.get(1))],
+                scale: float(e.get("Scale")),
+                rotation: float(e.get("Rotation")),
+            })
+        })
+        .collect()
 }
 
 /// A shape on a bone that bullets hit (`MDAT` → `m_hitboxsets[].value.m_HitBoxes[]`). CS2's agents have one set,
@@ -406,6 +452,9 @@ impl Model {
             model.meshes.push(read_embedded_mesh(resource, entry)?);
         }
         model.meshes.sort_by_key(|m| m.mesh_index);
+        for mesh in &mut model.meshes {
+            mesh.sticker_slots = sticker_slots(&model.key_values_text, &mesh.name);
+        }
         Ok(model)
     }
 
@@ -618,6 +667,7 @@ fn read_embedded_mesh(resource: &Resource<'_>, entry: &Value) -> Result<Mesh, Mo
         attachments: read_attachments(&mesh_data),
         skin_bones: read_skin_bones(&mesh_data),
         hitboxes: read_hitboxes(&mesh_data),
+        sticker_slots: Vec::new(),
         bone_weight_count: mesh_data
             .get("m_skeleton")
             .and_then(|s| s.get("m_nBoneWeightCount"))

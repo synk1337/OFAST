@@ -43,6 +43,13 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   576 + n, 1152 + n, 18 + 2).
 - **Only what it paints right**: patina age (4 kits) and trilinear case hardening (1) are not read yet; those weapons
   keep their own finish, with a warning — a wrong skin looks worse than none.
+- **Stickers baked into the weapon's textures** (`export::stickers`, 2026-10-28): CS2 draws them in the weapon's
+  own shader (`csgo_weapon.vfx`, `F_STICKERS`, its static combo 512 decompiled the same way) in a second UV set;
+  the bake draws the mesh's triangles into the texture's layout to find, at each texel, where the stickers are, then
+  blends each slot's colour (fitted to CS2's albedo levels), roughness and metalness over the painted (or the
+  weapon's own) colour and metallic-roughness. The slots come from the model's `StickerMarkup`, free placements
+  shift them by the item's offset in sticker units. The view-dependent parts are fixed (holograms seen face on) or
+  left out (glitter, the edges' parallax).
 - **Legacy kits** use the CS:GO-era model (`use_legacy_model`), which the demo's mesh groups already show; its
   material names its own composite inputs, in the layout the kit's pattern was painted for. Their composite
   materials roll no pattern offset or rotation (Fire Serpent's pattern sits the same at every seed; its wear and
@@ -59,8 +66,11 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   app); its command line does not decompile shaders, so OFAST reads the combos itself and calls SPIRV-Cross.
 - **Painting in Unreal** (a material per style reading the same textures): the same work in a graph, and every glTF
   reader but Unreal would see bare weapons.
-- **Stickers baked into the colour**: CS2 draws them in the weapon's own material (five slots), over the paint;
-  they wait for a decal of their own.
+- **Stickers as decals of their own** (the first plan: the triangles under each sticker copied into a mesh with the
+  sticker's texture): the sticker texture's full resolution, but extra geometry on skinned weapons (weights to
+  copy), the weapon's sticker mask is in the other UV set, and decals need a depth offset glTF has no word for.
+  Baked, a sticker gets the weapon texture's resolution (2048 at most: on the MP9 about 200 texels across) and
+  every glTF reader sees it.
 
 ## Consequences
 
@@ -85,7 +95,7 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   all 10 of round 17's glove skins. The height-blended program's colour-adjust matrices are the environment shaders'
   reconstruction (`environment::color_correct`, `color_tint`, from Source 2 Viewer's). Bakes run their rows in parallel: a glove skin
   takes about a second a hand.
-- Not painted yet: stickers, keychains, name tags, StatTrak counters.
+- Not painted yet: keychains, name tags, StatTrak counters; stickers' glitter and view-dependent holograms.
 - **Compared with CS2** (2026-10-28, `-insecure`, the demo paused at the same ticks, `spec_player` in first person
   against the saved round's POV cameras: 20 views of Aurora vs FURIA's round 17): the weapon skins match (Asiimov,
   Fire Serpents, Wild Lotus, Bloodsport, Hot Rod, Radiation Hazard, Gungnir), the gloves' patterns sit on the right

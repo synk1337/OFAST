@@ -37,6 +37,7 @@ pub mod replay;
 pub mod shots;
 pub mod sky;
 pub mod smoke;
+pub mod stickers;
 mod tint;
 pub mod viewmodel;
 
@@ -102,4 +103,7 @@ pub enum ExportError {
     /// A camera file (HLAE's) could not be read.
     #[error("camera: {0}")]
     Camera(String),
+    /// A sticker's material cannot be drawn.
+    #[error("sticker: {0}")]
+    Sticker(String),
 }

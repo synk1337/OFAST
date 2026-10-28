@@ -41,24 +41,69 @@ pub struct WeaponLook {
 }
 
 /// What a weapon's paint looks like: paint kit, pattern seed and wear (the demo's attributes 6, 7, 8,
-/// [`crate::demo::skins`]).
+/// [`crate::demo::skins`]), and its stickers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Finish {
-    /// Paint kit.
+    /// Paint kit (0: none, the weapon's own finish under its stickers).
     pub kit: u32,
     /// Pattern seed.
     pub seed: u32,
     /// Wear's bits (`f32::to_bits`: compared exactly).
     pub wear: u32,
+    /// The stickers by slot (the weapon shader draws [`STICKER_SLOTS`]).
+    pub stickers: [Option<StickerFinish>; STICKER_SLOTS],
+}
+
+/// The sticker slots a weapon's material draws (`csgo_weapon.vfx`: 0 – 4).
+pub const STICKER_SLOTS: usize = crate::export::stickers::SLOTS;
+
+/// A sticker as a weapon's item sets it (`demo::skins::Sticker`), floats as bits to compare them exactly; `None`:
+/// the slot's own value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct StickerFinish {
+    /// Sticker kit (`items_game.txt` → `sticker_kits`).
+    pub id: u32,
+    /// Scraped, 0 – 1.
+    pub wear: Option<u32>,
+    /// Size.
+    pub scale: Option<u32>,
+    /// Degrees.
+    pub rotation: Option<u32>,
+    /// CS2's free placement.
+    pub offset: Option<[u32; 2]>,
 }
 
 impl Finish {
-    /// The finish of a weapon's skin; `None` without a paint kit.
+    /// A paint without stickers (gloves).
+    pub fn painted(kit: u32, seed: u32, wear: f32) -> Self {
+        Self {
+            kit,
+            seed,
+            wear: wear.to_bits(),
+            stickers: [None; STICKER_SLOTS],
+        }
+    }
+
+    /// The finish of a weapon's skin; `None` without a paint kit or a sticker. Stickers in a slot the shader does
+    /// not draw are left out.
     pub fn of(skin: &Skin) -> Option<Self> {
-        (skin.paint_kit != 0).then_some(Self {
+        let mut stickers = [None; STICKER_SLOTS];
+        for s in &skin.stickers {
+            if let Some(slot) = stickers.get_mut(s.slot as usize) {
+                *slot = Some(StickerFinish {
+                    id: s.id,
+                    wear: s.wear.map(f32::to_bits),
+                    scale: s.scale.map(f32::to_bits),
+                    rotation: s.rotation.map(f32::to_bits),
+                    offset: s.offset.map(|o| o.map(f32::to_bits)),
+                });
+            }
+        }
+        (skin.paint_kit != 0 || stickers.iter().any(Option::is_some)).then_some(Self {
             kit: skin.paint_kit,
             seed: skin.seed,
             wear: skin.wear.to_bits(),
+            stickers,
         })
     }
 

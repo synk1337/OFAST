@@ -346,8 +346,12 @@ def import_gltf(replay, path, look, pipelines):
 
 
 def finish_key(finish):
-    """A weapon's skin as a key: (kit, seed, wear), or None for none (the replay's and the manifest's `finish`)."""
-    return None if finish is None else (finish["kit"], finish["seed"], finish["wear"])
+    """A weapon's skin as a key: (kit, seed, wear, stickers), or None for none (the replay's and the manifest's
+    `finish`; its stickers as written, so two weapons with one paint and different stickers are two looks)."""
+    if finish is None:
+        return None
+    stickers = json.dumps(finish.get("stickers", []), sort_keys=True)
+    return (finish["kit"], finish["seed"], finish["wear"], stickers)
 
 
 def import_dropped_weapons(replay):

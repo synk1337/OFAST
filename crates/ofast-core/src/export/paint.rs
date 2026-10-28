@@ -74,6 +74,7 @@ use crate::export::ExportError;
 use crate::export::environment::{SRGB_TO_LINEAR, linear_to_srgb};
 use crate::export::gltf::{decode_raw, srgb_to_linear};
 use crate::export::loadout::Finish;
+use crate::export::stickers::{Placed, StickerKit, sticker_kits};
 use crate::paint::{PaintKit, Param, Recipe, WeaponParams, kit_recipe, paint_kits};
 use crate::resource::Resource;
 use crate::texture::{Image, ImageF32, Texture};
@@ -81,15 +82,17 @@ use crate::texture::{Image, ImageF32, Texture};
 /// A skin to paint on a model's materials: what a weapon look carries into the glTF writer.
 #[derive(Debug, Clone)]
 pub struct Paint {
-    /// A short name for the painted materials and textures, unique to the kit, seed and wear:
-    /// `cu_fireserpent_ak47_bravo_245_1434` ([`Paint::label_of`]).
+    /// A short name for the painted materials and textures, unique to the kit, seed, wear and stickers:
+    /// `cu_fireserpent_ak47_bravo_245_1434` ([`Paint::label_of`]), `…_st3fa2c1d0` with stickers.
     pub label: String,
-    /// The paint kit's recipe.
-    pub recipe: Arc<Recipe>,
+    /// The paint kit's recipe; `None` for stickers on the weapon's own finish.
+    pub recipe: Option<Arc<Recipe>>,
     /// Pattern seed.
     pub seed: u32,
     /// Wear, 0 – 1.
     pub wear: f32,
+    /// The stickers, drawn over the paint on the materials that draw them (`F_STICKERS`).
+    pub stickers: Vec<Placed>,
 }
 
 impl Paint {
@@ -99,10 +102,12 @@ impl Paint {
     }
 }
 
-/// The paint kits of `items_game.txt`, and each kit's recipe read once (on first use), for a round's export.
+/// The paint and sticker kits of `items_game.txt`, and each paint kit's recipe read once (on first use), for a
+/// round's export.
 #[derive(Debug, Default)]
 pub struct Paints {
     kits: BTreeMap<u32, PaintKit>,
+    stickers: BTreeMap<u32, StickerKit>,
     recipes: Mutex<HashMap<u32, Option<Arc<Recipe>>>>,
 }
 
@@ -111,12 +116,14 @@ impl Paints {
     pub fn new(items_game: Option<&str>) -> Self {
         Self {
             kits: items_game.map(paint_kits).unwrap_or_default(),
+            stickers: items_game.map(sticker_kits).unwrap_or_default(),
             recipes: Mutex::default(),
         }
     }
 
-    /// The paint of `finish`; `None`, with a warning the first time for the kit, when its kit or recipe cannot be
-    /// read (without `items_game.txt`, quietly: the export warned about it already).
+    /// The paint of `finish`: its kit's recipe and its stickers. A kit or recipe that cannot be read is left out, a
+    /// sticker kit that is not known too, each with a warning (the first time for a paint kit; without
+    /// `items_game.txt`, quietly: the export warned about it already); `None` when nothing is left.
     pub fn paint(
         &self,
         content: &Content,
@@ -126,19 +133,68 @@ impl Paints {
         if self.kits.is_empty() {
             return None;
         }
-        let mut recipes = self.recipes.lock().expect("lock");
-        let Some(kit) = self.kits.get(&finish.kit) else {
-            recipes.entry(finish.kit).or_insert_with(|| {
+        let kit = (finish.kit != 0)
+            .then(|| self.kit_recipe(content, finish.kit, warnings))
+            .flatten();
+        let mut stickers = Vec::new();
+        for (slot, s) in finish.stickers.iter().enumerate() {
+            let Some(s) = s else { continue };
+            let Some(sticker) = self.stickers.get(&s.id) else {
                 warnings.push(format!(
-                    "paint kit {}: not in items_game.txt, left unpainted",
-                    finish.kit
+                    "sticker kit {}: not in items_game.txt, left out",
+                    s.id
+                ));
+                continue;
+            };
+            stickers.push(Placed {
+                slot,
+                material: sticker.material.clone(),
+                offset: s.offset.map(|o| o.map(f32::from_bits)),
+                scale: s.scale.map(f32::from_bits),
+                rotation: s.rotation.map(f32::from_bits),
+                wear: s.wear.map(f32::from_bits),
+            });
+        }
+        if kit.is_none() && stickers.is_empty() {
+            return None;
+        }
+        let mut label = match &kit {
+            Some((name, _)) => Paint::label_of(name, finish.seed, finish.wear()),
+            None => "own".into(),
+        };
+        if !stickers.is_empty() {
+            // Short and stable: the stickers' values hashed.
+            let hash = blake3::hash(format!("{:?}", finish.stickers).as_bytes());
+            label = format!("{label}_st{}", &hash.to_hex()[..8]);
+        }
+        Some(Paint {
+            label,
+            recipe: kit.map(|(_, recipe)| recipe),
+            seed: finish.seed,
+            wear: finish.wear(),
+            stickers,
+        })
+    }
+
+    /// Paint kit `id`'s name and recipe, read once; `None`, with a warning the first time, when either cannot be.
+    fn kit_recipe(
+        &self,
+        content: &Content,
+        id: u32,
+        warnings: &mut Vec<String>,
+    ) -> Option<(String, Arc<Recipe>)> {
+        let mut recipes = self.recipes.lock().expect("lock");
+        let Some(kit) = self.kits.get(&id) else {
+            recipes.entry(id).or_insert_with(|| {
+                warnings.push(format!(
+                    "paint kit {id}: not in items_game.txt, left unpainted"
                 ));
                 None
             });
             return None;
         };
         let recipe = recipes
-            .entry(finish.kit)
+            .entry(id)
             .or_insert_with(|| match kit_recipe(content, kit) {
                 Ok(recipe) => Some(Arc::new(recipe)),
                 Err(e) => {
@@ -150,12 +206,7 @@ impl Paints {
                 }
             })
             .clone()?;
-        Some(Paint {
-            label: Paint::label_of(&kit.name, finish.seed, finish.wear()),
-            recipe,
-            seed: finish.seed,
-            wear: finish.wear(),
-        })
+        Some((kit.name.clone(), recipe))
     }
 }
 
@@ -348,6 +399,24 @@ pub(super) fn rgb(a: [f32; 4]) -> [f32; 3] {
 /// The shaders' luminance weights.
 pub(super) fn luminance(c: [f32; 3]) -> f32 {
     c[0] * 0.2125 + c[1] * 0.7154 + c[2] * 0.0721
+}
+
+/// An image at half its size, each texel the mean of four: the next mip level, for textures the bakes read smaller
+/// than they are stored (the gloves' layers, stickers).
+pub(super) fn halve(image: &Image) -> Image {
+    let (width, height) = (image.width / 2, image.height / 2);
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            for c in 0..4 {
+                let at = |dx: usize, dy: usize| {
+                    u32::from(image.rgba[((2 * y + dy) * image.width + 2 * x + dx) * 4 + c])
+                };
+                rgba.push(((at(0, 0) + at(1, 0) + at(0, 1) + at(1, 1) + 2) / 4) as u8);
+            }
+        }
+    }
+    Image::new(width, height, rgba)
 }
 
 /// GLSL's `smoothstep`, also with `low` above `high` (a falling edge, as the shader uses it); equal edges step.
@@ -1677,9 +1746,9 @@ pub(crate) fn unpainted_reason(params: &BTreeMap<String, Param>) -> Option<Strin
 /// The job that paints weapon material `material` with `paint`, or why it is not painted (its skin's parameters
 /// unreadable, its style or a variant not baked yet, an input missing).
 pub(crate) fn job(content: &Content, material: &str, paint: &Paint) -> Result<PaintJob, String> {
-    let params =
-        crate::paint::weapon_params(content, &paint.recipe, material, paint.seed, paint.wear)
-            .map_err(|e| e.to_string())?;
+    let recipe = paint.recipe.as_ref().ok_or("no paint kit")?;
+    let params = crate::paint::weapon_params(content, recipe, material, paint.seed, paint.wear)
+        .map_err(|e| e.to_string())?;
     let reason = if params.glove {
         super::gloves::unpainted_reason(&params.color)
     } else {
@@ -1688,8 +1757,14 @@ pub(crate) fn job(content: &Content, material: &str, paint: &Paint) -> Result<Pa
     if let Some(why) = reason {
         return Err(why);
     }
+    // The paint alone: two weapons with one skin and different stickers share it (the stickers are drawn over it).
     Ok(PaintJob {
-        key: format!("{material}|{}", paint.label),
+        key: format!(
+            "{material}|{:p}|{}|{:08x}",
+            Arc::as_ptr(recipe),
+            paint.seed,
+            paint.wear.to_bits()
+        ),
         params: Arc::new(params),
     })
 }

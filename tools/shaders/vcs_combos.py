@@ -33,12 +33,12 @@ class Dump:
         combo_data = self.section("m_staticComboData")
         self.entries = re.split(r"\n\t\t\{\n", combo_data)[1:]
         self.code_idx = [int(re.search(r"m_nByteCodeDataIdx = (-?\d+)", e).group(1)) for e in self.entries]
-        self.byte_index = [[int(x) for x in re.search(r"m_byteCodeIndex = \[([^\]]*)\]", e).group(1).split(",") if x.strip()]
+        self.byte_index = [[int(x) for x in re.search(r"m_byteCodeIndex = \s*\[([^\]]*)\]", e).group(1).split(",") if x.strip()]
                            for e in self.entries]
         code = self.section("m_byteCodeData")
         self.offs = [int(v) for v in re.findall(r"m_nOffs = (\d+)", code)]
         self.sizes = [int(v) for v in re.findall(r"m_nSize = (\d+)", code)]
-        self.inner = [[int(x) for x in re.findall(r"\d+", v)] for v in re.findall(r"m_offs = \[([^\]]*)\]", code)]
+        self.inner = [[int(x) for x in re.findall(r"\d+", v)] for v in re.findall(r"m_offs = \s*\[([^\]]*)\]", code)]
         variables = re.split(r"\n\t\t\{\n", self.section("m_variableDescriptionArray"))[1:]
         self.names = [re.search(r'm_szName = "([^"]*)"', v).group(1) for v in variables]
         assert len(self.ids) == len(self.entries), (len(self.ids), len(self.entries))

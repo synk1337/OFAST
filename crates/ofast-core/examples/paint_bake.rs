@@ -45,9 +45,10 @@ fn main() {
         );
         let paint = Paint {
             label: Paint::label_of(&kit.name, seed, wear),
-            recipe: Arc::new(kit_recipe(&content, kit).expect("recipe")),
+            recipe: Some(Arc::new(kit_recipe(&content, kit).expect("recipe"))),
             seed,
             wear,
+            stickers: Vec::new(),
         };
         match bake(&content, material, &paint) {
             Ok((color, surface)) => {

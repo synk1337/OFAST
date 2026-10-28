@@ -48,7 +48,9 @@ use crate::content::Content;
 use crate::export::ExportError;
 use crate::export::environment::{color_correct, color_tint};
 use crate::export::gltf::{decode_raw, srgb_to_linear};
-use crate::export::paint::{Sampler, clamp3, lerp, lerp3, luminance, rgb, scale3, smoothstep};
+use crate::export::paint::{
+    Sampler, clamp3, halve, lerp, lerp3, luminance, rgb, scale3, smoothstep,
+};
 use crate::paint::Param;
 use crate::texture::Image;
 
@@ -178,23 +180,6 @@ impl Loader<'_> {
             });
         Some(texture.clone())
     }
-}
-
-/// An image at half its size, each texel the mean of four.
-fn halve(image: &Image) -> Image {
-    let (width, height) = (image.width / 2, image.height / 2);
-    let mut rgba = Vec::with_capacity(width * height * 4);
-    for y in 0..height {
-        for x in 0..width {
-            for c in 0..4 {
-                let at = |dx: usize, dy: usize| {
-                    u32::from(image.rgba[((2 * y + dy) * image.width + 2 * x + dx) * 4 + c])
-                };
-                rgba.push(((at(0, 0) + at(1, 0) + at(0, 1) + at(1, 1) + 2) / 4) as u8);
-            }
-        }
-    }
-    Image::new(width, height, rgba)
 }
 
 /// A placement as the vertex stage applies it: `u' = a·u + b·v + c`, `v' = d·u + e·v + f`.

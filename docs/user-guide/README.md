@@ -107,8 +107,8 @@ you can keep browsing meanwhile. It:
 
 1. exports the round: every player's movement and animation (CS2's own poses), their agent and weapons with
    their skins (the paint, its pattern and wear, as the demo records them: Fire Serpent, Asiimov, Dopplers, Fades,
-   Crimson Web, Gungnir, Royal Guard, case-hardened skins…, and the glove skins, 2025's too; stickers and name tags
-   not yet),
+   Crimson Web, Gungnir, Royal Guard, case-hardened skins…, the glove skins, 2025's too, and the stickers; name tags
+   and keychains not yet),
    the grenades, the shots;
 2. the first time a map is used, exports the map from CS2's files and imports it into Unreal (this can take a long
    time: Unreal compiles its shaders the first time);
