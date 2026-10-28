@@ -135,13 +135,13 @@ and fully metal gold (checked side by side, 2026-10-28).
 seeded and conditional rolls and copies into containers (`paint`), the combo-0 bake (`export::gloves`), the looks and
 viewmodels keyed by the glove finish. Round 17: 7 of its 10 players' glove skins painted (Crimson Kimono, Emerald
 Web, Vice, Foundation); the 3 others are 2025's kits (`gloves/paints/volatile_02/glove_*`), whose recipe renders a
-`workshop/paintkits/templates/glove_compositor.vmat` (`paint_compositor`) with the height-blended combo 1.
+`workshop/paintkits/templates/glove_compositor.vmat` (`paint_compositor`) with the height-blended program (below).
 
 **Checked against CS2** (2026-10-28): a pattern paints over mask region `g_nPatternReplaceIndex − 1` (authored 1 –
-8; the decompiled code indexes the regions with the uniform as is, so the material system must store it 0-based):
+8; the decompiled code indexes the regions with the uniform, which its declaration's expression makes `this-1`):
 Crimson Kimono's 1 covers the back of the hand (region 0) and leaves its knuckle panel (region 1) its slate tint.
 
-**2025's kits** (`gloves/paints/volatile_02/glove_*.vcompmat`, 22; read 2026-10-28, not ported yet): the `paint`
+**2025's kits** (`gloves/paints/volatile_02/glove_*.vcompmat`, 22; read and ported 2026-10-28): the `paint`
 container is loose variables holding one `LOOSE_VARIABLE_TYPE_RESOURCE_MATERIAL` (`m_strResourceMaterial`: the
 kit's own `items/assets/paintkits/volatile_02/textiles/<kit>.vmat`, shader `csgo_customglove_preview.vfx`, ~260
 parameters); conditions read that material's parameters through it (`paint.F_PATTERN`), and `COPY_MATCHING_KEYS
@@ -156,11 +156,30 @@ its swizzle's length, up to 4). The shader's height-blended program: combo 1 (an
 `g_tTintId`, `g_tObjectProperties` (AO, curvature, high-touch), `g_tPattern` (sRGB) and `g_tPatternProperties`.
 Its colour-adjust uniforms are 4×4 matrices from the material system's expressions
 (`MatrixMultiply(MatrixColorTint2(tint, 1), MatrixColorCorrect2(float3(contrast, saturation, brightness),
-TextureAverageColor(texture)))`), whose definitions no file holds: to reconstruct and check against CS2 (KSCERATO's
-Dragon Blue, yuurih's tech gradient, soulfly's quilted white in round 17's references).
+TextureAverageColor(texture)))`), whose definitions no file holds; Source 2 Viewer's reconstruction is what the
+environment shaders already use (`environment::color_correct`, `color_tint`), the average colour the texture's
+stored reflectivity.
 
-**Not done yet**: combo 1 (height blending: the newer kits) and the anisotropic combo; `g_nRandomSeedAlt`'s value
-(OFAST takes the pattern seed; to read from CS2: a left and right glove of one skin side by side).
+**The height-blended program** (read 2026-10-28; ported as `export::gloves::blended`): combos 5 and 7 share one
+bytecode, 1 and 3 another, and 1 is 5 with the id tint white and of no strength and the pattern over every id (23 of
+the 26 materials the kits name set `F_TINT_ID`; all three of round 17's kits run combo 7). Its other findings:
+
+- The tint ids are read unfiltered from `g_tTintId` R (`ceil(R × 7)`), at the texel and its 8 neighbours (in that
+  texture's texels); an id keeps the centre's where its row or column agrees, else 1/32 per corner, 3/32 per side and
+  1/2 for the centre — the compiled code counts the top-right corner in both and leaves the top side out.
+- The layers blend textures, values and matrices by weight, except the burnishing normal scale, both burnishing
+  roughness brightnesses and `g_bDamageBevelUseTintMask*`, which take the last present layer's value (times its
+  weight): the compiled program assigns them where it adds the others.
+- Expressions this program applies: `g_fWearProgress` is gamma-encoded (`SrgbLinearToGamma`: a wear of 0.16 reads
+  0.44), `g_fDamageHeightBlendSoftness*` at least 0.001, `g_fDamageBevelBlendSoftness*` plus the height softness,
+  `g_fPatternNormalDistortion` a tenth, `g_vId*Color` sRGB-decoded (not A); the vertex stage places the pattern
+  about `g_vPatternTexCoordCenter` with a per-axis `g_vPatternTexCoordScale`, the other hand by negating u (the
+  rotation is not mirrored, unlike the default combo).
+- Colour comes out linear (the target is sRGB); the other outputs write their values gamma-decoded so the target
+  stores them as they are.
+
+**Not done yet**: the default layout's anisotropic combo (one kit); `g_nRandomSeedAlt`'s value (OFAST takes the
+pattern seed; to read from CS2: a left and right glove of one skin side by side).
 
 ## Stickers
 

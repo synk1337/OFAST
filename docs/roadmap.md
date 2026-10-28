@@ -404,7 +404,10 @@ player and round.
   (`csgo_customglove` combo 0: four material layers, an 8-tint palette, the pattern's paint, curvature damage, edges
   by derivatives) ported; third and first person keyed by glove skin. Round 17: 7 of 10 (Crimson Kimono, Emerald
   Web, Vice, Foundation).
-- [ ] 2025's glove kits (the height-blended combo 1), the second hand's seed; patina age, trilinear case
+- [x] **2025's glove kits** (`export::gloves::blended`): the height-blended program (layers of surface over
+  substrate, tint ids, the pattern as tint or paint, damage by height, burnishing, grime, five colour-adjust
+  matrices per layer). Round 17: 10 of 10 (Dragon Blue, a tech gradient, quilted white).
+- [ ] The second hand's seed, the default layout's anisotropic combo (one kit); patina age, trilinear case
   hardening; pearlescence, the paints' normal maps; stickers, keychains, name tags; checked against CS2
   screenshots.
 - [ ] Textures shared across a round's glTFs imported once in Unreal: each look's import makes its own copy of the

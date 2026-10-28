@@ -79,10 +79,12 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   and grunge textures again for each skin, and again for the viewmodel): fine at a round's 30 skins, a cache if it
   grows.
 - Weapons lying in the world are painted too (their own glTFs, one per model and skin).
-- Gloves are painted with their own shader (`csgo_customglove`, its default combo, ported the same way:
-  `export::gloves`), 7 of round 17's 10 glove skins; 2025's kits (the height-blended combo) keep the glove model's own
-  textures, with a warning. Each glove skin bakes in about 15 s a hand (derivatives read at three texels): the round's
-  players now export in about 4 minutes.
+- Gloves are painted with their own shader (`csgo_customglove`, ported the same way: `export::gloves`): its default
+  combo ("Source1 texture layout", the older kits) and its height-blended program (2025's kits: material layers
+  with a surface over a substrate, tint ids, the pattern as tint or as paint, damage by height; `gloves::blended`),
+  all 10 of round 17's glove skins. The height-blended program's colour-adjust matrices are the environment shaders'
+  reconstruction (`environment::color_correct`, `color_tint`, from Source 2 Viewer's). Bakes run their rows in parallel: a glove skin
+  takes about a second a hand.
 - Not painted yet: stickers, keychains, name tags, StatTrak counters.
 - **Compared with CS2** (2026-10-28, `-insecure`, the demo paused at the same ticks, `spec_player` in first person
   against the saved round's POV cameras: 20 views of Aurora vs FURIA's round 17): the weapon skins match (Asiimov,
@@ -90,7 +92,7 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   panels. Two bugs found and fixed: a glove pattern's region is `g_nPatternReplaceIndex − 1` (Crimson Kimono's was
   on the knuckle panel instead of the back of the hand), and newer kits' per-colour metalness and roughness are
   `FLOAT4` variables (Royal Guard's slide was matte). Left: stickers (FalleN's MP9), 2025's glove kits (yuurih's,
-  soulfly's), and the metal knives' look, which follows each renderer's sky and haze (Unreal's deep blue sky turns a
+  soulfly's: ported since, below), and the metal knives' look, which follows each renderer's sky and haze (Unreal's deep blue sky turns a
   Sapphire karambit vivid where CS2's pale haze shows it near white) and the environment's grading (CS2's frames are
   less saturated throughout): a lighting question for the polish pass, not the bake.
 - To check against CS2: the roll (whether a variable a kit does not define still takes its draw), which size scale

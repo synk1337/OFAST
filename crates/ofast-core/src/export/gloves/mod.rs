@@ -25,12 +25,17 @@
 //! - **Surface**: roughness from the detail's, the pattern's and the grunge's, damaged and at damage edges (where the
 //!   grunge's alpha changes around the texel); metalness from the detail and the pattern, damaged and at the edges.
 //!
-//! **Not baked**: the normal, occlusion and cloth outputs (the glove keeps its own), the "Source2 height blending"
-//! combo (`F_BACKWARDS_COMPATIBILITY`), anisotropic gloss, tint ids; the mip-biased pattern sample that shades thick
-//! paint's edges is read unbiased. `g_nRandomSeedAlt` (the second hand's seed) is the pattern seed until checked
-//! against CS2.
+//! **Not baked**: the normal, occlusion and cloth outputs (the glove keeps its own), anisotropic gloss in this
+//! layout (one kit); the mip-biased pattern sample that shades thick paint's edges is read unbiased.
+//! `g_nRandomSeedAlt` (the second hand's seed) is the pattern seed until checked against CS2.
+//!
+//! The "Source2 height blending" program (`F_BACKWARDS_COMPATIBILITY`, 2025's kits) is [`blended`].
+
+mod blended;
 
 use std::collections::BTreeMap;
+
+use rayon::prelude::*;
 
 use super::ExportError;
 use super::gltf::srgb_to_linear;
@@ -122,10 +127,9 @@ struct Inputs {
     flip: f32,
     patterned: bool,
     pattern_mode: i64,
-    /// The mask region the pattern paints over (modes 0 and 2): `g_nPatternReplaceIndex` − 1. It is authored 1 – 8
-    /// and the decompiled code indexes the regions (0 – 7) with the uniform as is, but CS2 paints Crimson Kimono's 1
-    /// over region 0 (the back of the hand; region 1, its knuckle panel, keeps its tint): checked side by side
-    /// (Aurora vs FURIA, round 17).
+    /// The mask region the pattern paints over (modes 0 and 2): `g_nPatternReplaceIndex` − 1, its declaration's
+    /// expression (`this-1`). Authored 1 – 8: Crimson Kimono's 1 paints region 0 (the back of the hand; region 1, its
+    /// knuckle panel, keeps its tint), as CS2 shows it side by side (Aurora vs FURIA, round 17).
     replace_index: usize,
     paint_thickness: f32,
     paint_durability: f32,
@@ -305,11 +309,6 @@ impl Inputs {
                 offset("g_fGrungeTexCoordOffset"),
             ),
         })
-    }
-
-    /// The output size: [`GLOVE_SIZE`].
-    fn size(&self) -> usize {
-        GLOVE_SIZE
     }
 
     /// The grunge blended at (u, v): RGB sRGB-decoded, A as stored.
@@ -659,18 +658,11 @@ impl Inputs {
 /// Why a glove material is not painted with these parameters (a combo not baked yet, its layer mask missing), or
 /// `None`.
 pub(crate) fn unpainted_reason(params: &BTreeMap<String, Param>) -> Option<String> {
-    let int = |name: &str| match params.get(name) {
-        Some(Param::Int(i)) => *i,
-        _ => 0,
-    };
-    for (feature, what) in [
-        ("F_BACKWARDS_COMPATIBILITY", "height-blended glove layers"),
-        ("F_ANISOTROPIC_GLOSS", "anisotropic glove gloss"),
-        ("F_TINT_ID", "glove tint ids"),
-    ] {
-        if int(feature) != 0 {
-            return Some(format!("{what} not baked yet"));
-        }
+    if blended::applies(params) {
+        return blended::unpainted_reason(params);
+    }
+    if matches!(params.get("F_ANISOTROPIC_GLOSS"), Some(Param::Int(i)) if *i != 0) {
+        return Some("anisotropic glove gloss (Source1 layout) not baked yet".into());
     }
     (!matches!(params.get("g_tLayerMask"), Some(Param::Texture(path)) if !path.is_empty()))
         .then(|| "no glove layer mask".into())
@@ -698,24 +690,39 @@ pub(crate) fn bake_surface(
     })
 }
 
+/// The glove painted at [`GLOVE_SIZE`], by the program its parameters name.
 fn bake(
     content: &Content,
     params: &BTreeMap<String, Param>,
-    pixel: impl Fn(&Shade) -> [u8; 4],
+    pixel: impl Fn(&Shade) -> [u8; 4] + Sync,
 ) -> Result<Image, ExportError> {
-    let inputs = Inputs::read(content, params)?;
-    let size = inputs.size();
-    let mut rgba = Vec::with_capacity(size * size * 4);
-    for y in 0..size {
-        for x in 0..size {
-            let (u, v) = (
-                (x as f32 + 0.5) / size as f32,
-                (y as f32 + 0.5) / size as f32,
-            );
-            rgba.extend_from_slice(&pixel(&inputs.shade(u, v)));
-        }
+    if blended::applies(params) {
+        let inputs = blended::Inputs::read(content, params)?;
+        return Ok(render(|u, v| inputs.shade(u, v), pixel));
     }
-    Ok(Image::new(size, size, rgba))
+    let inputs = Inputs::read(content, params)?;
+    Ok(render(|u, v| inputs.shade(u, v), pixel))
+}
+
+/// Every texel of the output shaded at its centre, rows in parallel.
+fn render(
+    shade: impl Fn(f32, f32) -> Shade + Sync,
+    pixel: impl Fn(&Shade) -> [u8; 4] + Sync,
+) -> Image {
+    let size = GLOVE_SIZE;
+    let mut rgba = vec![0; size * size * 4];
+    rgba.par_chunks_mut(size * 4)
+        .enumerate()
+        .for_each(|(y, row)| {
+            for (x, texel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let (u, v) = (
+                    (x as f32 + 0.5) / size as f32,
+                    (y as f32 + 0.5) / size as f32,
+                );
+                texel.copy_from_slice(&pixel(&shade(u, v)));
+            }
+        });
+    Image::new(size, size, rgba)
 }
 
 #[cfg(test)]

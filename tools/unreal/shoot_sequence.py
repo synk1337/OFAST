@@ -16,6 +16,7 @@ Inputs (environment variables):
 
 import os
 import re
+import sys
 
 import unreal
 
@@ -23,6 +24,7 @@ WIDTH, HEIGHT = 1920, 1080
 LEVEL_TICKS = 300  # editor ticks between loading the level and opening the sequence (opening both at once crashed)
 SHOT_DELAY_S = 6.0
 SHOT_TIMEOUT_TICKS = 3000
+RESTORE_TICKS = 30  # editor ticks between checks that the editor's window is not minimized
 
 levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -31,6 +33,34 @@ assets = unreal.EditorAssetLibrary
 
 def log(message):
     unreal.log("OFAST: " + message)
+
+
+def keep_restored():
+    """Un-minimizes the editor's windows (Windows only), without activating them. A minimized editor stops
+    advancing frames while its Slate callbacks go on, so no screenshot is ever written: a desktop tool minimizing
+    other windows made every shot of a run time out (2026-10-28)."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    pid = os.getpid()
+    minimized = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user32.IsIconic(hwnd):
+            minimized.append(hwnd)
+        return True
+
+    user32.EnumWindows(each, 0)
+    for hwnd in minimized:
+        user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
+    if minimized:
+        log("restored the minimized editor window")
 
 
 def cut_camera(sequence, frame):
@@ -82,6 +112,8 @@ def main():
 
     def tick(_delta):
         state["ticks"] += 1
+        if state["ticks"] % RESTORE_TICKS == 0:
+            keep_restored()
         if state["ticks"] == LEVEL_TICKS:
             unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(sequence)
         if state["ticks"] < 2 * LEVEL_TICKS:
