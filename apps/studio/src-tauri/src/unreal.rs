@@ -552,10 +552,10 @@ fn run_script(
 ) -> Result<(), String> {
     let mut command = Command::new(engine.join(EDITOR_CMD));
     command
-        .arg(&side.project)
+        .arg(unreal_arg(&side.project))
         .arg(format!(
             "-ExecutePythonScript={}",
-            side.scripts.join(script).display()
+            unreal_arg(&side.scripts.join(script))
         ))
         .args([
             "-unattended",
@@ -639,7 +639,7 @@ pub async fn open_in_unreal(level: String, sequence: String) -> Result<(), Strin
         }
         let mut command = Command::new(engine.join(UNREAL_EDITOR));
         command
-            .arg(&side.project)
+            .arg(unreal_arg(&side.project))
             .arg("-ExecCmds=py import open_sequence");
         for name in SCRIPT_VARIABLES {
             command.env(name, "");
@@ -668,6 +668,13 @@ fn running(program: &str) -> bool {
     })
 }
 
+/// `path` as an argument for Unreal's command line, with forward slashes (which Unreal takes on Windows). An
+/// argument with a space is quoted, and Unreal reads backslash escapes inside quotes: an installed Studio's
+/// `…\OFAST Studio\tools\unreal\import_map.py` reached it as `OFAST Studio<tab>ools` (1.0.0, every default install).
+fn unreal_arg(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
 /// A program of Windows' own.
 fn system32(program: &str) -> PathBuf {
     let system = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
@@ -690,6 +697,17 @@ fn no_window(command: &mut Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreal_gets_paths_without_backslashes() {
+        // A default install: a space (so the argument is quoted) and `\t` (Unreal's escape for a tab).
+        assert_eq!(
+            unreal_arg(Path::new(
+                r"C:\Users\X\AppData\Local\OFAST Studio\tools\unreal\import_map.py"
+            )),
+            "C:/Users/X/AppData/Local/OFAST Studio/tools/unreal/import_map.py"
+        );
+    }
 
     #[test]
     fn demo_names_become_asset_names() {
