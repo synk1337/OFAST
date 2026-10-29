@@ -15,7 +15,7 @@ members = ["crates/ofast-core", "crates/ofast-cli", "apps/studio/src-tauri", "ap
 default-members = ["crates/ofast-core", "crates/ofast-cli"]
 
 [workspace.package]
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/synk1337/OFAST"
