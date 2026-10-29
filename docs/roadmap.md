@@ -418,9 +418,13 @@ player and round.
   under gravity with the cloth's hinge limits, moved by the weapon in the world (third and first person).
 - [x] **StatTrak counters** (`export::stattrak`): the module with its digits set as CS2's vertex shader sets them,
   counting up on the kills during the round (third person, first person, lying weapons).
-- [ ] The second hand's seed, the default layout's anisotropic combo (one kit); patina age, trilinear case
-  hardening; pearlescence, the paints' normal maps; stickers' glitter and the free placement's signs; gold stickers'
-  tone (darker and greener than CS2's); checked against CS2 screenshots.
+- [x] **Patina age** ([research](research/cs2-skins.md), "Patina age is unused"): no kit uses it; the four that
+  seemed to set `g_bLegacyPatina` (a recipe condition written `True`, misread until then) and are painted as gunsmith,
+  like CS2's previews of them, with two gunsmith fixes their shader combos showed (a roughness texture, an overlay's
+  wear).
+- [ ] The second hand's seed, the default layout's anisotropic combo (one kit); trilinear case hardening;
+  pearlescence, the paints' normal maps; stickers' glitter and the free placement's signs; gold stickers' tone
+  (darker and greener than CS2's); checked against CS2 screenshots.
 - [x] **Textures shared across the looks** (`import_demo.py`, `share_textures`): each exported PNG imported once into
   `/Game/OFAST/Replays/Textures`, which every round's looks sample, instead of a copy per look (round 17: 263
   textures, 574 MB, where its looks had made 3592 of 324 PNGs; 19 GB of looks for three rounds); a round's looks of

@@ -57,8 +57,11 @@
 //!   by their `g_vCaseHardening` share, patina's pattern is it, gunsmith's where the masks' G is. Its alpha scales the
 //!   metalness, its brightness lowers the roughness.
 //!
-//! **Not baked**: patina age (`F_PATINA_AGE`, 4 kits) and trilinear case hardening (1) — those weapons keep their own
-//! finish (`unpainted_reason`). Pearlescence and the normal-map pass are not read.
+//! **Not baked**: patina age (`F_PATINA_AGE`) and trilinear case hardening (1 kit) — such weapons keep their own
+//! finish (`unpainted_reason`). No kit uses patina age (CS2 1.41.9.3): the four whose gunsmith template carries it set
+//! `g_bLegacyPatina`, which turns it off, and are painted as gunsmith (their previews in
+//! `panorama/images/econ/default_generated` show the legacy patina). Pearlescence and the normal-map pass are not
+//! read.
 //!
 //! **Size**: the weapon's colour texture's or the pattern's, the larger, 2048 at most; the alpha is the weapon
 //! colour's (alpha-tested parts keep their cut-outs). Each colour and surface job decodes its inputs on its own (the
@@ -1170,8 +1173,9 @@ impl Inputs {
         }
     }
 
-    /// The overlay against its own wear (the wear texture × cavity × growth × its durability, past the paint's
-    /// threshold with softness `k`), where the paint `gone` is: mask mode 0 keeps the paint it covers
+    /// The overlay against its own wear (the wear texture × cavity × growth × its durability, past 0.58 – 0.68 or
+    /// with separate channels 0.56 – 0.74 with softness `k`: gunsmith's too, whose paint keeps the first; combos 584
+    /// and 872), where the paint `gone` is: mask mode 0 keeps the paint it covers
     /// (`lerp(gone, min(gone, its gone), strength)`); the layer blend fades with its wear; its share of roughness and
     /// metalness is what is left × alpha × `g_fOverlayMaterialStrength`.
     fn cover(&self, texel: Option<OverlayTexel>, t: &Texel, k: f32, gone: f32) -> Cover {
@@ -1182,7 +1186,16 @@ impl Inputs {
             };
         };
         let strength = texel.alpha * overlay.strength;
-        let own = self.gone(self.worn(t) * self.growth() * overlay.durability, k);
+        let (low, high) = if self.separate {
+            (0.56, 0.74)
+        } else {
+            (0.58, 0.68)
+        };
+        let own = smoothstep(
+            low - k,
+            high + k,
+            self.worn(t) * self.growth() * overlay.durability,
+        );
         let alpha = if overlay.blend == 4 {
             strength * (1.0 - own).clamp(0.0, 1.0)
         } else {
@@ -1713,13 +1726,19 @@ impl Inputs {
             lerp(paint_metal, ramp_metal, m),
             w,
         );
+        // A roughness texture is the paint's and the metal's roughness alike (combos 404, 980); without one, the
+        // metal parts are glossier where the pattern's alpha is low.
         let r = 1.0 - (a * 2.0).min(1.0);
         let base_rough = soften(self.paint_roughness(u, v, |_| self.roughness));
-        let roughness = rough_with(lerp(
-            base_rough,
-            lerp(r * r * 0.85 + 0.15, base_rough, f32::from(a >= 0.5)),
-            m,
-        ));
+        let roughness = rough_with(if self.paint_roughness.is_some() {
+            base_rough
+        } else {
+            lerp(
+                base_rough,
+                lerp(r * r * 0.85 + 0.15, base_rough, f32::from(a >= 0.5)),
+                m,
+            )
+        });
         Shade {
             color: lerp3(levels, t.weapon, gone * (1.0 - m)),
             roughness: cover.roughness(lerp(

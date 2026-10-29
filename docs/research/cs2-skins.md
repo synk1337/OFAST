@@ -83,8 +83,19 @@ Format 72 needs Source 2 Viewer 20.1 or newer (October 2025's 15.0 reads 59 – 
   entries of the same texture: `g_tPattern` is linear in styles 1, 2, 4, 5 and solid's case hardening, sRGB in 6,
   7, 8; the overlay, the case-hardening ramp and the grunge are sRGB; the masks linear.
 
-**Not read yet**: patina age (4608 + n; its own ramp and remap, 4 kits) and trilinear case hardening (2304 + n, 1
-kit); pearlescence and the normal-map pass, which the weapon material uses after the composite.
+**Patina age is unused** (read 2026-10-29): `F_PATINA_AGE` (4608 + n) ages gunsmith's metal parts along a colour
+ramp (`g_tPatinaAgeColorRamp`, e.g. copper → brown → verdigris, its alpha the metal's turn) by cavity, wear texture,
+the kit's normal map and a start age, `g_tPatinaAgeMask` keeping parts young. The gunsmith template
+(`workshop/paintkits/templates/gunsmith_extended.vcompmat`) sets it, but turns it off when `g_bLegacyPatina` is
+`True`, and the four kits that carry it (Skrrrt M4A4, Monarch R8, Prototype MP9, Arctic Camo SCAR-20) all set that:
+they are plain gunsmith, as CS2's previews of them show (`panorama/images/econ/default_generated/<weapon>_<kit>_light`,
+`_medium`, `_heavy`: silver metal when new, the legacy patina's colours when worn). OFAST read the condition's `True`
+as an unknown word until then. The same kits' combos (404, 980: a roughness texture, pearlescence, an overlay) show
+that a roughness texture replaces gunsmith's own metal roughness, and that an overlay's own wear takes the separate
+channels' 0.56 – 0.74 even on gunsmith.
+
+**Not read yet**: trilinear case hardening (2304 + n, 1 kit); pearlescence and the normal-map pass, which the weapon
+material uses after the composite.
 
 ### The composite's steps
 

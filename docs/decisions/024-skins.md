@@ -41,8 +41,9 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
 - **The variants CS2's kits use**: overlays (on the five styles kits put one on: 70 kits), spray paint's halftone (16)
   and all-masks (37) variants, case hardening on solid, patina and gunsmith (23), read the same way (static combos
   576 + n, 1152 + n, 18 + 2).
-- **Only what it paints right**: patina age (4 kits) and trilinear case hardening (1) are not read yet; those weapons
-  keep their own finish, with a warning — a wrong skin looks worse than none.
+- **Only what it paints right**: trilinear case hardening (1 kit) is not read yet, nor patina age, which no kit uses
+  (the four that seemed to were the legacy patina's: research, "Patina age is unused"); such weapons keep their own
+  finish, with a warning — a wrong skin looks worse than none.
 - **Stickers baked into the weapon's textures** (`export::stickers`, 2026-10-28): CS2 draws them in the weapon's
   own shader (`csgo_weapon.vfx`, `F_STICKERS`, its static combo 512 decompiled the same way) in a second UV set;
   the bake draws the mesh's triangles into the texture's layout to find, at each texel, where the stickers are, then

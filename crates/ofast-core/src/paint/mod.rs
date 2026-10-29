@@ -353,12 +353,16 @@ impl From<&VariableValue> for Param {
 }
 
 impl Param {
-    /// Whether this is the value a condition writes (`1`, `0.5`, `true`, a texture's path).
+    /// Whether this is the value a condition writes (`1`, `0.5`, `true` or `True`, a texture's path). The gunsmith
+    /// template writes `True` (`g_bLegacyPatina`): read as an unknown word, the four kits that set it kept patina
+    /// age where CS2 paints the legacy patina.
     fn is(&self, written: &str) -> bool {
-        let number = match written {
-            "true" => Some(1.0),
-            "false" => Some(0.0),
-            n => n.parse::<f64>().ok(),
+        let number = if written.eq_ignore_ascii_case("true") {
+            Some(1.0)
+        } else if written.eq_ignore_ascii_case("false") {
+            Some(0.0)
+        } else {
+            written.parse::<f64>().ok()
         };
         match self {
             Param::Int(i) => number == Some(*i as f64),

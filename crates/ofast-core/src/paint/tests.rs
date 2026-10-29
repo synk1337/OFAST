@@ -316,6 +316,8 @@ fn a_gloves_hands_take_their_attributes_rolls_and_copies() {
 fn conditions_compare_values_as_written() {
     assert!(Param::Int(1).is("1") && Param::Int(1).is("true"));
     assert!(Param::Int(0).is("false") && !Param::Int(0).is("true"));
+    // The gunsmith template's `g_bLegacyPatina` condition.
+    assert!(Param::Int(1).is("True") && Param::Int(0).is("FALSE"));
     assert!(Param::Floats([0.1, 0.0, 0.0, 0.0]).is("0.1"));
     assert!(!Param::Floats([0.1, 0.0, 0.0, 0.0]).is("0.2"));
     assert!(Param::Texture("masks.vtex".into()).is("masks.vtex_c"));
