@@ -822,8 +822,8 @@ impl Recipe {
     /// too, in [`Recipe::attribute_containers`]), and the loose variables' — `econ_instance` holding the seed and
     /// `wear`, then each roll whose conditions hold drawn from its seed variable, then the copies into containers.
     ///
-    /// `g_nRandomSeedAlt` (the second glove's seed) is set by the game, not by any file: OFAST takes the pattern seed
-    /// until it is checked against CS2.
+    /// `g_nRandomSeedAlt` (the second glove's seed) is set by the game, not by any file: the pattern seed + 1 (CS2
+    /// 1.41.9.3's `client.dll` sets both, the second from the same seed with `lea r8d, [rax+1]`).
     pub(crate) fn containers(
         &self,
         materials: &[(&str, &MaterialInfo)],
@@ -851,9 +851,11 @@ impl Recipe {
                 .insert(variable.name.clone(), Param::from(&variable.value));
         }
         let econ = containers.entry("econ_instance".into()).or_default();
-        for name in ["g_nRandomSeed", "g_nRandomSeedAlt"] {
-            econ.insert(name.into(), Param::Int(i64::from(seed)));
-        }
+        econ.insert("g_nRandomSeed".into(), Param::Int(i64::from(seed)));
+        econ.insert(
+            "g_nRandomSeedAlt".into(),
+            Param::Int(i64::from(seed.wrapping_add(1))),
+        );
         econ.insert(
             "g_flWearAmount".into(),
             Param::Floats([wear, 0.0, 0.0, 0.0]),

@@ -297,12 +297,16 @@ fn a_gloves_hands_take_their_attributes_rolls_and_copies() {
             ("material_seed".to_owned(), "seed_offset".to_owned())
         ]
     );
-    let rotation = |target: &MaterialInfo| match &recipe.containers(&[("target", target)], 400, 0.2)
-        ["instance_params"]["g_fPatternTexCoordRotation"]
+    let rolled = |target: &MaterialInfo, seed: u32| match &recipe.containers(
+        &[("target", target)],
+        seed,
+        0.2,
+    )["instance_params"]["g_fPatternTexCoordRotation"]
     {
         Param::Floats(v) => v[0],
         other => panic!("{other:?}"),
     };
+    let rotation = |target: &MaterialInfo| rolled(target, 400);
     // A hand without the attributes rolls with the pattern seed; one with `left` takes the left's own value.
     let plain = rotation(&MaterialInfo::default());
     assert!((0.0..360.0).contains(&plain) && plain != 0.0, "{plain}");
@@ -310,6 +314,11 @@ fn a_gloves_hands_take_their_attributes_rolls_and_copies() {
     left.int_attributes.insert("left".into(), 1);
     left.int_attributes.insert("seed_offset".into(), 1);
     assert_eq!(rotation(&left), 7.0);
+    // The other hand (`seed_offset`) rolls with g_nRandomSeedAlt, the pattern seed + 1 (CS2's client.dll).
+    let mut second = MaterialInfo::default();
+    second.int_attributes.insert("seed_offset".into(), 1);
+    assert_eq!(rotation(&second), rolled(&MaterialInfo::default(), 401));
+    assert_ne!(rotation(&second), plain);
 }
 
 #[test]

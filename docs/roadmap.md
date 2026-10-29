@@ -440,9 +440,10 @@ player and round.
   10 pearlescent materials. Checked on woxic's Gungnir at tick 153201: the body's blue at hue 0.611 where CS2 shows
   0.633 (0.570 before); its engraving lines read teal where CS2's are lavender (polish pass, with the picture's
   colour). The kits' normal maps checked on the same view: the Gungnir's engraving shows.
-- [ ] The second hand's seed, the default layout's anisotropic combo (one kit); the paints' glitter;
-  stickers' glitter and the free placement's signs (a side view: from behind, first person does not show
-  them); checked against CS2 screenshots.
+- [x] **The second glove's seed** (`g_nRandomSeedAlt`): the pattern seed + 1, read from CS2's `client.dll` (both
+  places that set it).
+- [ ] The default layout's anisotropic combo (one kit); the paints' glitter; stickers' glitter and the free
+  placement's signs (a side view: from behind, first person does not show them); checked against CS2 screenshots.
 - [x] **Textures shared across the looks** (`import_demo.py`, `share_textures`): each exported PNG imported once into
   `/Game/OFAST/Replays/Textures`, which every round's looks sample, instead of a copy per look (round 17: 263
   textures, 574 MB, where its looks had made 3592 of 324 PNGs; 19 GB of looks for three rounds); a round's looks of

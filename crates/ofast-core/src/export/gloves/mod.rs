@@ -27,7 +27,8 @@
 //!
 //! **Not baked**: the normal, occlusion and cloth outputs (the glove keeps its own), anisotropic gloss in this
 //! layout (one kit); the mip-biased pattern sample that shades thick paint's edges is read unbiased.
-//! `g_nRandomSeedAlt` (the second hand's seed) is the pattern seed until checked against CS2.
+//! `g_nRandomSeedAlt` (the second hand's seed) is the pattern seed + 1, as CS2's client sets it
+//! ([`crate::paint`]).
 //!
 //! The "Source2 height blending" program (`F_BACKWARDS_COMPATIBILITY`, 2025's kits) is [`blended`].
 
