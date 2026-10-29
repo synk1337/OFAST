@@ -113,7 +113,15 @@ material constant, `<material>_vmat_g_tnormal_…`, 1×1: Bloodsport's): OFAST k
 (whether CS2 lets them flatten the weapon is not checked). Round 17's Printstream USP-S, Autotronic M9 Bayonet and
 Gungnir AWP carry a real one.
 
-**Not read yet**: pearlescence, glitter and iridescence, which the weapon material draws with those values.
+**Pearlescence** (read 2026-10-29 from `csgo_weapon`'s combo 0, seen on the Gungnir AWP: CS2 indigo where OFAST's
+bake keeps the pattern's sky blue, hue 0.633 against 0.570, woxic's view at tick 153201): the weapon shader turns
+the colour's hue about the grey axis (Rodrigues, axis (1, 1, 1)/√3) by `g_flPearlescentScale × (1 − V·N) ×` the
+pearlescence mask (the generated surface's B; its A holds the scale too), then mixes back towards the luminance by
+`saturation^0.125`. Face on nothing turns; at grazing angles the Gungnir's 0.5 turns it up to 29°. The scale is one
+of the values the recipe copies onto the material (1223 kits). View-dependent: it needs a material of OFAST's own in
+Unreal (Interchange's glTF master has no such input) and the mask exported.
+
+**Not read yet**: glitter and iridescence, which the weapon material draws with the values copied onto it.
 
 ### The composite's steps
 

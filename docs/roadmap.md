@@ -432,7 +432,10 @@ player and round.
 - [x] **The kits' own normal maps** ([research](research/cs2-skins.md), "The paints' normal maps"): copied by the
   recipe onto the weapon's material (395 kits; 105 an occlusion too), they replace its normal and occlusion in the
   glTF (round 17: Printstream, Autotronic, Gungnir), except six flat stand-ins (Bloodsport's: not checked in CS2).
-- [ ] The second hand's seed, the default layout's anisotropic combo (one kit); pearlescence and the paints' glitter;
+- [ ] **Pearlescence** ([research](research/cs2-skins.md), "Pearlescence"): read, not drawn — a view-dependent hue
+  turn (the Gungnir AWP's sky blue reads indigo in CS2) that needs OFAST's own weapon material in Unreal and the mask
+  exported. The kits' normal maps checked on the same view: the Gungnir's engraving shows.
+- [ ] The second hand's seed, the default layout's anisotropic combo (one kit); the paints' glitter;
   stickers' glitter and the free placement's signs (a side view: from behind, first person does not show
   them); checked against CS2 screenshots.
 - [x] **Textures shared across the looks** (`import_demo.py`, `share_textures`): each exported PNG imported once into
