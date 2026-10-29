@@ -11,7 +11,12 @@ Inputs (environment variables):
     OFAST_TICKS      demo ticks, "153200,154050"
     OFAST_POV_SHOTS  optional views through players' eyes, "tick:name,tick:name" (their "POV <name>" cameras, as
                      CS2's spec_player shows them: -PovShots "150500:XANTARES")
-    OFAST_SHOT       the folder for the screenshots: <sequence>_tick<tick>_<camera label>.png
+    OFAST_VIEW_SHOTS optional views from where CS2's `getpos` (or tools/cs2/free_cam.py) puts a camera,
+                     "tick:x:y:z:pitch:yaw,…" (Source units and degrees), at CS2's field of view (90 at 4:3), as
+                     import_demo.py's: -ViewShots "155000:-2167.7:1140.1:65:89:-28.3"; the camera is not saved
+    OFAST_HIDE       optional actor labels to hide in the shots, "CT Wicadia,T molodoy" (a body lying over what
+                     the shot looks at); not saved
+    OFAST_SHOT       the folder for the screenshots: <sequence>_tick<tick>_<camera label>.png (view<n> for the views)
 """
 
 import os
@@ -19,6 +24,10 @@ import re
 import sys
 
 import unreal
+
+# Unreal runs this file without its folder on sys.path; the shared modules sit next to it.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import replay_cameras  # noqa: E402
 
 WIDTH, HEIGHT = 1920, 1080
 LEVEL_TICKS = 300  # editor ticks between loading the level and opening the sequence (opening both at once crashed)
@@ -108,6 +117,22 @@ def main():
             continue
         safe = re.sub(r"[^A-Za-z0-9]+", "_", label)[:40]
         shots.append((int(tick) - tick0, camera, os.path.join(folder, "%s_tick%s_%s.png" % (name, tick, safe))))
+    views = [item.split(":") for item in os.environ.get("OFAST_VIEW_SHOTS", "").split(",") if item.count(":") == 5]
+    spawned = []
+    for number, (tick, *view) in enumerate(views):
+        x, y, z, pitch, yaw = (float(v) for v in view)
+        camera = actors.spawn_actor_from_class(unreal.CameraActor,
+                                               unreal.Vector(*replay_cameras.to_unreal((x, y, z))))
+        camera.set_actor_rotation(unreal.Rotator(roll=0.0, pitch=-pitch, yaw=-yaw), False)
+        camera.camera_component.set_editor_property("field_of_view", replay_cameras.hfov_16_9(90.0))
+        spawned.append(camera)
+        shots.append((int(tick) - tick0, camera, os.path.join(folder, "%s_tick%s_view%d.png" % (name, tick, number))))
+    for label in (item.strip() for item in os.environ.get("OFAST_HIDE", "").split(",") if item.strip()):
+        if label in by_label:
+            # Its components: the sequence keys the actor's own hidden flag.
+            by_label[label].root_component.set_visibility(False, True)
+        else:
+            log("no actor %s to hide" % label)
     state = {"ticks": 0, "index": 0, "requested": None}
 
     def tick(_delta):
@@ -129,6 +154,8 @@ def main():
         if state["index"] >= len(shots):
             unreal.unregister_slate_post_tick_callback(handle)
             unreal.LevelSequenceEditorBlueprintLibrary.close_level_sequence()
+            for camera in spawned:
+                actors.destroy_actor(camera)
             unreal.SystemLibrary.quit_editor()
             return
         frame, camera, shot_path = shots[state["index"]]

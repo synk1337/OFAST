@@ -33,8 +33,11 @@ param(
     [string]$PovShots = "",
     # For import_demo.py: close-ups of players, "tick:controller,tick:controller".
     [string]$CloseShots = "",
-    # For import_demo.py: views from cameras placed as CS2's getpos prints them, "tick:x:y:z:pitch:yaw,...".
+    # For import_demo.py and shoot_sequence.py: views from cameras placed as CS2's getpos prints them,
+    # "tick:x:y:z:pitch:yaw,...".
     [string]$ViewShots = "",
+    # For shoot_sequence.py: actor labels to hide in its shots, "CT Wicadia,T molodoy".
+    [string]$Hide = "",
     # Without a renderer (-nullrhi): no GPU memory, so a big round imports where a drawn one may run out of video
     # memory (round 17 peaks at 10.8 GB of an 11 GB budget); nothing can be shot (shoot_sequence.py shoots the saved
     # round afterwards).
@@ -66,6 +69,7 @@ $env:OFAST_PRESET = $Preset
 $env:OFAST_POV_SHOTS = $PovShots
 $env:OFAST_CLOSE_SHOTS = $CloseShots
 $env:OFAST_VIEW_SHOTS = $ViewShots
+$env:OFAST_HIDE = $Hide
 if ($Shot) {
     # -Shot is either a .png file (single screenshot) or a folder (scripts that take several).
     if ($env:OFAST_SHOT.ToLower().EndsWith(".png")) {

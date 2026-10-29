@@ -81,6 +81,11 @@ see [replay.md](formats/replay.md) and [cameras.md](formats/cameras.md). `-Shot`
 (killer's view before the first kills, each shot camera). `import_cameras.py -Cameras <file>` changes the cameras of
 a round already built.
 
+To shoot a round already built without importing it again, `tools/unreal/shoot_sequence.py` (`-Sequence
+/Game/OFAST/Replays/<demo>_r<round>`): `-Ticks` through the cut camera, `-PovShots "tick:name"` through a player's
+eyes, `-ViewShots "tick:x:y:z:pitch:yaw"` from where `tools/cs2/free_cam.py` put CS2's camera, `-Hide "T Wicadia"`
+to hide actors by label (a body lying over what the view looks at).
+
 The Studio's "Send to Unreal" runs the same steps without a terminal (`apps/studio/src-tauri/src/unreal.rs`): the
 round and its players exported into the app's data folder, the map exported and imported the first time
 (`import_map.py` without `OFAST_SHOT`: no screenshots, the editor quits once the level is saved), then
