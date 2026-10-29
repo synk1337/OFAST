@@ -191,6 +191,10 @@ Snap Weapon                          wpn onto hand_R (rebuilt in anim::aim::snap
           + Body / Head / Fire flinches (additive)
 ```
 
+CS2's update of 2026-10-28 (patch 1.41.9.3) renamed the top state machine `SM0` to `Locomotion`
+(`Locomotion/Locomotion/Idle Poses`, `Locomotion/Planting`); the paths below are written with the old name. OFAST
+looks those up under any top-level name (`Graph::find_under_top`).
+
 States are selected by ID parameters: `weapon_category` (`weapon_category_rifle`, `_pistol`, `_knife`, `_smg`,
 `_shotgun`, `_sniper`, `_machinegun`, `_grenade`, `_equipment`), `weapon_type` (the item's name in
 `scripts/items/items_game.txt`: `weapon_ak47`, `weapon_m4a1` for the M4A4, `weapon_knife` for the CT knife…),

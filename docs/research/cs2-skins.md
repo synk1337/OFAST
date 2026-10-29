@@ -228,6 +228,40 @@ land in the markup's polygons, along the slide where CS2 shows them (tick 150500
 = markup + item ÷ scale, rotation = markup + item ÷ 360, scale = markup ÷ item. The signs (which way a shift moves)
 are not checked yet.
 
+## Keychains
+
+`items_game.txt` → `keychain_definitions` → `pedestal_display_model` (`weapons/keychains/<set>/vmdl/<kc>.vmdl`): a
+model of three bones (`joint1` the ring at the origin, `joint2`, `joint3` the charm) hanging down at rest (bounds z
+−2.07 – 0.12 for `kc_missinglink_catbeach`), simulated as cloth (keyvalues `cloth_sleep_enabled`). The item's
+keychain offset (attributes 300 – 302) is a point in the weapon model's space: FalleN's USP-S (9.74, 0.55, 3.96), an
+inch from the model's `keychain` attachment (8.63, 0.54, 4.00); KSCERATO's (17.5, 0.74, 4.1) on the suppressor.
+The weapon models' keyvalues hold a `KeychainMarkup` list of the areas a keychain may hang from: four corners in model
+space and a bone (`slide`, `weapon_offset`, `silencer`, `clip`…), `LegacyModel` for the CS:GO-era meshes'. The seed
+(306) is not read yet. **Not done**: the cloth swing (OFAST hangs the charm rigid, as at rest).
+
+Of the 143 definitions (2026-10-29), 82 name a model. 23 of those, the community charms (`missinglink_community_01`),
+share a blank model (`workshop_blanks/kc_missinglink_default.vmdl`, a grey template material, one draw call) and add
+`keychain_material`, the material CS2 draws them with: yuurih's keychain 50 (`kc_missinglink_pencil`) is an orange
+pencil in CS2, grey on the bare blank. The other 61 are highlight reels (tournament souvenir charms, `highlight_reel`
+names a clip): no model of their own, `base` names the definition whose model they show (`kc_cologne2026`). OFAST draws
+the reel's base charm; the clip on its screen is not shown.
+
+## Name tags
+
+Shown on the weapon: the name tag module (`weapons/models/shared/nametag/nametag_module.vmdl`, a data plate) on the
+model's `nametag` attachment (`nametag_legacy` on legacy meshes; knives have one too). Its material is a composite
+(`nametag_default.vcompmat`): `g_tColor` generated at 512 from the plate's own colour with `DRAW_TEXT` of the
+name at (0.04, 0.038), colour (241, 241, 241), font "Arial Narrow" (no size given). yuurih's M4A4 shows "LOVE from
+Jimzor v3" on its receiver in CS2 (tick 152705). OFAST draws the text with the Windows fonts (Arial Narrow, then
+Arial, Microsoft YaHei, Segoe UI Symbol per missing character) 46 texels tall.
+
+yuurih plays left-handed: CS2 mirrors his whole viewmodel, stickers included (their text reads mirrored, as in
+OFAST's mirrored viewmodel), but the plate reads "LOVE from Jimzor v3" from the stock towards the muzzle with its
+"PARKER" logo at the stock's end. That is the plate mirrored along its length, turned back by the view's mirror; a
+mirrored copy of the right-hand plate showed the text backwards. The plate is symmetric along its length (bounds
+±1.41 inches about its origin), so the mirrored plate covers the same place. How the game does it (client code, not
+the shader: `csgo_weapon` has no such switch) is not known; the result matches.
+
 ## Wear tiers
 
 Not in the game's files; the community's: factory new 0 – 0.07, minimal wear 0.07 – 0.15, field-tested 0.15 – 0.38,

@@ -49,6 +49,7 @@ fn main() {
             seed,
             wear,
             stickers: Vec::new(),
+            name_tag: None,
         };
         match bake(&content, material, &paint) {
             Ok((color, surface)) => {

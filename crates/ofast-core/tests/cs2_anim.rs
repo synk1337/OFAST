@@ -162,7 +162,7 @@ fn weapon_clips_found_in_the_graphs() {
     }
     // Which locomotion set each category runs with: the main graph's locomotion state machine.
     let machine = main
-        .find("SM0/Locomotion/locomotion")
+        .find_under_top("Locomotion/locomotion")
         .expect("locomotion state machine");
     for category in ofast_core::anim::weapon::CATEGORIES {
         let ids = |p: &str| (p == "weapon_category").then(|| category.to_owned());

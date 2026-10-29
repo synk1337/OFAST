@@ -56,7 +56,7 @@ use rayon::prelude::*;
 use serde_json::{Value as Json, json};
 
 use super::{ExportError, ExportOptions};
-use super::{environment, paint, stickers, tint};
+use super::{environment, nametags, paint, stickers, tint};
 use crate::anim::{BoneConstraints, Clip, NmSkeleton, Retargeter};
 use crate::content::Content;
 use crate::coords;
@@ -208,8 +208,9 @@ pub fn export_model_animated(
 
 /// Writes `model`'s meshes in mesh groups `mesh_groups` rigid, without a skin (each vertex where the bind pose has
 /// it), as `<file_name>.gltf`: a static mesh in Unreal, for a model shown without animation (a weapon lying on the
-/// ground), its weapon materials painted with `paint` (M10). Skinned, Unreal also made a physics asset per weapon, and
-/// rendering the AWP's thumbnail crashed the GPU.
+/// ground), its weapon materials painted with `paint` (M10), with a `charm` (a keychain's model and its placement in
+/// the model's space) hanging from it. Skinned, Unreal also made a physics asset per weapon, and rendering the AWP's
+/// thumbnail crashed the GPU.
 pub fn export_model_static(
     content: &Content,
     model: &Model,
@@ -217,6 +218,7 @@ pub fn export_model_static(
     out_dir: &Path,
     file_name: &str,
     paint: Option<paint::Paint>,
+    charm: Option<(&Model, Affine)>,
 ) -> Result<ExportReport, ExportError> {
     let mut writer = GltfWriter::new(content, out_dir, ExportOptions::default())?;
     writer.paint = paint;
@@ -225,6 +227,18 @@ pub fn export_model_static(
         let draws: Vec<&DrawCall> = mesh.draw_calls.iter().collect();
         if let Some(gltf_mesh) = writer.mesh(&mesh.name, mesh, &draws, [1.0; 4], 0.0, None)? {
             roots.push(writer.node(&mesh.name, Some(gltf_mesh), None));
+        }
+    }
+    writer.paint = None;
+    if let Some((charm, placement)) = charm {
+        for mesh in charm.default_meshes() {
+            let draws: Vec<&DrawCall> = mesh.draw_calls.iter().collect();
+            let name = format!("keychain_{}", mesh.name);
+            if let Some(gltf_mesh) =
+                writer.mesh_with(&name, mesh, &draws, [1.0; 4], 0.0, None, Some(&placement))?
+            {
+                roots.push(writer.node(&name, Some(gltf_mesh), None));
+            }
         }
     }
     writer.finish(file_name, roots)
@@ -636,6 +650,8 @@ enum TextureJob {
     /// A weapon material's colour or metallic-roughness with stickers drawn over it ([`stickers::apply`]): the
     /// texture the material had (painted or its own), then its stickers.
     Stickered(Box<TextureJob>, stickers::StickerJob),
+    /// The name tag plate's colour (its texture) with a weapon's name drawn on it ([`nametags::bake_color`]).
+    NameTag(String, String),
 }
 
 impl TextureJob {
@@ -652,6 +668,7 @@ impl TextureJob {
                 | TextureJob::PaintColor(_)
                 | TextureJob::PaintSurface(_)
                 | TextureJob::Stickered(..)
+                | TextureJob::NameTag(..)
         )
     }
 }
@@ -1319,6 +1336,19 @@ impl<'c> GltfWriter<'c> {
                     let r = rotate([t[0], t[1], t[2]]);
                     *t = [r[0], r[1], r[2], t[3]];
                 }
+                // A mirroring placement (a name tag plate in a left hand, `viewmodel`) turns the triangles inside
+                // out and the tangent frames' handedness: they are wound back and the bitangent sign flipped.
+                let determinant = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                    - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                    + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+                if determinant < 0.0 {
+                    for triangle in g.indices.as_chunks_mut::<3>().0 {
+                        triangle.swap(1, 2);
+                    }
+                    for t in &mut g.tangents {
+                        t[3] = -t[3];
+                    }
+                }
             }
 
             let to_gltf = coords::source_dir_to_gltf;
@@ -1490,6 +1520,7 @@ impl<'c> GltfWriter<'c> {
                 .filter(|i| {
                     (paint.recipe.is_some() && is_painted(i))
                         || (!paint.stickers.is_empty() && i.flag("F_STICKERS"))
+                        || (paint.name_tag.is_some() && path == nametags::MATERIAL)
                 })
                 .map(|_| paint),
             None => None,
@@ -1550,6 +1581,17 @@ impl<'c> GltfWriter<'c> {
             return;
         };
         let name = format!("{}_{}", stem(path), paint.label);
+        if let Some(text) = &paint.name_tag
+            && path == nametags::MATERIAL
+            && let Some(color) = info.textures.get("g_tColor")
+        {
+            let id = self.register(
+                TextureJob::NameTag(color.clone(), text.clone()),
+                name.clone(),
+            );
+            material["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": id });
+            material["extras"]["ofast"]["name_tag"] = json!(text);
+        }
         if paint.recipe.is_some() && is_painted(&info) {
             match paint::job(self.content, path, paint) {
                 Ok(job) => {
@@ -2575,6 +2617,7 @@ fn bake_job(
         TextureJob::PaintColor(job) => paint::bake_color(content, job),
         TextureJob::PaintSurface(job) => paint::bake_surface(content, job),
         TextureJob::ClothSpecular(metalness) => assemble_cloth_specular(content, metalness),
+        TextureJob::NameTag(base, text) => nametags::bake_color(content, base, text),
         TextureJob::Stickered(base, job) => {
             let mut image = bake_job(content, base, places, warn)?;
             let none = stickers::Places::default();

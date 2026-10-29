@@ -9,9 +9,13 @@
 //!   model's `firstperson_default`;
 //! - every weapon the look's players hold, skinned onto its own copy of its model's bones (`w<n>_<bone>`, the root
 //!   under `wpn`), so that the clips' secondary animations move its bolt, magazine and silencer;
+//! - each weapon's keychain, rigid on the bone it hangs from, and its name tag plate on a bone of its own under the
+//!   `nametag` attachment's (`w<n>_nametag_plate`), with a mirrored copy for the left hand
+//!   (`w<n>_nametag_mirrored_plate`, [`nametags::mirrored`]) when a player holds it there;
 //! - one animation per player, `viewmodel_<controller>`, keyed like the body's ([`super::players::animation_fps`]):
 //!   the arms with their twist bones, the weapon in hand on `wpn` with its own bones, every other weapon scaled to
-//!   0 — and the whole rig scaled to 0 while the player has no viewmodel (dead, or holding a weapon without one).
+//!   0, the name tag plate of the other hand too — and the whole rig scaled to 0 while the player has no viewmodel
+//!   (dead, or holding a weapon without one).
 //!
 //! `tools/unreal/import_demo.py` attaches each to its player's first-person camera at the player's viewmodel
 //! offsets, drawn with Unreal's first-person rendering at the player's viewmodel FOV.
@@ -23,7 +27,9 @@ use super::ExportError;
 use super::gltf::{
     Binding, BoneAnimation, ExportReport, MergedModel, export_character, load_model, resource_data,
 };
+use super::keychains;
 use super::loadout::{Finish, WeaponFrames, WeaponLook};
+use super::nametags;
 use super::paint::{Paint, Paints};
 use super::players::{Muzzle, shown_groups, stem};
 use crate::anim::bake::frame_samples;
@@ -197,8 +203,14 @@ struct Slot {
 /// in Unreal the viewmodel's component space, at the camera before the player's viewmodel offsets and hand).
 pub type ViewmodelExport = (ExportReport, Vec<WeaponLook>, Vec<Muzzle>);
 
-/// One player's baked frames and the weapon look in hand at each: `(controller, frames, looks)`.
-type Baked = (u32, Vec<Option<ViewmodelFrame>>, Vec<Option<WeaponLook>>);
+/// One player's baked frames, the weapon look in hand at each and whether it is the left hand:
+/// `(controller, frames, looks, left_handed)`.
+type Baked = (
+    u32,
+    Vec<Option<ViewmodelFrame>>,
+    Vec<Option<WeaponLook>>,
+    Vec<bool>,
+);
 
 /// Writes one viewmodel look's glTF (see the module docs): `agent` with glove skin `gloves` (the glove model and its
 /// paint, M10) for `players`, the round's frames at `fps`. `models` names the weapon models by resource id; `paints`
@@ -276,12 +288,22 @@ pub fn export_viewmodel_look(
                 })
             })
             .collect();
-        baked.push((controller, frames, looks));
+        let hands = frames_at
+            .iter()
+            .map(|&(_, index)| {
+                track.samples[index]
+                    .players
+                    .iter()
+                    .find(|p| p.controller == controller)
+                    .is_some_and(|p| p.viewmodel.left_handed)
+            })
+            .collect();
+        baked.push((controller, frames, looks, hands));
     }
 
     // One slot per weapon look in hand, with the weapon skeleton of the first item seen with it.
     let mut items_of: BTreeMap<WeaponLook, u32> = BTreeMap::new();
-    for (_, frames, looks) in &baked {
+    for (_, frames, looks, _) in &baked {
         for (frame, look) in frames.iter().zip(looks) {
             if let (Some(frame), Some(look)) = (frame, look) {
                 items_of.entry(look.clone()).or_insert(frame.item);
@@ -382,11 +404,23 @@ pub fn export_viewmodel_look(
             paint: glove_paint.clone(),
         });
     }
+    let mut charms = BTreeMap::new();
+    keychains::load_charms(
+        content,
+        paints,
+        slots.iter().map(|s| s.look.finish),
+        &mut charms,
+        &mut warnings,
+    );
+    let plate = nametags::load_plate(content, slots.iter().map(|s| s.look.finish), &mut warnings);
+    // Each name tag plate's bone, and whether it is the left hand's.
+    let mut plates: Vec<(usize, bool)> = Vec::new();
     for (n, slot) in slots.iter().enumerate() {
+        let mesh_groups = shown_groups(&slot.model, slot.look.mesh_groups);
         merged.push(MergedModel {
             label: format!("w{n}_{}", stem(&slot.look.model)),
             model: &slot.model,
-            mesh_groups: shown_groups(&slot.model, slot.look.mesh_groups),
+            mesh_groups,
             binding: Binding::Offset {
                 first: slot.first,
                 placement: placements[n],
@@ -396,6 +430,62 @@ pub fn export_viewmodel_look(
                 .finish
                 .and_then(|f| paints.paint(content, f, &mut warnings)),
         });
+        // Its keychain, on the weapon bone it hangs from (the slide's moves carry it).
+        if let Some((charm, hang)) =
+            keychains::charm(paints, &charms, &slot.model, mesh_groups, slot.look.finish)
+        {
+            merged.push(MergedModel {
+                label: format!("w{n}_keychain"),
+                model: charm,
+                mesh_groups: charm.default_mesh_group_mask,
+                binding: Binding::Rigid {
+                    bone: slot.first + hang.bone,
+                    placement: compose(&placements[n], &keychains::at_point(&hang)),
+                },
+                paint: None,
+            });
+        }
+        // Its name tag plate, on a bone of its own under the attachment's: as it is for the right hand and
+        // mirrored for the left (nametags, "In a left hand"), each for the hands the weapon is held in, shown in
+        // its own (the animations scale the other's bone to 0).
+        if let Some(plate) = &plate
+            && let Some(text) = slot.look.finish.and_then(|f| f.name_tag())
+            && let Some((bone, mount)) = nametags::mount(&slot.model, mesh_groups)
+        {
+            for (left, label, mount) in [
+                (false, "nametag", mount),
+                (true, "nametag_mirrored", nametags::mirrored(&mount)),
+            ] {
+                let held = baked.iter().any(|(_, frames, looks, hands)| {
+                    (0..frames.len()).any(|k| {
+                        frames[k].is_some()
+                            && hands[k] == left
+                            && looks[k].as_ref() == Some(&slot.look)
+                    })
+                });
+                if !held {
+                    continue;
+                }
+                plates.push((skeleton.bones.len(), left));
+                skeleton.bones.push(Bone {
+                    name: format!("w{n}_{label}_plate"),
+                    parent: Some(slot.first + bone),
+                    position: [0.0; 3],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    flags: 0,
+                });
+                merged.push(MergedModel {
+                    label: format!("w{n}_{label}"),
+                    model: plate,
+                    mesh_groups: plate.default_mesh_group_mask,
+                    binding: Binding::Rigid {
+                        bone: skeleton.bones.len() - 1,
+                        placement: compose(&placements[n], &mount),
+                    },
+                    paint: Some(Paint::name_tag(text.clone())),
+                });
+            }
+        }
     }
 
     // The animations.
@@ -408,13 +498,18 @@ pub fn export_viewmodel_look(
         .collect();
     let mut animations = Vec::new();
     let mut muzzles = Vec::new();
-    for (controller, frames, looks) in &baked {
+    for (controller, frames, looks, hands) in &baked {
         let mut keys = Vec::with_capacity(frames.len());
         let mut scales = Vec::with_capacity(frames.len());
         let mut last_arms: Option<Vec<([f32; 3], [f32; 4])>> = None;
-        for (frame, look) in frames.iter().zip(looks) {
+        for ((frame, look), &left_handed) in frames.iter().zip(looks).zip(hands) {
             let mut locals = bind_locals.clone();
             let mut frame_scales = vec![1.0f32; skeleton.bones.len()];
+            for &(bone, left) in &plates {
+                if left != left_handed {
+                    frame_scales[bone] = 0.0;
+                }
+            }
             match frame {
                 Some(frame) => {
                     let mut world = retargeter.world(&frame.arms);

@@ -63,7 +63,7 @@ impl WeaponClips {
             weapon: weapon.to_owned(),
             ..Self::default()
         };
-        let idle_machine = main.find("SM0/Locomotion/Idle Poses");
+        let idle_machine = main.find_under_top("Locomotion/Idle Poses");
         // The category whose idle-pose state machine has a state for this weapon.
         for category in CATEGORIES {
             let ids = |parameter: &str| match parameter {

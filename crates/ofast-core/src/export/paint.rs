@@ -73,6 +73,7 @@ use crate::content::Content;
 use crate::export::ExportError;
 use crate::export::environment::{SRGB_TO_LINEAR, linear_to_srgb};
 use crate::export::gltf::{decode_raw, srgb_to_linear};
+use crate::export::keychains::{Charm, keychain_models};
 use crate::export::loadout::Finish;
 use crate::export::stickers::{Placed, StickerKit, sticker_kits};
 use crate::paint::{PaintKit, Param, Recipe, WeaponParams, kit_recipe, paint_kits};
@@ -93,9 +94,24 @@ pub struct Paint {
     pub wear: f32,
     /// The stickers, drawn over the paint on the materials that draw them (`F_STICKERS`).
     pub stickers: Vec<Placed>,
+    /// A name to draw on the name tag plate's material ([`super::nametags`]).
+    pub name_tag: Option<String>,
 }
 
 impl Paint {
+    /// What a name tag plate is painted with: its text.
+    pub fn name_tag(text: String) -> Self {
+        let hash = blake3::hash(text.as_bytes());
+        Self {
+            label: format!("nametag_{}", &hash.to_hex()[..8]),
+            recipe: None,
+            seed: 0,
+            wear: 0.0,
+            stickers: Vec::new(),
+            name_tag: Some(text),
+        }
+    }
+
     /// The label of kit `kit` at `seed` and `wear` (wear to 4 digits, as CS2's inspect panel shows more).
     pub fn label_of(kit: &str, seed: u32, wear: f32) -> String {
         format!("{kit}_{seed}_{:04}", (wear * 10_000.0).round() as u32)
@@ -108,6 +124,7 @@ impl Paint {
 pub struct Paints {
     kits: BTreeMap<u32, PaintKit>,
     stickers: BTreeMap<u32, StickerKit>,
+    keychains: BTreeMap<u32, Charm>,
     recipes: Mutex<HashMap<u32, Option<Arc<Recipe>>>>,
 }
 
@@ -117,8 +134,14 @@ impl Paints {
         Self {
             kits: items_game.map(paint_kits).unwrap_or_default(),
             stickers: items_game.map(sticker_kits).unwrap_or_default(),
+            keychains: items_game.map(keychain_models).unwrap_or_default(),
             recipes: Mutex::default(),
         }
+    }
+
+    /// The charm of keychain definition `id`, if `items_game.txt` names its model.
+    pub fn keychain(&self, id: u32) -> Option<&Charm> {
+        self.keychains.get(&id)
     }
 
     /// The paint of `finish`: its kit's recipe and its stickers. A kit or recipe that cannot be read is left out, a
@@ -173,6 +196,7 @@ impl Paints {
             seed: finish.seed,
             wear: finish.wear(),
             stickers,
+            name_tag: None,
         })
     }
 

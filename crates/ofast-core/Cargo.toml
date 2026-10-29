@@ -13,6 +13,7 @@ authors.workspace = true
 game-data = []
 
 [dependencies]
+ab_glyph = "0.2"       # TrueType text for weapons' name tags (pure Rust, Apache-2.0) — docs/decisions/002
 bcdec_rs = "0.2"       # standard BC1–BC7 block decompression (pure Rust, MIT) — see docs/decisions/002
 blake3 = { version = "1", features = ["pure"] } # VPK v2 chunk hashes (pure Rust: no C/asm build step)
 crc32fast = "1"        # VPK entry checksums (IEEE CRC-32)

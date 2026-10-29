@@ -145,6 +145,18 @@ impl Graph {
         self.paths.iter().position(|p| p == path)
     }
 
+    /// The node whose editor path is `tail` under any top-level node (`<anything>/<tail>`), the shallowest one if
+    /// several are. CS2's update of 2026-10-28 renamed the world model graph's top state machine (`SM0` →
+    /// `Locomotion`): paths below it are looked up this way.
+    pub fn find_under_top(&self, tail: &str) -> Option<usize> {
+        self.paths
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.split_once('/').is_some_and(|(_, rest)| rest == tail))
+            .min_by_key(|(_, p)| p.len())
+            .map(|(i, _)| i)
+    }
+
     /// A node index field (`m_nChildNodeIdx`…).
     pub fn child(&self, node: usize, key: &str) -> Option<usize> {
         index(self.nodes.get(node)?.get(key))

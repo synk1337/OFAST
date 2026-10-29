@@ -411,9 +411,12 @@ player and round.
   CS2's weapon shader draws them in its second UV set: the model's sticker slots, free placements, colour fitting,
   metallic foils and golds, holograms seen face on, paper backing and wear. Round 17: 52 sticker textures; FalleN's
   MP9 matches CS2's.
+- [x] **Keychains and name tags** (`export::keychains`, `export::nametags`): the charm hanging from the item's point
+  on the weapon (third person, first person, lying weapons) with the community charms' own materials, the name tag
+  plate with the name drawn on it (third and first person, readable in a left hand as in CS2).
 - [ ] The second hand's seed, the default layout's anisotropic combo (one kit); patina age, trilinear case
-  hardening; pearlescence, the paints' normal maps; stickers' glitter and the free placement's signs; keychains,
-  name tags; checked against CS2 screenshots.
+  hardening; pearlescence, the paints' normal maps; stickers' glitter and the free placement's signs; keychains'
+  swing; StatTrak counters; checked against CS2 screenshots.
 - [ ] Textures shared across a round's glTFs imported once in Unreal: each look's import makes its own copy of the
   same painted weapon textures, and with a look per glove skin (round 17: 10 players' and 10 first-person files) a
   drawn import runs out of video memory (the Studio imports without a renderer; `run_ue.ps1 -NullRhi` for checks).

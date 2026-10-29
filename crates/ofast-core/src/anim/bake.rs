@@ -7,7 +7,8 @@
 //!    graph's other states — starts, plants and turns, turning on the spot, jumps and air time, ladders — are
 //!    evaluated by [`super::eval`] from the state [`super::states`] decides, `time` seconds into it. A change of
 //!    state blends over CS2's own transition time.
-//! 2. **Planting** (full body): `SM0/Planting` while the C4 is planted (gameplay state 300).
+//! 2. **Planting** (full body): `<top>/Planting` (the top state machine is `SM0` until CS2's update of 2026-10-28,
+//!    `Locomotion` since) while the C4 is planted (gameplay state 300).
 //! 3. **Weapon idle pose** (additive, upper body): the weapon's own `idle_<w>` / `idle_crouch_<w>` delta, blended by
 //!    the crouch amount — how this weapon is held over the set's generic carry.
 //! 4. **Weapons** (model space, `UpperBody`, `UpperBody_Ladder` on ladders): the weapon's own graph

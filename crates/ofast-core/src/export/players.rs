@@ -40,11 +40,13 @@ use super::gltf::{
     Binding, BoneAnimation, MergedModel, export_character, export_model_static, load_model,
     resource_data,
 };
+use super::keychains;
 use super::loadout::{
     AgentMounts, Finish, Place, Slot, WeaponFrames, WeaponLook, carried_places, hide_changes,
     key_places, skeleton_with_slots, slot_target,
 };
-use super::paint::Paints;
+use super::nametags;
+use super::paint::{Paint, Paints};
 use super::punch::{punch_json, recoil_by_tick};
 use super::shots::{
     Body, Capsule, Doors, ShotData, earlier_holes_json, export_decals, hitbox_check, shots_json,
@@ -712,7 +714,7 @@ fn export_cases(
         let name = format!("{demo_name}_r{}_case_{}", round.track.round, stem(path));
         let written = load_model(round.content, path).and_then(|model| {
             let shown = shown_groups(&model, 0);
-            export_model_static(round.content, &model, shown, out_dir, &name, None)
+            export_model_static(round.content, &model, shown, out_dir, &name, None, None)
         });
         match written {
             Ok(written) => {
@@ -783,6 +785,14 @@ fn export_dropped(
                 .push(mask);
         }
         let paint = finish.and_then(|f| round.paints.paint(round.content, f, &mut report.warnings));
+        let mut charms = BTreeMap::new();
+        keychains::load_charms(
+            round.content,
+            &round.paints,
+            [finish],
+            &mut charms,
+            &mut report.warnings,
+        );
         for (shown, masks) in by_shown {
             let mut name = format!(
                 "{demo_name}_r{}_dropped_{}_{shown}",
@@ -792,12 +802,27 @@ fn export_dropped(
             if let Some(paint) = &paint {
                 name = format!("{name}_{}", paint.label);
             }
+            let charm = keychains::charm(&round.paints, &charms, &model, shown, finish)
+                .map(|(charm, hang)| (charm, keychains::at_point(&hang)));
+            if let Some(keychain) = finish.and_then(|f| f.keychain)
+                && charm.is_some()
+            {
+                name = format!("{name}_kc{}", keychain.id);
+            }
             // Another model with the same file stem: keep the files apart.
             if !names.insert(name.clone()) {
                 name = format!("{name}_{id:016x}");
                 names.insert(name.clone());
             }
-            match export_model_static(round.content, &model, shown, out_dir, &name, paint.clone()) {
+            match export_model_static(
+                round.content,
+                &model,
+                shown,
+                out_dir,
+                &name,
+                paint.clone(),
+                charm,
+            ) {
                 Ok(written) => {
                     entries.push(json!({
                         "file": format!("{name}.gltf"),
@@ -1053,6 +1078,15 @@ fn export_look(
         .into_iter()
         .filter(|s| weapon_models.contains_key(&s.look.model))
         .collect();
+    let mut charms = BTreeMap::new();
+    keychains::load_charms(
+        content,
+        &round.paints,
+        slots.iter().map(|s| s.look.finish),
+        &mut charms,
+        &mut warnings,
+    );
+    let plate = nametags::load_plate(content, slots.iter().map(|s| s.look.finish), &mut warnings);
 
     let skeleton = skeleton_with_slots(&agent, &mounts, slots.len());
     let first_slot_bone = agent.skeleton.bones.len();
@@ -1061,19 +1095,49 @@ fn export_look(
     for (n, slot) in slots.iter().enumerate() {
         let (model, frames) = &weapon_models[&slot.look.model];
         let bone = first_slot_bone + n;
+        let mesh_groups = shown_groups(model, slot.look.mesh_groups);
+        let placement = compose(&bind[bone], &invert_rigid(&frames.weapon_bone));
         merged.push(MergedModel {
             label: format!("w{n}_{}", stem(&slot.look.model)),
             model,
-            mesh_groups: shown_groups(model, slot.look.mesh_groups),
-            binding: Binding::Rigid {
-                bone,
-                placement: compose(&bind[bone], &invert_rigid(&frames.weapon_bone)),
-            },
+            mesh_groups,
+            binding: Binding::Rigid { bone, placement },
             paint: slot
                 .look
                 .finish
                 .and_then(|f| round.paints.paint(content, f, &mut warnings)),
         });
+        // Its keychain, rigid with the weapon (whose bones a slot does not keep).
+        if let Some((charm, hang)) =
+            keychains::charm(&round.paints, &charms, model, mesh_groups, slot.look.finish)
+        {
+            merged.push(MergedModel {
+                label: format!("w{n}_keychain"),
+                model: charm,
+                mesh_groups: charm.default_mesh_group_mask,
+                binding: Binding::Rigid {
+                    bone,
+                    placement: compose(&placement, &keychains::at_point(&hang)),
+                },
+                paint: None,
+            });
+        }
+        // Its name tag plate.
+        if let Some(plate) = &plate
+            && let Some(text) = slot.look.finish.and_then(|f| f.name_tag())
+            && let Some((_, mount)) = nametags::mount(model, mesh_groups)
+        {
+            merged.push(MergedModel {
+                label: format!("w{n}_nametag"),
+                model: plate,
+                mesh_groups: plate.default_mesh_group_mask,
+                binding: Binding::Rigid {
+                    bone,
+                    placement: compose(&placement, &mount),
+                },
+                paint: Some(Paint::name_tag(text)),
+            });
+        }
     }
     let gloves = match &look.gloves {
         Some(path) => match load_model(content, path) {
@@ -1371,6 +1435,12 @@ pub(crate) fn finish_json(finish: Finish) -> serde_json::Value {
     if !stickers.is_empty() {
         out["stickers"] = json!(stickers);
     }
+    if let Some(keychain) = finish.keychain {
+        out["keychain"] = json!({ "id": keychain.id, "offset": keychain.offset() });
+    }
+    if let Some(name) = finish.name_tag() {
+        out["name_tag"] = json!(name);
+    }
     out
 }
 
@@ -1527,7 +1597,7 @@ fn load_graph_rig(
     }
     let main = rig.library.load_graph(MAIN_GRAPH, &mut load_graph)?;
     let node = |path: &str| main.find(path);
-    rig.planting = node("SM0/Planting");
+    rig.planting = main.find_under_top("Planting");
     rig.defuse = node("Defuse/Defuse");
     rig.jump_start = node("BodyAdditives/JumpAdditiveStart");
     rig.jump_land = node("BodyAdditives/JumpAdditiveLand");

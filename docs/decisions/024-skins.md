@@ -50,6 +50,15 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   weapon's own) colour and metallic-roughness. The slots come from the model's `StickerMarkup`, free placements
   shift them by the item's offset in sticker units. The view-dependent parts are fixed (holograms seen face on) or
   left out (glitter, the edges' parallax).
+- **Keychains and name tags as parts of the weapon** (`export::keychains`, `export::nametags`): the charm model
+  hangs rigid from the item's point (or the model's `keychain` attachment) on the bone of the model's nearest
+  keychain area, as at rest, drawn with the definition's `keychain_material` when it names one (the community
+  charms' blank model), a highlight reel as its `base` charm; the name tag plate sits on the `nametag` attachment,
+  its colour baked with the name drawn as CS2's composite draws it. The text uses the Windows fonts CS2 names (Arial
+  Narrow, with fallbacks for the characters it lacks) through `ab_glyph` (TrueType is a standard format: decision
+  002). A left-handed viewmodel, mirrored whole as in CS2, carries a second plate mirrored along its length (CS2
+  keeps the text readable there); each plate is on a bone of its own and the animation scales the other hand's to 0,
+  since players switch hands during a round.
 - **Legacy kits** use the CS:GO-era model (`use_legacy_model`), which the demo's mesh groups already show; its
   material names its own composite inputs, in the layout the kit's pattern was painted for. Their composite
   materials roll no pattern offset or rotation (Fire Serpent's pattern sits the same at every seed; its wear and
@@ -95,7 +104,8 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   all 10 of round 17's glove skins. The height-blended program's colour-adjust matrices are the environment shaders'
   reconstruction (`environment::color_correct`, `color_tint`, from Source 2 Viewer's). Bakes run their rows in parallel: a glove skin
   takes about a second a hand.
-- Not painted yet: keychains, name tags, StatTrak counters; stickers' glitter and view-dependent holograms.
+- Not shown yet: StatTrak counters; stickers' glitter and view-dependent holograms; keychains' swing; name tags on
+  weapons lying in the world.
 - **Compared with CS2** (2026-10-28, `-insecure`, the demo paused at the same ticks, `spec_player` in first person
   against the saved round's POV cameras: 20 views of Aurora vs FURIA's round 17): the weapon skins match (Asiimov,
   Fire Serpents, Wild Lotus, Bloodsport, Hot Rod, Radiation Hazard, Gungnir), the gloves' patterns sit on the right

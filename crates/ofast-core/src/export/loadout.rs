@@ -23,7 +23,8 @@
 //! [`key_places`]: hidden frames stay where the weapon shows, so it never flies or sweeps through the body).
 //! Scrubbing, reverse play and Movie Render Queue then show the same weapons in the same places, like the body.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{LazyLock, Mutex};
 
 use crate::demo::players::CarriedWeapon;
 use crate::demo::skins::Skin;
@@ -52,6 +53,43 @@ pub struct Finish {
     pub wear: u32,
     /// The stickers by slot (the weapon shader draws [`STICKER_SLOTS`]).
     pub stickers: [Option<StickerFinish>; STICKER_SLOTS],
+    /// The keychain hanging from it.
+    pub keychain: Option<KeychainFinish>,
+    /// Its name tag, as a hash (the text: [`Finish::name_tag`]; a hash keeps the finish `Copy`).
+    pub name_tag: Option<u64>,
+}
+
+/// The name tags seen in this process by their hash ([`Finish::name_tag`]).
+static NAME_TAGS: LazyLock<Mutex<HashMap<u64, String>>> = LazyLock::new(Mutex::default);
+
+/// `text`'s hash, remembered with it.
+fn intern_name(text: &str) -> u64 {
+    let hash = blake3::hash(text.as_bytes());
+    let mut first = [0u8; 8];
+    first.copy_from_slice(&hash.as_bytes()[..8]);
+    let id = u64::from_le_bytes(first);
+    NAME_TAGS
+        .lock()
+        .expect("lock")
+        .entry(id)
+        .or_insert_with(|| text.to_owned());
+    id
+}
+
+/// A keychain as a weapon's item sets it (`demo::skins::Keychain`), its point as bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct KeychainFinish {
+    /// Keychain definition (`items_game.txt` → `keychain_definitions`).
+    pub id: u32,
+    /// The point it hangs from in the weapon model's space; `None`: the model's `keychain` attachment.
+    pub offset: Option<[u32; 3]>,
+}
+
+impl KeychainFinish {
+    /// The point it hangs from, inches.
+    pub fn offset(&self) -> Option<[f32; 3]> {
+        self.offset.map(|o| o.map(f32::from_bits))
+    }
 }
 
 /// The sticker slots a weapon's material draws (`csgo_weapon.vfx`: 0 – 4).
@@ -81,11 +119,19 @@ impl Finish {
             seed,
             wear: wear.to_bits(),
             stickers: [None; STICKER_SLOTS],
+            keychain: None,
+            name_tag: None,
         }
     }
 
-    /// The finish of a weapon's skin; `None` without a paint kit or a sticker. Stickers in a slot the shader does
-    /// not draw are left out.
+    /// The name tag's text.
+    pub fn name_tag(&self) -> Option<String> {
+        let id = self.name_tag?;
+        NAME_TAGS.lock().expect("lock").get(&id).cloned()
+    }
+
+    /// The finish of a weapon's skin; `None` without a paint kit, a sticker, a keychain or a name tag. Stickers in a
+    /// slot the shader does not draw are left out.
     pub fn of(skin: &Skin) -> Option<Self> {
         let mut stickers = [None; STICKER_SLOTS];
         for s in &skin.stickers {
@@ -99,11 +145,24 @@ impl Finish {
                 });
             }
         }
-        (skin.paint_kit != 0 || stickers.iter().any(Option::is_some)).then_some(Self {
+        let keychain = skin.keychain.as_ref().map(|k| KeychainFinish {
+            id: k.id,
+            offset: k.offset.map(|o| o.map(f32::to_bits)),
+        });
+        let name_tag = skin
+            .name_tag
+            .as_deref()
+            .filter(|t| !t.is_empty())
+            .map(intern_name);
+        let decorated =
+            stickers.iter().any(Option::is_some) || keychain.is_some() || name_tag.is_some();
+        (skin.paint_kit != 0 || decorated).then_some(Self {
             kit: skin.paint_kit,
             seed: skin.seed,
             wear: skin.wear.to_bits(),
             stickers,
+            keychain,
+            name_tag,
         })
     }
 
