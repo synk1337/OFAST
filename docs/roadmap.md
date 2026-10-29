@@ -432,9 +432,14 @@ player and round.
 - [x] **The kits' own normal maps** ([research](research/cs2-skins.md), "The paints' normal maps"): copied by the
   recipe onto the weapon's material (395 kits; 105 an occlusion too), they replace its normal and occlusion in the
   glTF (round 17: Printstream, Autotronic, Gungnir), except six flat stand-ins (Bloodsport's: not checked in CS2).
-- [ ] **Pearlescence** ([research](research/cs2-skins.md), "Pearlescence"): read, not drawn — a view-dependent hue
-  turn (the Gungnir AWP's sky blue reads indigo in CS2) that needs OFAST's own weapon material in Unreal and the mask
-  exported. The kits' normal maps checked on the same view: the Gungnir's engraving shows.
+- [x] **Pearlescence** ([research](research/cs2-skins.md), "Pearlescence"): the share that turns (the composite's
+  surface B, read per style) baked into the metallic-roughness texture's R, the kit's scale as
+  `extras.ofast.pearlescence` (64 kits: Dopplers, Gungnir, Printstreams…), and CS2's hue turn by the view drawn by
+  OFAST's copy of Interchange's glTF master (`tools/unreal/pearlescence.py`), the view taken from where a viewmodel
+  really is (Unreal's first-person rendering moves its vertices: with its camera vector, half the turn). Round 17:
+  10 pearlescent materials. Checked on woxic's Gungnir at tick 153201: the body's blue at hue 0.611 where CS2 shows
+  0.633 (0.570 before); its engraving lines read teal where CS2's are lavender (polish pass, with the picture's
+  colour). The kits' normal maps checked on the same view: the Gungnir's engraving shows.
 - [ ] The second hand's seed, the default layout's anisotropic combo (one kit); the paints' glitter;
   stickers' glitter and the free placement's signs (a side view: from behind, first person does not show
   them); checked against CS2 screenshots.

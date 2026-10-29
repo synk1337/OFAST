@@ -61,11 +61,17 @@
 //! **Not baked**: patina age (`F_PATINA_AGE`) — such weapons keep their own finish (`unpainted_reason`). No kit uses
 //! it (CS2 1.41.9.3): the four whose gunsmith template carries it set
 //! `g_bLegacyPatina`, which turns it off, and are painted as gunsmith (their previews in
-//! `panorama/images/econ/default_generated` show the legacy patina). Pearlescence and glitter are not read.
+//! `panorama/images/econ/default_generated` show the legacy patina). Glitter is not read.
+//!
+//! **Pearlescence**: the surface's B in CS2, the share of the colour the weapon shader turns in hue by the view —
+//! where the paint is, by `g_tPearlescenceMask` (`F_PEARLESCENCE_MASK`) — goes into the metallic-roughness
+//! texture's R, which glTF leaves unused. The turn itself is drawn in Unreal (`tools/unreal/pearlescence.py`).
 //!
 //! **Beside the bake**: what a recipe copies onto the weapon's own material (`WeaponParams::material`): a kit's own
 //! normal map (`g_tNormal` when `g_bUseNormalMap`, or a legacy kit's paint material's: 395 kits) and occlusion
-//! (105) replace the weapon's in its glTF material (`gltf`), except flat stand-ins (6 kits).
+//! (105) replace the weapon's in its glTF material (`gltf`), except flat stand-ins (6 kits); its pearlescence scale
+//! (`g_flPearlescentScale`, not 0 on 64 kits, 30 of them Dopplers) is written as the material's
+//! `extras.ofast.pearlescence`.
 //!
 //! **Size**: the weapon's colour texture's or the pattern's, the larger, 2048 at most; the alpha is the weapon
 //! colour's (alpha-tested parts keep their cut-outs). Each colour and surface job decodes its inputs on its own (the
@@ -774,6 +780,12 @@ struct Inputs {
     paint_metalness: Option<Sampler>,
     roughness_on_pattern: bool,
     metalness_on_pattern: bool,
+    /// `F_PEARLESCENCE_MASK`: `g_tPearlescenceMask`, on the pattern's placement when
+    /// `g_bPearlescenceMaskUsesPatternUVs` (the default).
+    pearl_mask: Option<Sampler>,
+    pearl_on_pattern: bool,
+    /// `g_bPearlescentOnMetallicOnly` (gunsmith): pearlescence on the metal parts only (paint masks' R).
+    pearl_on_metal: bool,
     pattern_at: Placement,
     projection_at: Placement,
     wear_at: Placement,
@@ -821,12 +833,14 @@ struct Texel {
     surface: [f32; 2],
 }
 
-/// A texel painted: colour (linear), roughness, metalness.
+/// A texel painted: colour (linear), roughness, metalness, and the pearlescence's share: where the paint is as each
+/// style returns it, by the mask once [`Inputs::shade`] is done.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Shade {
     color: [f32; 3],
     roughness: f32,
     metalness: f32,
+    pearl: f32,
 }
 
 impl Inputs {
@@ -997,6 +1011,13 @@ impl Inputs {
             },
             roughness_on_pattern: int("g_bRoughnessUsesPatternUVs", 1) != 0,
             metalness_on_pattern: int("g_bMetalnessUsesPatternUVs", 0) != 0,
+            pearl_mask: if int("F_PEARLESCENCE_MASK", 0) != 0 {
+                texture("g_tPearlescenceMask")?
+            } else {
+                None
+            },
+            pearl_on_pattern: int("g_bPearlescenceMaskUsesPatternUVs", 1) != 0,
+            pearl_on_metal: int("g_bPearlescentOnMetallicOnly", 0) != 0,
             pattern_at,
             projection_at: placement("Pattern", projection_scale),
             wear_at: placement("Wear", size_scale),
@@ -1418,6 +1439,30 @@ impl Inputs {
             color: clamp3(shade.color),
             roughness: shade.roughness.clamp(0.0, 1.0),
             metalness: shade.metalness.clamp(0.0, 1.0),
+            pearl: self.pearl(&t, shade.pearl.clamp(0.0, 1.0), u, v),
+        }
+    }
+
+    /// The pearlescence's share at (u, v), the surface output's B (combos 0, 4, 72, 76, 78, 80, 368: research
+    /// "Pearlescence"): where the paint is (`kept`) by the pearlescence mask — on the pattern's placement, else squared
+    /// with `kept` on the weapon's layout (solid: neither); anodized multicolour's masked one outside the paint masks'
+    /// G and B, and gunsmith's on its metal only with `g_bPearlescentOnMetallicOnly`.
+    fn pearl(&self, t: &Texel, kept: f32, u: f32, v: f32) -> f32 {
+        let masked = match &self.pearl_mask {
+            None => kept,
+            Some(mask) if self.style == SOLID => kept * mask.at(u, v)[0],
+            Some(mask) if self.pearl_on_pattern => kept * self.paint_texture(mask, true, u, v),
+            Some(mask) => (kept * mask.at(u, v)[0]).powi(2),
+        };
+        let masked = if self.style == ANODIZED_MULTI && self.pearl_mask.is_some() {
+            masked * (1.0 - t.masks[1].max(t.masks[2]))
+        } else {
+            masked
+        };
+        if self.style == GUNSMITH && self.pearl_on_metal {
+            masked * t.masks[0]
+        } else {
+            masked
         }
     }
 
@@ -1429,7 +1474,8 @@ impl Inputs {
         let d = pick(self.durability, masks);
         let k = self.softness * d;
         let worn = (t.no_paint + self.worn(t)) * self.growth() * self.overlay_durability(over) * d;
-        let cover = self.cover(over, t, k, self.gone(worn, k));
+        let gone_paint = self.gone(worn, k);
+        let cover = self.cover(over, t, k, gone_paint);
         let grime = self.grime(t);
         let metal = self.paint_metalness(u, v, pick(self.metalness, masks));
         let colors = match (self.ramp(t, u, v, true), &self.case_hardening) {
@@ -1452,6 +1498,7 @@ impl Inputs {
             ),
             roughness,
             metalness,
+            pearl: 1.0 - gone_paint,
         }
     }
 
@@ -1535,6 +1582,7 @@ impl Inputs {
             color: lerp3(albedo_levels(color, painted, metal, w), t.weapon, gone),
             roughness,
             metalness,
+            pearl: 1.0 - gone_paint,
         }
     }
 
@@ -1604,6 +1652,7 @@ impl Inputs {
             ),
             roughness: lerp(t.surface[0], rough, (1.0 - gone).max(0.0)),
             metalness: lerp(m, t.surface[1], gone),
+            pearl: 1.0 - gone,
         }
     }
 
@@ -1641,6 +1690,7 @@ impl Inputs {
             ),
             roughness,
             metalness,
+            pearl: 1.0 - gone_paint,
         }
     }
 
@@ -1738,6 +1788,8 @@ impl Inputs {
                     edge,
                 ),
                 metalness: lerp(t.surface[1], metalness, m),
+                // The occlusion's no-paint mask alone (combo 7).
+                pearl: 1.0 - t.no_paint,
             };
         }
         // Gunsmith: the pattern's alpha is the paint's durability; the metal parts (masks R above 0.99) wear
@@ -1796,6 +1848,7 @@ impl Inputs {
                 },
             )),
             metalness: cover.metalness(lerp(lerp(paint_metal, t.surface[1], gone), metalness, m)),
+            pearl: 1.0 - gone_paint,
         }
     }
 }
@@ -1912,7 +1965,8 @@ pub(crate) fn bake_color(content: &Content, job: &PaintJob) -> Result<Image, Exp
     Ok(Image::new(width, height, rgba))
 }
 
-/// The painted metallic-roughness texture of `job` (glTF channels: G roughness, B metalness): see the
+/// The painted metallic-roughness texture of `job` (glTF channels: G roughness, B metalness; R, which glTF leaves
+/// unused, the pearlescence's share, CS2's surface B, for Unreal's pearlescent material): see the
 /// [module docs](self).
 pub(crate) fn bake_surface(content: &Content, job: &PaintJob) -> Result<Image, ExportError> {
     if job.params.glove {
@@ -1931,7 +1985,12 @@ pub(crate) fn bake_surface(content: &Content, job: &PaintJob) -> Result<Image, E
             );
             let shade = inputs.shade(u, v);
             let byte = |c: f32| (c * 255.0).round() as u8;
-            rgba.extend_from_slice(&[255, byte(shade.roughness), byte(shade.metalness), 255]);
+            rgba.extend_from_slice(&[
+                byte(shade.pearl),
+                byte(shade.roughness),
+                byte(shade.metalness),
+                255,
+            ]);
         }
     }
     Ok(Image::new(width, height, rgba))
@@ -2019,6 +2078,9 @@ mod tests {
             paint_metalness: None,
             roughness_on_pattern: true,
             metalness_on_pattern: false,
+            pearl_mask: None,
+            pearl_on_pattern: true,
+            pearl_on_metal: false,
             pattern_at: at,
             projection_at: at,
             wear_at: at,
@@ -2058,6 +2120,33 @@ mod tests {
             roughness: 0.25,
             metalness: 0.75,
         })
+    }
+
+    #[test]
+    fn pearlescence_is_where_the_paint_is_by_its_mask() {
+        // Unworn paint: all of it; where the weapon takes no paint, none.
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        assert!(close(
+            inputs(SOLID, 0.0, 0, 128, 0).shade(0.5, 0.5).pearl,
+            1.0
+        ));
+        assert!(close(
+            inputs(SOLID, 0.0, 0, 255, 255).shade(0.5, 0.5).pearl,
+            0.0
+        ));
+        let half = 128.0 / 255.0;
+        // Solid takes the mask on the weapon's layout as it is.
+        let mut solid = inputs(SOLID, 0.0, 0, 128, 0);
+        solid.pearl_mask = pixel([128, 0, 0, 255]);
+        assert!(close(solid.shade(0.5, 0.5).pearl, half));
+        // The other styles: on the pattern's placement as it is, on the weapon's layout squared with the paint.
+        let mut anodized = inputs(ANODIZED, 0.0, 0, 128, 0);
+        anodized.masks = pixel([255, 0, 0, 255]);
+        anodized.colors[0] = [1.0, 0.0, 0.0];
+        anodized.pearl_mask = pixel([128, 0, 0, 255]);
+        assert!(close(anodized.shade(0.5, 0.5).pearl, half));
+        anodized.pearl_on_pattern = false;
+        assert!(close(anodized.shade(0.5, 0.5).pearl, half * half));
     }
 
     #[test]

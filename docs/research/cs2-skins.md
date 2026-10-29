@@ -118,8 +118,19 @@ bake keeps the pattern's sky blue, hue 0.633 against 0.570, woxic's view at tick
 the colour's hue about the grey axis (Rodrigues, axis (1, 1, 1)/√3) by `g_flPearlescentScale × (1 − V·N) ×` the
 pearlescence mask (the generated surface's B; its A holds the scale too), then mixes back towards the luminance by
 `saturation^0.125`. Face on nothing turns; at grazing angles the Gungnir's 0.5 turns it up to 29°. The scale is one
-of the values the recipe copies onto the material (1223 kits). View-dependent: it needs a material of OFAST's own in
-Unreal (Interchange's glTF master has no such input) and the mask exported.
+of the values the recipe copies onto the material (1223 kits; not 0 on 64: 30 Dopplers and Gamma Dopplers, 13 custom
+paints such as the Printstreams at 20, 17 gunsmith such as the Gungnir). View-dependent: it needs a material of
+OFAST's own in Unreal (Interchange's glTF master has no such input) and the mask exported.
+
+The surface's B, the share that turns (read 2026-10-29 from the composite's combos 0, 1, 2, 4, 6, 7, 8 and their
+`S_PEARLESCENCE_MASK` variants 72, 74, 76, 78, 80): where the paint is, `1 − gone` (the paint's own wear;
+anodized's `max(1 − masks R, gone)`; patina's `1 − no-paint mask`), × `g_tPearlescenceMask`'s R with
+`F_PEARLESCENCE_MASK` — on the pattern's placement when `g_bPearlescenceMaskUsesPatternUVs` (the default), else on
+the weapon's UVs and squared with the paint share; solid's on the weapon's UVs, not squared, whatever the switch;
+anodized multicolour's (Dopplers) masked share × `1 − max(masks G, B)`; gunsmith's × masks R with
+`g_bPearlescentOnMetallicOnly`. Every combo writes it through the sRGB-to-linear curve as it does roughness and
+metalness (so the stored byte is the value). OFAST bakes it into its metallic-roughness texture's R
+(`export::paint`) and draws the turn in Unreal (`tools/unreal/pearlescence.py`).
 
 **Not read yet**: glitter and iridescence, which the weapon material draws with the values copied onto it.
 

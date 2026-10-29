@@ -1643,6 +1643,16 @@ impl<'c> GltfWriter<'c> {
                         _ => None,
                     };
                     let (normal, occlusion) = (copied("g_tNormal"), copied("g_tAmbientOcclusion"));
+                    // The hue turn by the view that CS2's weapon shader draws (`g_flPearlescentScale`, copied onto the
+                    // material), by the share the surface texture's R holds ([`paint::bake_surface`]).
+                    let pearlescence = match job.params.material.get("g_flPearlescentScale") {
+                        Some(crate::paint::Param::Floats([scale, ..]))
+                            if *scale != 0.0 && !job.params.glove =>
+                        {
+                            Some(*scale)
+                        }
+                        _ => None,
+                    };
                     if let Some(path) = normal {
                         let id = self.texture(&path, TextureRole::Normal { hemi_oct: true });
                         material["normalTexture"] = json!({ "index": id });
@@ -1660,6 +1670,9 @@ impl<'c> GltfWriter<'c> {
                     pbr["metallicFactor"] = json!(1.0);
                     pbr["roughnessFactor"] = json!(1.0);
                     material["extras"]["ofast"]["paint"] = json!(paint.label);
+                    if let Some(scale) = pearlescence {
+                        material["extras"]["ofast"]["pearlescence"] = json!(scale);
+                    }
                 }
                 Err(why) => self.report.warnings.push(format!(
                     "{path}: skin {}: {why}, left unpainted",

@@ -24,6 +24,8 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
 - /Game/OFAST/Replays/Textures: the textures of the players' files below, one per exported PNG, which every round's
   imported looks sample (share_textures; brought up to date when a re-export changed a PNG, deleted when nothing
   samples them any more);
+- /Game/OFAST/Materials/M_OFAST_glTFPearlescent_v1: the master of the pearlescent skins' materials (Dopplers,
+  Gungnir, Printstream…), Interchange's glTF master with CS2's hue turn by the view (pearlescence.py);
 - per player, when `ofast export-demo --players` wrote the animated agents next to the replay (listed in
   <demo>_r<round>.agents.json, one glTF per agent look): the player's agent as a skeletal mesh, playing the player's
   baked animation (`player_<controller>`: body, weapons in hand and holstered), its feet on the demo's positions and
@@ -84,6 +86,7 @@ import unreal
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gltf_specular  # noqa: E402
 import grenade_effects  # noqa: E402
+import pearlescence  # noqa: E402
 import replay_cameras  # noqa: E402
 import shot_effects  # noqa: E402
 import smoke_volumes  # noqa: E402
@@ -281,19 +284,13 @@ def static_pipelines():
             unreal.SoftObjectPath("/Interchange/Pipelines/DefaultGLTFPipeline.DefaultGLTFPipeline")]
 
 
-def set_gltf_specular(gltf_path, objects):
-    """Sets SpecularFactor on the imported material instances that Interchange's glTF master draws without a specular
-    texture, as import_map.py does for maps (gltf_specular.specular_factor): 0.25 on CS2's weapons (glTF
-    specularFactor 0.5, F0 0.02), 0.5 on the rest (F0 0.04); CHARACTER_SPECULAR_FACTOR on the agents. Their
-    cloth-shaded materials (KHR_materials_sheen, Interchange's sheen master) carry a specular texture, which the master
-    applies itself (F0 0.04 off the cloth), so they are left as they are. Interchange
-    leaves it at 1, F0 0.08. Instances are found through the meshes' material slots, which keep the glTF material
-    names: Interchange shortens long asset names in the middle (weapon_kni_e_karambit), so matching by the instance's
-    name missed some weapons."""
+def gltf_instances(gltf_path, objects):
+    """The glTF file's materials by name, and [(material instance, its glTF material)] for those an imported file's
+    meshes use. Instances are found through the meshes' material slots, which keep the glTF material names:
+    Interchange shortens long asset names in the middle (weapon_kni_e_karambit), so matching by the instance's name
+    missed some weapons."""
     with open(gltf_path, encoding="utf-8") as f:
         materials = {m["name"]: m for m in json.load(f).get("materials", [])}
-    masters = {assets.load_asset(path).get_path_name()
-               for path in (gltf_specular.INTERCHANGE_MASTER, gltf_specular.SHEEN_MASTER)}
     slots = []
     for o in objects:
         if isinstance(o, unreal.StaticMesh):
@@ -306,8 +303,20 @@ def set_gltf_specular(gltf_path, objects):
         name = str(slot.get_editor_property("material_slot_name"))
         if isinstance(instance, unreal.MaterialInstanceConstant) and name in materials:
             found[instance.get_path_name()] = (instance, materials[name])
+    return materials, list(found.values())
+
+
+def set_gltf_specular(materials, found):
+    """Sets SpecularFactor on the imported material instances (`found`, from gltf_instances) that Interchange's glTF
+    master draws without a specular texture, as import_map.py does for maps (gltf_specular.specular_factor): 0.25 on
+    CS2's weapons (glTF specularFactor 0.5, F0 0.02), 0.5 on the rest (F0 0.04); CHARACTER_SPECULAR_FACTOR on the
+    agents. Their cloth-shaded materials (KHR_materials_sheen, Interchange's sheen master) carry a specular texture,
+    which the master applies itself (F0 0.04 off the cloth), so they are left as they are. Interchange leaves it at 1,
+    F0 0.08."""
+    masters = {assets.load_asset(path).get_path_name()
+               for path in (gltf_specular.INTERCHANGE_MASTER, gltf_specular.SHEEN_MASTER)}
     count = characters = cloth = 0
-    for instance, material in found.values():
+    for instance, material in found:
         if not gltf_specular.takes_specular_factor(instance, masters):
             continue
         character = material.get("extras", {}).get("ofast", {}).get("shader") == "csgo_character.vfx"
@@ -482,7 +491,12 @@ def import_gltf(replay, path, look, pipelines):
     if assets.does_directory_exist(destination):
         assets.delete_directory(destination)
     objects = manager.import_asset(destination, unreal.InterchangeManager.create_source_data(path), params)
-    set_gltf_specular(path, objects)
+    materials, found = gltf_instances(path, objects)
+    # The specular first: it only sets Interchange's own instances (pearlescent ones then move under OFAST's master).
+    set_gltf_specular(materials, found)
+    pearlescent = pearlescence.make_pearlescent(found)
+    if pearlescent:
+        log("  pearlescence on %d materials" % pearlescent)
     share_textures(objects)
     # Interchange leaves imported assets in memory only: saved, the level's actors keep them when reopened.
     assets.save_directory(destination, only_if_is_dirty=True, recursive=True)
