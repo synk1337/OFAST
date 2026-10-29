@@ -85,7 +85,9 @@ The Studio's "Send to Unreal" runs the same steps without a terminal (`apps/stud
 round and its players exported into the app's data folder, the map exported and imported the first time
 (`import_map.py` without `OFAST_SHOT`: no screenshots, the editor quits once the level is saved), then
 `import_demo.py`. Both run with `-nullrhi`: nothing is drawn, so Unreal takes no GPU memory (with a renderer, a
-12 GB card ran out while `import_demo.py` built a round's smoke volumes: 23 GB asked of an 8.4 GB budget). "Update
+12 GB card ran out while `import_demo.py` built a round's smoke volumes: 23 GB asked of an 8.4 GB budget; and while
+it imported the looks, until the thumbnails' virtual shadow maps were turned off for that step, 2026-10-29: round 17
+now peaks at 10.8 GB of 11). "Update
 cameras" exports the round's cameras again and runs `import_cameras.py` (`OFAST_CAMERAS`). "Open in Unreal" starts
 the editor with `tools/unreal/open_sequence.py` (`OFAST_LEVEL`, `OFAST_SEQUENCE`).
 

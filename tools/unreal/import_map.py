@@ -41,8 +41,9 @@ import unreal
 # Unreal runs this file without its folder on sys.path; the shared modules sit next to it.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gltf_specular  # noqa: E402
+from source_files import imported_from  # noqa: E402
 
-GLTF = os.environ["OFAST_GLTF"]
+GLTF =os.environ["OFAST_GLTF"]
 SHOT_DIR = os.environ.get("OFAST_SHOT", "")
 if SHOT_DIR.lower().endswith(".png"):  # a file path was given: use its folder
     SHOT_DIR = os.path.dirname(SHOT_DIR)
@@ -153,37 +154,6 @@ def import_scene():
     # Interchange leaves imported assets in memory only; save them so the project keeps the map after closing.
     unreal.EditorAssetLibrary.save_directory("/Game/OFAST/" + NAME, only_if_is_dirty=True, recursive=True)
     return new
-
-
-FILE_MD5 = {}
-
-
-def file_md5(path):
-    """A file's MD5 (hex, as Unreal records it), computed once per run."""
-    import hashlib
-
-    if path not in FILE_MD5:
-        digest = hashlib.md5()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 22), b""):
-                digest.update(chunk)
-        FILE_MD5[path] = digest.hexdigest()
-    return FILE_MD5[path]
-
-
-def imported_from(data, path):
-    """Whether the asset (registry AssetData) was imported from the file at `path` as it is now, by the source
-    timestamp and MD5 its import data records (the registry's AssetImportData tag: no need to load the asset). None
-    when nothing is recorded. The exporter rewrites every PNG on each export, so after a re-export the timestamps
-    differ and the MD5 decides (de_inferno's 1099 PNGs, 2.6 GB: 6 s)."""
-    try:
-        entry = json.loads(str(data.get_tag_value("AssetImportData") or "[]"))[0]
-        timestamp, digest = int(entry.get("Timestamp") or 0), entry.get("FileMD5") or ""
-    except (ValueError, IndexError, TypeError):
-        return None
-    if not digest:
-        return None
-    return timestamp == int(os.path.getmtime(path)) or digest == file_md5(path)
 
 
 def delete_assets(packages, what):

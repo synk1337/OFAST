@@ -421,9 +421,12 @@ player and round.
 - [ ] The second hand's seed, the default layout's anisotropic combo (one kit); patina age, trilinear case
   hardening; pearlescence, the paints' normal maps; stickers' glitter and the free placement's signs; gold stickers'
   tone (darker and greener than CS2's); checked against CS2 screenshots.
-- [ ] Textures shared across a round's glTFs imported once in Unreal: each look's import makes its own copy of the
-  same painted weapon textures, and with a look per glove skin (round 17: 10 players' and 10 first-person files) a
-  drawn import runs out of video memory (the Studio imports without a renderer; `run_ue.ps1 -NullRhi` for checks).
+- [x] **Textures shared across the looks** (`import_demo.py`, `share_textures`): each exported PNG imported once into
+  `/Game/OFAST/Replays/Textures`, which every round's looks sample, instead of a copy per look (round 17: 263
+  textures, 574 MB, where its looks had made 3592 of 324 PNGs; 19 GB of looks for three rounds); a round's looks of
+  an older export deleted. A drawn import ran out of video memory for another reason: each saved look's thumbnail
+  keeps a preview scene with its own virtual shadow map pool (2.2 GB a look). With those shadows off while the looks
+  import, round 17 imports drawn in 14 minutes, peaking at 10.8 GB of an 11 GB budget.
 
 ## Order from here
 

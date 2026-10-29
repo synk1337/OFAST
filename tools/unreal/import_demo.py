@@ -21,6 +21,9 @@ The map must have been imported first (tools/unreal/import_map.py): the sequence
 
 - /Game/OFAST/Replays/<demo>_r<round>: a Level Sequence at the demo's tick rate (64 fps: one frame per tick),
   playback from the round's start (freeze time included) to its end;
+- /Game/OFAST/Replays/Textures: the textures of the players' files below, one per exported PNG, which every round's
+  imported looks sample (share_textures; brought up to date when a re-export changed a PNG, deleted when nothing
+  samples them any more);
 - per player, when `ofast export-demo --players` wrote the animated agents next to the replay (listed in
   <demo>_r<round>.agents.json, one glTF per agent look): the player's agent as a skeletal mesh, playing the player's
   baked animation (`player_<controller>`: body, weapons in hand and holstered), its feet on the demo's positions and
@@ -84,6 +87,7 @@ import grenade_effects  # noqa: E402
 import replay_cameras  # noqa: E402
 import shot_effects  # noqa: E402
 import smoke_volumes  # noqa: E402
+import source_files  # noqa: E402
 from replay_cameras import (  # noqa: E402
     ANGLE_TOLERANCE_DEG, POSITION_TOLERANCE_CM, TAG, UNITS_TO_CM, channels_by_name, key_visibility, reduce_keys,
     spawn_tagged, to_unreal, unwrap)
@@ -124,6 +128,15 @@ SHOT_TIMEOUT_TICKS = 3000  # editor ticks a screenshot may take before it is giv
 # converted; docs/formats/material.md, "Weapons' and agents' specular"). A stand-in. Cloth-shaded materials
 # (KHR_materials_sheen) carry a specular texture instead (1 - their cloth mask, at F0 0.04 like CS2's).
 CHARACTER_SPECULAR_FACTOR = 1.0
+# Where each imported look (one file of the players export) gets its own folder (look_folder), and the folders this
+# run imported.
+LOOKS_FOLDER = "/Game/OFAST/Replays/Agents"
+IMPORTED_LOOKS = set()
+# Where the textures of the players' files go, one per exported PNG and kind, whatever round or look samples it
+# (share_textures).
+SHARED_TEXTURES = "/Game/OFAST/Replays/Textures"
+# Shared textures this run made or checked against their PNG.
+CHECKED_TEXTURES = set()
 
 levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -314,6 +327,106 @@ def set_gltf_specular(gltf_path, objects):
         % (count, len(materials), len(found), characters, cloth))
 
 
+def texture_kind(texture):
+    """How Interchange set a texture up for the glTF material that samples it: "normal" (a normal map, green flipped
+    to Unreal's convention), "color" (sRGB) or "linear"."""
+    if texture.get_editor_property("compression_settings") == unreal.TextureCompressionSettings.TC_NORMALMAP:
+        return "normal"
+    return "color" if texture.get_editor_property("srgb") else "linear"
+
+
+def shared_texture(texture):
+    """SHARED_TEXTURES' texture for `texture` (one an imported file's materials sample), made or brought up to date:
+    named after its PNG (with its kind added when that name holds another kind). None when `texture` itself became
+    it: the first import of its PNG and kind moves the file's own texture there. A shared texture whose PNG changed
+    since it was imported (a re-export) is imported again in place, so every look that samples it gets the new
+    pixels."""
+    png = texture.get_editor_property("asset_import_data").get_first_filename()
+    kind = texture_kind(texture)
+    stem = re.sub(r"[^A-Za-z0-9_]", "_", os.path.splitext(os.path.basename(png))[0])
+    for name in (stem, "%s_%s" % (stem, kind)):
+        path = "%s/%s" % (SHARED_TEXTURES, name)
+        if not assets.does_asset_exist(path):
+            if not assets.rename_loaded_asset(texture, path):
+                raise RuntimeError("could not move %s to %s" % (texture.get_path_name(), path))
+            CHECKED_TEXTURES.add(path)
+            return None
+        shared = assets.load_asset(path)
+        if texture_kind(shared) != kind:
+            continue
+        if path not in CHECKED_TEXTURES:
+            CHECKED_TEXTURES.add(path)
+            if source_files.imported_from(assets.find_asset_data(path), png) is False:
+                log("  re-importing %s (its PNG changed)" % name)
+                task = unreal.AssetImportTask()
+                task.filename = png
+                task.destination_path = SHARED_TEXTURES
+                task.destination_name = name
+                task.automated = True
+                task.replace_existing = True
+                task.save = False
+                unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+                shared = assets.load_asset(path)
+                for prop in ("srgb", "compression_settings", "flip_green_channel"):
+                    if shared.get_editor_property(prop) != texture.get_editor_property(prop):
+                        shared.set_editor_property(prop, texture.get_editor_property(prop))
+        return shared
+    raise RuntimeError("no shared texture name left for " + png)
+
+
+def share_textures(objects):
+    """Points the material instances of one imported file at SHARED_TEXTURES' copy of each texture they sample
+    (shared_texture) and deletes the file's own textures. Every look's file samples the same exported PNGs (the
+    export's textures folder holds each image once, and every agent and viewmodel file carries all the round's
+    weapons), but Interchange gives each import its own copies: three rounds' looks had made 3592 textures (round 17
+    exports 324 PNGs), 19 GB of assets; shared, round 17's take 263 textures, 574 MB."""
+    own = {o.get_path_name(): o for o in objects if isinstance(o, unreal.Texture2D)}
+    instances = [o for o in objects if isinstance(o, unreal.MaterialInstanceConstant)]
+    sampled = {}
+    for instance in instances:
+        for value in instance.get_editor_property("texture_parameter_values"):
+            texture = value.get_editor_property("parameter_value")
+            if texture is not None and texture.get_path_name() in own:
+                sampled[texture.get_path_name()] = texture
+    replaced = {}
+    moved = set()
+    for path, texture in sampled.items():
+        shared = shared_texture(texture)
+        if shared is None:
+            moved.add(path)
+        else:
+            replaced[path] = shared
+    mel = unreal.MaterialEditingLibrary
+    for instance in instances:
+        for value in instance.get_editor_property("texture_parameter_values"):
+            texture = value.get_editor_property("parameter_value")
+            if texture is not None and texture.get_path_name() in replaced:
+                name = value.get_editor_property("parameter_info").get_editor_property("name")
+                mel.set_material_instance_texture_parameter_value(instance, name, replaced[texture.get_path_name()])
+    leftovers = [texture for path, texture in own.items() if path not in moved]
+    if leftovers and not assets.delete_loaded_assets(leftovers):
+        raise RuntimeError("could not delete the imported copies of shared textures")
+    log("  textures: %d shared, %d new, %d unused deleted"
+        % (len(replaced), len(moved), len(own) - len(sampled)))
+
+
+def delete_unused_shared_textures():
+    """Deletes the shared textures that this run's files do not sample and no saved asset does any more (a re-export
+    that baked other pixels gives the bake a new name; the looks of an earlier import of this round are gone)."""
+    registry = unreal.AssetRegistryHelpers.get_asset_registry()
+    options = unreal.AssetRegistryDependencyOptions(include_soft_package_references=True,
+                                                    include_hard_package_references=True)
+    unused = []
+    for data in registry.get_assets_by_path(SHARED_TEXTURES, recursive=False):
+        package = str(data.package_name)
+        if package not in CHECKED_TEXTURES and not registry.get_referencers(data.package_name, options):
+            unused.append(assets.load_asset(package))
+    unused = [texture for texture in unused if texture is not None]
+    if unused and not assets.delete_loaded_assets(unused):
+        raise RuntimeError("could not delete unused shared textures")
+    log("shared textures: %d unused deleted" % len(unused))
+
+
 def agents_manifest(replay):
     """(folder, "<demo>_r<round>", manifest) of the agents manifest next to the replay, or None without one."""
     folder = os.path.dirname(REPLAY_PATH)
@@ -325,6 +438,35 @@ def agents_manifest(replay):
         return folder, base, json.load(f)
 
 
+def look_folder(replay):
+    """What the folders of this round's imported looks start with (a look's own name follows). Short: asset file
+    paths must stay under Windows' 260 characters."""
+    return "%s/%s_r%d_" % (LOOKS_FOLDER, replay["demo"][-12:], replay["round"])
+
+
+def delete_old_looks(replay):
+    """Deletes this round's look folders that this run did not import: looks an earlier export named otherwise (they
+    used to stay, with their own copies of the textures: 4 GB of round 17's). A folder is this round's when its
+    assets were imported from one of its files (<demo>_r<round>_….gltf, whatever folder the export was in): the
+    folder's name keeps only the demo's last 12 characters, which another demo may share."""
+    prefix = look_folder(replay)
+    base = "%s_r%d_" % (replay["demo"], replay["round"])
+    registry = unreal.AssetRegistryHelpers.get_asset_registry()
+    old = []
+    for path in assets.list_assets(LOOKS_FOLDER, recursive=False, include_folder=True):
+        path = path.rstrip("/")
+        if not path.startswith(prefix) or path in IMPORTED_LOOKS:
+            continue
+        files = {os.path.basename(entry.get("RelativeFilename") or "")
+                 for data in registry.get_assets_by_path(path, recursive=True)
+                 for entry in source_files.recorded(data)}
+        if any(name.startswith(base) and name.endswith(".gltf") for name in files):
+            old.append(path)
+    for path in old:
+        assets.delete_directory(path)
+    log("old looks of this round deleted: %d" % len(old))
+
+
 def import_gltf(replay, path, look, pipelines):
     """Imports one glTF of the players export into its own folder (named after `look`) and returns the objects."""
     manager = unreal.InterchangeManager.get_interchange_manager_scripted()
@@ -332,17 +474,20 @@ def import_gltf(replay, path, look, pipelines):
     params.is_automated = True
     params.replace_existing = True
     params.override_pipelines = pipelines
-    # A short folder: asset file paths must stay under Windows' 260 characters.
-    destination = "/Game/OFAST/Replays/Agents/%s_r%d_%s" % (replay["demo"][-12:], replay["round"], look)
+    destination = look_folder(replay) + look
+    IMPORTED_LOOKS.add(destination)
     # Fresh every run: Interchange keeps existing material instances on a re-import (decision 006), so a changed
-    # material conversion would not show. The level's old replay actors are already gone.
+    # material conversion would not show. The level's old replay actors, which use it, are removed once it is open
+    # (clean_level).
     if assets.does_directory_exist(destination):
         assets.delete_directory(destination)
     objects = manager.import_asset(destination, unreal.InterchangeManager.create_source_data(path), params)
     set_gltf_specular(path, objects)
+    share_textures(objects)
     # Interchange leaves imported assets in memory only: saved, the level's actors keep them when reopened.
     assets.save_directory(destination, only_if_is_dirty=True, recursive=True)
-    return objects
+    assets.save_directory(SHARED_TEXTURES, only_if_is_dirty=True, recursive=False)
+    return [o for o in objects if not isinstance(o, unreal.Texture)]
 
 
 def finish_key(finish):
@@ -896,7 +1041,29 @@ def apply_owners(cameras, hidden_in_own_view, own_view_only):
     log("owner visibility: %d actors on %d POV cameras" % (owned, len(cameras)))
 
 
-def build(replay):
+def import_looks(replay):
+    """Imports every file of the players export (agents, viewmodels, dropped weapons, cases), before the map's level
+    is loaded: sharing an import's textures deletes its own copies (share_textures), and a deletion searches every
+    object in memory for references to them, 1 s per file in an empty editor but 11 - 20 s with de_dust2's level open
+    (round 17's 40 files: 5 minutes).
+
+    Virtual shadow maps are off meanwhile. Saving an asset renders its thumbnail, and Unreal keeps a preview scene
+    per skeletal mesh and skeleton thumbnail (up to 128 of each), each with its own virtual shadow map pool: a drawn
+    import took 2.2 GB of video memory per look, and round 17's ran out at its twelfth file (25 GB used of an 11 GB
+    budget); without them, 0.15 GB."""
+    shadows = unreal.SystemLibrary.get_console_variable_int_value("r.Shadow.Virtual.Enable")
+    unreal.SystemLibrary.execute_console_command(None, "r.Shadow.Virtual.Enable 0")
+    try:
+        looks = {"agents": import_agents(replay), "viewmodels": import_viewmodels(replay),
+                 "world_models": import_dropped_weapons(replay), "cases": import_cases(replay)}
+    finally:
+        unreal.SystemLibrary.execute_console_command(None, "r.Shadow.Virtual.Enable %d" % shadows)
+    delete_old_looks(replay)
+    delete_unused_shared_textures()
+    return looks
+
+
+def build(replay, looks):
     tick0 = replay["start_tick"]
     ticks = replay["samples"]["ticks"]
     frames = [t - tick0 for t in ticks]
@@ -927,8 +1094,8 @@ def build(replay):
     own_view_only = {}
     started = time.monotonic()
     keys = 0
-    agents = import_agents(replay)
-    viewmodels = import_viewmodels(replay)
+    agents = looks["agents"]
+    viewmodels = looks["viewmodels"]
     manifest = agents_manifest(replay)
     # Recoil on each player's viewmodel (export::punch): tick -> (camera pitch, yaw, viewmodel pitch, yaw), Source's;
     # the cameras file has the camera's part in the eyes already.
@@ -990,7 +1157,7 @@ def build(replay):
             viewmodel_life[controller] = vm_changes
             key_visibility(vm_binding, vm_changes, end_frame)
             own_view_only.setdefault(controller, []).append(vm)
-    world_models = import_dropped_weapons(replay)
+    world_models = looks["world_models"]
     keys += place_dropped_weapons(sequence, replay, world_models, end_frame)
     keys += place_grenades(sequence, replay, world_models, end_frame)
     # The demo tick the smokes, fires, blasts and flashed views read: keyed whatever the round has (a round without
@@ -1016,7 +1183,7 @@ def build(replay):
 
     shot_effects.place_shots(sequence, replay, REPLAY_PATH, end_frame, manifest[2] if manifest else {}, spawn_tagged,
                              hide, viewmodel_actors, first_person, light)
-    keys += place_brass(sequence, replay, import_cases(replay), end_frame, viewmodel_actors,
+    keys += place_brass(sequence, replay, looks["cases"], end_frame, viewmodel_actors,
                         lambda actor, c: hidden_in_own_view.setdefault(c, []).append(actor),
                         lambda actor, c: own_view_only.setdefault(c, []).append(actor))
     keys += animate_doors(sequence, replay, end_frame)
@@ -1212,8 +1379,9 @@ def main():
         replay = json.load(f)
     if replay.get("format") != "ofast-replay" or replay.get("version") != 1:
         raise RuntimeError("%s is not an OFAST replay (version 1)" % REPLAY_PATH)
+    looks = import_looks(replay)
     clean_level(replay["map"])
-    sequence, cameras, shot_actors = build(replay)
+    sequence, cameras, shot_actors = build(replay, looks)
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world().get_path_name()
     if not world.startswith("/Game/"):
         raise RuntimeError("refusing to save " + world)

@@ -35,8 +35,9 @@ param(
     [string]$CloseShots = "",
     # For import_demo.py: views from cameras placed as CS2's getpos prints them, "tick:x:y:z:pitch:yaw,...".
     [string]$ViewShots = "",
-    # Without a renderer (-nullrhi): no GPU memory, so a big round imports where a drawn one ran out of video memory;
-    # nothing can be shot (shoot_sequence.py shoots the saved round afterwards).
+    # Without a renderer (-nullrhi): no GPU memory, so a big round imports where a drawn one may run out of video
+    # memory (round 17 peaks at 10.8 GB of an 11 GB budget); nothing can be shot (shoot_sequence.py shoots the saved
+    # round afterwards).
     [switch]$NullRhi,
     [string]$Engine = "C:\Program Files\Epic Games\UE_5.8"
 )
