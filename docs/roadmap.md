@@ -425,8 +425,13 @@ player and round.
 - [x] **Trilinear case hardening** ([research](research/cs2-skins.md)): the case-hardening ramp read with the pattern
   projected from the weapon's position (Soch Mountains M4A1-S); its bakes show CS2's previews' blue mountains, cream
   waves and gold, not checked in a render.
-- [ ] The second hand's seed, the default layout's anisotropic combo (one kit); pearlescence, the paints' normal maps; stickers' glitter and the free placement's signs; gold stickers' tone
-  (darker and greener than CS2's); checked against CS2 screenshots.
+- [x] **Gold stickers' tone** (checked 2026-10-29, FalleN's MP9 at tick 152488, CS2 at gamma 2.2): not the stickers'.
+  At the red paint's equal brightness, Unreal's picture is more saturated than CS2's everywhere (red 0.80 against
+  0.67, the gold 0.53 against 0.38); the gold metal is also a tenth darker, lit by the reflections. Both go to the
+  polish pass (the picture's colour, metals' reflections).
+- [ ] The second hand's seed, the default layout's anisotropic combo (one kit); pearlescence, the paints' normal
+  maps; stickers' glitter and the free placement's signs (a side view: from behind, first person does not show
+  them); checked against CS2 screenshots.
 - [x] **Textures shared across the looks** (`import_demo.py`, `share_textures`): each exported PNG imported once into
   `/Game/OFAST/Replays/Textures`, which every round's looks sample, instead of a copy per look (round 17: 263
   textures, 574 MB, where its looks had made 3592 of 324 PNGs; 19 GB of looks for three rounds); a round's looks of
@@ -439,6 +444,9 @@ player and round.
 A first pass on each milestone left, M7 to M10, then a second pass through every milestone to fix, tweak and
 polish (2026-10-26). That pass includes the effects rework and the installer:
 
+- [ ] **The picture's colour**: Unreal's rounds are more saturated than CS2's (de_dust2's mid, 2026-10-29: red paint
+  0.80 against CS2's 0.67 at equal brightness), and metals a little darker (gold stickers a tenth); indoors CS2 reads
+  greyer still.
 - [ ] **Installer**: the Studio as a setup program (`tauri build`, NSIS), made by CI on version tags. It carries
   OFAST's Unreal scripts (`tools/unreal`) and a template of its Unreal project (Python only: no C++ to compile), and
   makes the user's own project in a writable folder on first start (the Studio finds both in the source folder
