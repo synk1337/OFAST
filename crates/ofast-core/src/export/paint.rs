@@ -55,10 +55,11 @@
 //! - **Case hardening** (`F_CASE_HARDENING`, solid, patina, gunsmith): a colour ramp read across by the weapon's
 //!   shape (cavity, occlusion, the normal map's flatness) and the pattern's R, down by its G; solid's colours take it
 //!   by their `g_vCaseHardening` share, patina's pattern is it, gunsmith's where the masks' G is. Its alpha scales the
-//!   metalness, its brightness lowers the roughness.
+//!   metalness, its brightness lowers the roughness. Trilinear (`F_CASE_HARDENING_TRILINEAR`, 2304 + n, 1 kit: Soch
+//!   Mountains M4A1-S), the pattern it reads is projected from the weapon's position as spray paint's.
 //!
-//! **Not baked**: patina age (`F_PATINA_AGE`) and trilinear case hardening (1 kit) — such weapons keep their own
-//! finish (`unpainted_reason`). No kit uses patina age (CS2 1.41.9.3): the four whose gunsmith template carries it set
+//! **Not baked**: patina age (`F_PATINA_AGE`) — such weapons keep their own finish (`unpainted_reason`). No kit uses
+//! it (CS2 1.41.9.3): the four whose gunsmith template carries it set
 //! `g_bLegacyPatina`, which turns it off, and are painted as gunsmith (their previews in
 //! `panorama/images/econ/default_generated` show the legacy patina). Pearlescence and the normal-map pass are not
 //! read.
@@ -710,6 +711,30 @@ struct CaseHardening {
     offset: f32,
     /// `g_vCaseHardening`: how much the ramp replaces each paint colour (solid).
     weights: [f32; 4],
+    /// `F_CASE_HARDENING_TRILINEAR`: the pattern projected from the weapon's 3D position, as spray paint's, instead
+    /// of on the pattern's UVs.
+    trilinear: bool,
+}
+
+/// Where a texel is on the weapon for a pattern projected from its 3D position (`Inputs::projection`).
+struct Projection {
+    position: [f32; 3],
+    /// How far the projection turns from the (y, z) plane to (x, z), then to (y, x).
+    to_xz: f32,
+    to_yx: f32,
+}
+
+impl Projection {
+    /// The pattern of `inputs` at `placement`, projected from the position moved by `offset`.
+    fn pattern(&self, inputs: &Inputs, placement: &Placement, offset: [f32; 3]) -> [f32; 4] {
+        let [x, y, z] = std::array::from_fn(|i| self.position[i] + offset[i]);
+        let at = |a: f32, b: f32| {
+            let (pu, pv) = placement.apply(a, b);
+            inputs.pattern_sample(pu, pv)
+        };
+        let (yz, xz, yx) = (at(y, z), at(x, z), at(y, x));
+        std::array::from_fn(|c| lerp(lerp(yz[c], xz[c], self.to_xz), yx[c], self.to_yx))
+    }
 }
 
 /// The paint styles (`F_PAINT_STYLE`).
@@ -843,8 +868,10 @@ impl Inputs {
             )
         };
         let projected = matches!(style, SPRAY | AIRBRUSHED);
+        let trilinear =
+            int("F_CASE_HARDENING", 0) != 0 && int("F_CASE_HARDENING_TRILINEAR", 0) != 0;
         let position = match params.get("g_tPosition") {
-            Some(Param::Texture(path)) if projected => load_f32(content, path)?,
+            Some(Param::Texture(path)) if projected || trilinear => load_f32(content, path)?,
             _ => None,
         };
         // A texture without alpha decodes to 255 there: no no-paint mask, not paint nowhere.
@@ -925,6 +952,7 @@ impl Inputs {
                 geometric: float("g_flCaseHardeningGeometricInfluence", 1.0),
                 offset: float("g_flCaseHardeningRampOffset", 0.0),
                 weights: floats("g_vCaseHardening", [0.0; 4]),
+                trilinear,
             }),
             _ => None,
         };
@@ -942,7 +970,7 @@ impl Inputs {
                 Address::of(int("g_nPatternTextureVerticalSampling", 0)),
             ],
             position,
-            surface: if projected {
+            surface: if projected || trilinear {
                 texture("g_tSurface")?
             } else {
                 None
@@ -1069,18 +1097,12 @@ impl Inputs {
         }
     }
 
-    /// The pattern projected from the weapon's 3D position (spray paint, anodized airbrushed): the position texture
-    /// averaged over 17 taps, × 2, the pattern placed on its (y, z), (x, z) and (y, x) planes, blended towards the
-    /// second and third by the surface normal's |y|⁷ and |z|⁷ (× `g_vSprayBlend`). With separate channels and
-    /// `g_bBiasSpray`, the normal texture is read through an sRGB encode first.
-    ///
-    /// With the halftone (z mirrored): the colour channels × a level of cavity × occlusion × 2 (`smoothstep` of its
-    /// power; inverted when the thresholds fall, the other way out of the cavity), × the alpha of three more
-    /// projections turned by the dots' rotations, then thresholded.
-    fn pattern_projected(&self, t: &Texel, u: f32, v: f32) -> [f32; 4] {
-        let Some(position) = &self.position else {
-            return self.pattern_at(u, v);
-        };
+    /// Where (u, v) is on the weapon for a projected pattern: the position texture averaged over 17 taps, × 2 (z
+    /// mirrored with the halftone), and the surface normal's |y|⁷ and |z|⁷ × `g_vSprayBlend`, how far the projection
+    /// turns to its second and third planes. With separate channels and `g_bBiasSpray`, the normal texture is read
+    /// through an sRGB encode first. `None` without a position texture.
+    fn projection(&self, u: f32, v: f32) -> Option<Projection> {
+        let position = self.position.as_ref()?;
         let mut sum = [0.0f32; 4];
         for [du, dv] in POSITION_TAPS {
             let p = position.sample_bilinear(u + du * 0.2, v + dv * 0.2);
@@ -1101,16 +1123,24 @@ impl Inputs {
         let n = stored.map(|c| c * 2.0 - 1.0);
         let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-6);
         let n = n.map(|c| c / length);
-        let to_xz = self.spray_blend[0] * n[1].abs().powi(7);
-        let to_yx = self.spray_blend[1] * n[2].abs().powi(7);
-        let project = |placement: &Placement| -> [f32; 4] {
-            let at = |a: f32, b: f32| {
-                let (pu, pv) = placement.apply(a, b);
-                self.pattern_sample(pu, pv)
-            };
-            let (yz, xz, yx) = (at(y, z), at(x, z), at(y, x));
-            std::array::from_fn(|c| lerp(lerp(yz[c], xz[c], to_xz), yx[c], to_yx))
+        Some(Projection {
+            position: [x, y, z],
+            to_xz: self.spray_blend[0] * n[1].abs().powi(7),
+            to_yx: self.spray_blend[1] * n[2].abs().powi(7),
+        })
+    }
+
+    /// The pattern projected from the weapon's 3D position (spray paint, anodized airbrushed; `projection`):
+    /// placed on the position's (y, z), (x, z) and (y, x) planes, blended towards the second and third.
+    ///
+    /// With the halftone (z mirrored): the colour channels × a level of cavity × occlusion × 2 (`smoothstep` of its
+    /// power; inverted when the thresholds fall, the other way out of the cavity), × the alpha of three more
+    /// projections turned by the dots' rotations, then thresholded.
+    fn pattern_projected(&self, t: &Texel, u: f32, v: f32) -> [f32; 4] {
+        let Some(projection) = self.projection(u, v) else {
+            return self.pattern_at(u, v);
         };
+        let project = |placement: &Placement| projection.pattern(self, placement, [0.0; 3]);
         let p = project(&self.projection_at);
         let Some(h) = &self.halftone else {
             return p;
@@ -1220,9 +1250,15 @@ impl Inputs {
     /// The case-hardening ramp at (u, v) (sRGB-decoded; `None` without it): across by the shape — `lerp(0.5,
     /// cavity^0.85, G) × lerp(1, occlusion × 2 × flatness of g_tNormal, G)`, 2× it or itself + the pattern's R by
     /// `P` — and down by `max(pattern G × P, (1 − occlusion) × 0.2 × G) + offset`; averaged over five pattern taps
-    /// (±1/2048) when `taps`.
+    /// (±1/2048) when `taps`. Trilinear, the pattern is projected from the weapon's position (as spray paint's) and
+    /// the taps move the position's y and z by ±0.0004 (combos 3456, 3744).
     fn ramp(&self, t: &Texel, u: f32, v: f32, taps: bool) -> Option<[f32; 4]> {
         let ch = self.case_hardening.as_ref()?;
+        let projection = if ch.trilinear {
+            self.projection(u, v)
+        } else {
+            None
+        };
         let n = ch.normal.as_ref().map_or([0.5; 4], |s| s.at(u, v));
         let flat = |c: f32| smoothstep(0.85, 0.2, c.min(1.0 - c));
         let shape = lerp(0.5, t.cavity.powf(0.85), ch.geometric)
@@ -1232,7 +1268,14 @@ impl Inputs {
                 ch.geometric,
             );
         let (pu, pv) = self.pattern_at.apply(u, v);
-        let p = self.pattern_sample(pu, pv);
+        // The pattern a tap away, by the signs of its two offsets.
+        let pattern = |su: f32, sv: f32| match &projection {
+            Some(projection) => {
+                projection.pattern(self, &self.projection_at, [0.0, su * 0.0004, sv * 0.0004])
+            }
+            None => self.pattern_sample(pu + su / 2048.0, pv + sv / 2048.0),
+        };
+        let p = pattern(0.0, 0.0);
         let row = (p[1] * ch.pattern).max((1.0 - t.occlusion) * 0.2 * ch.geometric) + ch.offset;
         let at = |x: f32| {
             let s = ch.ramp.at_with(
@@ -1250,10 +1293,9 @@ impl Inputs {
         if !taps {
             return Some(at(p[0]));
         }
-        const D: f32 = 1.0 / 2048.0;
         let mut sum = at(p[0]);
-        for (du, dv) in [(D, D), (-D, -D), (-D, D), (D, -D)] {
-            let s = at(self.pattern_sample(pu + du, pv + dv)[0]);
+        for (su, sv) in [(1.0, 1.0), (-1.0, -1.0), (-1.0, 1.0), (1.0, -1.0)] {
+            let s = at(pattern(su, sv)[0]);
             for c in 0..4 {
                 sum[c] += s[c];
             }
@@ -1774,13 +1816,8 @@ pub(crate) fn unpainted_reason(params: &BTreeMap<String, Param>) -> Option<Strin
     if !PAINTED_STYLES.contains(&style) {
         return Some(format!("paint style {style} not baked yet"));
     }
-    for (feature, what) in [
-        ("F_PATINA_AGE", "patina age"),
-        ("F_CASE_HARDENING_TRILINEAR", "trilinear case hardening"),
-    ] {
-        if int(feature) != 0 {
-            return Some(format!("{what} not baked yet"));
-        }
+    if int("F_PATINA_AGE") != 0 {
+        return Some("patina age not baked yet".into());
     }
     if int("F_OVERLAY_TEXTURE") != 0 {
         if !OVERLAID_STYLES.contains(&style) {
@@ -1790,8 +1827,13 @@ pub(crate) fn unpainted_reason(params: &BTreeMap<String, Param>) -> Option<Strin
             return Some("no overlay texture".into());
         }
     }
-    if int("F_CASE_HARDENING") != 0 && !named("g_tCaseHardeningColorRamp") {
-        return Some("no case-hardening ramp".into());
+    if int("F_CASE_HARDENING") != 0 {
+        if !named("g_tCaseHardeningColorRamp") {
+            return Some("no case-hardening ramp".into());
+        }
+        if int("F_CASE_HARDENING_TRILINEAR") != 0 && !named("g_tPosition") {
+            return Some("no position texture".into());
+        }
     }
     match style {
         // Solid and anodized name their colours (a recipe without a paint material would otherwise paint the
@@ -2075,6 +2117,7 @@ mod tests {
             geometric: 1.0,
             offset: 0.0,
             weights: [1.0, 0.0, 0.0, 0.0],
+            trilinear: false,
         });
         hardened.masks = pixel([0, 0, 0, 255]);
         let shade = hardened.shade(0.5, 0.5);
@@ -2086,6 +2129,44 @@ mod tests {
         // Colour 1 keeps its own (black) where the R mask picks it.
         hardened.masks = pixel([255, 0, 0, 255]);
         assert!(hardened.shade(0.5, 0.5).color[2] < 0.1);
+    }
+
+    #[test]
+    fn trilinear_case_hardening_reads_the_pattern_where_the_texel_is_on_the_weapon() {
+        // Solid colour 0 all ramp, the ramp read across at 0.5 + the pattern's R (no shape): blue then red, so a
+        // black pattern gives half of each and a white one red. The pattern is black on the left, white on the right.
+        let hardened = |trilinear: bool, y: f32| {
+            let mut inputs = inputs(SOLID, 0.0, 0, 128, 0);
+            inputs.case_hardening = Some(CaseHardening {
+                ramp: Sampler {
+                    image: Image::new(2, 1, vec![0, 0, 255, 255, 255, 0, 0, 255]),
+                },
+                normal: None,
+                pattern: 1.0,
+                geometric: 0.0,
+                offset: 0.0,
+                weights: [1.0, 0.0, 0.0, 0.0],
+                trilinear,
+            });
+            inputs.pattern = Some(Sampler {
+                image: Image::new(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]),
+            });
+            inputs.pattern_address = [Address::Clamp; 2];
+            inputs.masks = pixel([0, 0, 0, 255]);
+            // A position whose y (× 2) lands on the pattern's black or white half.
+            inputs.position = Some(ImageF32 {
+                width: 1,
+                height: 1,
+                rgba: vec![0.0, y, 0.25, 1.0],
+            });
+            inputs.shade(0.5, 0.5).color
+        };
+        // On the pattern's UVs the texel is between the halves: red. Projected, it is where the position says.
+        assert!(hardened(false, 0.05)[2] < 0.01);
+        let on_black = hardened(true, 0.05);
+        assert!(on_black[2] > 0.1 && on_black[0] > 0.1, "{on_black:?}");
+        let on_white = hardened(true, 0.45);
+        assert!(on_white[2] < 0.01 && on_white[0] > 0.9, "{on_white:?}");
     }
 
     #[test]
@@ -2248,6 +2329,14 @@ mod tests {
         hardened.insert(
             "g_tCaseHardeningColorRamp".into(),
             Param::Texture("ramp.vtex".into()),
+        );
+        assert_eq!(unpainted_reason(&hardened), None);
+        // Trilinear, it projects the pattern from the position texture.
+        hardened.insert("F_CASE_HARDENING_TRILINEAR".into(), Param::Int(1));
+        assert!(unpainted_reason(&hardened).is_some());
+        hardened.insert(
+            "g_tPosition".into(),
+            Param::Texture("m4a1_surface_wrap.vtex".into()),
         );
         assert_eq!(unpainted_reason(&hardened), None);
         // Fades project their pattern from the weapon's position texture.

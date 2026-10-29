@@ -94,8 +94,14 @@ as an unknown word until then. The same kits' combos (404, 980: a roughness text
 that a roughness texture replaces gunsmith's own metal roughness, and that an overlay's own wear takes the separate
 channels' 0.56 – 0.74 even on gunsmith.
 
-**Not read yet**: trilinear case hardening (2304 + n, 1 kit); pearlescence and the normal-map pass, which the weapon
-material uses after the composite.
+**Trilinear case hardening** (2304 + n, read 2026-10-29: combos 3456 and 3744 against 1152): solid's case hardening
+with the pattern projected from the weapon's 3D position as spray paint's (17 position taps × 2, the (y, z), (x, z)
+and (y, x) planes blended by the surface normal), its four extra ramp taps moving the position's y and z by ±0.0004
+instead of the UVs by ±1/2048; everything after the pattern reads is the same program. One kit: Soch Mountains on the
+M4A1-S, with its own position texture (`g_tPositionOverride`, `m4a1_surface_wrap`) and a 2D ramp read at row 0.88 +
+the pattern's G.
+
+**Not read yet**: pearlescence and the normal-map pass, which the weapon material uses after the composite.
 
 ### The composite's steps
 

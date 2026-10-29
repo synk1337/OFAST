@@ -422,8 +422,10 @@ player and round.
   seemed to set `g_bLegacyPatina` (a recipe condition written `True`, misread until then) and are painted as gunsmith,
   like CS2's previews of them, with two gunsmith fixes their shader combos showed (a roughness texture, an overlay's
   wear).
-- [ ] The second hand's seed, the default layout's anisotropic combo (one kit); trilinear case hardening;
-  pearlescence, the paints' normal maps; stickers' glitter and the free placement's signs; gold stickers' tone
+- [x] **Trilinear case hardening** ([research](research/cs2-skins.md)): the case-hardening ramp read with the pattern
+  projected from the weapon's position (Soch Mountains M4A1-S); its bakes show CS2's previews' blue mountains, cream
+  waves and gold, not checked in a render.
+- [ ] The second hand's seed, the default layout's anisotropic combo (one kit); pearlescence, the paints' normal maps; stickers' glitter and the free placement's signs; gold stickers' tone
   (darker and greener than CS2's); checked against CS2 screenshots.
 - [x] **Textures shared across the looks** (`import_demo.py`, `share_textures`): each exported PNG imported once into
   `/Game/OFAST/Replays/Textures`, which every round's looks sample, instead of a copy per look (round 17: 263
