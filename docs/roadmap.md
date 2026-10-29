@@ -429,8 +429,11 @@ player and round.
   At the red paint's equal brightness, Unreal's picture is more saturated than CS2's everywhere (red 0.80 against
   0.67, the gold 0.53 against 0.38); the gold metal is also a tenth darker, lit by the reflections. Both go to the
   polish pass (the picture's colour, metals' reflections).
-- [ ] The second hand's seed, the default layout's anisotropic combo (one kit); pearlescence, the paints' normal
-  maps; stickers' glitter and the free placement's signs (a side view: from behind, first person does not show
+- [x] **The kits' own normal maps** ([research](research/cs2-skins.md), "The paints' normal maps"): copied by the
+  recipe onto the weapon's material (395 kits; 105 an occlusion too), they replace its normal and occlusion in the
+  glTF (round 17: Printstream, Autotronic, Gungnir), except six flat stand-ins (Bloodsport's: not checked in CS2).
+- [ ] The second hand's seed, the default layout's anisotropic combo (one kit); pearlescence and the paints' glitter;
+  stickers' glitter and the free placement's signs (a side view: from behind, first person does not show
   them); checked against CS2 screenshots.
 - [x] **Textures shared across the looks** (`import_demo.py`, `share_textures`): each exported PNG imported once into
   `/Game/OFAST/Replays/Textures`, which every round's looks sample, instead of a copy per look (round 17: 263

@@ -102,7 +102,8 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   in by a conditional step.
 - The Source 2 Viewer of October 2025 (15.0) cannot open CS2's shader files (format 72; it reads 59 – 70): 20.1
   (October 2026) can.
-- Pearlescence, the paints' normal maps and AO overrides are not read yet.
+- Pearlescence and glitter are not read yet. The paints' normal maps and occlusion overrides are (2026-10-29): the
+  recipe copies them onto the weapon's own material, and they replace its normal and occlusion in the glTF.
 - Each skin's colour and surface decode their inputs separately (the weapon's composite inputs and the shared wear
   and grunge textures again for each skin, and again for the viewmodel): fine at a round's 30 skins, a cache if it
   grows.

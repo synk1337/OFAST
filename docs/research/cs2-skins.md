@@ -101,7 +101,19 @@ instead of the UVs by ±1/2048; everything after the pattern reads is the same p
 M4A1-S, with its own position texture (`g_tPositionOverride`, `m4a1_surface_wrap`) and a 2D ramp read at row 0.88 +
 the pattern's G.
 
-**Not read yet**: pearlescence and the normal-map pass, which the weapon material uses after the composite.
+**The paints' normal maps** (read 2026-10-29): recipes generate only `g_tColor` and `g_tMetalness`. A kit's own
+normal map reaches the weapon another way: the gunsmith-era templates end with `COPY_PROPERTY` steps whose target is
+a plain name, the painted material's own parameter — `exposed_params.g_tNormal` → `g_tNormal` when
+`g_bUseNormalMap` is true (395 kits), `g_tFinalAmbientOcclusion` → `g_tAmbientOcclusion` when
+`g_bOverrideAmbientOcclusion` (105), and the pearlescence, glitter and iridescence values. The kit's normal map is
+laid out on the weapon's UVs and replaces the weapon's own. The legacy kits' shared recipe
+(`weapons/paints/legacy/_shared_paint_generic.vcompmat`) copies their paint material's `g_tNormal` whenever it has
+one. Six of the 395 hand over a flat stand-in (three `materials/default/default_normal`, three compiled from a
+material constant, `<material>_vmat_g_tnormal_…`, 1×1: Bloodsport's): OFAST keeps the weapon's own normal map there
+(whether CS2 lets them flatten the weapon is not checked). Round 17's Printstream USP-S, Autotronic M9 Bayonet and
+Gungnir AWP carry a real one.
+
+**Not read yet**: pearlescence, glitter and iridescence, which the weapon material draws with those values.
 
 ### The composite's steps
 

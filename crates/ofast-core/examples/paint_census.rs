@@ -1,6 +1,7 @@
 //! Developer tool: which paint styles and shader features CS2's paint kits use (M10, `export::paint`), to see what
 //! the bake must handle. Every kit's colour parameters are read as if painted on one weapon material (the features
-//! do not depend on it, but `F_SEPARATE_CHANNEL_INPUTS` does), then counted per feature value.
+//! do not depend on it, but `F_SEPARATE_CHANNEL_INPUTS` does), then counted per feature value; and what each recipe
+//! copies onto the weapon's own material (`g_tNormal`…), counted by name (`g_tNormal=1` lists the kits).
 //!
 //! ```bash
 //! cargo run --release --example paint_census                         # on the USP-S
@@ -43,6 +44,7 @@ fn main() {
         .expect("items_game");
     let kits = paint_kits(&String::from_utf8_lossy(&items));
     let mut counts: BTreeMap<&str, BTreeMap<i64, usize>> = BTreeMap::new();
+    let mut copied: BTreeMap<String, usize> = BTreeMap::new();
     let (mut read, mut failed) = (0, 0);
     for kit in kits.values() {
         let Ok(recipe) = kit_recipe(&content, kit) else {
@@ -79,9 +81,17 @@ fn main() {
         {
             println!("  {} {} (style {})", kit.id, kit.name, int("F_PAINT_STYLE"));
         }
+        // What the recipe copies onto the weapon's own material (a kit's normal map…), counted by name.
+        for (name, value) in &params.material {
+            *copied.entry(name.clone()).or_default() += 1;
+            if wanted.is_some_and(|(w, _)| w == name) {
+                println!("  {} {} copies {name} = {value:?}", kit.id, kit.name);
+            }
+        }
     }
     println!("{read} kits read, {failed} without a readable recipe");
     for (name, values) in counts {
         println!("{name}: {values:?}");
     }
+    println!("copied onto the material: {copied:?}");
 }

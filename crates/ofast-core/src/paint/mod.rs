@@ -160,6 +160,9 @@ pub struct Recipe {
     pub container_copies: Vec<Step>,
     /// The textures it generates, each with its steps (a later one replaces an earlier for the same texture).
     pub generated: Vec<Generated>,
+    /// Copies onto the painted material's own parameters (a `COPY_PROPERTY` whose target is a plain name): the
+    /// gunsmith template's own normal map (`g_tNormal` when `g_bUseNormalMap`) and occlusion, glitter, pearlescence.
+    pub material_copies: Vec<Step>,
 }
 
 /// A random roll (`COMP_MAT_PROPERTY_MUTATOR_RANDOM_ROLL_INPUT_VARIABLES`): a uniform random stream seeded by a
@@ -245,6 +248,9 @@ pub struct WeaponParams {
     pub surface: BTreeMap<String, Param>,
     /// Painted with the gloves' shader (`csgo_customglove.vfx`), not the weapons'.
     pub glove: bool,
+    /// What the recipe sets on the weapon's own material besides the textures it generates (its
+    /// `material_copies` whose conditions hold): a kit's own normal map as `g_tNormal`.
+    pub material: BTreeMap<String, Param>,
 }
 
 /// The parameters weapon material `material` (one of the weapon model's, `…/ak47.vmat`, or a glove model's) is
@@ -314,6 +320,7 @@ pub fn weapon_params(
         color: texture("g_tColor"),
         surface: texture("g_tMetalness"),
         glove: shader == "csgo_customglove.vfx",
+        material: recipe.copied_onto_material(&containers),
     })
 }
 
@@ -600,18 +607,22 @@ fn add_mutators(mutators: &[Value], recipe: &mut Recipe) {
                 });
             }
             // Into a container's own variable (`container.variable`), before the textures; a plain property is the
-            // final material's, not read.
-            Some("COMP_MAT_PROPERTY_MUTATOR_COPY_PROPERTY")
-                if text("m_strCopyProperty_TargetProperty").contains('.') =>
-            {
-                recipe.container_copies.push(Step {
+            // painted material's own.
+            Some("COMP_MAT_PROPERTY_MUTATOR_COPY_PROPERTY") => {
+                let target = text("m_strCopyProperty_TargetProperty");
+                let step = Step {
                     action: Action::CopyProperty(
                         text("m_strCopyProperty_InputContainerSrc"),
                         text("m_strCopyProperty_InputContainerProperty"),
-                        text("m_strCopyProperty_TargetProperty"),
+                        target.clone(),
                     ),
                     conditions: conditions_of(mutator),
-                });
+                };
+                if target.contains('.') {
+                    recipe.container_copies.push(step);
+                } else {
+                    recipe.material_copies.push(step);
+                }
             }
             Some("COMP_MAT_PROPERTY_MUTATOR_GENERATE_TEXTURE") => {
                 let mut steps = Vec::new();
@@ -881,6 +892,21 @@ impl Recipe {
             }
         }
         containers
+    }
+
+    /// The parameters the recipe copies onto the painted material's own (`material_copies` whose conditions hold, a
+    /// later one replacing an earlier).
+    fn copied_onto_material(&self, containers: &Containers) -> BTreeMap<String, Param> {
+        let mut params = BTreeMap::new();
+        for step in &self.material_copies {
+            if let Action::CopyProperty(source, property, target) = &step.action
+                && step.conditions.iter().all(|c| c.holds(containers))
+                && let Some(value) = containers.get(source).and_then(|c| c.get(property))
+            {
+                params.insert(target.clone(), value.clone());
+            }
+        }
+        params
     }
 
     /// The parameters texture `target` (`g_tColor`, `g_tMetalness`) is generated with: its initial container's,

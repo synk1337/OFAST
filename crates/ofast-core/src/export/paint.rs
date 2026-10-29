@@ -61,8 +61,11 @@
 //! **Not baked**: patina age (`F_PATINA_AGE`) — such weapons keep their own finish (`unpainted_reason`). No kit uses
 //! it (CS2 1.41.9.3): the four whose gunsmith template carries it set
 //! `g_bLegacyPatina`, which turns it off, and are painted as gunsmith (their previews in
-//! `panorama/images/econ/default_generated` show the legacy patina). Pearlescence and the normal-map pass are not
-//! read.
+//! `panorama/images/econ/default_generated` show the legacy patina). Pearlescence and glitter are not read.
+//!
+//! **Beside the bake**: what a recipe copies onto the weapon's own material (`WeaponParams::material`): a kit's own
+//! normal map (`g_tNormal` when `g_bUseNormalMap`, or a legacy kit's paint material's: 395 kits) and occlusion
+//! (105) replace the weapon's in its glTF material (`gltf`), except flat stand-ins (6 kits).
 //!
 //! **Size**: the weapon's colour texture's or the pattern's, the larger, 2048 at most; the alpha is the weapon
 //! colour's (alpha-tested parts keep their cut-outs). Each colour and surface job decodes its inputs on its own (the

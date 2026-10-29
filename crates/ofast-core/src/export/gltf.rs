@@ -1626,6 +1626,31 @@ impl<'c> GltfWriter<'c> {
         if paint.recipe.is_some() && is_painted(&info) {
             match paint::job(self.content, path, paint) {
                 Ok(job) => {
+                    // The kit's own normal map and occlusion replace the weapon's where its recipe copies them onto
+                    // the material (the gunsmith template's `g_bUseNormalMap`, `g_bOverrideAmbientOcclusion`; a
+                    // legacy kit's paint material's). Not flat stand-ins: the engine's defaults and the textures
+                    // compiled from a material's constant (`<material>_vmat_g_tnormal_…`, 6 of 395 kits: Bloodsport)
+                    // carry nothing of the kit, and would take the weapon's own detail away.
+                    let copied = |param: &str| match job.params.material.get(param) {
+                        Some(crate::paint::Param::Texture(path))
+                            if !path.is_empty()
+                                && !job.params.glove
+                                && !path.starts_with("materials/default/")
+                                && !path.contains("_vmat_g_t") =>
+                        {
+                            Some(path.clone())
+                        }
+                        _ => None,
+                    };
+                    let (normal, occlusion) = (copied("g_tNormal"), copied("g_tAmbientOcclusion"));
+                    if let Some(path) = normal {
+                        let id = self.texture(&path, TextureRole::Normal { hemi_oct: true });
+                        material["normalTexture"] = json!({ "index": id });
+                    }
+                    if let Some(path) = occlusion {
+                        let id = self.texture(&path, TextureRole::Occlusion);
+                        material["occlusionTexture"] = json!({ "index": id });
+                    }
                     let color = self.register(TextureJob::PaintColor(job.clone()), name.clone());
                     let surface =
                         self.register(TextureJob::PaintSurface(job), format!("{name}_orm"));
