@@ -112,6 +112,9 @@ pub struct StickerFinish {
     pub rotation: Option<u32>,
     /// CS2's free placement.
     pub offset: Option<[u32; 2]>,
+    /// The model's sticker slot it sits on (and its free placement moves from): the item's `sticker slot n
+    /// schema`; `None`: its own slot.
+    pub place: Option<u32>,
 }
 
 impl Finish {
@@ -146,6 +149,7 @@ impl Finish {
                     scale: s.scale.map(f32::to_bits),
                     rotation: s.rotation.map(f32::to_bits),
                     offset: s.offset.map(|o| o.map(f32::to_bits)),
+                    place: s.schema,
                 });
             }
         }

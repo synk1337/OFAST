@@ -290,6 +290,14 @@ land in the markup's polygons, along the slide where CS2 shows them (tick 150500
 = markup + item ÷ scale, rotation = markup + item ÷ 360, scale = markup ÷ item. The signs (which way a shift moves)
 are not checked yet.
 
+**Which place** (read 2026-10-29): `sticker slot n schema` (attributes 290 – 295) names the model's markup slot a
+sticker sits on and its free placement moves from; the item's slot n is only the shader slot (the drawing order).
+Aurora vs FURIA's Island Floral AK (round 17, lying at (−2168, 1140, 35) from tick 154458): HellRaisers (Atlanta
+2017, holo) in slots 2, 3, 4 with schemas 3, 2, 1, and both Sea Swallows (slots 0, 1) with schema 0 and an offset.
+The AK marks up places 0 – 3 only (receiver rear, receiver, receiver front, handguard); CS2 shows the three
+HellRaisers on places 1, 2 and 3. Read as slot n on place n, slot 4 had no place and was not drawn. Older items send
+no schema: slot n on place n.
+
 ## Keychains
 
 `items_game.txt` → `keychain_definitions` → `pedestal_display_model` (`weapons/keychains/<set>/vmdl/<kc>.vmdl`): a

@@ -7,8 +7,9 @@
 //! ```
 //!
 //! After the model and material: the paint kit, seed and wear (kit 0: the weapon's own textures are not baked, so
-//! one is needed), then one sticker per argument: `slot:kit[:offset x,y][:rotation degrees][:scale][:wear]`, `-`
-//! for a value the item leaves to the slot. Writes `<label>.png` and `<label>_orm.png`.
+//! one is needed), then one sticker per argument: `slot:kit[:offset x,y][:rotation degrees][:scale][:wear][:place]`,
+//! `-` for a value the item leaves to the slot (`place`: the model's slot it sits on, the item's schema). Writes
+//! `<label>.png` and `<label>_orm.png`.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -66,6 +67,7 @@ fn main() {
                 rotation: value(3).map(|v| v.parse().expect("degrees")),
                 scale: value(4).map(|v| v.parse().expect("scale")),
                 wear: value(5).map(|v| v.parse().expect("wear")),
+                place: value(6).map(|v| v.parse().expect("place")),
             }
         })
         .collect();

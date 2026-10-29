@@ -203,6 +203,7 @@ impl Paints {
             };
             stickers.push(Placed {
                 slot,
+                place: s.place.map(|p| p as usize),
                 material: sticker.material.clone(),
                 offset: s.offset.map(|o| o.map(f32::from_bits)),
                 scale: s.scale.map(f32::from_bits),

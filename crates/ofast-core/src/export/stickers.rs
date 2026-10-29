@@ -91,8 +91,13 @@ pub fn sticker_kits(items_game: &str) -> BTreeMap<u32, StickerKit> {
 /// A sticker on a weapon: the slot, the kit's material, and what the item sets (`None`: the slot's own default).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Placed {
-    /// Slot, 0 – 4.
+    /// Slot, 0 – 4: the shader's, which draws them in that order.
     pub slot: usize,
+    /// The model's slot it sits on (`StickerMarkup`'s index, and the material's defaults for it): the item's
+    /// `sticker slot n schema`; `None`: `slot`. Aurora vs FURIA's Island Floral AK has its HellRaisers in slots 2,
+    /// 3, 4 on places 3, 2, 1 (the AK marks up 0 – 3: slot 4 alone has no place of its own) and both Sea Swallows
+    /// freely placed from place 0, as CS2 shows them.
+    pub place: Option<usize>,
     /// The sticker's material.
     pub material: String,
     /// CS2's free placement, in the slot's offset units.
@@ -116,6 +121,17 @@ struct Slot {
 }
 
 impl Slot {
+    /// Where `placed` is drawn: at its place (`Placed::place`, else its own slot) as the model's `markup` has it.
+    fn placed(weapon: &MaterialInfo, markup: &[StickerSlot], placed: &Placed) -> Self {
+        let place = placed.place.unwrap_or(placed.slot);
+        Self::of(
+            weapon,
+            markup.iter().find(|s| s.index == place),
+            place,
+            placed,
+        )
+    }
+
     /// Slot `n` as the model marks it up (`markup`; else the material's own defaults, `weapon`'s
     /// `g_vStickerNOffset`…), moved as `placed` says: the offset by the item's, in stickers (÷ the slot's scale),
     /// turned by the item's degrees, the scale divided by the item's (a larger sticker spans more of the UV set).
@@ -628,12 +644,7 @@ pub fn apply(
         match Look::read(content, &placed.material) {
             Ok(look) => drawn.push(Drawn {
                 index: placed.slot,
-                slot: Slot::of(
-                    &weapon,
-                    places.slots.iter().find(|s| s.index == placed.slot),
-                    placed.slot,
-                    placed,
-                ),
+                slot: Slot::placed(&weapon, &places.slots, placed),
                 look,
             }),
             Err(e) => warnings.push(format!("sticker {}: {e}", placed.material)),
@@ -812,6 +823,7 @@ mod tests {
         };
         let placed = |offset, rotation| Placed {
             slot: 2,
+            place: None,
             material: String::new(),
             offset,
             scale: None,
@@ -838,6 +850,45 @@ mod tests {
         let unset = Slot::of(&weapon, None, 2, &placed(None, None));
         assert_eq!(unset.scale, 0.0);
         assert!(unset.sticker_uv([0.5, 0.5]).is_none());
+    }
+
+    #[test]
+    fn a_sticker_sits_on_the_place_its_schema_names() {
+        // The AK marks up places 0 – 3; Aurora vs FURIA's Island Floral AK has a sticker in slot 4 on place 1.
+        let markup: Vec<StickerSlot> = [0.148, 0.061, -0.025, -0.164]
+            .iter()
+            .enumerate()
+            .map(|(index, &u)| StickerSlot {
+                index,
+                offset: [u, -0.434],
+                scale: 14.1,
+                rotation: 0.0,
+            })
+            .collect();
+        let weapon = MaterialInfo::default();
+        let sticker = |slot, place| Placed {
+            slot,
+            place,
+            material: String::new(),
+            offset: None,
+            scale: None,
+            rotation: None,
+            wear: None,
+        };
+        assert_eq!(
+            Slot::placed(&weapon, &markup, &sticker(4, Some(1))).offset,
+            [0.061, -0.434]
+        );
+        assert_eq!(
+            Slot::placed(&weapon, &markup, &sticker(2, Some(3))).offset,
+            [-0.164, -0.434]
+        );
+        // Without a schema, its own slot; slot 4 has no place of its own on the AK (scale 0: not drawn).
+        assert_eq!(
+            Slot::placed(&weapon, &markup, &sticker(2, None)).offset,
+            [-0.025, -0.434]
+        );
+        assert_eq!(Slot::placed(&weapon, &markup, &sticker(4, None)).scale, 0.0);
     }
 
     #[test]

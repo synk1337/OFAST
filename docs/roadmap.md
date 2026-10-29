@@ -442,8 +442,12 @@ player and round.
   colour). The kits' normal maps checked on the same view: the Gungnir's engraving shows.
 - [x] **The second glove's seed** (`g_nRandomSeedAlt`): the pattern seed + 1, read from CS2's `client.dll` (both
   places that set it).
-- [ ] The free placement's signs (a side view: from behind, first person does not show them), checked against a CS2
-  screenshot.
+- [x] **Stickers on their places** (`sticker slot n schema`, [research](research/cs2-skins.md), "Which place"): a
+  sticker sits on the model's markup slot its schema names, not on its own slot's. Checked from above the Island
+  Floral AK lying in round 17 (tick 155002, CS2's free camera and `shoot_sequence.py -ViewShots`): CS2's three
+  HellRaisers on the receiver and handguard, where OFAST had drawn two (slot 4 has no markup of its own on the AK).
+- [ ] The free placement's signs: the AK's Sea Swallows move by a fifth of an inch from place 0, too little to tell;
+  a sticker moved further, seen from the side, checked against a CS2 screenshot.
 - Moved to the polish pass (2026-10-29): glitter (14 kits and the glitter stickers) and iridescence (18 kits), read
   from CS2's weapon shader ([research](research/cs2-skins.md), "Glitter") but drawn × the diffuse lighting, which
   Unreal's materials do not give; the default glove layout's anisotropic combo (one kit).
@@ -462,6 +466,8 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
 - [ ] **The picture's colour**: Unreal's rounds are more saturated than CS2's (de_dust2's mid, 2026-10-29: red paint
   0.80 against CS2's 0.67 at equal brightness), and metals a little darker (gold stickers a tenth); indoors CS2 reads
   greyer still.
+- [ ] **Bodies against CS2's**: Wicadia's (round 17, dead at tick 154410) lies on the AK he dropped in Unreal; CS2
+  shows the AK alone there at tick 155002. The AK itself rests tilted a little differently.
 - [ ] **Skins' finer shading**: glitter and iridescence in OFAST's weapon master (`pearlescence.py`'s copy of
   Interchange's glTF master), the default glove layout's anisotropic gloss, the Gungnir's engraving lines (teal in
   Unreal, lavender in CS2).

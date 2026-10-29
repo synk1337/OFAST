@@ -21,6 +21,15 @@ fn main() {
     let install = Cs2Install::locate().expect("CS2 install found");
     let content = Content::game(&install).expect("archives");
     let model = load_model(&content, model).expect("model");
+    // The slots the model marks up (offsets are points to look up too).
+    for mesh in model.meshes_in_groups(1) {
+        for slot in &mesh.sticker_slots {
+            println!(
+                "{}: slot {} at {:.3},{:.3}, scale {:.2}, rotation {:.3}",
+                mesh.name, slot.index, slot.offset[0], slot.offset[1], slot.scale, slot.rotation
+            );
+        }
+    }
     // Every triangle of the material: positions, normals, second UV set.
     let mut triangles = Vec::new();
     let mut bounds = [[f32::MAX; 3], [f32::MIN; 3]];

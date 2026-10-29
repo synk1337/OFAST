@@ -1588,6 +1588,7 @@ pub(crate) fn finish_json(finish: Finish) -> serde_json::Value {
                     "scale": float(s.scale),
                     "rotation": float(s.rotation),
                     "offset": s.offset.map(|o| o.map(f32::from_bits)),
+                    "place": s.place,
                 })
             })
         })
