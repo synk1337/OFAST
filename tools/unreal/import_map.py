@@ -343,6 +343,33 @@ def default_textures():
     return DEFAULT_TEXTURES
 
 
+def master_default(kind):
+    """The default texture of a master's texture parameter of `kind` (import_texture's: "color", "normal",
+    "linear"): one of default_textures(), never a map's own texture. A master is shared by every map, and a map's
+    re-import deletes the textures its folder no longer uses (delete_unused_ofast_assets): a default taken from the
+    first map's textures went with them, and the master then failed to compile, every instance of it on every map
+    drawn with Unreal's default material."""
+    return default_textures()[{"color": "color", "normal": "normal"}.get(kind, "mask")]
+
+
+def restore_texture_defaults(master, path):
+    """`master` (at `path`) with a master_default for each texture parameter whose default texture is gone (see
+    master_default: masters made before 2026-10-29 took a map's textures), recompiled and saved when one was."""
+    mel = unreal.MaterialEditingLibrary
+    sampler = unreal.MaterialSamplerType
+    kinds = {sampler.SAMPLERTYPE_COLOR: "color", sampler.SAMPLERTYPE_NORMAL: "normal"}
+    restored = []
+    for node in mel.get_material_expressions(master):
+        if isinstance(node, unreal.MaterialExpressionTextureSampleParameter) and node.get_editor_property("texture") is None:
+            node.set_editor_property("texture", master_default(kinds.get(node.get_editor_property("sampler_type"))))
+            restored.append(str(node.get_editor_property("parameter_name")))
+    if restored:
+        mel.recompile_material(master)
+        unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+        log("%s: default textures restored for %s" % (path, ", ".join(restored)))
+    return master
+
+
 def ensure_skybox_master(defaults):
     """Masked material with glTF's PBR inputs (colour, normal and metallic-roughness textures with their factors),
     the model tint of environment materials (MODEL_TINT_FUNCTION on the colour, tint mask from HeightTexture.G; a
@@ -559,7 +586,7 @@ def ensure_blend_master(defaults):
     `defaults` are texture assets used as parameter defaults (a sampler parameter needs a matching texture).
     """
     if unreal.EditorAssetLibrary.does_asset_exist(BLEND_MASTER):
-        return unreal.EditorAssetLibrary.load_asset(BLEND_MASTER)
+        return restore_texture_defaults(unreal.EditorAssetLibrary.load_asset(BLEND_MASTER), BLEND_MASTER)
     tools = unreal.AssetToolsHelpers.get_asset_tools()
     folder, name = BLEND_MASTER.rsplit("/", 1)
     material = tools.create_asset(name, folder, unreal.Material, unreal.MaterialFactoryNew())
@@ -833,7 +860,7 @@ def ensure_environment_master(defaults):
     set_alpha_overrides; translucent ones lit per pixel, TRANSLUCENCY_LIGHTING). `defaults` maps texture parameter
     names to texture assets."""
     if unreal.EditorAssetLibrary.does_asset_exist(ENVIRONMENT_MASTER):
-        master = unreal.EditorAssetLibrary.load_asset(ENVIRONMENT_MASTER)
+        master = restore_texture_defaults(unreal.EditorAssetLibrary.load_asset(ENVIRONMENT_MASTER), ENVIRONMENT_MASTER)
         return ensure_translucency_lighting(master, ENVIRONMENT_MASTER)
     folder, name = ENVIRONMENT_MASTER.rsplit("/", 1)
     material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
@@ -887,7 +914,8 @@ def environment_instances():
         textures = {}
         for param, key, kind, default in ENVIRONMENT_TEXTURES:
             textures[param] = import_texture(layer[key], BLEND_FOLDER, kind) if layer.get(key) else defaults[default]
-        master = master or ensure_environment_master(textures)
+        master = master or ensure_environment_master(
+            {param: defaults[default] for param, _key, _kind, default in ENVIRONMENT_TEXTURES})
         instance = blend_instance(material["name"], master)
         for param, texture in textures.items():
             set_texture_parameter(instance, param, texture)
@@ -953,7 +981,8 @@ def ensure_tint_mask_master(defaults):
     (set_alpha_overrides; translucent ones lit per pixel, TRANSLUCENCY_LIGHTING).
     `defaults` maps texture parameter names to texture assets."""
     if unreal.EditorAssetLibrary.does_asset_exist(TINT_MASK_MASTER):
-        return ensure_translucency_lighting(unreal.EditorAssetLibrary.load_asset(TINT_MASK_MASTER), TINT_MASK_MASTER)
+        master = restore_texture_defaults(unreal.EditorAssetLibrary.load_asset(TINT_MASK_MASTER), TINT_MASK_MASTER)
+        return ensure_translucency_lighting(master, TINT_MASK_MASTER)
     folder, name = TINT_MASK_MASTER.rsplit("/", 1)
     material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
         name, folder, unreal.Material, unreal.MaterialFactoryNew()
@@ -1051,7 +1080,8 @@ def tint_mask_instances():
         }
         textures = {param: import_texture(files[param], BLEND_FOLDER, kind) if files[param] else defaults[default]
                     for param, kind, default in TINT_MASK_TEXTURES}
-        master = master or ensure_tint_mask_master(textures)
+        master = master or ensure_tint_mask_master(
+            {param: defaults[default] for param, _kind, default in TINT_MASK_TEXTURES})
         instance = blend_instance(material["name"], master)
         for param, texture in textures.items():
             set_texture_parameter(instance, param, texture)
@@ -1116,7 +1146,7 @@ def ensure_height_blend_master(defaults):
     A Custom node computes layer 2's weight (HEIGHT_BLEND_HLSL); every output is lerp(layer 1, layer 2, weight).
     `defaults` maps texture parameter names to texture assets (a sampler parameter needs a matching texture)."""
     if unreal.EditorAssetLibrary.does_asset_exist(HEIGHT_BLEND_MASTER):
-        return unreal.EditorAssetLibrary.load_asset(HEIGHT_BLEND_MASTER)
+        return restore_texture_defaults(unreal.EditorAssetLibrary.load_asset(HEIGHT_BLEND_MASTER), HEIGHT_BLEND_MASTER)
     folder, name = HEIGHT_BLEND_MASTER.rsplit("/", 1)
     material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
         name, folder, unreal.Material, unreal.MaterialFactoryNew()
@@ -1213,7 +1243,9 @@ def height_blend_instances():
         for pattern, key, kind in HEIGHT_BLEND_TEXTURES:
             for layer in ("Layer1", "Layer2"):
                 textures[pattern % layer] = import_texture(environment[layer.lower()][key], BLEND_FOLDER, kind)
-        master = master or ensure_height_blend_master(textures)
+        master = master or ensure_height_blend_master(
+            {pattern % layer: master_default(kind) for pattern, _key, kind in HEIGHT_BLEND_TEXTURES
+             for layer in ("Layer1", "Layer2")})
         instance = blend_instance(name, master)
         for param, texture in textures.items():
             set_texture_parameter(instance, param, texture)
@@ -1464,7 +1496,10 @@ def layer_blend_instances():
         }
         if textures["mod"] is None:
             textures["mod"] = textures["r1"]
-        master = master or ensure_blend_master(textures)
+        master = master or ensure_blend_master(
+            {key: master_default(kind) for key, kind in (("c1", "color"), ("c2", "color"), ("n1", "normal"),
+                                                        ("n2", "normal"), ("r1", "linear"), ("r2", "linear"),
+                                                        ("mod", "linear"))})
         instance = blend_instance(name, master)
         for param, key in (("Layer1Color", "c1"), ("Layer2Color", "c2"), ("Layer1Normal", "n1"),
                            ("Layer2Normal", "n2"), ("Layer1Rough", "r1"), ("Layer2Rough", "r2"),
