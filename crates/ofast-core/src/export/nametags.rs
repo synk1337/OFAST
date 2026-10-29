@@ -35,8 +35,8 @@ use crate::content::Content;
 use crate::export::ExportError;
 use crate::export::environment::{SRGB_TO_LINEAR, linear_to_srgb};
 use crate::export::gltf::{decode_raw, load_model};
-use crate::export::loadout::Finish;
-use crate::model::{Affine, Model, affine, compose};
+use crate::export::loadout::{Finish, module_mount};
+use crate::model::{Affine, Model, compose};
 use crate::texture::Image;
 
 /// The plate's model.
@@ -65,19 +65,7 @@ const FONTS: [(&str, u32); 4] = [
 /// Where the plate sits on `weapon` with `mesh_groups` shown: the bone it follows and the plate's space → the
 /// weapon model's space (the `nametag` attachment's frame). `None` without the attachment.
 pub fn mount(weapon: &Model, mesh_groups: u64) -> Option<(usize, Affine)> {
-    let legacy = weapon
-        .meshes_in_groups(mesh_groups)
-        .any(|m| m.name.contains("legacy"));
-    let attachment = weapon
-        .attachment(if legacy { "nametag_legacy" } else { "nametag" })
-        .or_else(|| weapon.attachment("nametag"))?;
-    let influence = attachment.influences.first()?;
-    let bone = weapon.skeleton.find(&influence.bone)?;
-    let world = weapon.skeleton.world_transforms();
-    Some((
-        bone,
-        compose(&world[bone], &affine(influence.rotation, influence.offset)),
-    ))
+    module_mount(weapon, mesh_groups, "nametag")
 }
 
 /// `mount` ([`mount`]'s placement) mirrored along the plate's length (its x): the plate as a mirrored viewmodel

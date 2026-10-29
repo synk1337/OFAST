@@ -646,6 +646,7 @@ mod tests {
             earlier_hits: Vec::new(),
             server_tick_offset: Some(2403),
             skins: Default::default(),
+            stattrak: Default::default(),
         }
     }
 

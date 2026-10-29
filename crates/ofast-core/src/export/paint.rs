@@ -96,19 +96,38 @@ pub struct Paint {
     pub stickers: Vec<Placed>,
     /// A name to draw on the name tag plate's material ([`super::nametags`]).
     pub name_tag: Option<String>,
+    /// A count for the StatTrak module's digits (`F_STATTRAK` draw calls, [`super::stattrak`]).
+    pub stattrak: Option<u32>,
 }
 
 impl Paint {
-    /// What a name tag plate is painted with: its text.
-    pub fn name_tag(text: String) -> Self {
-        let hash = blake3::hash(text.as_bytes());
+    /// Nothing painted yet: `label` and the defaults.
+    fn bare(label: String) -> Self {
         Self {
-            label: format!("nametag_{}", &hash.to_hex()[..8]),
+            label,
             recipe: None,
             seed: 0,
             wear: 0.0,
             stickers: Vec::new(),
+            name_tag: None,
+            stattrak: None,
+        }
+    }
+
+    /// What a name tag plate is painted with: its text.
+    pub fn name_tag(text: String) -> Self {
+        let hash = blake3::hash(text.as_bytes());
+        Self {
             name_tag: Some(text),
+            ..Self::bare(format!("nametag_{}", &hash.to_hex()[..8]))
+        }
+    }
+
+    /// What a StatTrak module shows: its count.
+    pub fn stattrak(count: u32) -> Self {
+        Self {
+            stattrak: Some(count),
+            ..Self::bare(format!("stattrak_{count}"))
         }
     }
 
@@ -197,6 +216,7 @@ impl Paints {
             wear: finish.wear(),
             stickers,
             name_tag: None,
+            stattrak: None,
         })
     }
 

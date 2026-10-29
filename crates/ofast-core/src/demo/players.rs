@@ -407,6 +407,25 @@ pub struct RoundTrack {
     /// again when the entity index comes back as another item). A weapon picked up keeps its finish: CS2 shows the
     /// buyer's skin in anyone's hands.
     pub skins: BTreeMap<u32, Skin>,
+    /// The StatTrak counts that changed during the round, by weapon entity index: `(tick, count)` in order, after
+    /// the count its finish was read with ([`Skin::stattrak`]). The demo counts a kill on the kill's tick
+    /// (YEKINDAR's M4A1-S, round 17 of Aurora vs FURIA: 1471 → 1472 at tick 155067, as MAJ3R falls).
+    pub stattrak: BTreeMap<u32, Vec<(u32, u32)>>,
+}
+
+impl RoundTrack {
+    /// The StatTrak count of weapon entity `entity` at `tick`, `None` without one.
+    pub fn stattrak_at(&self, entity: u32, tick: u32) -> Option<u32> {
+        let first = self.skins.get(&entity)?.stattrak?;
+        let changes = self.stattrak.get(&entity).map_or(&[][..], Vec::as_slice);
+        Some(
+            changes
+                .iter()
+                .take_while(|&&(at, _)| at <= tick)
+                .last()
+                .map_or(first, |&(_, count)| count),
+        )
+    }
 }
 
 /// Where one round is in the demo.
@@ -1028,6 +1047,7 @@ fn track_round_where(
                     earlier_hits: Vec::new(),
                     server_tick_offset: None,
                     skins: BTreeMap::new(),
+                    stattrak: BTreeMap::new(),
                 };
                 for m in earlier.drain(..).filter(|m| m.tick < tick) {
                     if m.kind == shots::FIRE_BULLETS {
@@ -1073,13 +1093,33 @@ fn track_round_where(
                 .map(|w| (w.entity, w.item))
                 .chain(sample.dropped.iter().map(|w| (w.entity, w.item)));
             for (entity, item) in seen {
-                if track
-                    .skins
-                    .get(&entity)
-                    .is_none_or(|skin| skin.item != item)
-                    && let Some(skin) = read_skin(parser, paths, entity)
-                {
-                    track.skins.insert(entity, skin);
+                match track.skins.get(&entity).filter(|skin| skin.item == item) {
+                    None => {
+                        if let Some(skin) = read_skin(parser, paths, entity) {
+                            track.skins.insert(entity, skin);
+                            track.stattrak.remove(&entity);
+                        }
+                    }
+                    // A StatTrak weapon's count, read again: CS2 counts a kill on its tick.
+                    Some(skin) => {
+                        if let Some(first) = skin.stattrak {
+                            let last = track
+                                .stattrak
+                                .get(&entity)
+                                .and_then(|counts| counts.last())
+                                .map_or(first, |&(_, count)| count);
+                            if let Some(now) = read_skin(parser, paths, entity)
+                                .and_then(|s| s.stattrak)
+                                .filter(|&now| now != last)
+                            {
+                                track
+                                    .stattrak
+                                    .entry(entity)
+                                    .or_default()
+                                    .push((sample.tick, now));
+                            }
+                        }
+                    }
                 }
             }
             // A smoke's log, read again only when its update counter moved and kept when its bytes changed.

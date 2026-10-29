@@ -57,6 +57,9 @@ pub struct Finish {
     pub keychain: Option<KeychainFinish>,
     /// Its name tag, as a hash (the text: [`Finish::name_tag`]; a hash keeps the finish `Copy`).
     pub name_tag: Option<u64>,
+    /// A StatTrak weapon's count when the round first saw it (it counts on during the round:
+    /// [`crate::demo::players::RoundTrack::stattrak_at`]); `None` without a StatTrak module.
+    pub stattrak: Option<u32>,
 }
 
 /// The name tags seen in this process by their hash ([`Finish::name_tag`]).
@@ -121,6 +124,7 @@ impl Finish {
             stickers: [None; STICKER_SLOTS],
             keychain: None,
             name_tag: None,
+            stattrak: None,
         }
     }
 
@@ -130,8 +134,8 @@ impl Finish {
         NAME_TAGS.lock().expect("lock").get(&id).cloned()
     }
 
-    /// The finish of a weapon's skin; `None` without a paint kit, a sticker, a keychain or a name tag. Stickers in a
-    /// slot the shader does not draw are left out.
+    /// The finish of a weapon's skin; `None` without a paint kit, a sticker, a keychain, a name tag or a StatTrak
+    /// count. Stickers in a slot the shader does not draw are left out.
     pub fn of(skin: &Skin) -> Option<Self> {
         let mut stickers = [None; STICKER_SLOTS];
         for s in &skin.stickers {
@@ -154,8 +158,10 @@ impl Finish {
             .as_deref()
             .filter(|t| !t.is_empty())
             .map(intern_name);
-        let decorated =
-            stickers.iter().any(Option::is_some) || keychain.is_some() || name_tag.is_some();
+        let decorated = stickers.iter().any(Option::is_some)
+            || keychain.is_some()
+            || name_tag.is_some()
+            || skin.stattrak.is_some();
         (skin.paint_kit != 0 || decorated).then_some(Self {
             kit: skin.paint_kit,
             seed: skin.seed,
@@ -163,6 +169,7 @@ impl Finish {
             stickers,
             keychain,
             name_tag,
+            stattrak: skin.stattrak,
         })
     }
 
@@ -416,6 +423,30 @@ pub fn slot_target(
             Some(compose(&mount, &invert_rigid(&frames.holster_center?)))
         }
     }
+}
+
+/// Where a module CS2 adds to a weapon (the name tag plate, the StatTrak module) sits on `weapon` with
+/// `mesh_groups` shown: the bone it follows and the module's space → the weapon model's space at bind pose, the
+/// frame of the model's `attachment` (`<attachment>_legacy` when a shown mesh is a CS:GO-era one, `legacy` in its
+/// name, and the model has it). `None` without the attachment.
+pub fn module_mount(weapon: &Model, mesh_groups: u64, attachment: &str) -> Option<(usize, Affine)> {
+    let legacy = weapon
+        .meshes_in_groups(mesh_groups)
+        .any(|m| m.name.contains("legacy"));
+    let found = legacy
+        .then(|| weapon.attachment(&format!("{attachment}_legacy")))
+        .flatten()
+        .or_else(|| weapon.attachment(attachment))?;
+    let influence = found.influences.first()?;
+    let bone = weapon.skeleton.find(&influence.bone)?;
+    let world = weapon.skeleton.world_transforms();
+    Some((
+        bone,
+        compose(
+            &world[bone],
+            &crate::model::affine(influence.rotation, influence.offset),
+        ),
+    ))
 }
 
 /// The agent's skeleton with one bone per slot appended, children of bone 0 (the root), named

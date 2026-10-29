@@ -346,13 +346,13 @@ def import_gltf(replay, path, look, pipelines):
 
 
 def finish_key(finish):
-    """A weapon's skin as a key: (kit, seed, wear, stickers, keychain and name tag), or None for none (the replay's
-    and the manifest's `finish`; the extras as written, so two weapons with one paint and different stickers,
-    keychains or names are two looks)."""
+    """A weapon's skin as a key: (kit, seed, wear, stickers, keychain, name tag and StatTrak count), or None for none
+    (the replay's and the manifest's `finish`; the extras as written, so two weapons with one paint and different
+    stickers, keychains, names or counts are two looks)."""
     if finish is None:
         return None
     extras = json.dumps({"stickers": finish.get("stickers", []), "keychain": finish.get("keychain"),
-                         "name_tag": finish.get("name_tag")}, sort_keys=True)
+                         "name_tag": finish.get("name_tag"), "stattrak": finish.get("stattrak")}, sort_keys=True)
     return (finish["kit"], finish["seed"], finish["wear"], extras)
 
 

@@ -47,6 +47,7 @@ fn main() {
         wear,
         stickers: Vec::new(),
         name_tag: None,
+        stattrak: None,
     };
     let (mut color, mut surface) = bake(&content, material, &paint).expect("painted");
     let placed: Vec<Placed> = stickers

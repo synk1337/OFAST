@@ -19,7 +19,8 @@
 //!   `g_flAlphaTestReference`); `csgo_static_overlay` by its blend mode (`OverlayBlend`, private). The shaders CS2
 //!   draws unlit (`csgo_unlitgeneric`, `csgo_black_unlit`) get `KHR_materials_unlit`; weapons a lower
 //!   `KHR_materials_specular`; characters' cloth-shaded materials `KHR_materials_sheen` and a specular texture, CS2's
-//!   cloth shading (`assemble_cloth_sheen`, private).
+//!   cloth shading (`assemble_cloth_sheen`, private); self-illuminated weapon materials (the StatTrak display) an
+//!   emissive, with `KHR_materials_emissive_strength` above 1.
 //! - **Textures**: see [`TextureRole`]. Textures are decoded and written as PNG at the end, in parallel; a texture
 //!   that fails to decode is replaced by a 1×1 neutral image and reported as a warning.
 //!
@@ -56,7 +57,7 @@ use rayon::prelude::*;
 use serde_json::{Value as Json, json};
 
 use super::{ExportError, ExportOptions};
-use super::{environment, nametags, paint, stickers, tint};
+use super::{environment, nametags, paint, stattrak, stickers, tint};
 use crate::anim::{BoneConstraints, Clip, NmSkeleton, Retargeter};
 use crate::content::Content;
 use crate::coords;
@@ -206,11 +207,23 @@ pub fn export_model_animated(
     writer.finish(&name, roots)
 }
 
+/// A model joined to another in [`export_model_static`]: a keychain's charm, a name tag plate, a StatTrak module.
+pub struct StaticPart<'a> {
+    /// Names its meshes: `<label>_<mesh>`.
+    pub label: &'a str,
+    /// The model, in its default mesh groups.
+    pub model: &'a Model,
+    /// Its space → the main model's space.
+    pub placement: Affine,
+    /// What its materials are painted with.
+    pub paint: Option<paint::Paint>,
+}
+
 /// Writes `model`'s meshes in mesh groups `mesh_groups` rigid, without a skin (each vertex where the bind pose has
 /// it), as `<file_name>.gltf`: a static mesh in Unreal, for a model shown without animation (a weapon lying on the
-/// ground), its weapon materials painted with `paint` (M10), with a `charm` (a keychain's model and its placement in
-/// the model's space) hanging from it. Skinned, Unreal also made a physics asset per weapon, and rendering the AWP's
-/// thumbnail crashed the GPU.
+/// ground), its weapon materials painted with `paint` (M10), with `parts` joined to it (its keychain, name tag plate
+/// and StatTrak module). Skinned, Unreal also made a physics asset per weapon, and rendering the AWP's thumbnail
+/// crashed the GPU.
 pub fn export_model_static(
     content: &Content,
     model: &Model,
@@ -218,7 +231,7 @@ pub fn export_model_static(
     out_dir: &Path,
     file_name: &str,
     paint: Option<paint::Paint>,
-    charm: Option<(&Model, Affine)>,
+    parts: &[StaticPart<'_>],
 ) -> Result<ExportReport, ExportError> {
     let mut writer = GltfWriter::new(content, out_dir, ExportOptions::default())?;
     writer.paint = paint;
@@ -229,18 +242,25 @@ pub fn export_model_static(
             roots.push(writer.node(&mesh.name, Some(gltf_mesh), None));
         }
     }
-    writer.paint = None;
-    if let Some((charm, placement)) = charm {
-        for mesh in charm.default_meshes() {
+    for part in parts {
+        writer.paint = part.paint.clone();
+        for mesh in part.model.default_meshes() {
             let draws: Vec<&DrawCall> = mesh.draw_calls.iter().collect();
-            let name = format!("keychain_{}", mesh.name);
-            if let Some(gltf_mesh) =
-                writer.mesh_with(&name, mesh, &draws, [1.0; 4], 0.0, None, Some(&placement))?
-            {
+            let name = format!("{}_{}", part.label, mesh.name);
+            if let Some(gltf_mesh) = writer.mesh_with(
+                &name,
+                mesh,
+                &draws,
+                [1.0; 4],
+                0.0,
+                None,
+                Some(&part.placement),
+            )? {
                 roots.push(writer.node(&name, Some(gltf_mesh), None));
             }
         }
     }
+    writer.paint = None;
     writer.finish(file_name, roots)
 }
 
@@ -1301,6 +1321,17 @@ impl<'c> GltfWriter<'c> {
                 continue;
             }
             let mut g = mesh.geometry(draw)?;
+            // A StatTrak display shows its count through its UVs, as CS2's vertex shader sets them.
+            if let Some(count) = self.paint.as_ref().and_then(|p| p.stattrak)
+                && self
+                    .material_info(&draw.material)
+                    .is_some_and(|i| i.flag("F_STATTRAK"))
+                && let Some(uvs) = g.uvs.first_mut()
+            {
+                for uv in uvs {
+                    *uv = stattrak::digit_uv(*uv, count);
+                }
+            }
             // CS2 meshes contain zero-area triangles (repeated or collinear vertices) that the game ignores, but
             // Unreal's glTF importer drops a whole primitive when it finds one — leaving holes in walls.
             let before = g.indices.len();
@@ -1871,6 +1902,58 @@ impl<'c> GltfWriter<'c> {
         if let Some(layers) = self.layer_textures(info) {
             material["extras"]["ofast"]["layers"] = layers;
         }
+        if info.shader == "csgo_weapon.vfx" && info.flag("F_SELF_ILLUM") {
+            self.fill_self_illum(material, info);
+        }
+    }
+
+    /// A weapon material's self-illumination (`F_SELF_ILLUM`: the StatTrak display's lit digits) as glTF's
+    /// emissive. `csgo_weapon.vfx` adds mask × 2^`g_flSelfIllumBrightness` × `g_flSelfIllumScale` ×
+    /// `g_vSelfIllumTint` × lerp(1, albedo, `g_flSelfIllumAlbedoFactor`) to its light (decompiled, pixel shader static
+    /// combo `S_SELF_ILLUM`), the mask an sRGB colour texture and the tint an sRGB colour. Written as the colour
+    /// texture times the mask's average (albedo factor ½ or more) or as the mask times the rest; above 1 through
+    /// `KHR_materials_emissive_strength`.
+    fn fill_self_illum(&mut self, material: &mut Json, info: &MaterialInfo) {
+        let float =
+            |name: &str, default: f64| info.floats.get(name).copied().unwrap_or(default) as f32;
+        let tint = info.vectors.get("g_vSelfIllumTint").map_or([1.0; 3], |v| {
+            [v[0], v[1], v[2]].map(|c| srgb_to_linear(c as f32))
+        });
+        let gain =
+            2f32.powf(float("g_flSelfIllumBrightness", 0.0)) * float("g_flSelfIllumScale", 1.0);
+        let mask = info.textures.get("g_tSelfIllumMask").cloned();
+        let albedo = float("g_flSelfIllumAlbedoFactor", 1.0) >= 0.5;
+        let colour = &material["pbrMetallicRoughness"]["baseColorTexture"];
+        let (texture, mask_mean) = match (&mask, albedo) {
+            (_, true) if !colour.is_null() => {
+                let mean = mask.as_deref().map_or([1.0; 3], |path| {
+                    decode_raw(self.content, path).map_or([1.0; 3], |(_, image)| {
+                        let texels = image.rgba.as_chunks::<4>().0;
+                        let sum = texels.iter().fold([0.0f64; 3], |acc, p| {
+                            std::array::from_fn(|k| {
+                                acc[k] + f64::from(srgb_to_linear(f32::from(p[k]) / 255.0))
+                            })
+                        });
+                        sum.map(|c| (c / texels.len().max(1) as f64) as f32)
+                    })
+                });
+                (Some(colour.clone()), mean)
+            }
+            (Some(path), _) => {
+                let id = self.texture(path, TextureRole::Color { keep_alpha: false });
+                (Some(json!({ "index": id })), [1.0; 3])
+            }
+            (None, _) => (None, [1.0; 3]),
+        };
+        let Some(texture) = texture else { return };
+        let factor: [f32; 3] = std::array::from_fn(|k| tint[k] * gain * mask_mean[k]);
+        let strength = factor.iter().copied().fold(1.0f32, f32::max);
+        material["emissiveTexture"] = texture;
+        material["emissiveFactor"] = json!(factor.map(|c| c / strength));
+        if strength > 1.0 {
+            material["extensions"]["KHR_materials_emissive_strength"] =
+                json!({ "emissiveStrength": strength });
+        }
     }
 
     /// The colour texture and model tint of a material that is not an environment one (see [`tint`]). The tint
@@ -2345,6 +2428,7 @@ impl<'c> GltfWriter<'c> {
             "KHR_materials_unlit",
             "KHR_materials_specular",
             "KHR_materials_sheen",
+            "KHR_materials_emissive_strength",
         ] {
             if self
                 .materials

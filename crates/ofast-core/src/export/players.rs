@@ -37,8 +37,8 @@ use super::brass::{brass_json, load_casings};
 use super::deaths::bake_deaths;
 use super::effects::{blasts_json, export_effect_textures, fire_walls_json};
 use super::gltf::{
-    Binding, BoneAnimation, MergedModel, export_character, export_model_static, load_model,
-    resource_data,
+    Binding, BoneAnimation, MergedModel, StaticPart, export_character, export_model_static,
+    load_model, resource_data,
 };
 use super::keychains;
 use super::loadout::{
@@ -51,6 +51,7 @@ use super::punch::{punch_json, recoil_by_tick};
 use super::shots::{
     Body, Capsule, Doors, ShotData, earlier_holes_json, export_decals, hitbox_check, shots_json,
 };
+use super::stattrak;
 use super::viewmodel::{export_viewmodel_look, load_viewmodel_rig};
 use crate::anim::aim::AimBones;
 use crate::anim::bake::{
@@ -714,7 +715,7 @@ fn export_cases(
         let name = format!("{demo_name}_r{}_case_{}", round.track.round, stem(path));
         let written = load_model(round.content, path).and_then(|model| {
             let shown = shown_groups(&model, 0);
-            export_model_static(round.content, &model, shown, out_dir, &name, None, None)
+            export_model_static(round.content, &model, shown, out_dir, &name, None, &[])
         });
         match written {
             Ok(written) => {
@@ -742,11 +743,16 @@ fn export_dropped(
     report: &mut PlayersReport,
 ) -> Vec<serde_json::Value> {
     let mut looks: BTreeMap<(u64, Option<Finish>), BTreeSet<u64>> = BTreeMap::new();
-    for w in round.track.samples.iter().flat_map(|s| &s.dropped) {
-        looks
-            .entry((w.model, dropped_finish(round.track, w)))
-            .or_default()
-            .insert(w.mesh_groups);
+    // A StatTrak weapon's count as it last lay (a count changes only while it is carried).
+    let mut counts: BTreeMap<(u64, Option<Finish>), u32> = BTreeMap::new();
+    for sample in &round.track.samples {
+        for w in &sample.dropped {
+            let key = (w.model, dropped_finish(round.track, w));
+            if let Some(count) = round.track.stattrak_at(w.entity, sample.tick) {
+                counts.insert(key, count);
+            }
+            looks.entry(key).or_default().insert(w.mesh_groups);
+        }
     }
     // Thrown grenades fly as their own model in its default mesh groups (mask 0).
     for g in round
@@ -793,6 +799,14 @@ fn export_dropped(
             &mut charms,
             &mut report.warnings,
         );
+        let plate = nametags::load_plate(round.content, [finish], &mut report.warnings);
+        let modules = stattrak::load_modules(
+            round.content,
+            [(path.as_str(), finish)],
+            &mut report.warnings,
+        );
+        let name_tag = finish.and_then(|f| f.name_tag());
+        let count = counts.get(&(id, finish)).copied();
         for (shown, masks) in by_shown {
             let mut name = format!(
                 "{demo_name}_r{}_dropped_{}_{shown}",
@@ -802,12 +816,42 @@ fn export_dropped(
             if let Some(paint) = &paint {
                 name = format!("{name}_{}", paint.label);
             }
-            let charm = keychains::charm(&round.paints, &charms, &model, shown, finish)
-                .map(|(charm, hang)| (charm, keychains::at_point(&hang)));
-            if let Some(keychain) = finish.and_then(|f| f.keychain)
-                && charm.is_some()
+            // Its keychain, name tag plate and StatTrak module, each named in the file's name.
+            let mut parts = Vec::new();
+            if let Some((charm, hang)) =
+                keychains::charm(&round.paints, &charms, &model, shown, finish)
+                && let Some(keychain) = finish.and_then(|f| f.keychain)
             {
                 name = format!("{name}_kc{}", keychain.id);
+                parts.push(StaticPart {
+                    label: "keychain",
+                    model: charm,
+                    placement: keychains::at_point(&hang),
+                    paint: None,
+                });
+            }
+            if let (Some(plate), Some(text)) = (&plate, &name_tag)
+                && let Some((_, mount)) = nametags::mount(&model, shown)
+            {
+                let paint = Paint::name_tag(text.clone());
+                name = format!("{name}_{}", paint.label);
+                parts.push(StaticPart {
+                    label: "nametag",
+                    model: plate,
+                    placement: mount,
+                    paint: Some(paint),
+                });
+            }
+            if let (Some(module), Some(count)) = (stattrak::module(&modules, path, finish), count)
+                && let Some((_, mount)) = stattrak::mount(&model, shown)
+            {
+                name = format!("{name}_stattrak{count}");
+                parts.push(StaticPart {
+                    label: "stattrak",
+                    model: module,
+                    placement: mount,
+                    paint: Some(Paint::stattrak(count)),
+                });
             }
             // Another model with the same file stem: keep the files apart.
             if !names.insert(name.clone()) {
@@ -821,7 +865,7 @@ fn export_dropped(
                 out_dir,
                 &name,
                 paint.clone(),
-                charm,
+                &parts,
             ) {
                 Ok(written) => {
                     entries.push(json!({
@@ -1002,6 +1046,7 @@ fn export_look(
     };
     let mut bodies = Vec::new();
     let mut places: Vec<Vec<Vec<(Slot, Place)>>> = Vec::new();
+    let mut stattrak_counts: Vec<Vec<Vec<(WeaponLook, u32)>>> = Vec::new();
     let mut slots: BTreeSet<Slot> = BTreeSet::new();
     let clips = round
         .clip_table
@@ -1053,9 +1098,32 @@ fn export_look(
                 }
             })
             .collect();
+        // The StatTrak count of each look carried, frame by frame (a StatTrak look is one weapon's: its finish holds
+        // the count it started the round with).
+        let counts: Vec<Vec<(WeaponLook, u32)>> = round
+            .frames
+            .iter()
+            .map(|&(_, index)| {
+                let sample = &track.samples[index];
+                sample
+                    .players
+                    .iter()
+                    .find(|p| p.controller == controller && p.alive)
+                    .map(|p| {
+                        p.weapons
+                            .iter()
+                            .filter_map(|w| {
+                                Some((weapon_look(w)?, track.stattrak_at(w.entity, sample.tick)?))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
         slots.extend(carried.iter().flatten().map(|(slot, _)| slot.clone()));
         bodies.push(poses);
         places.push(carried);
+        stattrak_counts.push(counts);
     }
 
     // The weapon models; a slot whose model cannot be read is left out.
@@ -1087,11 +1155,20 @@ fn export_look(
         &mut warnings,
     );
     let plate = nametags::load_plate(content, slots.iter().map(|s| s.look.finish), &mut warnings);
+    let modules = stattrak::load_modules(
+        content,
+        slots.iter().map(|s| (s.look.model.as_str(), s.look.finish)),
+        &mut warnings,
+    );
 
-    let skeleton = skeleton_with_slots(&agent, &mounts, slots.len());
+    let mut skeleton = skeleton_with_slots(&agent, &mounts, slots.len());
     let first_slot_bone = agent.skeleton.bones.len();
     let bind = skeleton.world_transforms();
     let mut merged = Vec::new();
+    // After the slots' bones: the StatTrak modules' (one per count a look shows: the bone, its slot and count) and
+    // the charms' joints (their slot, first joint, the charm's space → the slot bone's frame, and chain).
+    let mut module_bones: Vec<(usize, usize, u32)> = Vec::new();
+    let mut charm_swings: Vec<(usize, usize, Affine, keychains::Chain)> = Vec::new();
     for (n, slot) in slots.iter().enumerate() {
         let (model, frames) = &weapon_models[&slot.look.model];
         let bone = first_slot_bone + n;
@@ -1107,17 +1184,30 @@ fn export_look(
                 .finish
                 .and_then(|f| round.paints.paint(content, f, &mut warnings)),
         });
-        // Its keychain, rigid with the weapon (whose bones a slot does not keep).
+        // Its keychain, on joints of its own under the slot's bone (a slot does not keep the weapon's bones), swung
+        // by the animations.
         if let Some((charm, hang)) =
             keychains::charm(&round.paints, &charms, model, mesh_groups, slot.look.finish)
         {
+            let charm_placement = compose(&placement, &keychains::at_point(&hang));
+            let offset = compose(&invert_rigid(&bind[bone]), &charm_placement);
+            let first = keychains::add_bones(
+                &mut skeleton,
+                charm,
+                bone,
+                &offset,
+                &format!("ofast_weapon_{n}_keychain_"),
+            );
+            if let Some(chain) = keychains::Chain::of(charm) {
+                charm_swings.push((n, first, offset, chain));
+            }
             merged.push(MergedModel {
                 label: format!("w{n}_keychain"),
                 model: charm,
                 mesh_groups: charm.default_mesh_group_mask,
-                binding: Binding::Rigid {
-                    bone,
-                    placement: compose(&placement, &keychains::at_point(&hang)),
+                binding: Binding::Offset {
+                    first,
+                    placement: charm_placement,
                 },
                 paint: None,
             });
@@ -1137,6 +1227,39 @@ fn export_look(
                 },
                 paint: Some(Paint::name_tag(text)),
             });
+        }
+        // Its StatTrak module, on a bone of its own for each count the look shows in the round (the animations scale
+        // the others' to 0).
+        if let Some(module) = stattrak::module(&modules, &slot.look.model, slot.look.finish)
+            && let Some((_, mount)) = stattrak::mount(model, mesh_groups)
+        {
+            let counts: BTreeSet<u32> = stattrak_counts
+                .iter()
+                .flatten()
+                .flatten()
+                .filter(|(look, _)| *look == slot.look)
+                .map(|&(_, count)| count)
+                .collect();
+            for count in counts {
+                module_bones.push((skeleton.bones.len(), n, count));
+                skeleton.bones.push(crate::model::Bone {
+                    name: format!("ofast_weapon_{n}_stattrak_{count}"),
+                    parent: Some(bone),
+                    position: [0.0; 3],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    flags: 0,
+                });
+                merged.push(MergedModel {
+                    label: format!("w{n}_stattrak_{count}"),
+                    model: module,
+                    mesh_groups: module.default_mesh_group_mask,
+                    binding: Binding::Rigid {
+                        bone: skeleton.bones.len() - 1,
+                        placement: compose(&placement, &mount),
+                    },
+                    paint: Some(Paint::stattrak(count)),
+                });
+            }
         }
     }
     let gloves = match &look.gloves {
@@ -1190,7 +1313,12 @@ fn export_look(
     let mut falls = Vec::new();
     let mut muzzles = Vec::new();
     let mut hit_bodies = Vec::new();
-    for ((&controller, poses), carried) in players.iter().zip(bodies).zip(&places) {
+    for (((&controller, poses), carried), counts) in players
+        .iter()
+        .zip(bodies)
+        .zip(&places)
+        .zip(&stattrak_counts)
+    {
         let poses = hold_gaps(poses, &round.clip_skeleton.reference);
         let mut worlds: Vec<Vec<Affine>> = poses
             .iter()
@@ -1330,8 +1458,40 @@ fn export_look(
                     matrix_to_quat(&local),
                 ));
             }
+            // The bones after the slots' as at bind (the charms swing below); a StatTrak module shows at its count.
+            let extra = &skeleton.bones[locals.len()..];
+            locals.extend(extra.iter().map(|b| (b.position, b.rotation)));
+            for &(bone, n, count) in &module_bones {
+                let look = &slots[n].look;
+                if !counts[k].iter().any(|(l, c)| l == look && *c == count) {
+                    frame_scales[bone] = 0.0;
+                }
+            }
             frames.push(locals);
             scales.push(frame_scales);
+        }
+        // The charms' swing: each charm's space in the world on the frames its weapon shows (the player's place, the
+        // slot's key), its joints keyed as they swing.
+        for (n, first, offset, chain) in &charm_swings {
+            let placed: Vec<Option<Affine>> = (0..frames.len())
+                .map(|k| {
+                    let (local, shown) = slot_keys[*n][k];
+                    let player = track.samples[round.frames[k].1]
+                        .players
+                        .iter()
+                        .find(|p| p.controller == controller && p.alive)
+                        .filter(|_| shown)?;
+                    let slot = compose(&worlds[k][0], &local);
+                    Some(compose(
+                        &super::deaths::actor(player),
+                        &compose(&slot, offset),
+                    ))
+                })
+                .collect();
+            for (k, rotations) in chain.swing(&placed, round.fps).iter().enumerate() {
+                let locals = chain.locals(offset, rotations);
+                frames[k][*first..*first + locals.len()].copy_from_slice(&locals);
+            }
         }
         animations.push(BoneAnimation {
             name: format!("player_{controller}"),
@@ -1440,6 +1600,9 @@ pub(crate) fn finish_json(finish: Finish) -> serde_json::Value {
     }
     if let Some(name) = finish.name_tag() {
         out["name_tag"] = json!(name);
+    }
+    if let Some(count) = finish.stattrak {
+        out["stattrak"] = json!(count);
     }
     out
 }

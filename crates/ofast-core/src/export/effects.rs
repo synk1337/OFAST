@@ -548,6 +548,7 @@ mod tests {
             earlier_hits: Vec::new(),
             server_tick_offset: None,
             skins: Default::default(),
+            stattrak: Default::default(),
         };
 
         // The flame 20 units from the wall meets it straight ahead and on the two diagonals (18 units to each side,

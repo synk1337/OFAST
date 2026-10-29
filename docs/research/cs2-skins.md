@@ -237,7 +237,19 @@ keychain offset (attributes 300 – 302) is a point in the weapon model's space:
 inch from the model's `keychain` attachment (8.63, 0.54, 4.00); KSCERATO's (17.5, 0.74, 4.1) on the suppressor.
 The weapon models' keyvalues hold a `KeychainMarkup` list of the areas a keychain may hang from: four corners in model
 space and a bone (`slide`, `weapon_offset`, `silencer`, `clip`…), `LegacyModel` for the CS:GO-era meshes'. The seed
-(306) is not read yet. **Not done**: the cloth swing (OFAST hangs the charm rigid, as at rest).
+(306) is not read yet.
+
+The swing: each charm model's physics block holds a cloth model (`m_pFeModel`, Source 2's softbody). On the blank
+`kc_missinglink_default`: 20 nodes, 4 of them static (the ring: `$ha_joint1`, `$ccjoint1_0`, `$ccjoint1_1`,
+`joint1`), `joint3` and `joint2` driven by the cloth's nodes (`m_nFirstPositionDrivenNode` 18), gravity 360 inches/s²
+(`flGravity`) on every free node, no point damping, no air drag, hinge limits of ±45° (three) and ±67.5° (the charm's),
+`m_flLocalForce` 1, `m_flLocalRotation` 0. The mesh is skinned to the three joints, one bone per vertex. `joint2` sits
+0.13 inch beside the ring (the link lies flat), `joint3` 0.39 inch below it, the charm's weight (the centre of its
+vertices) 0.8 inch further. OFAST does not run the cloth solver: it swings `joint2` and `joint3` as a chain of rods
+from the ring under gravity, with those hinge limits and a damping of its own choosing (`export::keychains`, swing),
+driven by where the weapon takes the ring in the world (the agent's place and pose; in first person, the eye camera
+and the viewmodel's pose). The pendulum swings about 2.7 times a second, the pace of A–D strafes: holding an angle,
+yuurih's charm swings to its hinges. Not checked against CS2's own motion (screenshots are stills).
 
 Of the 143 definitions (2026-10-29), 82 name a model. 23 of those, the community charms (`missinglink_community_01`),
 share a blank model (`workshop_blanks/kc_missinglink_default.vmdl`, a grey template material, one draw call) and add
@@ -261,6 +273,25 @@ OFAST's mirrored viewmodel), but the plate reads "LOVE from Jimzor v3" from the 
 mirrored copy of the right-hand plate showed the text backwards. The plate is symmetric along its length (bounds
 ±1.41 inches about its origin), so the mirrored plate covers the same place. How the game does it (client code, not
 the shader: `csgo_weapon` has no such switch) is not known; the result matches.
+
+## StatTrak
+
+The demo sends the count as attribute 80 (kill eater, an integer) and updates it live: YEKINDAR's M4A1-S goes 1471 →
+1472 at tick 155067, the tick MAJ3R falls to it (round 17). The weapon carries the StatTrak module
+(`weapons/models/shared/stattrak/stattrak_module.vmdl`; on knives `stattrak_module_knife.vmdl`, the display alone) on
+its model's `stattrak` attachment (`stattrak_legacy` on legacy meshes). The display is `csgo_weapon.vfx` with
+`F_STATTRAK` (and `F_SELF_ILLUM`): the vertex shader's static combo `S_STATTRAK` picks the digits from
+`g_nStatTrakValue` (the material's 654321 is a placeholder; the game sets the count). Decompiled (VS combo 8):
+
+- a digit's vertices have a negative v in their first UV set (−1 … −0.924) and u in [d + 1, d + 2) for digit d,
+  0 the hundred-thousands … 5 the units; the fraction of u covers atlas cell d (cells 1/16 wide: [d/16, d/16 + 0.055]);
+- d = ⌊u⌋ − 1, n = count / {100000, 10000, 1000, 100, 10, 1}[d] (whole), cell = 1 + n mod 10 when n ≠ 0 or d = 5,
+  else 0; u − d/16 + cell/16 (the texture repeats).
+
+The atlas's (`stattrak_digit_atlas.psd`, 512²) top row: cell 0 a dim zero (leading zeros show unlit), cells 1 – 10 the
+lit digits 0 – 9, 11 – 15 empty. YEKINDAR's view shows "001471" this way, lit orange (tick 152613). OFAST sets the
+digits' UVs for the count when it writes the module, one module per count a weapon shows in the round on bones that
+the animation shows in turn.
 
 ## Wear tiers
 

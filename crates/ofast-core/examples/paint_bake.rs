@@ -50,6 +50,7 @@ fn main() {
             wear,
             stickers: Vec::new(),
             name_tag: None,
+            stattrak: None,
         };
         match bake(&content, material, &paint) {
             Ok((color, surface)) => {

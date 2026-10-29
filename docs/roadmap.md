@@ -413,10 +413,14 @@ player and round.
   MP9 matches CS2's.
 - [x] **Keychains and name tags** (`export::keychains`, `export::nametags`): the charm hanging from the item's point
   on the weapon (third person, first person, lying weapons) with the community charms' own materials, the name tag
-  plate with the name drawn on it (third and first person, readable in a left hand as in CS2).
+  plate with the name drawn on it (third and first person, lying weapons, readable in a left hand as in CS2).
+- [x] **Charms swing** (`export::keychains`, swing): the charm's joints swing in the animations as a chain of rods
+  under gravity with the cloth's hinge limits, moved by the weapon in the world (third and first person).
+- [x] **StatTrak counters** (`export::stattrak`): the module with its digits set as CS2's vertex shader sets them,
+  counting up on the kills during the round (third person, first person, lying weapons).
 - [ ] The second hand's seed, the default layout's anisotropic combo (one kit); patina age, trilinear case
-  hardening; pearlescence, the paints' normal maps; stickers' glitter and the free placement's signs; keychains'
-  swing; StatTrak counters; checked against CS2 screenshots.
+  hardening; pearlescence, the paints' normal maps; stickers' glitter and the free placement's signs; gold stickers'
+  tone (darker and greener than CS2's); checked against CS2 screenshots.
 - [ ] Textures shared across a round's glTFs imported once in Unreal: each look's import makes its own copy of the
   same painted weapon textures, and with a look per glove skin (round 17: 10 players' and 10 first-person files) a
   drawn import runs out of video memory (the Studio imports without a renderer; `run_ue.ps1 -NullRhi` for checks).

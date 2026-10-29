@@ -39,6 +39,7 @@ pub mod replay;
 pub mod shots;
 pub mod sky;
 pub mod smoke;
+pub mod stattrak;
 pub mod stickers;
 mod tint;
 pub mod viewmodel;

@@ -16,10 +16,16 @@
 //!
 //! # As exported
 //!
-//! The charm's meshes join the weapon's (a merged part, `gltf::MergedModel`), rigid on the weapon bone it follows,
-//! moved to its point and hanging as at rest: along the weapon's −z, not swung by gravity or motion.
+//! The charm's meshes join the weapon's (a merged part, `gltf::MergedModel`), moved to its point, skinned to its
+//! own joints added under the weapon bone it follows (`add_bones`). On the agents and in first person the joints
+//! swing with the weapon's moves in the world (`swing`: a chain of rods under gravity, not CS2's cloth solver); a
+//! weapon lying on the ground keeps it as at rest: along the weapon's −z.
+
+mod swing;
 
 use std::collections::{BTreeMap, HashMap};
+
+pub(crate) use swing::Chain;
 
 use crate::content::Content;
 use crate::export::gltf::load_model;
@@ -27,7 +33,7 @@ use crate::export::loadout::Finish;
 use crate::export::paint::Paints;
 use crate::items::section_values;
 use crate::kv3::Value;
-use crate::model::{Affine, Model, affine, compose};
+use crate::model::{Affine, Bone, Model, Skeleton, affine, compose};
 
 /// A keychain definition's charm: its model, and the material CS2 draws it with instead of the model's own.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,6 +221,40 @@ pub(crate) fn charm<'m>(
 /// The charm's space → the weapon model's space: moved to the point it hangs from.
 pub(crate) fn at_point(hang: &Hang) -> Affine {
     affine([0.0, 0.0, 0.0, 1.0], hang.point)
+}
+
+/// Appends `charm`'s bones to `skeleton`, named `<prefix><bone>`: its roots under `parent` at `offset` (the charm's
+/// space → the parent's frame), the others as in the charm. Returns the index of the first: the charm's bone `b` is
+/// `first + b`.
+pub(crate) fn add_bones(
+    skeleton: &mut Skeleton,
+    charm: &Model,
+    parent: usize,
+    offset: &Affine,
+    prefix: &str,
+) -> usize {
+    let first = skeleton.bones.len();
+    for bone in &charm.skeleton.bones {
+        let (parent, position, rotation) = match bone.parent {
+            Some(p) => (first + p, bone.position, bone.rotation),
+            None => {
+                let local = compose(offset, &affine(bone.rotation, bone.position));
+                (
+                    parent,
+                    [local[0][3], local[1][3], local[2][3]],
+                    crate::anim::matrix_to_quat(&local),
+                )
+            }
+        };
+        skeleton.bones.push(Bone {
+            name: format!("{prefix}{}", bone.name),
+            parent: Some(parent),
+            position,
+            rotation,
+            flags: 0,
+        });
+    }
+    first
 }
 
 #[cfg(test)]

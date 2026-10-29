@@ -51,14 +51,22 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   shift them by the item's offset in sticker units. The view-dependent parts are fixed (holograms seen face on) or
   left out (glitter, the edges' parallax).
 - **Keychains and name tags as parts of the weapon** (`export::keychains`, `export::nametags`): the charm model
-  hangs rigid from the item's point (or the model's `keychain` attachment) on the bone of the model's nearest
-  keychain area, as at rest, drawn with the definition's `keychain_material` when it names one (the community
-  charms' blank model), a highlight reel as its `base` charm; the name tag plate sits on the `nametag` attachment,
+  hangs from the item's point (or the model's `keychain` attachment) on the bone of the model's nearest keychain
+  area, drawn with the definition's `keychain_material` when it names one (the community charms' blank model), a
+  highlight reel as its `base` charm. Its joints are added to the skeleton and swing in the animations: a chain of
+  rods from the ring under gravity with the cloth's hinge limits, moved by where the weapon takes the ring in the
+  world (not CS2's cloth solver, whose nodes and constraints the model carries; a lying weapon's charm stays as at
+  rest). The name tag plate sits on the `nametag` attachment,
   its colour baked with the name drawn as CS2's composite draws it. The text uses the Windows fonts CS2 names (Arial
   Narrow, with fallbacks for the characters it lacks) through `ab_glyph` (TrueType is a standard format: decision
   002). A left-handed viewmodel, mirrored whole as in CS2, carries a second plate mirrored along its length (CS2
   keeps the text readable there); each plate is on a bone of its own and the animation scales the other hand's to 0,
   since players switch hands during a round.
+- **StatTrak modules with their digits set in the UVs** (`export::stattrak`): the module on the `stattrak`
+  attachment, its digits' first UV set moved as CS2's vertex shader moves them for the count (decompiled). The
+  count goes up during the round (the demo's attribute 80 on the kill's tick): a weapon carries one module per count
+  it shows, each on a bone of its own, shown in turn by the animation's scales — the same switch as the name tag's
+  hands, nothing new for Unreal. Weapons lying in the world carry their plate and module too.
 - **Legacy kits** use the CS:GO-era model (`use_legacy_model`), which the demo's mesh groups already show; its
   material names its own composite inputs, in the layout the kit's pattern was painted for. Their composite
   materials roll no pattern offset or rotation (Fire Serpent's pattern sits the same at every seed; its wear and
@@ -104,8 +112,8 @@ is readable; the pixel maths of the paint styles is in Valve's compiled shaders.
   all 10 of round 17's glove skins. The height-blended program's colour-adjust matrices are the environment shaders'
   reconstruction (`environment::color_correct`, `color_tint`, from Source 2 Viewer's). Bakes run their rows in parallel: a glove skin
   takes about a second a hand.
-- Not shown yet: StatTrak counters; stickers' glitter and view-dependent holograms; keychains' swing; name tags on
-  weapons lying in the world.
+- Not shown yet: stickers' glitter and view-dependent holograms; CS2's own cloth motion for the charms (OFAST's
+  chain of rods stands in).
 - **Compared with CS2** (2026-10-28, `-insecure`, the demo paused at the same ticks, `spec_player` in first person
   against the saved round's POV cameras: 20 views of Aurora vs FURIA's round 17): the weapon skins match (Asiimov,
   Fire Serpents, Wild Lotus, Bloodsport, Hot Rod, Radiation Hazard, Gungnir), the gloves' patterns sit on the right
