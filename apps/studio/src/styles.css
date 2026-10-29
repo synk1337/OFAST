@@ -134,6 +134,15 @@ button:hover {
   background: var(--bad);
 }
 
+/* Works, but might break: CS2 updated since OFAST was checked on it. */
+.check.warn .dot {
+  background: var(--accent);
+}
+
+.check.warn .muted {
+  color: var(--accent);
+}
+
 table.demos {
   width: 100%;
   border-collapse: collapse;

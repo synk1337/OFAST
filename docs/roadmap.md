@@ -458,6 +458,10 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   makes the user's own project in a writable folder on first start (the Studio finds both in the source folder
   today). What users need then: Windows 10 or 11, CS2, Unreal Engine 5.8 and WebView2 (part of Windows 11; the
   setup program installs it when missing). No Node.js, Rust or Visual Studio.
+- [x] **CS2 version check** (2026-10-29): the Studio shows the installed CS2 version, green when OFAST was checked
+  on it (`game::CHECKED_VERSIONS`), orange ("not synced with this CS2 version yet, it might break") otherwise.
+- [ ] **Same-day CS2 support**: each CS2 patch checked the day it ships (docs/development.md, "After a CS2 update"),
+  its build added to the checked versions, or fixed, and an OFAST release out that day.
 
 ## Hard problems we know about
 
@@ -466,5 +470,6 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   the demo's inputs (M4), the recipe decoded to replace those decisions, then exact live capture through
   ofast-capture (M8).
 - **CS2 updates.** Each patch can change demo protobufs and game internals. The capture DLL reads field offsets
-  from CS2's own schema system at runtime to limit breakage.
+  from CS2's own schema system at runtime to limit breakage; skins are read from the game's own kits, so new ones
+  need no update unless they bring a new shader feature. The Studio warns when CS2 is newer than OFAST's checks.
 - **Skins and particles** have no open-source reference implementation; they are late milestones.

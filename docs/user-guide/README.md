@@ -33,10 +33,13 @@ npm run app
 
 The first start compiles the app and takes a few minutes; later starts take seconds.
 
-The first page checks three things, each with a green or red dot:
+The first page checks four things, each with a green or red dot:
 
 - **Counter-Strike 2**: found through Steam's list of game libraries. If CS2 is installed somewhere Steam does not
   list, set the environment variable `OFAST_CS2_DIR` to its folder (the one that holds `game\`).
+- **CS2 version**: green when OFAST was checked on your CS2's version. Orange when CS2 updated since: OFAST still
+  runs, but the update may have changed something it reads (a broken first person, a weapon missing). An OFAST
+  update for the new CS2 version turns it green again.
 - **Unreal Engine 5.8**: found through the Epic Games Launcher's list. Otherwise set `OFAST_UE_DIR` to its folder.
 - **OFAST Unreal project**: `unreal/Sandbox` in the OFAST folder, where rounds are built.
 

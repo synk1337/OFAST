@@ -14,7 +14,7 @@ use ofast_core::demo::DemoParser;
 use ofast_core::demo::players::{RoundTrack, track_round_at};
 use ofast_core::demo::summary::{DemoSummary, summarize};
 use ofast_core::export::gltf::write_png;
-use ofast_core::game::Cs2Install;
+use ofast_core::game::{CHECKED_VERSIONS, Cs2Install, Cs2Version};
 use ofast_core::map::overview::{Overview, overview_path, radar_image_path};
 use ofast_core::resource::Resource;
 use ofast_core::texture::Texture;
@@ -55,12 +55,26 @@ pub(crate) async fn blocking<T: Send + 'static>(
 pub struct Environment {
     /// The CS2 install's root folder.
     pub cs2: Option<String>,
+    /// The CS2 install's version against those OFAST was checked on (`None` without an install).
+    pub cs2_version: Option<VersionCheck>,
     /// CS2's replays folder, where the game saves downloaded demos.
     pub replays: Option<String>,
     /// Unreal Engine 5.8's folder.
     pub unreal: Option<String>,
     /// OFAST's Unreal project (`.uproject`), where "Send to Unreal" imports rounds.
     pub project: Option<String>,
+}
+
+/// The CS2 install's version against those OFAST was checked on ([`ofast_core::game::CHECKED_VERSIONS`]): a CS2
+/// patch can change what OFAST reads without warning.
+#[derive(Debug, Serialize)]
+pub struct VersionCheck {
+    /// The install's version (`PatchVersion`), `None` when `steam.inf` could not be read.
+    pub installed: Option<String>,
+    /// Whether OFAST was checked on the installed build.
+    pub synced: bool,
+    /// The newest version OFAST was checked on.
+    pub checked: String,
 }
 
 /// Finds CS2, Unreal Engine 5.8 and OFAST's Unreal project.
@@ -72,8 +86,19 @@ pub async fn environment() -> Result<Environment, String> {
             .as_ref()
             .map(Cs2Install::replays_dir)
             .filter(|p| p.is_dir());
+        let cs2_version = cs2.as_ref().map(|c| {
+            let version = c.version();
+            VersionCheck {
+                synced: version.as_ref().is_some_and(Cs2Version::is_checked),
+                installed: version.map(|v| v.patch),
+                checked: CHECKED_VERSIONS
+                    .first()
+                    .map_or_else(String::new, |&(patch, _)| patch.to_owned()),
+            }
+        });
         Environment {
             cs2: cs2.map(|c| display(c.root())),
+            cs2_version,
             replays: replays.as_deref().map(display),
             unreal: unreal_dir().as_deref().map(display),
             project: repository()

@@ -5,7 +5,8 @@ goes through `crates/ofast-core`, as the CLI does.
 
 What it does so far:
 
-- Finds CS2, Unreal Engine 5.8 and OFAST's Unreal project (`unreal/Sandbox`)
+- Finds CS2, Unreal Engine 5.8 and OFAST's Unreal project (`unreal/Sandbox`), and shows CS2's version: green when
+  OFAST was checked on it, orange when CS2 updated since (`ofast_core::game::CHECKED_VERSIONS`)
 - Lists the demos in CS2's replays folder (or any folder), with each one's map and server from its header
 - Opens a demo on its page: every round with its winner, score and best moments, the kill feed of the round chosen,
   and a finder for the moments worth filming — highlights (3K and more, aces, won clutches, collaterals, no-scopes,

@@ -8,6 +8,7 @@ import {
   Environment,
   RenderPreset,
   RoundSummary,
+  VersionCheck,
   environment,
   listDemos,
   renderRound,
@@ -136,25 +137,55 @@ export function App() {
   );
 }
 
-/** What was found on this computer: CS2, Unreal Engine 5.8 and OFAST's Unreal project. */
+/** One line of the setup checks: green, orange (works, but might break) or red. */
+interface Check {
+  name: string;
+  state: "ok" | "warn" | "missing";
+  text: string;
+}
+
+/** A check for something found on this computer: its path, or how to get it. */
+const found = (name: string, path: string | null, hint: string): Check => ({
+  name,
+  state: path ? "ok" : "missing",
+  text: path ?? hint,
+});
+
+/** CS2's version against those OFAST was checked on: a CS2 patch can change what OFAST reads without warning. */
+function versionCheck({ installed, synced, checked }: VersionCheck): Check {
+  const name = "CS2 version";
+  if (!installed) {
+    return { name, state: "warn", text: `Unreadable: OFAST might not be synced with this CS2 (checked on ${checked}).` };
+  }
+  return synced
+    ? { name, state: "ok", text: `${installed}: OFAST is synced with this CS2 version.` }
+    : {
+        name,
+        state: "warn",
+        text: `${installed}: OFAST is not synced with this CS2 version yet (checked on ${checked}). It might break.`,
+      };
+}
+
+/** What was found on this computer: CS2 and its version, Unreal Engine 5.8 and OFAST's Unreal project. */
 function Setup({ env }: { env: Environment | null }) {
   if (!env) return <section className="panel muted">Looking for CS2 and Unreal…</section>;
-  const items: [string, string | null, string][] = [
-    ["Counter-Strike 2", env.cs2, "Install CS2 through Steam, or set OFAST_CS2_DIR to its folder."],
-    [
+  const checks = [
+    found("Counter-Strike 2", env.cs2, "Install CS2 through Steam, or set OFAST_CS2_DIR to its folder."),
+    ...(env.cs2_version ? [versionCheck(env.cs2_version)] : []),
+    found(
       "Unreal Engine 5.8",
       env.unreal,
       "Install Unreal Engine 5.8 from the Epic Games Launcher, or set OFAST_UE_DIR to its folder.",
-    ],
-    ["OFAST Unreal project", env.project, "The Studio must run from the OFAST folder."],
+    ),
+    found("OFAST Unreal project", env.project, "The Studio must run from the OFAST folder."),
   ];
   return (
     <section className="panel setup">
-      {items.map(([name, path, hint]) => (
-        <div key={name} className={path ? "check ok" : "check missing"}>
+      {checks.map(({ name, state, text }) => (
+        <div key={name} className={`check ${state}`}>
           <span className="dot" />
           <span className="name">{name}</span>
-          <span className="muted">{path ?? hint}</span>
+          <span className="muted">{text}</span>
         </div>
       ))}
     </section>

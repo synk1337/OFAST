@@ -5,9 +5,20 @@ import { listen } from "@tauri-apps/api/event";
 /** What the Studio needs on this computer, each null when not found. */
 export interface Environment {
   cs2: string | null;
+  /** Null without a CS2 install. */
+  cs2_version: VersionCheck | null;
   replays: string | null;
   unreal: string | null;
   project: string | null;
+}
+
+/** The CS2 install's version against those OFAST was checked on. */
+export interface VersionCheck {
+  /** Null when CS2's steam.inf could not be read. */
+  installed: string | null;
+  synced: boolean;
+  /** The newest version OFAST was checked on. */
+  checked: string;
 }
 
 /** One demo file, from its header. */

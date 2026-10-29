@@ -47,13 +47,15 @@ fn main() {
     let mut copied: BTreeMap<String, usize> = BTreeMap::new();
     let (mut read, mut failed) = (0, 0);
     for kit in kits.values() {
-        let Ok(recipe) = kit_recipe(&content, kit) else {
-            failed += 1;
-            continue;
-        };
-        let Ok(params) = weapon_params(&content, &recipe, material, 1, 0.1) else {
-            failed += 1;
-            continue;
+        let params = kit_recipe(&content, kit)
+            .and_then(|recipe| weapon_params(&content, &recipe, material, 1, 0.1));
+        let params = match params {
+            Ok(params) => params,
+            Err(e) => {
+                println!("  {} {}: {e}", kit.id, kit.name);
+                failed += 1;
+                continue;
+            }
         };
         read += 1;
         let int = |name: &str| match params.color.get(name) {

@@ -112,6 +112,22 @@ Developer tools for game files: `cargo run --release --example resource_dump -- 
 `cargo run --release --example resource_dump -- <path>_c` dumps a compiled file's blocks (KV3 as text), and
 `cargo run --release --example kv3_inspect -- <path>_c` prints raw KV3 headers.
 
+### After a CS2 update
+
+A CS2 patch can change what OFAST reads without warning (1.41.9.3, 2026-10-28, renamed the world models' animation
+graph's top state machine: first person lost its weapons). The Studio shows the installed version
+(`game/csgo/steam.inf`: `PatchVersion`, `ClientVersion`) in green when it is in `CHECKED_VERSIONS`
+(`crates/ofast-core/src/game.rs`), in orange otherwise. After each patch:
+
+1. `cargo test --release -p ofast-core --features game-data`.
+2. Export the reference round again (`export-demo … --round 17`) and compare its log with the last one: the
+   `check:` lines (`check: pose recipes`: 149 clips, 37382 player-ticks) and the warnings ("not in the animation
+   graph", "left unpainted").
+3. `cargo run --release -p ofast-core --example paint_census`: a paint style or feature value not seen before, or a
+   kit that no longer reads, is a new skin feature to port.
+4. Import the round into Unreal (`import_demo.py -Shot`) and compare the shots with the last ones.
+5. Add the build to `CHECKED_VERSIONS` (newest first), with the fixes if something broke.
+
 ## Exporting and checking in Unreal
 
 ```bash

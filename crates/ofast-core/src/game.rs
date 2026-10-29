@@ -12,6 +12,9 @@
 //!    `C:\Program Files (x86)\Steam`.
 //! 3. Steam's default library on Windows: `C:\Program Files (x86)\Steam\steamapps\common\Counter-Strike Global
 //!    Offensive`.
+//!
+//! It also reads the install's version (`game/csgo/steam.inf`) and tells whether OFAST was checked on that build
+//! ([`CHECKED_VERSIONS`]): the Studio warns when it was not.
 
 use std::path::{Path, PathBuf};
 
@@ -130,6 +133,50 @@ impl Cs2Install {
     pub fn replays_dir(&self) -> PathBuf {
         self.csgo_dir().join("replays")
     }
+
+    /// The installed CS2 build, from `game/csgo/steam.inf`; `None` when the file is missing or unreadable.
+    pub fn version(&self) -> Option<Cs2Version> {
+        Cs2Version::parse(&std::fs::read_to_string(self.csgo_dir().join("steam.inf")).ok()?)
+    }
+}
+
+/// The CS2 builds OFAST was checked on, newest first: `PatchVersion` and `ClientVersion` of `game/csgo/steam.inf`.
+///
+/// A CS2 patch can change what OFAST reads (demo messages, animation graphs, shaders) without warning. After each
+/// one, a round is exported and imported again and its checks compared (docs/development.md, "After a CS2 update");
+/// the new build is added here once nothing is broken, or with the fix when something was.
+pub const CHECKED_VERSIONS: &[(&str, u32)] = &[("1.41.9.3", 2_000_938)];
+
+/// A CS2 build, as `game/csgo/steam.inf` names it (plain `key=value` lines).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cs2Version {
+    /// The version players see (`PatchVersion`, "1.41.9.3").
+    pub patch: String,
+    /// The build number (`ClientVersion`), which every update changes.
+    pub build: u32,
+}
+
+impl Cs2Version {
+    /// Reads `steam.inf`'s text; `None` without a `PatchVersion` or a numeric `ClientVersion`.
+    pub fn parse(steam_inf: &str) -> Option<Self> {
+        let value = |key: &str| {
+            steam_inf
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(key)?.strip_prefix('='))
+                .map(str::trim)
+        };
+        Some(Self {
+            patch: value("PatchVersion")?.to_owned(),
+            build: value("ClientVersion")?.parse().ok()?,
+        })
+    }
+
+    /// Whether OFAST was checked on this build ([`CHECKED_VERSIONS`]).
+    pub fn is_checked(&self) -> bool {
+        CHECKED_VERSIONS
+            .iter()
+            .any(|&(_, build)| build == self.build)
+    }
 }
 
 #[cfg(test)]
@@ -140,6 +187,23 @@ mod tests {
     fn from_root_rejects_a_folder_without_cs2_files() {
         let empty = std::env::temp_dir().join("ofast-not-a-cs2-install");
         assert_eq!(Cs2Install::from_root(empty), None);
+    }
+
+    #[test]
+    fn version_reads_steam_inf() {
+        let inf = "ClientVersion=2000938\r\nServerVersion=2000938\r\nPatchVersion=1.41.9.3\r\nProductName=cs2\r\n";
+        let version = Cs2Version::parse(inf).expect("a version");
+        assert_eq!(version.patch, "1.41.9.3");
+        assert_eq!(version.build, 2_000_938);
+        assert!(version.is_checked());
+        let newer =
+            Cs2Version::parse("ClientVersion=2000939\nPatchVersion=1.41.9.4\n").expect("a version");
+        assert!(!newer.is_checked());
+        assert_eq!(
+            Cs2Version::parse("ClientVersion=x\nPatchVersion=1.41.9.3\n"),
+            None
+        );
+        assert_eq!(Cs2Version::parse("ClientVersion=2000938\n"), None);
     }
 
     #[test]
