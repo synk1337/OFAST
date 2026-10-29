@@ -132,7 +132,20 @@ anodized multicolour's (Dopplers) masked share × `1 − max(masks G, B)`; gunsm
 metalness (so the stored byte is the value). OFAST bakes it into its metallic-roughness texture's R
 (`export::paint`) and draws the turn in Unreal (`tools/unreal/pearlescence.py`).
 
-**Not read yet**: glitter and iridescence, which the weapon material draws with the values copied onto it.
+**Glitter** (read 2026-10-29 from `csgo_weapon`'s `S_GLITTER` combo 64, 576 with stickers; not drawn yet): 14 kits
+have a `g_fGlitterIntensity` (Axia Glock 0.8, Skrrrt M4A4 0.45…), all with their own `g_tGlitterNormal`. Where the
+surface's B (the pearlescence share) and the intensity are, the flake texture is read point-sampled on the weapon's
+UVs × `g_fGlitterScale` × `g_flUvScale1` × 1.75 (2.5 at a higher setting): its RG a hemi-octahedral flake normal,
+its A the flake mask. The view reflected about the normal tilted by the flake gives `sin(r × mix(12, 5.6, spread))`,
+whose peaks above `mix(0.99, 0.8, spread)` make a rainbow sparkle (`g_fGlitterRainbowSpread`, `…Balance`), × the
+flake mask × V·N × intensity × the share; it is added × the **diffuse lighting** (`_17067`), not the albedo, so it
+shows on metal too. The flakes also brighten the colour (up to × 3.5 on darks), lower the roughness (× up to 0.75),
+raise the metalness and tilt the normal (by 0.04 × intensity, faded with the UV derivatives). Unreal's material graph
+has no input for "× the diffuse lighting": the port needs a choice (folded into the base colour, which metals would
+dim; or emissive scaled by an estimate of the light).
+
+**Iridescence** (same combo, `bIridescence`; 18 kits with a strength): a hue `fract((V·N + V·L) × g_flIridescentScale
++ g_flIridescentHueShift) × 6` turned into a rainbow colour that tints the specular. Not drawn yet.
 
 ### The composite's steps
 

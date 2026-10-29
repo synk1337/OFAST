@@ -442,8 +442,11 @@ player and round.
   colour). The kits' normal maps checked on the same view: the Gungnir's engraving shows.
 - [x] **The second glove's seed** (`g_nRandomSeedAlt`): the pattern seed + 1, read from CS2's `client.dll` (both
   places that set it).
-- [ ] The default layout's anisotropic combo (one kit); the paints' glitter; stickers' glitter and the free
-  placement's signs (a side view: from behind, first person does not show them); checked against CS2 screenshots.
+- [ ] The free placement's signs (a side view: from behind, first person does not show them), checked against a CS2
+  screenshot.
+- Moved to the polish pass (2026-10-29): glitter (14 kits and the glitter stickers) and iridescence (18 kits), read
+  from CS2's weapon shader ([research](research/cs2-skins.md), "Glitter") but drawn × the diffuse lighting, which
+  Unreal's materials do not give; the default glove layout's anisotropic combo (one kit).
 - [x] **Textures shared across the looks** (`import_demo.py`, `share_textures`): each exported PNG imported once into
   `/Game/OFAST/Replays/Textures`, which every round's looks sample, instead of a copy per look (round 17: 263
   textures, 574 MB, where its looks had made 3592 of 324 PNGs; 19 GB of looks for three rounds); a round's looks of
@@ -459,6 +462,9 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
 - [ ] **The picture's colour**: Unreal's rounds are more saturated than CS2's (de_dust2's mid, 2026-10-29: red paint
   0.80 against CS2's 0.67 at equal brightness), and metals a little darker (gold stickers a tenth); indoors CS2 reads
   greyer still.
+- [ ] **Skins' finer shading**: glitter and iridescence in OFAST's weapon master (`pearlescence.py`'s copy of
+  Interchange's glTF master), the default glove layout's anisotropic gloss, the Gungnir's engraving lines (teal in
+  Unreal, lavender in CS2).
 - [ ] **Installer**: the Studio as a setup program (`tauri build`, NSIS), made by CI on version tags. It carries
   OFAST's Unreal scripts (`tools/unreal`) and a template of its Unreal project (Python only: no C++ to compile), and
   makes the user's own project in a writable folder on first start (the Studio finds both in the source folder
