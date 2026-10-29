@@ -50,7 +50,8 @@ jobs:
         run: |
           $version = "$env:GITHUB_REF_NAME".TrimStart("v")
           New-Item -ItemType Directory dist | Out-Null
-          Copy-Item "target/release/bundle/nsis/*-setup.exe" dist/
+          # Without the space of Tauri's name ("OFAST Studio_…"), which GitHub would turn into a dot.
+          Copy-Item "target/release/bundle/nsis/*-setup.exe" "dist/OFAST-Studio_${version}_x64-setup.exe"
           Compress-Archive -DestinationPath "dist/ofast-tools-$version-windows-x64.zip" -Path `
             target/release/ofast.exe, target/release/ofast-attach.exe, target/release/ofast_capture.dll, LICENSE
           Get-ChildItem dist

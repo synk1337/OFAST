@@ -45,7 +45,7 @@ skins, the grenades, the shots and the cameras — without hand-fixing materials
 You need Windows 10 or 11, Counter-Strike 2 (Steam), [Unreal Engine 5.8](https://www.unrealengine.com/) (free, from
 the Epic Games Launcher) and a graphics card that runs Unreal Engine 5 comfortably.
 
-1. Download `OFAST Studio_1.0.0_x64-setup.exe` from the
+1. Download OFAST Studio's setup program (`…_x64-setup.exe`) from the
    [latest release](https://github.com/synk1337/OFAST/releases/latest) and run it (it installs for your user only; the
    setup program is not signed yet, so Windows may warn about an unknown publisher: **More info → Run anyway**).
 2. In CS2, download a match from the Watch tab.

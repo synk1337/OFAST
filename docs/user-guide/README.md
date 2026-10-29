@@ -19,7 +19,7 @@ builds the round in OFAST's Unreal project for you.
 
 ## Installing the Studio
 
-Download `OFAST Studio_<version>_x64-setup.exe` from the
+Download OFAST Studio's setup program (`…_x64-setup.exe`) from the
 [latest release](https://github.com/synk1337/OFAST/releases/latest) and run it. It installs for your Windows user
 only (no administrator rights needed) and adds OFAST Studio to the Start menu. The setup program is not signed yet:
 Windows SmartScreen may warn about an unknown publisher (**More info → Run anyway**).
