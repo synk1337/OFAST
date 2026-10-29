@@ -300,7 +300,8 @@ to the whole picture as shown ^ (gamma / 2.2): references taken at 2.013 show CS
 1. Set the version in `Cargo.toml` (`[workspace.package]`), `apps/studio/src-tauri/tauri.conf.json`,
    `apps/studio/package.json` and the top of `apps/studio/package-lock.json`; the Studio's project template is set up
    again for users when it changes.
-2. Write the notes as `docs/releases/<version>.md` (what changed, the CS2 build it was checked on).
+2. Write the notes as `docs/releases/<version>.md` (what changed, the CS2 build it was checked on), each paragraph
+   and bullet on one line: GitHub's release page keeps line breaks.
 3. Run the checks above, commit, then `git tag v<version>` and `git push origin v<version>`.
 
 The release workflow (`.github/workflows/release.yml`) checks that the tag, the versions and the notes agree, builds
