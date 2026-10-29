@@ -295,6 +295,19 @@ to the whole picture as shown ^ (gamma / 2.2): references taken at 2.013 show CS
 6. **Use agents.** Reference sources are researched in parallel before a reader is written; independent crates can be
    built in parallel; code is reviewed before merging.
 
+## Releasing
+
+1. Set the version in `Cargo.toml` (`[workspace.package]`), `apps/studio/src-tauri/tauri.conf.json`,
+   `apps/studio/package.json` and the top of `apps/studio/package-lock.json`; the Studio's project template is set up
+   again for users when it changes.
+2. Write the notes as `docs/releases/<version>.md` (what changed, the CS2 build it was checked on).
+3. Run the checks above, commit, then `git tag v<version>` and `git push origin v<version>`.
+
+The release workflow (`.github/workflows/release.yml`) checks that the tag, the versions and the notes agree, builds
+the Studio's setup program and the tools' zip on Windows, and publishes them as the GitHub release `v<version>`.
+After a CS2 update that broke nothing ("After a CS2 update"), a patch release (1.0.1…) carries the new build in
+`CHECKED_VERSIONS`, so installed Studios show green again.
+
 ## Decision log
 
 Architecture choices and dead ends are recorded in [docs/decisions/](decisions/). Copy

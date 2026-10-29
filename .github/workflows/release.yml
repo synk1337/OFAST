@@ -1,0 +1,63 @@
+# Releases of OFAST, made when a version tag is pushed (`git tag v1.0.0 && git push origin v1.0.0`).
+#
+# Builds on Windows (the platform CS2 and Unreal run on):
+# - the Studio's setup program (Tauri, NSIS: `apps/studio/src-tauri/tauri.conf.json`), which carries OFAST's Unreal
+#   scripts and a template of its Unreal project;
+# - the command-line tools and the CS2 capture (`ofast.exe`, `ofast-attach.exe`, `ofast_capture.dll`), zipped;
+# and publishes them as a GitHub release whose notes are `docs/releases/<version>.md`.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/studio/package-lock.json
+      - name: The tag matches the version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          grep -q "^version = \"$version\"" Cargo.toml || { echo "Cargo.toml is not at $version"; exit 1; }
+          grep -q "\"version\": \"$version\"" apps/studio/src-tauri/tauri.conf.json || { echo "tauri.conf.json is not at $version"; exit 1; }
+          test -f "docs/releases/$version.md" || { echo "no docs/releases/$version.md"; exit 1; }
+      - name: Studio setup program
+        working-directory: apps/studio
+        shell: bash
+        run: |
+          npm ci
+          npx tauri build
+      - name: Command-line tools and CS2 capture
+        run: cargo build --release -p ofast-cli -p ofast-capture
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = "$env:GITHUB_REF_NAME".TrimStart("v")
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item "target/release/bundle/nsis/*-setup.exe" dist/
+          Compress-Archive -DestinationPath "dist/ofast-tools-$version-windows-x64.zip" -Path `
+            target/release/ofast.exe, target/release/ofast-attach.exe, target/release/ofast_capture.dll, LICENSE
+          Get-ChildItem dist
+      - name: Publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" dist/* --title "OFAST $version" --notes-file "docs/releases/$version.md"

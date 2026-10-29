@@ -14,16 +14,22 @@ builds the round in OFAST's Unreal project for you.
   Versions → 5.8)
 - A graphics card that runs Unreal Engine 5 with Lumen comfortably, and plenty of memory: Unreal alone can take
   15–20 GB while it imports a round
-- For now, the OFAST folder itself, with Node.js 22 or newer and the Rust toolchain to start the Studio — see
-  [apps/studio/README.md](../../apps/studio/README.md)
+- Windows 10 or 11, with Microsoft Edge WebView2 (part of Windows 11; the setup program installs it if it is
+  missing)
 
-OFAST has no installer yet. Once it has one, the Studio comes as a setup program and none of the commands below are
-needed: no Node.js, Rust or Visual Studio, only Windows 10 or 11, CS2, Unreal Engine 5.8 and Microsoft Edge WebView2
-(already part of Windows 11; the setup program installs it if it is missing).
+## Installing the Studio
 
-## Starting the Studio
+Download `OFAST Studio_<version>_x64-setup.exe` from the
+[latest release](https://github.com/synk1337/OFAST/releases/latest) and run it. It installs for your Windows user
+only (no administrator rights needed) and adds OFAST Studio to the Start menu. The setup program is not signed yet:
+Windows SmartScreen may warn about an unknown publisher (**More info → Run anyway**).
 
-Until then, in the OFAST folder:
+The Studio keeps its Unreal project in `%LOCALAPPDATA%\OFAST\Unreal` (made the first time it starts; set the
+environment variable `OFAST_PROJECT_DIR` to keep it elsewhere). To update, run a newer setup program over it: the
+maps and rounds already sent stay.
+
+From the source code instead (to work on OFAST: Node.js 22 or newer and the Rust toolchain, see
+[apps/studio/README.md](../../apps/studio/README.md)), in the OFAST folder:
 
 ```bash
 cd apps/studio
@@ -31,7 +37,10 @@ npm install
 npm run app
 ```
 
-The first start compiles the app and takes a few minutes; later starts take seconds.
+The first start compiles the app and takes a few minutes; later starts take seconds. Run this way, the Studio uses
+the OFAST folder's own Unreal project, `unreal/Sandbox`.
+
+## Starting the Studio
 
 The first page checks four things, each with a green or red dot:
 
@@ -41,7 +50,8 @@ The first page checks four things, each with a green or red dot:
   runs, but the update may have changed something it reads (a broken first person, a weapon missing). An OFAST
   update for the new CS2 version turns it green again.
 - **Unreal Engine 5.8**: found through the Epic Games Launcher's list. Otherwise set `OFAST_UE_DIR` to its folder.
-- **OFAST Unreal project**: `unreal/Sandbox` in the OFAST folder, where rounds are built.
+- **OFAST Unreal project**: where rounds are built: `%LOCALAPPDATA%\OFAST\Unreal` for an installed Studio,
+  `unreal/Sandbox` in the OFAST folder when it runs from the source code.
 
 ## Finding a moment
 
@@ -175,9 +185,9 @@ Unreal's own log is; a map whose first import did not finish is imported again t
 - The Studio's cache (summaries of demos read, radar images) and its exports while a round is being sent (a map can
   take a few gigabytes; they are deleted once imported) are in `%LOCALAPPDATA%\com.ofast.studio`. Deleting the
   folder is safe: the Studio makes them again when needed.
-- What is imported into Unreal is in `unreal/Sandbox/Content/OFAST` in the OFAST folder: each map once, and each
-  round sent with its players' agents (close to a gigabyte per agent look). `Replays` can be emptied from Unreal's
-  Content Browser when it grows.
+- What is imported into Unreal is in the project's `Content/OFAST` (`%LOCALAPPDATA%\OFAST\Unreal\Content\OFAST`,
+  or `unreal/Sandbox/Content/OFAST` from the source code): each map once, and each round sent with its players'
+  looks (their textures shared). `Replays` can be emptied from Unreal's Content Browser when it grows.
 - Renders are in `Videos\OFAST`, a folder per render, and they are big: Preview about 1 MB a frame (a 20-second
   highlight, 1200 frames: over a gigabyte), Final about 20 MB a frame (the same highlight: about 25 GB), 4K about
   four times that. Delete the folders you no longer need.

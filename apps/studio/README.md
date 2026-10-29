@@ -5,8 +5,9 @@ goes through `crates/ofast-core`, as the CLI does.
 
 What it does so far:
 
-- Finds CS2, Unreal Engine 5.8 and OFAST's Unreal project (`unreal/Sandbox`), and shows CS2's version: green when
-  OFAST was checked on it, orange when CS2 updated since (`ofast_core::game::CHECKED_VERSIONS`)
+- Finds CS2, Unreal Engine 5.8 and OFAST's Unreal project (`unreal/Sandbox`, or its own copy when installed), and
+  shows CS2's version: green when OFAST was checked on it, orange when CS2 updated since
+  (`ofast_core::game::CHECKED_VERSIONS`)
 - Lists the demos in CS2's replays folder (or any folder), with each one's map and server from its header
 - Opens a demo on its page: every round with its winner, score and best moments, the kill feed of the round chosen,
   and a finder for the moments worth filming — highlights (3K and more, aces, won clutches, collaterals, no-scopes,
@@ -40,7 +41,15 @@ npm run app
 `npm run app` starts the web UI's dev server (Vite, port 1420) and the app's window, and rebuilds either side when its
 files change. Its Rust side is built optimized: reading a demo in a debug build is about 20 times slower (a whole
 match: a minute instead of seconds). `npm run tauri dev` gives the debug build, quicker to rebuild while working on
-the Rust side. `npm run tauri build` makes the installer (NSIS), with the web UI built and embedded.
+the Rust side. `npm run tauri build` makes the installer (NSIS: `target/release/bundle/nsis/OFAST
+Studio_<version>_x64-setup.exe`), with the web UI built and embedded; the release workflow
+(`.github/workflows/release.yml`) does the same on a version tag.
+
+**Installed or from the source tree.** Run from the OFAST folder, the Studio uses its Unreal project
+(`unreal/Sandbox`) and scripts (`tools/unreal`). The installer instead puts the scripts and a template of the project
+(`project-template`: the project file and `Config`, `tauri.conf.json`'s `resources`) next to the executable; on first
+start the Studio sets the project up in `%LOCALAPPDATA%\OFAST\Unreal` (or `OFAST_PROJECT_DIR`) and refreshes its
+settings when its version changes, keeping what Unreal made there (`commands::unreal_side`).
 
 The Rust side (`src-tauri`) is in the repository's Cargo workspace but not among its default members:
 `cargo test --workspace` checks it. A plain `cargo build -p ofast-studio` makes a development build that loads its UI

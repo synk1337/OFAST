@@ -2383,7 +2383,7 @@ dependencies = [
 
 [[package]]
 name = "ofast-capture"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "ofast-core",
  "serde_json",
@@ -2393,7 +2393,7 @@ dependencies = [
 
 [[package]]
 name = "ofast-cli"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "clap",
  "ofast-core",
@@ -2401,7 +2401,7 @@ dependencies = [
 
 [[package]]
 name = "ofast-core"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "ab_glyph",
  "bcdec_rs",
@@ -2424,7 +2424,7 @@ dependencies = [
 
 [[package]]
 name = "ofast-studio"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "ofast-core",
  "serde",

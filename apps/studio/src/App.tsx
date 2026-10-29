@@ -177,7 +177,11 @@ function Setup({ env }: { env: Environment | null }) {
       env.unreal,
       "Install Unreal Engine 5.8 from the Epic Games Launcher, or set OFAST_UE_DIR to its folder.",
     ),
-    found("OFAST Unreal project", env.project, "The Studio must run from the OFAST folder."),
+    found(
+      "OFAST Unreal project",
+      env.project,
+      "OFAST's Unreal scripts were not found next to the Studio: reinstall OFAST Studio.",
+    ),
   ];
   return (
     <section className="panel setup">

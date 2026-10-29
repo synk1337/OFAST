@@ -33,7 +33,7 @@ use serde::Serialize;
 use tauri::async_runtime::Mutex as AsyncMutex;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::commands::{PROJECT, UNREAL_EDITOR, blocking, repository, unreal_dir};
+use crate::commands::{UNREAL_EDITOR, UnrealSide, blocking, unreal_dir, unreal_side};
 
 /// The event the UI listens to for a sending's progress ([`Progress`]).
 pub const PROGRESS_EVENT: &str = "unreal-progress";
@@ -41,8 +41,8 @@ pub const PROGRESS_EVENT: &str = "unreal-progress";
 /// The editor without a window, for imports.
 const EDITOR_CMD: &str = r"Engine\Binaries\Win64\UnrealEditor-Cmd.exe";
 
-/// Unreal's log, for the user when an import fails.
-const LOG: &str = r"unreal\Sandbox\Saved\Logs\OFASTSandbox.log";
+/// Unreal's log in the project's folder, for the user when an import fails.
+const LOG: &str = r"Saved\Logs\OFASTSandbox.log";
 
 /// The environment variables OFAST's Unreal scripts read: all are set for each run (empty when unused), so none
 /// leaks from the Studio's own environment.
@@ -205,10 +205,11 @@ fn render(
         return Err(format!("There is no render preset \"{preset}\"."));
     }
     let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
-    let repo = repository().ok_or("OFAST's Unreal project was not found.")?;
+    let side = unreal_side().ok_or("OFAST's Unreal project was not found.")?;
     unreal_closed()?;
     let prefix = format!("{}_r{round}", asset_name(stem(path)));
-    if !repo
+    if !side
+        .dir()
         .join(REPLAYS)
         .join(format!("{prefix}.uasset"))
         .is_file()
@@ -235,7 +236,7 @@ fn render(
     let mut folder = None;
     run_script(
         &engine,
-        &repo,
+        &side,
         "render_round.py",
         // Movie Render Queue renders in Play In Editor, which needs a renderer.
         true,
@@ -265,11 +266,11 @@ fn render(
 #[tauri::command]
 pub async fn sent_rounds(path: String) -> Result<Vec<u32>, String> {
     blocking(move || {
-        let Some(repo) = repository() else {
+        let Some(side) = unreal_side() else {
             return Vec::new();
         };
         let prefix = format!("{}_r", asset_name(stem(&path)));
-        let mut rounds: Vec<u32> = std::fs::read_dir(repo.join(REPLAYS))
+        let mut rounds: Vec<u32> = std::fs::read_dir(side.dir().join(REPLAYS))
             .into_iter()
             .flatten()
             .filter_map(Result::ok)
@@ -287,8 +288,8 @@ pub async fn sent_rounds(path: String) -> Result<Vec<u32>, String> {
     .await
 }
 
-/// Where the rounds' sequences are, in the repository.
-const REPLAYS: &str = r"unreal\Sandbox\Content\OFAST\Replays";
+/// Where the rounds' sequences are, in the project's folder.
+const REPLAYS: &str = r"Content\OFAST\Replays";
 
 /// A demo path's file name without its extension.
 fn stem(path: &str) -> &str {
@@ -326,7 +327,7 @@ fn cameras(
 ) -> Result<Sent, String> {
     let report = |message: String, warning: bool| emit(app, Step::Cameras, message, warning);
     let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
-    let repo = repository().ok_or("OFAST's Unreal project was not found.")?;
+    let side = unreal_side().ok_or("OFAST's Unreal project was not found.")?;
     unreal_closed()?;
     let install = Cs2Install::locate().ok_or("CS2 was not found.")?;
     report("Reading the round…".into(), false);
@@ -335,7 +336,8 @@ fn cameras(
     let track = track_round_at(&data, start_tick).map_err(|e| format!("{path}: {e}"))?;
     drop(data);
     let prefix = format!("{name}_r{}", track.round);
-    if !repo
+    if !side
+        .dir()
         .join(REPLAYS)
         .join(format!("{prefix}.uasset"))
         .is_file()
@@ -359,7 +361,7 @@ fn cameras(
     unreal_closed()?;
     let result = run_script(
         &engine,
-        &repo,
+        &side,
         "import_cameras.py",
         false,
         &[("OFAST_CAMERAS", made.path.as_os_str())],
@@ -388,7 +390,7 @@ pub fn stop_sending() {
 fn send(app: &AppHandle, path: &str, start_tick: u32, plan: &CameraPlan) -> Result<Sent, String> {
     let report = |step: Step, message: String| emit(app, step, message, false);
     let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
-    let repo = repository().ok_or("OFAST's Unreal project was not found.")?;
+    let side = unreal_side().ok_or("OFAST's Unreal project was not found.")?;
     unreal_closed()?;
     let install = Cs2Install::locate().ok_or("CS2 was not found.")?;
     let exports = app
@@ -431,14 +433,15 @@ fn send(app: &AppHandle, path: &str, start_tick: u32, plan: &CameraPlan) -> Resu
     let map = track.map_name.as_str();
     let level = format!("/Game/OFAST/Maps/{map}");
     // A map import that did not finish keeps its marker: the next sending imports the map again.
-    let importing = repo.join(r"unreal\Sandbox\Saved\OFAST\importing").join(map);
+    let project = side.dir();
+    let importing = project.join(r"Saved\OFAST\importing").join(map);
     let imported = !importing.exists()
-        && repo
-            .join(r"unreal\Sandbox\Content\OFAST\Maps")
+        && project
+            .join(r"Content\OFAST\Maps")
             .join(format!("{map}.umap"))
             .is_file()
-        && repo
-            .join(r"unreal\Sandbox\Content\OFAST")
+        && project
+            .join(r"Content\OFAST")
             .join(map)
             .join(map)
             .join(format!("SceneImport_{map}.uasset"))
@@ -465,7 +468,7 @@ fn send(app: &AppHandle, path: &str, start_tick: u32, plan: &CameraPlan) -> Resu
         let gltf = out.join(format!("{map}.gltf"));
         run_script(
             &engine,
-            &repo,
+            &side,
             "import_map.py",
             false,
             &[
@@ -487,7 +490,7 @@ fn send(app: &AppHandle, path: &str, start_tick: u32, plan: &CameraPlan) -> Resu
     unreal_closed()?;
     run_script(
         &engine,
-        &repo,
+        &side,
         "import_demo.py",
         false,
         &[("OFAST_REPLAY", replay.path.as_os_str())],
@@ -540,7 +543,7 @@ fn unreal_closed() -> Result<(), String> {
 /// starting with `last`; an error when it says `FAILED` or stops before. Without `draws`, the editor has no renderer.
 fn run_script(
     engine: &Path,
-    repo: &Path,
+    side: &UnrealSide,
     script: &str,
     draws: bool,
     variables: &[(&str, &std::ffi::OsStr)],
@@ -549,10 +552,10 @@ fn run_script(
 ) -> Result<(), String> {
     let mut command = Command::new(engine.join(EDITOR_CMD));
     command
-        .arg(repo.join(PROJECT))
+        .arg(&side.project)
         .arg(format!(
             "-ExecutePythonScript={}",
-            repo.join(r"tools\unreal").join(script).display()
+            side.scripts.join(script).display()
         ))
         .args([
             "-unattended",
@@ -601,7 +604,7 @@ fn run_script(
     if let Ok(mut running) = EDITOR_RUNNING.lock() {
         *running = None;
     }
-    let log = repo.join(LOG);
+    let log = side.dir().join(LOG);
     match failure {
         Some(why) => Err(format!(
             "Unreal could not finish ({script}): {why}. Unreal's log: {}",
@@ -623,20 +626,20 @@ fn run_script(
 pub async fn open_in_unreal(level: String, sequence: String) -> Result<(), String> {
     blocking(move || -> Result<(), String> {
         let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
-        let repo = repository().ok_or("OFAST's Unreal project was not found.")?;
+        let side = unreal_side().ok_or("OFAST's Unreal project was not found.")?;
         if running("UnrealEditor.exe") {
             return Err(
                 "Unreal is open already: open the sequence there (Content Browser, OFAST › Replays).".into(),
             );
         }
-        let mut python_path = std::ffi::OsString::from(repo.join(r"tools\unreal"));
+        let mut python_path = std::ffi::OsString::from(&side.scripts);
         if let Some(theirs) = std::env::var_os("UE_PYTHONPATH") {
             python_path.push(";");
             python_path.push(theirs);
         }
         let mut command = Command::new(engine.join(UNREAL_EDITOR));
         command
-            .arg(repo.join(PROJECT))
+            .arg(&side.project)
             .arg("-ExecCmds=py import open_sequence");
         for name in SCRIPT_VARIABLES {
             command.env(name, "");

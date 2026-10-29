@@ -36,7 +36,23 @@ const EPIC_INSTALLS: &str = r"C:\ProgramData\Epic\UnrealEngineLauncher\LauncherI
 pub(crate) const UNREAL_EDITOR: &str = r"Engine\Binaries\Win64\UnrealEditor.exe";
 
 /// OFAST's Unreal project, inside the repository.
-pub(crate) const PROJECT: &str = "unreal/Sandbox/OFASTSandbox.uproject";
+const PROJECT: &str = "unreal/Sandbox/OFASTSandbox.uproject";
+
+/// The project file's name, wherever the project is.
+const PROJECT_FILE: &str = "OFASTSandbox.uproject";
+
+/// Next to an installed Studio's executable (the installer's resources, `tauri.conf.json`): OFAST's Unreal scripts,
+/// and the project's template (its project file and settings, `Config`).
+const SCRIPTS: &str = r"tools\unreal";
+const TEMPLATE: &str = "project-template";
+
+/// Environment variable naming the folder an installed Studio keeps its Unreal project in, instead of
+/// `%LOCALAPPDATA%\OFAST\Unreal` (apart from the Studio's cache, `%LOCALAPPDATA%\com.ofast.studio`, which is safe to
+/// delete: the project holds the maps and rounds sent).
+const PROJECT_DIR_ENV: &str = "OFAST_PROJECT_DIR";
+
+/// The file in an installed Studio's project folder that says which Studio version set it up.
+const PROJECT_VERSION: &str = ".ofast-version";
 
 /// The first bytes of a demo read for its header: the header is the file's first frame, a few hundred bytes.
 const HEADER_BYTES: u64 = 64 * 1024;
@@ -101,8 +117,8 @@ pub async fn environment() -> Result<Environment, String> {
             cs2_version,
             replays: replays.as_deref().map(display),
             unreal: unreal_dir().as_deref().map(display),
-            project: repository()
-                .map(|r| r.join(PROJECT))
+            project: unreal_side()
+                .map(|side| side.project)
                 .filter(|p| p.is_file())
                 .as_deref()
                 .map(display),
@@ -136,22 +152,82 @@ pub(crate) fn unreal_dir() -> Option<PathBuf> {
         .find(has_editor)
 }
 
-/// The OFAST repository the Studio runs from (the Unreal project and its scripts live there): the nearest folder
-/// above the executable that holds the project, else the source tree it was built from (a build copied elsewhere).
-pub(crate) fn repository() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok();
-    if let Some(dir) = exe
-        .as_deref()
-        .and_then(|exe| exe.ancestors().find(|dir| dir.join(PROJECT).is_file()))
-    {
-        return Some(dir.to_path_buf());
+/// OFAST's side in Unreal: the project the rounds go into and the scripts that build them there.
+#[derive(Debug, Clone)]
+pub(crate) struct UnrealSide {
+    /// The project file (`OFASTSandbox.uproject`).
+    pub(crate) project: PathBuf,
+    /// OFAST's Unreal scripts (`tools/unreal`).
+    pub(crate) scripts: PathBuf,
+}
+
+impl UnrealSide {
+    /// The project's folder, where Unreal keeps what it makes (`Content`, `Saved`).
+    pub(crate) fn dir(&self) -> &Path {
+        self.project.parent().unwrap_or(&self.project)
     }
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    source
-        .join(PROJECT)
-        .is_file()
-        .then(|| source.canonicalize().ok())
-        .flatten()
+}
+
+/// Where OFAST's side in Unreal is:
+/// - the Studio runs from OFAST's source tree (`npm run app`): the nearest folder above the executable that holds
+///   `unreal/Sandbox/OFASTSandbox.uproject`, with `tools/unreal` beside it;
+/// - an installed Studio: the scripts next to the executable, the project in the user's own writable folder
+///   ([`PROJECT_DIR_ENV`], else `%LOCALAPPDATA%\OFAST\Unreal`), set up from the template beside the scripts
+///   on first use and again when the Studio's version changes ([`set_up_project`]).
+///
+/// `None` when neither is there.
+pub(crate) fn unreal_side() -> Option<UnrealSide> {
+    let exe = std::env::current_exe().ok()?;
+    if let Some(repo) = exe.ancestors().find(|dir| dir.join(PROJECT).is_file()) {
+        return Some(UnrealSide {
+            project: repo.join(PROJECT),
+            scripts: repo.join(SCRIPTS),
+        });
+    }
+    let installed = exe.parent()?;
+    let scripts = installed.join(SCRIPTS);
+    let template = installed.join(TEMPLATE);
+    if !scripts.join("import_demo.py").is_file() || !template.join(PROJECT_FILE).is_file() {
+        return None;
+    }
+    let dir = std::env::var_os(PROJECT_DIR_ENV)
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("OFAST").join("Unreal"))
+        })?;
+    set_up_project(&template, &dir).ok()?;
+    Some(UnrealSide {
+        project: dir.join(PROJECT_FILE),
+        scripts,
+    })
+}
+
+/// Copies the template's project file and settings into `dir` when it has no project yet or an older Studio set it
+/// up ([`PROJECT_VERSION`]); what Unreal made there (`Content`, `Saved`: the maps and rounds sent) stays.
+fn set_up_project(template: &Path, dir: &Path) -> std::io::Result<()> {
+    let marker = dir.join(PROJECT_VERSION);
+    let version = env!("CARGO_PKG_VERSION");
+    let current = std::fs::read_to_string(&marker).is_ok_and(|v| v.trim() == version);
+    if current && dir.join(PROJECT_FILE).is_file() {
+        return Ok(());
+    }
+    copy_dir(template, dir)?;
+    std::fs::write(marker, version)
+}
+
+/// Copies the files of `from` into `to`, folders and all, over what is there.
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 /// A path for the UI, without the `\\?\` prefix Windows gives canonical paths (`\\?\UNC\server\share` becomes

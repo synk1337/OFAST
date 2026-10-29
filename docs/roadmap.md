@@ -471,11 +471,12 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
 - [ ] **Skins' finer shading**: glitter and iridescence in OFAST's weapon master (`pearlescence.py`'s copy of
   Interchange's glTF master), the default glove layout's anisotropic gloss, the Gungnir's engraving lines (teal in
   Unreal, lavender in CS2).
-- [ ] **Installer**: the Studio as a setup program (`tauri build`, NSIS), made by CI on version tags. It carries
-  OFAST's Unreal scripts (`tools/unreal`) and a template of its Unreal project (Python only: no C++ to compile), and
-  makes the user's own project in a writable folder on first start (the Studio finds both in the source folder
-  today). What users need then: Windows 10 or 11, CS2, Unreal Engine 5.8 and WebView2 (part of Windows 11; the
-  setup program installs it when missing). No Node.js, Rust or Visual Studio.
+- [x] **Installer** (1.0.0, 2026-10-29): the Studio as a setup program (`tauri build`, NSIS, per-user), made by the
+  release workflow on version tags with the command-line tools and the capture zipped beside it. It carries OFAST's
+  Unreal scripts (`tools/unreal`) and a template of its Unreal project (Python only: no C++ to compile); the Studio
+  makes the user's own project from it in `%LOCALAPPDATA%\OFAST\Unreal` on first start. What users need: Windows 10
+  or 11, CS2, Unreal Engine 5.8 and WebView2 (part of Windows 11; the setup program installs it when missing). No
+  Node.js, Rust or Visual Studio. Not signed yet (SmartScreen warns).
 - [x] **CS2 version check** (2026-10-29): the Studio shows the installed CS2 version, green when OFAST was checked
   on it (`game::CHECKED_VERSIONS`), orange ("not synced with this CS2 version yet, it might break") otherwise.
 - [ ] **Same-day CS2 support**: each CS2 patch checked the day it ships (docs/development.md, "After a CS2 update"),

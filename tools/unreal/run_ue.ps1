@@ -42,14 +42,19 @@ param(
     # memory (round 17 peaks at 10.8 GB of an 11 GB budget); nothing can be shot (shoot_sequence.py shoots the saved
     # round afterwards).
     [switch]$NullRhi,
-    [string]$Engine = "C:\Program Files\Epic Games\UE_5.8"
+    [string]$Engine = "C:\Program Files\Epic Games\UE_5.8",
+    # Another project than the repository's (unreal/Sandbox): an installed Studio's, %LOCALAPPDATA%\OFAST\Unreal.
+    [string]$Project = ""
 )
 
 $ErrorActionPreference = "Stop"
 $repo = Resolve-Path (Join-Path $PSScriptRoot "..\..")
-$project = Join-Path $repo "unreal\Sandbox\OFASTSandbox.uproject"
 $editor = Join-Path $Engine "Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
 $resolve = { param($p) $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($p) }
+$project = if ($Project) {
+    $p = & $resolve $Project
+    if (Test-Path -PathType Container $p) { Join-Path $p "OFASTSandbox.uproject" } else { $p }
+} else { Join-Path $repo "unreal\Sandbox\OFASTSandbox.uproject" }
 
 $env:OFAST_GLTF = if ($Gltf) { & $resolve $Gltf } else { "" }
 $env:OFAST_SHOT = if ($Shot) { & $resolve $Shot } else { "" }
