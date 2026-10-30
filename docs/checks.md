@@ -385,6 +385,25 @@ de_dust2 alone it asks for a fifth less sun bounce (0.87 ×, sky 0.98 ×); de_mi
 the three maps 0.88 × and 1.07 × move every map by 1 – 2 % only. `OUTDOOR_BOUNCE_GAIN` stays: the shade is a per-map
 lighting question (the open items), not the picture's colour.
 
+## Blood against CS2 (2026-10-30)
+
+Round 17 of Aurora vs FURIA on de_dust2, through MAJ3R's eyes: his two body hits on yuurih (ticks 153346 and 153353,
+medium blood: 27 and 28 damage), his headshot on him (153359: the helmet took it, low blood and the helmet's sparks)
+and his two hits on molodoy (154511, 154517, medium), 12 frames 1 – 7 ticks after the hits, CS2 (`tools/cs2/pov_shots.py`
+at the default brightness, the tick read off the demo bar) against Unreal (`shoot_sequence.py -PovShots` at that tick).
+
+- **Which blood**: right on all of them; the demo's blood dispatch carries the damage CS2 picks by (`export::shots`).
+- **Helmet sparks**: CS2's white rays fan up from the head with a white point for 5 – 7 ticks; Unreal's the same in
+  number, spread, length and time, a little thinner.
+- **Direction**: CS2's splashes and dark streaks go to the left of the player hit on the shooter's screen, and a
+  little up, for both shooting directions (north at yuurih, east at molodoy); Unreal's now the same (before this, out
+  toward the shooter and away along the bullet, where they hid in depth).
+- **Size and reach**: one tick after a hit CS2's dark streaks reach 25 – 35 units from the wound, 35 – 45 two or three
+  ticks later; Unreal's about half that. CS2's red glow round the head is denser.
+- **In the shade** (molodoy, 154514 – 154520) CS2's near-black streaks show against a lit ground; Unreal's ground there
+  is dark (the per-map shade, above) and they hardly show.
+- Not drawn: the streaks' decals on the ground (`…_ground_decal`), CS2's bloom round the sparks.
+
 ## What was wrong
 
 ### Fixed

@@ -7,9 +7,10 @@ CS2 started with `-insecure -netconport 2121` and playing the demo (`+playdemo r
 `tick:name`, the demo is paused, sought to 64 ticks before and stepped to the tick (`demo_gototick`, `demo_step_tick`;
 the console's "demo tick" line is read back and the step repeated until it is the tick), the player spectated in first
 person (`spec_player "<name>"`, `spec_mode 1`), and CS2's own picture grabbed (grab_window.ps1) as
-`<out>/cs2_<tick>_<name>.png`. CS2 draws the frame of one or two ticks before the console's tick (the demo bar shows
-which: of 14 frames on 2026-10-30, some − 1, some − 2); read the bar on the picture before comparing a moment that
-lasts a tick or two (a muzzle flash), and shoot Unreal at that tick.
+`<out>/cs2_<tick>_<name>.png`. The tick drawn is not always the one asked for: the demo bar shows it (of 14 frames on
+2026-10-30 morning, some one, some two before the console's tick; later that day all 15 blood references read one
+after the tick asked for, whatever the console printed); read the bar on the picture before comparing a moment that
+lasts a tick or two (a muzzle flash, blood), and shoot Unreal at that tick.
 
 Capture at CS2's default brightness (`r_fullscreen_gamma 2.2`, set back afterwards) or pass the setting to the
 comparison tools as `--cs2-gamma`.

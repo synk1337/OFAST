@@ -100,8 +100,31 @@ pub const EFFECT_TEXTURES: &[(&str, &str)] = &[
     ),
     // particles/impact_fx/impact_metal.vpcf: the glow of a bullet striking metal.
     ("impact_glow", "materials/effects/yellowflare.vtex_c"),
-    // particles/blood_impact/blood_impact_mist1.vpcf: the mist of blood a hit on a player raises.
-    ("blood", "materials/effects/blood_core.vtex_c"),
+    // particles/blood_impact/blood_impact_high, _med and _low (a bullet's hit on a player, by its damage): the splashes
+    // thrown toward the shooter (…_vis_spray, …_low_forw_spray), 3 sequences of 16 frames…
+    (
+        "blood_spray",
+        "materials/particle/fluids/blood/blood_spray_top.vtex_c",
+    ),
+    // …and the streaks flying away and falling (…_vis_spray_trail; …_spray_away, …_spray_screen use a sheet of thin
+    // streaks, blood_spray_multi, which OFAST draws with the high one's).
+    (
+        "blood_streak_high",
+        "materials/particle/fluids/blood/blood_spray_high.vtex_c",
+    ),
+    (
+        "blood_streak_med",
+        "materials/particle/fluids/blood/blood_spray_med.vtex_c",
+    ),
+    (
+        "blood_streak_low",
+        "materials/particle/fluids/blood/blood_spray_low.vtex_c",
+    ),
+    // The puff of smoke under each splash, in the same reds (the splashes' second renderer; 5 one-frame puffs).
+    (
+        "blood_haze",
+        "materials/particle/smoke/static/static_smoke.vtex_c",
+    ),
 ];
 
 /// How far below an HE grenade's detonation [`blasts_json`] looks for the ground, units.

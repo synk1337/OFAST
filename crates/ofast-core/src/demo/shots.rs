@@ -15,6 +15,8 @@
 
 use prost::Message;
 
+use super::stringtable::StringTable;
+
 /// Packet message id of CS2's fire-bullets message (`GE_FireBulletsId`).
 pub const FIRE_BULLETS: i32 = 452;
 /// Packet message id of an effect dispatch (`TE_EffectDispatchId`): among others, a bullet's hit on a player.
@@ -145,7 +147,8 @@ pub struct Shot {
     pub attack: Option<(u32, f32)>,
 }
 
-/// An effect dispatch's effect, the fields OFAST reads (`CMsgEffectData`; 3 a normal, 4 angles, 5 the entity…).
+/// An effect dispatch's effect, the fields OFAST reads (`CMsgEffectData`; 3 a normal, 4 angles, 5 the entity, 10 a
+/// surface, 12 a damage type, 14 a hitbox…).
 #[derive(Clone, PartialEq, Message)]
 pub struct EffectData {
     /// Where the effect happens: for a bullet, where it met the player.
@@ -155,7 +158,27 @@ pub struct EffectData {
     /// came out of the wall or player it went through before.
     #[prost(message, optional, tag = "2")]
     pub start: Option<MsgVector>,
+    /// `magnitude`: CS2's blood ([`BLOOD_EFFECT`]) sends the hit's damage here (module docs of `export::shots`).
+    #[prost(float, optional, tag = "8")]
+    pub magnitude: Option<f32>,
+    /// `effectindex`: a [`PARTICLE_EFFECT`]'s particle system, the [`crate::resource::resource_id`] of its path.
+    #[prost(fixed64, optional, tag = "11")]
+    pub effect_index: Option<u64>,
+    /// `effectname`: which effect, as its entry in the demo's [`EFFECT_TABLE`].
+    #[prost(uint32, optional, tag = "18")]
+    pub effect_name: Option<u32>,
 }
+
+/// The string table naming the effects of effect dispatches ([`EffectData::effect_name`] is an entry's index). In
+/// CS2's demos of 2026 (three checked, 2026-10-30): 4 `csblood`, 7 `ParticleEffect`, 10 `Impact` (a bullet's hit on a
+/// player is dispatched as both `Impact` and `csblood`), 15 `BloodImpact`…
+pub const EFFECT_TABLE: &str = "EffectDispatch";
+/// The effect CS2 draws a bullet's blood with: `particles/blood_impact/blood_impact_high`, `_med`, `_low` or
+/// `_friendly` by the damage it carries ([`EffectData::magnitude`]).
+pub const BLOOD_EFFECT: &str = "csblood";
+/// The effect playing a particle system named by its id ([`EffectData::effect_index`]): on a bullet's line, the
+/// sparks of a headshot a helmet took (`particles/impact_fx/impact_helmet_headshot`), dispatched at the hit's point.
+pub const PARTICLE_EFFECT: &str = "ParticleEffect";
 
 /// An effect dispatch message (`CMsgTEEffectDispatch`).
 #[derive(Clone, PartialEq, Message)]
@@ -175,17 +198,34 @@ pub struct PlayerHit {
     pub start: [f32; 3],
     /// Where the bullet met the player.
     pub point: [f32; 3],
+    /// The damage a [`BLOOD_EFFECT`] dispatch carries (CS2 picks the blood's size by it); `None` for other effects.
+    pub blood: Option<f32>,
+    /// A [`PARTICLE_EFFECT`] dispatch's particle system ([`EffectData::effect_index`]); `None` for other effects.
+    pub particle: Option<u64>,
 }
 
 /// Decodes an effect dispatch (`body`) read at `tick` as a possible bullet hit; `None` without both ends. Other
 /// effects (a knife's hit, a grenade's) decode too: [`PlayerHit::start`] lies on no bullet's line for them, and the
-/// impacts dispatched on a bullet's line start where they end.
-pub fn decode_player_hit(tick: u32, body: &[u8]) -> Option<PlayerHit> {
+/// impacts dispatched on a bullet's line start where they end. `effects` is the demo's [`EFFECT_TABLE`], which names
+/// the blood and particle effects ([`PlayerHit::blood`], [`PlayerHit::particle`]; without it, neither is known).
+pub fn decode_player_hit(
+    tick: u32,
+    body: &[u8],
+    effects: Option<&StringTable>,
+) -> Option<PlayerHit> {
     let effect = EffectDispatch::decode(body).ok()?.effect?;
+    let name = effect
+        .effect_name
+        .and_then(|n| effects?.entries.get(n as usize))
+        .map(|e| e.key.as_str());
     Some(PlayerHit {
         tick,
         start: effect.start?.to_array(),
         point: effect.origin?.to_array(),
+        blood: (name == Some(BLOOD_EFFECT)).then(|| effect.magnitude.unwrap_or(0.0)),
+        particle: effect
+            .effect_index
+            .filter(|_| name == Some(PARTICLE_EFFECT)),
     })
 }
 
@@ -371,6 +411,54 @@ pub fn bullet_direction(angles: [f32; 3], offset: [f32; 2]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::demo::stringtable::StringTableEntry;
+
+    #[test]
+    fn effect_dispatches_carry_the_blood_damage_and_particle_ids() {
+        let table = StringTable {
+            name: EFFECT_TABLE.into(),
+            entries: ["error", "csblood", "ParticleEffect"]
+                .into_iter()
+                .map(|key| StringTableEntry {
+                    key: key.into(),
+                    value: None,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let v = |x: f32| {
+            Some(MsgVector {
+                x: Some(x),
+                y: Some(0.0),
+                z: Some(0.0),
+            })
+        };
+        let dispatch = |name: u32, magnitude: Option<f32>, index: Option<u64>| {
+            EffectDispatch {
+                effect: Some(EffectData {
+                    origin: v(100.0),
+                    start: v(0.0),
+                    magnitude,
+                    effect_index: index,
+                    effect_name: Some(name),
+                }),
+            }
+            .encode_to_vec()
+        };
+        let blood = decode_player_hit(7, &dispatch(1, Some(27.0), None), Some(&table)).unwrap();
+        assert_eq!((blood.blood, blood.particle), (Some(27.0), None));
+        assert_eq!(blood.point, [100.0, 0.0, 0.0]);
+        // A zero damage is not sent (protobuf's default): friendly blood, damage 0.
+        let friendly = decode_player_hit(7, &dispatch(1, None, None), Some(&table)).unwrap();
+        assert_eq!(friendly.blood, Some(0.0));
+        let sparks = decode_player_hit(7, &dispatch(2, None, Some(42)), Some(&table)).unwrap();
+        assert_eq!((sparks.blood, sparks.particle), (None, Some(42)));
+        // Another effect, or no table to name it: neither.
+        let other = decode_player_hit(7, &dispatch(0, Some(27.0), Some(42)), Some(&table)).unwrap();
+        assert_eq!((other.blood, other.particle), (None, None));
+        let unnamed = decode_player_hit(7, &dispatch(1, Some(27.0), None), None).unwrap();
+        assert_eq!(unnamed.blood, None);
+    }
 
     #[test]
     fn uniform_random_is_park_miller_with_a_shuffle() {

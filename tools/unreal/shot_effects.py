@@ -182,19 +182,210 @@ FAMILY_LAYERS = {
     "wood": dust_layers("wood", (0.5, 0.38, 0.25)),
     "metal": METAL_LAYERS,
 }
-# particles/blood_impact/blood_impact_medium's mist (blood_impact_mist1): 8 blood_core sprites, 0.5 s, radius 12 - 16
-# grown from a quarter, out along its axis at 60 - 132 units/s (back toward the shooter: sprite_slots) and 4 - 9 any
-# way, drag 0.2, gravity 215, dark red
-# (95 - 136 of 255), alpha 0.67 - 0.86, faded in over its first eighth and out from a fifth on.
-# The radius is the sprite's half-size here, grown from 0.6 (blood_core is a sparse white splash, a tenth opaque on
-# average: at half that size and from a quarter of it, the mist on a player 8 ticks after a hit was a faint speck where
-# CS2 shows a dark red splatter over his chest; molodoy's view at tick 40840 of de_nuke round 5).
-BLOOD_LAYERS = [
-    {"name": "blood_mist", "role": "blood", "slots": 8, "life": (0.5, 0.5), "radius": (12.0, 16.0),
-     "scale": (0.6, 1.2), "alpha": (0.67, 0.86), "roll": 180.0, "spread": 1.0, "rise": 0.0, "bright": 1.0,
-     "tint": (0.5, 0.02, 0.02), "translucent": True, "size": 1.0, "lift": 0.0, "up": (60.0, 132.0),
-     "speed": (4.0, 9.0), "drag": 0.2, "gravity": 215.0, "fade_in": 0.125, "fade_out": 0.8},
+# Blood (particles/blood_impact/, read 2026-10-30). A bullet's hit on a player is drawn by its damage as CS2's client
+# picks blood_impact_high, _med or _low (blood_tier: export::shots' `damage`, the damage the demo's blood dispatch
+# carries); each is a handful of children, rebuilt here as layers. They fly along their effect's x axis (`up` here),
+# which points to the shooter's left: CS2's streaks of MAJ3R's hits on yuurih (shooting north, ticks 153347 - 153366)
+# and on molodoy (shooting east, 154514 - 154521) all go to the left of the player hit on his screen, and a little up,
+# so the axis is the dispatch's normal (back toward the shooter) crossed with up (blood_axis); the splashes and streaks
+# go along it (+x), the mists the other way (-x). Their sideways speeds, random speeds and velocity noise make
+# `speed`. The splashes (blood_spray_top) are a white sheet CS2 colours through a gradient (34 3 36
+# to 154 13 13 of 255), each with a static_smoke puff under it in the same colours (its second renderer: haze_layer);
+# the streaks a frame of blood_spray_high / _med / _low stretched from the wound to the droplet (its trail renderer
+# takes the tail from the particle's birth point, attribute 17, sagging by a curve over the system's age: -11 units at
+# 0.36 s, -110 at 1 s), coloured from red to near black (178 11 11 to 16 0 0; med's 143 1 1 to 30 1 1); the mists are
+# wispy_steam_burst_b (the muzzle's alt flame sheet, role muzzle_alt) in dark red (92 - 101, 0, 0). Lifetimes, radii,
+# alphas, sequences, speeds, gravity, drag and the age particles are born at (C_INIT_AgeNoise) are CS2's; its radius
+# growth (C_OP_InterpolateRadius) is `scale`, its fade (C_OP_FadeOut, a share of the life) `fade_out`. Not rebuilt: the
+# mists' bloom-pass copies, the decals the streaks leave (…_ground_decal children), the thin streaks' own sheet
+# (blood_spray_multi: …_spray_away and …_spray_screen are drawn with blood_spray_high) and the frames' age curves (the
+# sheets play over the life).
+# CS2's damage thresholds: damage_impact_heavy (high above it) and damage_impact_medium (med from it, low below; a
+# headshot a helmet took carries 1): hidden console variables, their defaults read from client.dll 1.41.9.3.
+BLOOD_HEAVY = 40.0
+BLOOD_MEDIUM = 20.0
+# A sprite's half-size per unit of radius: CS2 draws a radius as the half-size (SPRITE_SIZE, the helmet's sparks and
+# glow, is that times their renderers' radius scale 0.5; the flames' SPRITE_SIZE was fitted to their sheets). At half
+# size the splashes on MAJ3R's kill (tick 153359) were specks where CS2 shows a red blob about 25 units across.
+BLOOD_SIZE = 1.0
+SPRITE_SIZE = grenade_effects.SPRITE_SIZE
+# How far a streak's tail (the wound) sags in a second, units (CS2's curve, followed as t^2.2).
+STREAK_TAIL_DROP = 110.0
+# The tints are CS2's gradients' reds; the splashes are drawn twice as bright as their tint: at 1, MAJ3R's kill showed
+# a dark red speckle where CS2 shows a bright red blob (CS2 lights its blood in the sun). The streaks are near black:
+# CS2's gradient puts their sheet's bright, opaque core at its dark end (16 0 0), and at its red end (178 11 11) they
+# were bright red lines where CS2 shows black-red splatter (MAJ3R's view, ticks 153354 - 153366).
+SPLASH_TINT = (0.6, 0.05, 0.05)
+SPLASH_BRIGHT = 2.0
+STREAK_TINT = (0.1, 0.008, 0.008)
+MIST_TINT = (0.38, 0.0, 0.0)
+# How much denser the haze is than its sheet's alpha (static_smoke is faint, about a tenth opaque): at 1 the puffs
+# barely showed under the splashes, where CS2 draws a solid red glow round the head.
+HAZE_ALPHA = (2.0, 2.5)
+
+
+def blood_layer(name, role, slots, life, radius, scale, up, speed=(0.0, 0.0), **more):
+    """A blood layer: a translucent splash, born within 2 units of the hit (CS2's m_fRadiusMax), born whole (no fade
+    in); `more` overrides."""
+    layer = {"name": name, "role": role, "slots": slots, "life": life, "radius": radius, "scale": scale,
+             "alpha": (1.0, 1.0), "roll": 180.0, "spread": 2.0, "rise": 0.0, "bright": SPLASH_BRIGHT,
+             "tint": SPLASH_TINT, "translucent": True, "size": BLOOD_SIZE, "lift": 0.0, "up": up, "speed": speed,
+             "fade_in": 0.0}
+    layer.update(more)
+    return layer
+
+
+def haze_layer(splash, radius_scale=1.0):
+    """The static_smoke puff CS2 draws under a splash (its second renderer, `radius_scale` of its size): the same
+    particles' sizes, flight and colours in the blood_haze sheet's 5 puffs (here particles of their own), HAZE_ALPHA
+    times as opaque."""
+    return dict(splash, name=splash["name"] + "_haze", role="blood_haze", sequence=(0, 5), alpha=HAZE_ALPHA,
+                radius=tuple(r * radius_scale for r in splash["radius"]))
+
+
+def streak_layer(name, role, slots, life, radius, scale, up, speed, gravity, sequence, **more):
+    """A blood streak (CS2's trails): from the wound to the droplet, born a tenth of its life old, faded out over its
+    last fifth (0.125 - 0.25); `more` overrides (drag 0.05, the age, the streaks' tint)."""
+    values = {"gravity": gravity, "drag": 0.05, "age": (0.1, 0.125), "from_birth": True,
+              "tail_drop": STREAK_TAIL_DROP, "sequence": sequence, "tint": STREAK_TINT, "bright": 1.0,
+              "fade_out": 0.2}
+    values.update(more)
+    return blood_layer(name, role, slots, life, radius, scale, up, speed, **values)
+
+
+def mist_layer(name, life, radius, alpha, up, speed, drag, fade_out=0.8):
+    """A blood mist (…_mist_away): 4 wispy puffs flying away, rising a little (velocity noise 30 - 50 up), born a tenth
+    of their life old."""
+    return blood_layer(name, "muzzle_alt", 4, life, radius, (0.25, 3.0), up, speed, alpha=alpha, rise=8.0,
+                       age=(0.1, 0.125), gravity=50.0, drag=drag, sequence=(0, 3), tint=MIST_TINT, bright=1.0,
+                       fade_out=fade_out)
+
+
+# …_low_forw_spray (every size): 2 splashes to the left at 150 - 250 units/s, drag 0.2, radius 5 - 8 growing to
+# 3 times, rolled -45 to -90 degrees.
+BLOOD_FORWARD = blood_layer("blood_forward", "blood_spray", 2, (0.35, 0.75), (5.0, 8.0), (0.1, 3.0), (150.0, 250.0),
+                            (0.0, 20.0), alpha=(0.78, 0.86), roll=22.5, roll_base=-67.5, drag=0.2, fade_out=0.25,
+                            age=(0.25, 0.5), sequence=(1, 2))
+BLOOD_FORWARD_HAZE = haze_layer(BLOOD_FORWARD, 0.5)
+# blood_impact_high's _vis_spray: 2 splashes to the left at 50 - 120, radius 14 - 20 grown from a quarter,
+# gravity 100.
+HIGH_SPRAY = blood_layer("blood_high_spray", "blood_spray", 2, (0.5, 0.75), (14.0, 20.0), (0.25, 1.0), (50.0, 120.0),
+                         gravity=100.0, drag=0.05, fade_out=0.3, sequence=(0, 3), age=(0.0, 0.1))
+# blood_impact_med's _vis_spray: 2 splashes to the left at 50 - 120 (sideways 12 - 15), radius 11 - 16 grown
+# from a tenth to twice, gravity 250, rolled -45 to -90.
+MED_SPRAY = blood_layer("blood_med_spray", "blood_spray", 2, (0.5, 0.7), (11.0, 16.0), (0.1, 2.0), (50.0, 120.0),
+                        (0.0, 20.0), alpha=(0.78, 0.86), roll=22.5, roll_base=-67.5, gravity=250.0, drag=0.05,
+                        fade_out=0.55, sequence=(1, 2), age=(0.25, 0.5))
+# impact_fx/blood_impact_friendly_flash (every size, and a helmet's sparks): a white flash for 0.085 s (its glow:
+# yellowflare, additive at an overbright of up to 4, alpha 0.5; radius 4 shrinking from twice to half), only from afar:
+# it is emitted when control point 4 (the distance between the effect's points 0 and 1 mapped from 128 - 1024 units to
+# 0.2 - 0.85) passes 0.38, about 376 units (point 1 taken as the viewer).
+BLOOD_FLASH = {"name": "blood_flash", "role": "impact_glow", "slots": 1, "life": (0.085, 0.085), "radius": (4.0, 4.0),
+               "scale": (2.0, 0.5), "alpha": (0.5, 0.5), "roll": 180.0, "spread": 0.0, "rise": 0.0, "bright": 4.0,
+               "tint": (1.0, 1.0, 1.0), "size": 0.375, "lift": 0.0, "fade_in": 0.0, "fade_out": 0.5,
+               "min_distance": 376.0}
+BLOOD_TIERS = {
+    # blood_impact_high (damage above 40: a headshot without a helmet).
+    "high": [
+        HIGH_SPRAY,
+        haze_layer(HIGH_SPRAY),
+        # _vis_spray_trail: a streak to the left at 100 - 200 (sideways 50, up 25 - 50), radius 16 - 32 to twice,
+        # gravity 550.
+        streak_layer("blood_high_streak", "blood_streak_high", 1, (0.5, 0.75), (16.0, 32.0), (0.25, 2.0),
+                     (100.0, 200.0), (25.0, 60.0), 550.0, (1, 1)),
+        # _mist_away: to the right at 120 - 200 (sideways 50 - 75, 80 any way), alpha 0.3 - 0.65, drag 0.15.
+        mist_layer("blood_high_mist", (0.75, 1.25), (10.0, 15.0), (0.3, 0.65), (-200.0, -120.0), (50.0, 110.0),
+                   0.15),
+        # _spray_away: a thin streak to the left at 200 - 400 (50 any way), radius 8 - 16 to 4 times, gravity 450.
+        streak_layer("blood_high_away", "blood_streak_high", 1, (0.35, 0.75), (8.0, 16.0), (0.25, 4.0),
+                     (200.0, 400.0), (0.0, 50.0), 450.0, (0, 1)),
+    ],
+    # blood_impact_med (damage 20 - 40: a rifle's body hit).
+    "med": [
+        MED_SPRAY,
+        haze_layer(MED_SPRAY, 0.5),
+        # _vis_spray_trail: 2 streaks to the left at 120 - 250 (50 any way, up 25 - 50), radius 14 - 20 to twice.
+        streak_layer("blood_med_streak", "blood_streak_med", 2, (0.5, 0.75), (14.0, 20.0), (0.25, 2.0),
+                     (120.0, 250.0), (25.0, 60.0), 450.0, (0, 4)),
+        # _mist_away: to the right at 75 - 250 (sideways 20 - 50, 35 - 65 any way), drag 0.135.
+        mist_layer("blood_med_mist", (0.5, 1.0), (9.0, 12.0), (0.3, 0.65), (-250.0, -75.0), (40.0, 100.0), 0.135),
+        # _spray_away and _spray_screen: thin streaks to the left at 250 - 450, radius 4 - 8 to twice.
+        streak_layer("blood_med_away", "blood_streak_high", 1, (0.5, 0.65), (4.0, 8.0), (0.25, 2.0),
+                     (250.0, 450.0), (0.0, 50.0), 450.0, (2, 1)),
+        streak_layer("blood_med_screen", "blood_streak_high", 1, (0.35, 0.5), (4.0, 8.0), (0.25, 2.0),
+                     (250.0, 450.0), (0.0, 50.0), 450.0, (2, 1)),
+    ],
+    # blood_impact_low (damage below 20, and a headshot a helmet took).
+    "low": [
+        # _mist_away: to the right at 50 - 100 (sideways and up +-50, 25 any way), radius 7 - 8 to twice, alpha 0.5 - 1.
+        mist_layer("blood_low_mist", (0.5, 1.0), (7.0, 8.0), (0.5, 1.0), (-100.0, -50.0), (25.0, 75.0), 0.125,
+                   fade_out=0.33),
+        # _vis_spray_trail: a streak to the left at 200 - 350 (sideways 50, 50 any way, up 25 - 50), radius 16 - 32,
+        # drag 0.1.
+        streak_layer("blood_low_streak", "blood_streak_low", 1, (0.5, 0.65), (16.0, 32.0), (0.25, 1.0),
+                     (200.0, 350.0), (40.0, 80.0), 450.0, (1, 3), drag=0.1, age=(0.0, 0.0)),
+        # _spray_screen: a thin streak to the left at 250 - 450.
+        streak_layer("blood_low_screen", "blood_streak_high", 1, (0.35, 0.5), (4.0, 8.0), (0.25, 2.0),
+                     (250.0, 450.0), (0.0, 50.0), 450.0, (2, 1)),
+    ],
+}
+# particles/impact_fx/impact_helmet_headshot (export::shots' `helmet`: CS2's server dispatches it at a headshot a
+# helmet took), along the world's up: 15 sparks (sparks.vtex's two thin streaks, additive at an overbright of 3, cyan
+# white 82 - 103, 216 - 255, 242 - 255) flying up at 550 - 950 (+ up to 500 of noise) and sideways up to 900 (+ 300 any
+# way), drag 0.5, gravity 300, 0.05 - 0.3 s, streaks at most 25 units; a glow (yellowflare, overbright 8, bluish white,
+# radius 2 - 3 growing from half to twice, 3 units up, 0.1 - 0.13 s); and the blood's flash. The sparks are drawn with
+# the sheet's wide streak (sequence 4, as the tracers): CS2 crops each frame to its own rectangle, OFAST's flipbook
+# keeps the largest frame's cell, where the thin streaks fill a sixth of the width and drew under a pixel wide. Each
+# streak is a tenth of a second of its flight long (the tracers' rule). Sparks and glow are drawn whole-sized and 4 and
+# 3 times as bright as CS2's overbright: at its sizes and brightness, MAJ3R's kill (tick 153359) showed faint grey
+# lines and a dim blue dot where CS2 shows bright white rays and a white point (CS2 blooms them); the sparks white, as
+# CS2's show (in cyan they drew bluish). Not rebuilt: its two long sparks (…_spark), a metal impact's sparks and glow, a
+# puff of smoke.
+HELMET_LAYERS = [
+    {"name": "helmet_sparks", "role": "sparks", "slots": 15, "life": (0.05, 0.3), "radius": (0.35, 0.9),
+     "scale": (1.0, 1.0), "alpha": (0.5, 1.0), "roll": 0.0, "spread": 1.0, "rise": 0.0, "bright": 12.0,
+     "tint": (1.0, 1.0, 1.0), "size": 1.0, "lift": 0.0, "up": (550.0, 1450.0), "speed": (100.0, 900.0),
+     "gravity": 300.0, "drag": 0.5, "stretch": 0.1, "max_length": 25.0, "sequence": (4, 1),
+     "fade_in": 0.0, "fade_out": 0.3},
+    {"name": "helmet_glow", "role": "impact_glow", "slots": 1, "life": (0.1, 0.13), "radius": (2.0, 3.0),
+     "scale": (0.5, 2.0), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 0.0, "rise": 0.0, "bright": 24.0,
+     "tint": (0.85, 0.92, 1.0), "size": SPRITE_SIZE, "lift": 0.0, "along": (3.0, 3.0), "fade_in": 0.0},
+    BLOOD_FLASH,
 ]
+# Every size has the forward splash (with its haze) and the flash.
+BLOOD_EVERY = [BLOOD_FORWARD, BLOOD_FORWARD_HAZE, BLOOD_FLASH]
+BLOOD_LAYERS = BLOOD_EVERY + [layer for tier in BLOOD_TIERS.values() for layer in tier] + HELMET_LAYERS[:2]
+
+
+def blood_axis(hit, eye):
+    """The axis a blood flies along (Source axes): the shooter's left at the player hit, the blood dispatch's normal
+    (from `hit` back toward `eye`) crossed with up; straight up for a shot from right above."""
+    back = unit([e - h for h, e in zip(hit, eye)])
+    left = [back[1], -back[0], 0.0]
+    return unit(left) if math.hypot(left[0], left[1]) > 1e-3 else [0.0, 0.0, 1.0]
+
+
+def blood_tier(damage):
+    """CS2's blood for a hit of `damage` (export::shots' `damage`): "high" above BLOOD_HEAVY, "med" from
+    BLOOD_MEDIUM, "low" below (CS2's `_friendly` at 0 is drawn as low); "med" when the export has none (an older
+    export, or no blood dispatched)."""
+    if damage is None:
+        return "med"
+    if damage > BLOOD_HEAVY:
+        return "high"
+    return "med" if damage >= BLOOD_MEDIUM else "low"
+
+
+def blood_layers(hit):
+    """The layers of the blood of a hit on a player (export::shots' player entries): its size's (blood_tier) with
+    BLOOD_EVERY, and a helmet's sparks and glow when CS2 dispatched them (`helmet`; its flash is the blood's), as
+    (layers, whether they fly along blood_axis): the sparks fly up."""
+    out = [(BLOOD_TIERS[blood_tier(hit.get("damage"))] + BLOOD_EVERY, True)]
+    if hit.get("helmet"):
+        out.append((HELMET_LAYERS[:2], False))
+    return out
+
+
 # A muzzle flash's light (uweapon_muzflsh_*_fakelight: colour (226, 125, 37), radius about 185 units, 0.05 s): peak
 # intensity (candela) and how it dies out, (ticks after the shot, share of the peak). In CS2 it only tints what is
 # next to the barrel (the door edge beside YEKINDAR's AK one tick after his shot, de_nuke round 5, tick 37950; around
@@ -316,13 +507,14 @@ def sprite_slots(shots, alt=True, own_views=None):
                 if at["on"] == "world" and at.get("normal"):
                     add(FAMILY_LAYERS[family_of(at)], (at["end"], tick, tick, at["normal"], 0.0), slots)
                 elif at["on"] == "player":
-                    # Back toward the shooter: CS2's mist flies along its effect's own axis, and the shooter sees it
-                    # in front of the player hit (molodoy's view at tick 40840 of de_nuke round 5; along the bullet it
-                    # hid behind the body). On the player hit's own actor when the export names them (`victim`).
+                    # The blood along the shooter's left (blood_axis), a helmet's sparks straight up. On the player
+                    # hit's own actor when the export names them (`victim`).
                     hit = at["end"]
                     victim = at.get("victim")
                     into = slots if victim is None else blood.setdefault(victim, {})
-                    add(BLOOD_LAYERS, (hit, tick, tick, unit([s - e for e, s in zip(hit, shot["eye"])]), 0.0), into)
+                    axis = blood_axis(hit, shot["eye"])
+                    for layers, along in blood_layers(at):
+                        add(layers, (hit, tick, tick, axis if along else [0.0, 0.0, 1.0], 0.0), into)
     return muzzles, views, own, blood, slots
 
 

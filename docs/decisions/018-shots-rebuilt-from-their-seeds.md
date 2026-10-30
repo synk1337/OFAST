@@ -48,6 +48,16 @@ collision triangle its surface property (`world_physics`), per weapon model its 
 - **The player each bullet met, named from their hitboxes** (added 2026-10-26): the hit's point lies on the body
   posed there (the nearest hitbox surface, not the shooter's), which names the player (`victim`); their blood is
   drawn on an actor hidden with their body, as CS2's view through their eyes shows none.
+- **Blood as CS2 picks it, from the demo** (added 2026-10-30, the effects rework): each hit's blood dispatch
+  (`csblood`) carries the damage CS2's client sizes the blood by (`blood_impact_high` above 40, `_med` from 20, `_low`
+  below: `damage_impact_heavy` and `damage_impact_medium`, hidden console variables whose defaults were read from
+  client.dll), and a headshot a helmet took carries 1 with a `ParticleEffect` dispatch of
+  `impact_helmet_headshot` beside it: its sparks are drawn exactly where CS2's server sent them. Each size's children
+  are rebuilt as sprite layers with CS2's numbers. Two things the files do not say were read off CS2's pictures: the
+  effect's x axis points to the shooter's left (the dispatch's normal crossed with up: the streaks of hits from the
+  south and from the west both fly to the left on the shooter's screen), and the age particles are born at
+  (`C_INIT_AgeNoise`) moves them too (the streaks reach 25 – 35 units from the wound one tick after a hit). The
+  ground decals the streaks leave are not drawn yet.
 - **A tracer on every shot, from the moment it was fired**: CS2 draws one on each shot of a gun with a tracer system
   (YEKINDAR's view: four in a row; soulfly's: molodoy's AK on shots one in three would skip), whatever
   `m_nTracerFrequency` says (3 on the AK; 0 still means none: the silenced modes). The shot is fired before its

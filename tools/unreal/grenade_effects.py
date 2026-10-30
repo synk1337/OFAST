@@ -171,11 +171,16 @@ SPRITE_SIZE = 0.5
 # streak with a reach (a tracer) as a share of its distance from the camera; `local`: its slots' centres and axes are in
 # the space of the component it is drawn by (a first-person muzzle flash, on the viewmodel moving with the camera), not
 # the world's (such a layer has no floor: see SPRITE_STATE); `roll_base` (degrees) what its roll (`roll`: +- degrees)
-# is drawn around.
+# is drawn around; `min_distance` (units) how far the camera must be from its centre for it to show (0: always; a
+# blood's flash, CS2's `blood_impact_friendly_flash`, shows only from afar); `age` the share of its life a particle is
+# born at (min, max: CS2's C_INIT_AgeNoise; a blood splash is already grown on its first frame); `from_birth`: drawn as
+# a streak from where the particle was born to where it is (CS2's blood trails), its tail sagging `tail_drop` units in
+# a second. `up` may be negative: down the axis.
 LAYER_DEFAULTS = {"size": SPRITE_SIZE, "lift": 0.6, "speed": (0.0, 0.0), "up": (0.0, 0.0), "gravity": 0.0,
                   "drag": 0.0, "stretch": 0.0, "max_length": 0.0, "sequence": None, "floor": False,
                   "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False, "end_fade": 0.0, "fade_in": 0.1,
-                  "fade_out": 0.33, "along": (0.0, 0.0), "min_width": 0.0, "local": False, "roll_base": 0.0}
+                  "fade_out": 0.33, "along": (0.0, 0.0), "min_width": 0.0, "local": False, "roll_base": 0.0,
+                  "min_distance": 0.0, "age": (0.0, 0.0), "from_birth": False, "tail_drop": 0.0}
 # CS2's particle drag takes a share of the velocity per simulation step; OFAST reads it as per 1/30 s (an assumption:
 # the step is not in the files) and turns it into a rate per second, -30 ln(1 - drag): 0.025 -> 0.76, 0.1 -> 3.2.
 DRAG_STEPS_PER_SECOND = 30.0
@@ -257,8 +262,14 @@ float h6 = frac(sin(dot(key, float2(19.773, 83.517))) * 54321.9876);
 float h7 = frac(sin(dot(key, float2(45.164, 94.673))) * 21345.4321);
 float h8 = frac(sin(dot(key, float2(68.721, 31.297))) * 45231.7654);
 float h9 = frac(sin(dot(key, float2(53.871, 26.413))) * 37192.8355);
+float h10 = frac(sin(dot(key, float2(84.317, 47.129))) * 28461.3579);
 float life = lerp(LifeMin, LifeMax, h1);
-float norm = age / life;
+// Born already AgeMin - AgeMax of its life old (CS2's C_INIT_AgeNoise): grown, faded, further through its frames and
+// along its flight from the start, dying that much sooner (`flown`: the time its flight has taken). CS2's blood streaks
+// reach 25 - 35 units from the wound one tick after a hit (MAJ3R's view of his hits on yuurih, ticks 153347 and
+// 153354), where their speeds alone take them 2 - 5.
+float flown = age + lerp(AgeMin, AgeMax, h10) * life;
+float norm = flown / life;
 float heading = h3 * 6.2831853;
 float3 origin = Local > 0.5 ? LocalOrigin : float3(CenterX, CenterY, CenterZ);
 float3 axis = Local > 0.5 ? LocalAxis : float3(AxisX, AxisY, AxisZ);
@@ -268,8 +279,8 @@ float3 outward = side * cos(heading) + cross(axis, side) * sin(heading);
 float speed = lerp(SpeedMin, SpeedMax, h7);
 float upward = lerp(UpMin, UpMax, h8);
 bool drags = Drag > 0.01;
-float slow = drags ? (1.0 - exp(-Drag * age)) / Drag : age;
-float fall = drags ? (age - slow) / Drag : 0.5 * age * age;
+float slow = drags ? (1.0 - exp(-Drag * flown)) / Drag : flown;
+float fall = drags ? (flown - slow) / Drag : 0.5 * flown * flown;
 float along = lerp(AlongMin, AlongMax, h9);
 float axial = along + upward * slow;
 float3 place = origin
@@ -292,7 +303,9 @@ SPRITE_WPO = SPRITE_STATE + r"""
 float2 corner = float2(UV.x * 2.0 - 1.0, 1.0 - UV.y * 2.0);
 float roll = radians(RollBase + (h5 * 2.0 - 1.0) * Roll);
 corner = float2(corner.x * cos(roll) - corner.y * sin(roll), corner.x * sin(roll) + corner.y * cos(roll));
-float radius = alive ? lerp(RadiusMin, RadiusMax, h2) * lerp(ScaleStart, ScaleEnd, norm) * 2.54 : 0.0;
+// Shown only with the camera at least MinDistance units from its centre (0: always).
+bool too_near = MinDistance > 0.0 && length(CameraPos - origin) < MinDistance * 2.54;
+float radius = alive && !too_near ? lerp(RadiusMin, RadiusMax, h2) * lerp(ScaleStart, ScaleEnd, norm) * 2.54 : 0.0;
 // Lifted by Lift of its size (most of it for flames: the frames' flames sit low in their cells, so the sprite stands
 // on the ground rather than half in it), rising as it ages.
 float3 centre = place + float3(0.0, 0.0, 1.0) * (Rise * norm * 2.54 + radius * Lift);
@@ -301,6 +314,23 @@ forward = length(forward) > 0.001 ? normalize(forward) : float3(1.0, 0.0, 0.0);
 float3 right = cross(forward, float3(0.0, 0.0, 1.0));
 right = length(right) > 0.001 ? normalize(right) : float3(0.0, 1.0, 0.0);
 float3 up = cross(right, forward);
+if (FromBirth > 0.5)
+{
+    // A streak from where the particle was born to where it is (CS2's blood trails, whose tail is the birth point,
+    // sagging TailDrop units in a second, about as t^2.2), at least its radius long either way, as wide as its radius,
+    // facing the camera; the sheet's frame stands along it, its top at the particle.
+    float3 tail_at = origin + (outward * sqrt(h4) * Spread + axis * along) * 2.54
+        - float3(0.0, 0.0, 1.0) * TailDrop * pow(max(flown, 0.0), 2.2) * 2.54;
+    float3 span = centre - tail_at;
+    float span_length = length(span);
+    float3 span_dir = span_length > 0.001 ? span / span_length : up;
+    float3 middle = (centre + tail_at) * 0.5;
+    float3 seen_from = normalize(CameraPos - middle);
+    float3 across = cross(seen_from, span_dir);
+    across = length(across) > 0.001 ? normalize(across) : right;
+    float half_length = alive ? max(span_length * 0.5, radius) : 0.0;
+    return middle + span_dir * corner.y * half_length + across * corner.x * radius - WorldPos;
+}
 if (Stretch > 0.0 && Reach > 0.0)
 {
     // A streak with a reach (a tracer): from its tail to its head up the axis, as wide as its radius and at least
@@ -317,8 +347,8 @@ if (Stretch > 0.0)
 {
     // A streak along its flight as the camera sees it: as long as Stretch seconds of the flight (MaxLength units at
     // most), as wide as its radius; the sheet's frame stands along it.
-    float decay = drags ? exp(-Drag * age) : 1.0;
-    float sinking = drags ? Gravity / Drag * (1.0 - decay) : Gravity * age;
+    float decay = drags ? exp(-Drag * flown) : 1.0;
+    float sinking = drags ? Gravity / Drag * (1.0 - decay) : Gravity * flown;
     float3 velocity = ((outward * speed + axis * upward) * decay - float3(0.0, 0.0, 1.0) * sinking) * 2.54;
     float3 sideways = velocity - dot(velocity, forward) * forward;
     float seen = length(sideways);
@@ -352,10 +382,12 @@ return float4(texel.rgb * colour * Bright, alpha);
 SPRITE_SCALARS = ["TicksPerSecond", "LifeMin", "LifeMax", "RadiusMin", "RadiusMax", "ScaleStart", "ScaleEnd", "Roll",
                   "Spread", "Rise", "AlphaMin", "AlphaMax", "Bright", "Sequences", "SequenceFirst", "Frames", "Stride",
                   "Columns", "Rows", "Lift", "SpeedMin", "SpeedMax", "UpMin", "UpMax", "Gravity", "Drag", "Stretch",
-                  "MaxLength", "EndFade", "FadeIn", "FadeOut", "AlongMin", "AlongMax", "MinWidth", "Local", "RollBase"]
+                  "MaxLength", "EndFade", "FadeIn", "FadeOut", "AlongMin", "AlongMax", "MinWidth", "Local", "RollBase",
+                  "MinDistance", "AgeMin", "AgeMax", "FromBirth", "TailDrop"]
 # A scalar's value in the material itself, where not 1 (what an instance that does not set it reads): a layer is placed
-# in the world, and its roll centred on 0, unless its instance says otherwise.
-SCALAR_DEFAULTS = {"Local": 0.0, "RollBase": 0.0}
+# in the world, its roll centred on 0, shown from any distance and born new, unless its instance says otherwise.
+SCALAR_DEFAULTS = {"Local": 0.0, "RollBase": 0.0, "MinDistance": 0.0, "AgeMin": 0.0, "AgeMax": 0.0, "FromBirth": 0.0,
+                   "TailDrop": 0.0}
 
 
 def sprite_material(translucent):
@@ -526,7 +558,7 @@ def instance_scale(layer):
         return min(speed * layer["life"][1], speed / rate) if rate > 0.0 else speed * layer["life"][1]
 
     size = max(layer["radius"]) * option(layer, "size") * max(layer["scale"])
-    axial = flight(option(layer, "up")[1]) + option(layer, "along")[1]
+    axial = flight(max(abs(u) for u in option(layer, "up"))) + option(layer, "along")[1]
     out = (layer["spread"] + flight(option(layer, "speed")[1]) + axial + size) * UNITS_TO_CM / 50.0
     lifted = size * (1.0 + option(layer, "lift"))
     up = (axial + layer["rise"] + lifted) * UNITS_TO_CM / SPRITE_BOUNDS_UP
@@ -567,6 +599,9 @@ def layer_instance(layer, effect, texture, material, tick_rate):
         "MinWidth": option(layer, "min_width"),
         "Local": 1.0 if option(layer, "local") else 0.0,
         "RollBase": option(layer, "roll_base"),
+        "MinDistance": option(layer, "min_distance"),
+        "AgeMin": option(layer, "age")[0], "AgeMax": option(layer, "age")[1],
+        "FromBirth": 1.0 if option(layer, "from_birth") else 0.0, "TailDrop": option(layer, "tail_drop"),
     }
     for param, value in values.items():
         mel.set_material_instance_scalar_parameter_value(instance, param, float(value))

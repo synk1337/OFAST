@@ -97,16 +97,38 @@ fn main() {
         .ok()
         .and_then(|n| n.parse().ok())
         .unwrap_or(0);
+    // OFAST_HITS=first,last: every field of the effect dispatches and the player_hurt events of those ticks.
+    let hits_in: Option<(u32, u32)> = std::env::var("OFAST_HITS").ok().map(|v| {
+        let (a, b) = v.split_once(',').expect("OFAST_HITS: first,last");
+        (
+            a.trim().parse().expect("tick"),
+            b.trim().parse().expect("tick"),
+        )
+    });
+    let within = |tick: u32| hits_in.is_some_and(|(a, b)| (a..=b).contains(&tick));
     while parser.next_frame().expect("frame").is_some() {
-        parser.take_events();
+        for e in parser.take_events() {
+            if e.name == "player_hurt" && within(e.tick) {
+                println!("tick {}: player_hurt {:?}", e.tick, e.keys);
+            }
+        }
         for m in parser.take_messages() {
             if m.kind == FIRE_BULLETS && raw > 0 {
                 raw -= 1;
                 println!("tick {}: {}", m.tick, wire_fields(&m.body));
             }
+            if m.kind == EFFECT_DISPATCH && within(m.tick) {
+                println!("tick {}: effect {}", m.tick, wire_fields(&m.body));
+            }
             if m.kind == FIRE_BULLETS {
                 shots.extend(decode_fire_bullets(m.tick, &m.body));
-            } else if let Some(hit) = decode_player_hit(m.tick, &m.body) {
+            } else if let Some(hit) = decode_player_hit(
+                m.tick,
+                &m.body,
+                parser
+                    .string_tables()
+                    .by_name(ofast_core::demo::shots::EFFECT_TABLE),
+            ) {
                 hits.push(hit);
             }
         }
@@ -116,6 +138,18 @@ fn main() {
         shots.len(),
         hits.len()
     );
+    // The names behind the dispatches' effect numbers (field 18).
+    if hits_in.is_some()
+        && let Some(table) = parser.string_tables().by_name("EffectDispatch")
+    {
+        let names: Vec<String> = table
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(n, e)| format!("{n}:{}", e.key))
+            .collect();
+        println!("EffectDispatch: {}", names.join(" "));
+    }
 
     let near: Option<Vec<f32>> = std::env::var("OFAST_NEAR").ok().map(|v| {
         v.split(',')

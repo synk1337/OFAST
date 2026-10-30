@@ -1017,7 +1017,13 @@ Two kinds of message show where bullets really went, and checked the rule (`exam
   and 423 of the local demo's 424. Of the 545 hits starting past the eyes on 13 demos of 6 maps, 456 start within
   half an inch of where OFAST's trace comes out of a wall (`examples/shot_penetration.rs`), 81 where the trace
   meets nothing (a prop or door it does not have, or a player: a later hit starting 3 – 9 inches past another's), 8
-  elsewhere. Other effects dispatched on a bullet's line start where they end.
+  elsewhere. Other effects dispatched on a bullet's line start where they end. Field 18 names the effect, as an index
+  into the `EffectDispatch` string table (2026 demos: 4 `csblood`, 7 `ParticleEffect`, 10 `Impact`): each hit is
+  dispatched twice, as `Impact` (12 a damage type, 14 the hitbox, 10 the surface) and as `csblood`, whose field 3 is a
+  normal back toward the shooter and field 8 (`magnitude`) the damage to health, unrounded and not cut to the health
+  left: CS2's client picks the blood's size by it (`export::shots`). A headshot a helmet took carries 1, and beside it
+  a `ParticleEffect` at the same point whose field 11 (`effectindex`, fixed64) is the resource id of
+  `particles/impact_fx/impact_helmet_headshot.vpcf` (`examples/particle_of_id.rs` names such ids).
 - **The damage a hit did** (`player_hurt`'s `dmg_health`, `dmg_armor`, `hitgroup`; on local demos `bullet_damage`'s
   `num_penetrations` and `distance`, from where the stretch started) checks the penetration rule
   ([replay.md](replay.md#agents-manifest-demo_rroundagentsjson), `shots`): without walls 2,860 non-lethal hits

@@ -42,7 +42,16 @@
 //! | `muzzle`, `muzzle_direction` | where they left the barrel as the exported agent shows it (third person), and along the barrel; `null` when the agent shows no gun in hand then |
 //! | `view_muzzle`, `view_muzzle_direction` | the same as the shooter's viewmodel shows it (first person), in the viewmodel rig's model space: Source axes (x forward, y left, z up), inches (in Unreal the viewmodel's component space: the camera, before the player's viewmodel offsets and the left hand's mirroring); `null` without a viewmodel then |
 //! | `view_tracer` | where the shooter's own view shows the tracer leave, in the world: the viewmodel's muzzle on the shot tick's camera, moved to the world point seen at the same place on the screen ([`view_tracer_start`]); `null` without a viewmodel |
-//! | `bullets` | per bullet (shotguns fire several): `end` (where it stopped), `on` (`"world"`, `"player"` or `"air"`: nothing within range), `normal` (of the surface met, facing the shooter; `null` on a player or in the air), `surface` (the world surface's property name, `null` when unknown), `impact` (the surface's impact system, [`Impact::effect`]), `decal` (its bullet-hole decal group) and, on the world, `thickness` (of the wall it stopped in, `null` when the trace finds no way out of it); `through`: what it went through before, in order: each wall's way in and way out (`on` `"world"`, `end`, `normal`: facing back at the bullet going in, along it coming out, `surface`, `impact`, `decal`, `thickness`; `door` true on a door's side, which takes no bullet hole) and each player (`on` `"player"`, `end`: where it met them, `victim`: the player hit, their controller, from the posed hitboxes nearest the hit, [`body_hit`]; `null` when none is near); a bullet ending on a player has `victim` too |
+//! | `bullets` | per bullet (shotguns fire several): `end` (where it stopped), `on` (`"world"`, `"player"` or `"air"`: nothing within range), `normal` (of the surface met, facing the shooter; `null` on a player or in the air), `surface` (the world surface's property name, `null` when unknown), `impact` (the surface's impact system, [`Impact::effect`]), `decal` (its bullet-hole decal group) and, on the world, `thickness` (of the wall it stopped in, `null` when the trace finds no way out of it); `through`: what it went through before, in order: each wall's way in and way out (`on` `"world"`, `end`, `normal`: facing back at the bullet going in, along it coming out, `surface`, `impact`, `decal`, `thickness`; `door` true on a door's side, which takes no bullet hole) and each player (`on` `"player"`, `end`: where it met them, `victim`: the player hit, their controller, from the posed hitboxes nearest the hit, [`body_hit`]; `null` when none is near; `damage`: the damage the demo's blood for the hit carries, `null` when it sent none, and `helmet`: whether a helmet's sparks were dispatched there, below); a bullet ending on a player has these too |
+//!
+//! **Blood.** Each bullet's hit on a player is dispatched twice, as `Impact` and as `csblood`
+//! ([`crate::demo::shots::BLOOD_EFFECT`]), whose magnitude is the hit's damage to health, unrounded (on the Aurora vs
+//! FURIA de_dust2 demo, of the ticks with a single bullet hit: `player_hurt`'s `dmg_health` or one more on all 271
+//! that did not kill, at least `dmg_health` on the 99 kills, as the damage is not cut to the health left), except on a
+//! headshot a helmet took: 1 (all 47), with the helmet's sparks dispatched beside it ([`HELMET_HEADSHOT`]). CS2's client draws
+//! `particles/blood_impact/blood_impact_high` above `damage_impact_heavy` (40), `_med` from `damage_impact_medium`
+//! (20), `_low` above 0, `_friendly` otherwise (client.dll 1.41.9.3: the two console variables are hidden, their
+//! defaults read from the code registering them). Unreal picks the same by `damage` (`tools/unreal/shot_effects.py`).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -59,7 +68,7 @@ use crate::items::item_names;
 use crate::kv3::Value;
 use crate::physics::PhysicsData;
 use crate::physics::ragdoll::{Crossing, WorldCollision};
-use crate::resource::{BlockKind, Resource};
+use crate::resource::{BlockKind, Resource, resource_id};
 use crate::texture::Texture;
 
 /// A weapon's shots as `scripts/weapons.vdata` describes them (each entry inherits what it lacks from its `_base`).
@@ -1113,11 +1122,15 @@ pub fn to_health(
     (health.floor(), taken.floor())
 }
 
-/// The player hits the demo sent, by tick (a shot's hits are among its tick's: [`hits_of`]). The other effects
-/// dispatched there, which start where they end, are left out.
+/// The player hits the demo sent, by tick (a shot's hits are among its tick's: [`hits_of`]), and the particle
+/// effects dispatched there (a helmet's sparks, [`HELMET_HEADSHOT`]). The other effects, which start where they end,
+/// are left out.
 fn hits_by_tick(hits: &[PlayerHit]) -> HashMap<u32, Vec<&PlayerHit>> {
     let mut out: HashMap<u32, Vec<&PlayerHit>> = HashMap::new();
-    for hit in hits.iter().filter(|h| h.start != h.point) {
+    for hit in hits
+        .iter()
+        .filter(|h| h.start != h.point || h.particle.is_some())
+    {
         out.entry(hit.tick).or_default().push(hit);
     }
     out
@@ -1142,6 +1155,12 @@ fn range_of(shot: &Shot, data: &ShotData) -> f32 {
 /// on the line of the bullet OFAST rebuilds (to a thousandth of an inch on all 302 hits of the de_nuke pro demo and
 /// 423 of the local match demo's 424; `examples/shot_traces.rs`), so only rounding is allowed for.
 const ON_THE_LINE: f32 = 0.5;
+
+/// The particle system CS2's server dispatches at a headshot a helmet took (a [`crate::demo::shots::PARTICLE_EFFECT`]
+/// at the hit's point, beside its blood): sparks flying up, a glow and a flash. On the Aurora vs FURIA de_dust2 demo
+/// all 47 of them sit on a head hit (`player_hurt` hit group 1) that took armour, and that hit's blood carries a
+/// damage of 1 (`examples/shot_traces.rs`, `OFAST_HITS`; `examples/particle_of_id.rs` names the id).
+pub const HELMET_HEADSHOT: &str = "particles/impact_fx/impact_helmet_headshot.vpcf";
 
 /// Whether a shot draws a tracer: every shot of a weapon whose tracer frequency for its mode is not 0
 /// ([`WeaponShots::tracer_frequency`]: 0 for the silenced M4A1-S and USP-S, the MP5-SD, and what is not a gun).
@@ -1364,18 +1383,30 @@ fn bullet_json(
         )
     };
     let point = |t: f32| -> [f32; 3] { std::array::from_fn(|k| shot.eye[k] + direction[k] * t) };
-    // This bullet's hits: (the point's distance along the line, the start's), nearest first; one dispatched twice is
-    // one.
-    let mut players: Vec<(f32, f32)> = hits
+    // This bullet's hits: (the point's distance along the line, the start's, the damage CS2's blood carries, whether a
+    // helmet's sparks were dispatched at it), nearest first; one dispatched twice (as `Impact` and `csblood`) is one.
+    let helmet_id = resource_id(HELMET_HEADSHOT);
+    let mut players: Vec<(f32, f32, Option<f32>, bool)> = hits
         .iter()
         .filter_map(|h| {
             let ((start, start_off), (at, off)) = (along(h.start), along(h.point));
+            let helmet = hits.iter().any(|p| {
+                p.particle == Some(helmet_id)
+                    && segment_distance(p.point, h.point, h.point) < ON_THE_LINE
+            });
             (start_off < ON_THE_LINE && off < ON_THE_LINE && start > -ON_THE_LINE && at > start)
-                .then_some((at, start))
+                .then_some((at, start, h.blood, helmet))
         })
         .collect();
     players.sort_by(|a, b| a.0.total_cmp(&b.0));
-    players.dedup_by(|later, kept| later.0 - kept.0 < ON_THE_LINE);
+    players.dedup_by(|later, kept| {
+        let same = later.0 - kept.0 < ON_THE_LINE;
+        if same {
+            kept.2 = kept.2.or(later.2);
+            kept.3 |= later.3;
+        }
+        same
+    });
     let shown = players.last().map_or(0.0, |p| p.0);
     let walls: Vec<Wall> = obstacles
         .walls(shot.tick, shot.eye, direction, range, data)
@@ -1383,7 +1414,7 @@ fn bullet_json(
         .filter(|w| {
             !players
                 .iter()
-                .any(|&(at, start)| w.distance > start + ON_THE_LINE && w.distance < at)
+                .any(|&(at, start, _, _)| w.distance > start + ON_THE_LINE && w.distance < at)
         })
         .collect();
     // What a bullet met on the world: where, the surface's normal, its name, impact and bullet hole.
@@ -1458,7 +1489,7 @@ fn bullet_json(
                 gone += 1;
             }
             _ => {
-                let Some(&(hit, _)) = player else {
+                let Some(&(hit, _, blood, helmet)) = player else {
                     let end = json!({ "on": "air", "end": rounded(point(range)) });
                     return stopped(end, through);
                 };
@@ -1470,6 +1501,8 @@ fn bullet_json(
                     "on": "player",
                     "end": rounded(point(hit)),
                     "victim": victim.map(|b| b.controller),
+                    "damage": blood.map(|d| (f64::from(d) * 100.0).round() / 100.0),
+                    "helmet": helmet,
                 });
                 // Where it came out: a later hit's start just past (not past the next wall: that start is the
                 // wall's way out), else where the line leaves the player's hitboxes, else a body's depth on; never
@@ -1689,11 +1722,15 @@ mod tests {
                     tick: 20,
                     start: [0.0, 50.0, 0.0],
                     point: [200.0, 50.0, 0.0],
+                    blood: None,
+                    particle: None,
                 },
                 PlayerHit {
                     tick: 40,
                     start: [510.0, 0.0, 0.0],
                     point: [600.0, 0.0, 0.0],
+                    blood: None,
+                    particle: None,
                 },
             ],
             // Before the round: one shot into the wall, one into a player (no hole).
@@ -1705,6 +1742,8 @@ mod tests {
                 tick: 2,
                 start: [0.0, 20.0, 0.0],
                 point: [100.0, 20.0, 0.0],
+                blood: None,
+                particle: None,
             }],
             server_tick_offset: None,
             skins: Default::default(),
@@ -2076,15 +2115,42 @@ mod tests {
             tick: 10,
             start: [0.0, 30.0, 0.0],
             point: [200.0, 30.0, 0.0],
+            blood: None,
+            particle: None,
         };
         let bullet = fire([0.0, 30.0, 0.0], &[past]);
         assert_eq!(bullet["through"][0]["on"], "player");
+        assert_eq!(bullet["through"][0]["damage"], Json::Null);
+        assert_eq!(bullet["through"][0]["helmet"], false);
         assert_eq!(bullet["end"], json!([500.0, 30.0, 0.0]));
+        // The same hit as CS2 dispatches it: twice (`Impact`, `csblood` with its damage), and a headshot a helmet
+        // took has its sparks at the point: still one player, with the blood's damage and the helmet.
+        let blood = PlayerHit {
+            blood: Some(1.0),
+            ..past
+        };
+        let sparks = PlayerHit {
+            start: past.point,
+            particle: Some(resource_id(HELMET_HEADSHOT)),
+            ..past
+        };
+        let mut hits = vec![past, blood, sparks];
+        let by_tick = hits_by_tick(&hits);
+        assert_eq!(by_tick[&10].len(), 3);
+        let bullet = fire([0.0, 30.0, 0.0], &hits);
+        assert_eq!(bullet["through"].as_array().map(Vec::len), Some(1));
+        assert_eq!(bullet["through"][0]["damage"], 1.0);
+        assert_eq!(bullet["through"][0]["helmet"], true);
+        // Another particle effect there is no helmet.
+        hits[2].particle = Some(resource_id("particles/impact_fx/impact_concrete.vpcf"));
+        assert_eq!(fire([0.0, 30.0, 0.0], &hits)["through"][0]["helmet"], false);
         // A second player the demo shows behind the wall: the bullet got there.
         let behind = PlayerHit {
             tick: 10,
             start: [510.0, 30.0, 0.0],
             point: [600.0, 30.0, 0.0],
+            blood: None,
+            particle: None,
         };
         let bullet = fire([0.0, 30.0, 0.0], &[past, behind]);
         assert_eq!(bullet["on"], "player");
@@ -2095,6 +2161,8 @@ mod tests {
             tick: 10,
             start: [0.0, 60.0, 0.0],
             point: [600.0, 60.0, 0.0],
+            blood: None,
+            particle: None,
         };
         let bullet = fire([0.0, 60.0, 0.0], &[clear]);
         assert_eq!(bullet["through"][0]["on"], "player");

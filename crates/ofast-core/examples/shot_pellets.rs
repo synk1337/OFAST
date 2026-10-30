@@ -188,7 +188,13 @@ fn main() {
                 {
                     panes.push((m.tick, point.to_array()));
                 }
-            } else if let Some(hit) = decode_player_hit(m.tick, &m.body) {
+            } else if let Some(hit) = decode_player_hit(
+                m.tick,
+                &m.body,
+                parser
+                    .string_tables()
+                    .by_name(ofast_core::demo::shots::EFFECT_TABLE),
+            ) {
                 hits.push(hit);
             }
         }

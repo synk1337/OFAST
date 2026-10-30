@@ -1049,13 +1049,14 @@ fn track_round_where(
                     skins: BTreeMap::new(),
                     stattrak: BTreeMap::new(),
                 };
+                let effects = parser.string_tables().by_name(shots::EFFECT_TABLE);
                 for m in earlier.drain(..).filter(|m| m.tick < tick) {
                     if m.kind == shots::FIRE_BULLETS {
                         new.earlier_shots
                             .extend(shots::decode_fire_bullets(m.tick, &m.body));
                     } else if m.kind == shots::EFFECT_DISPATCH {
                         new.earlier_hits
-                            .extend(shots::decode_player_hit(m.tick, &m.body));
+                            .extend(shots::decode_player_hit(m.tick, &m.body, effects));
                     }
                 }
                 track = Some(new);
@@ -1178,6 +1179,7 @@ fn add_shots(
     } else {
         HashMap::new()
     };
+    let effects = parser.string_tables().by_name(shots::EFFECT_TABLE);
     for m in messages {
         if m.kind == shots::FIRE_BULLETS {
             if let Some(shot) = shots::decode_fire_bullets(m.tick, &m.body)
@@ -1186,7 +1188,7 @@ fn add_shots(
                 track.shots.push((controller, shot));
             }
         } else if m.kind == shots::EFFECT_DISPATCH
-            && let Some(hit) = shots::decode_player_hit(m.tick, &m.body)
+            && let Some(hit) = shots::decode_player_hit(m.tick, &m.body, effects)
         {
             track.player_hits.push(hit);
         }

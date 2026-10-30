@@ -136,7 +136,13 @@ fn main() {
         for m in parser.take_messages() {
             if m.kind == FIRE_BULLETS {
                 shots.extend(decode_fire_bullets(m.tick, &m.body));
-            } else if let Some(hit) = decode_player_hit(m.tick, &m.body) {
+            } else if let Some(hit) = decode_player_hit(
+                m.tick,
+                &m.body,
+                parser
+                    .string_tables()
+                    .by_name(ofast_core::demo::shots::EFFECT_TABLE),
+            ) {
                 hits.push(hit);
             }
         }
