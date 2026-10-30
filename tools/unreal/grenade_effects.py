@@ -116,6 +116,10 @@ WALL_SMOKE_LAYERS = [
 # +11 - +18 brown-black smoke thinning; gone by about +22 (0.35 s; indoors a faint haze to +28), the scorch left.
 # The layers' lifetimes follow that, not the files' (1 - 2 s for the fireball, up to 6 s for the ground smoke: at
 # those, Unreal's fireball still burned a second after the blast, where CS2's is gone in a third of one).
+# The fire's colour: the top of CS2's heat gradient, 255 77 23, which is sRGB: linear (1, 0.075, 0.01), a deep red
+# that turns orange and yellow where the brightness clips it, as CS2's core does. Taken as linear, the sRGB values
+# drew a yellow-orange fireball beside CS2's red-orange one (mid, +4 - +8).
+FIRE_ORANGE = (1.0, 0.075, 0.01)
 BLAST_LAYERS = [
     # particles/explosions_fx/explosion_hegrenade: the white flash it goes off with (radius 2 - 3 grown 10 to 15
     # times, its renderers' radius scale and bloom making it far bigger): lasting 4 ticks, 80 - 100 units round,
@@ -134,15 +138,15 @@ BLAST_LAYERS = [
     # sprite's half-size...
     {"name": "blast_heat", "role": "blast_heat", "slots": 3, "life": (0.2, 0.3), "radius": (90.0, 180.0),
      "scale": (0.8, 1.0), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 30.0, "rise": 0.0, "bright": 6.0,
-     "tint": (1.0, 0.3, 0.09), "size": 1.0, "lift": 0.0, "up": (90.0, 180.0), "speed": (0.0, 60.0), "drag": 0.1,
-     "gravity": -50.0, "fade_in": 0.0, "fade_out": 0.5, "sort": 1},
+     "tint": FIRE_ORANGE, "size": 1.0, "lift": 0.0, "up": (90.0, 180.0), "speed": (0.0, 60.0), "drag": 0.1,
+     "gravity": -50.0, "fade_in": 0.0, "fade_out": 0.5, "sort": 1, "link": "blast_core"},
     # explosion_hegrenade_smoke_blasts: 3 jets of fire thrown out any way at 200 - 400 units/s (and 50 - 200 up),
     # radius 30 - 60, drag 0.025, drawn as trails of explosion_blast_01_heat in the same orange at an overbright of 5;
     # a streak as long as a fifth of a second of its flight here, out by +10 as the fireball. Brighter than CS2's
     # overbright: at 3 the jets did not show against de_dust2's sunlit walls.
     {"name": "blast_jets", "role": "blast_jet", "slots": 3, "life": (0.15, 0.3), "radius": (30.0, 60.0),
      "scale": (0.75, 1.0), "alpha": (1.0, 1.0), "roll": 0.0, "spread": 10.0, "rise": 0.0, "bright": 8.0,
-     "tint": (1.0, 0.3, 0.09), "size": 1.0, "lift": 0.0, "up": (50.0, 200.0), "speed": (200.0, 400.0),
+     "tint": FIRE_ORANGE, "size": 1.0, "lift": 0.0, "up": (50.0, 200.0), "speed": (200.0, 400.0),
      "drag": 0.025, "stretch": 0.2, "max_length": 600.0, "fade_in": 0.0, "fade_out": 0.25, "sort": 1},
     # ... and the same puffs' smoke (its first renderer: explosion_fireball_01_smoke in dark grey, 64 of 255, alpha 1,
     # lit), under the fire: the heat added over dark smoke makes CS2's dark red-orange fireball, then the black smoke
@@ -151,14 +155,33 @@ BLAST_LAYERS = [
     {"role": "blast_smoke", "slots": 3, "life": (0.35, 0.5), "radius": (90.0, 180.0), "scale": (0.8, 1.0),
      "alpha": (1.0, 1.0), "roll": 180.0, "spread": 30.0, "rise": 0.0, "bright": 1.0, "tint": (0.15, 0.14, 0.13),
      "translucent": True, "lift": 0.0, "up": (90.0, 180.0), "speed": (0.0, 60.0), "drag": 0.1, "gravity": -50.0,
-     "fade_in": 0.0, "fade_out": 0.6},
-    # explosion_hegrenade_smoke_ground: dark puffs rolling out along the ground in a ring (born 20 out, radius 75 – 125
-    # grown from a third, out at 25 – 200 units/s and slowed by drag 0.1; colour 64 of 255): a low haze CS2 shows
-    # thinning with the rest, gone by about +25 (+28 indoors).
+     "fade_in": 0.0, "fade_out": 0.6, "link": "blast_core"},
+    # explosion_hegrenade_smoke_ground: puffs rolling out along the ground in a ring (born 20 out, radius 75 – 125
+    # grown from a third, out at 25 – 200 units/s and slowed by drag 0.1; colour 64 of 255), burning orange at first
+    # as the fireball does (the same heat sheet, at an overbright of 5: CS2's orange puffs bursting out 1 – 4 ticks
+    # after the blast, on A long), then a low haze thinning with the rest, gone by about +25 (+28 indoors).
     {"name": "blast_ground", "role": "blast_smoke", "slots": 8, "life": (0.3, 0.45), "radius": (75.0, 125.0),
-     "scale": (0.333, 1.0), "alpha": (0.4, 0.5), "roll": 180.0, "spread": 20.0, "rise": 0.0, "bright": 1.0,
-     "tint": (0.25, 0.25, 0.25), "translucent": True, "speed": (25.0, 200.0), "drag": 0.1, "lift": 0.3,
-     "fade_in": 0.0, "fade_out": 0.6},
+     "scale": (0.8, 1.0), "alpha": (0.6, 0.7), "roll": 180.0, "spread": 20.0, "rise": 0.0, "bright": 1.0,
+     "tint": (0.18, 0.17, 0.16), "translucent": True, "speed": (25.0, 200.0), "drag": 0.1, "lift": 0.3,
+     "fade_in": 0.0, "fade_out": 0.6, "link": "blast_ground"},
+    {"name": "blast_ground_heat", "role": "blast_heat", "slots": 8, "life": (0.2, 0.3), "radius": (75.0, 125.0),
+     "scale": (0.8, 1.0), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 20.0, "rise": 0.0, "bright": 4.0,
+     "tint": FIRE_ORANGE, "size": 1.0, "speed": (25.0, 200.0), "drag": 0.1, "lift": 0.3, "fade_in": 0.0,
+     "fade_out": 0.5, "sort": 1, "link": "blast_ground"},
+    # explosion_hegrenade_smoketrails: 7 tongues of fire flung out at up to 1400 units/s (±1000 each way) and 250 - 1000
+    # up, falling (gravity 250, drag 0.05), each a ball of fire (explosion_fireball_01_flame, overbright 40) trailing a
+    # rope of dark smoke (smoke_trail_01_loop): the arcs CS2 throws out of its blasts (the lower B tunnel, +1 - +10).
+    # Here the head in the fireball's heat sheet and the rope a streak of its smoke from where it was thrown (linked:
+    # the same particles), both gone with the rest.
+    {"name": "blast_trails", "role": "blast_smoke", "slots": 7, "life": (0.35, 0.5), "radius": (4.0, 8.0),
+     "scale": (1.0, 0.6), "alpha": (0.8, 0.9), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 1.0,
+     "tint": (0.1, 0.1, 0.1), "translucent": True, "size": 1.0, "lift": 0.0, "speed": (300.0, 1400.0),
+     "up": (250.0, 1000.0), "gravity": 250.0, "drag": 0.05, "from_birth": True, "fade_in": 0.0, "fade_out": 0.5,
+     "link": "blast_trails"},
+    {"name": "blast_trail_fire", "role": "blast_heat", "slots": 7, "life": (0.35, 0.5), "radius": (8.0, 14.0),
+     "scale": (1.0, 0.333), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 0.0, "rise": 0.0, "bright": 8.0,
+     "tint": FIRE_ORANGE, "size": 1.0, "lift": 0.0, "speed": (300.0, 1400.0), "up": (250.0, 1000.0),
+     "gravity": 250.0, "drag": 0.05, "fade_in": 0.0, "fade_out": 0.5, "sort": 1, "link": "blast_trails"},
     # explosion_hegrenade_sparktrails: 3 - 5 carriers flung out at up to 1400 units/s and 250 - 1000 up (gravity 500),
     # each shedding streaks of sparks (sparks.vtex sequence 4, 252 / 209 / 187, self-lit) for half a second. Drawn as
     # single streaks along such flights, each as long as 0.06 s of it: the lines CS2's picture shows. Orange and dim
@@ -203,12 +226,15 @@ SPRITE_SIZE = 0.5
 # born at (min, max: CS2's C_INIT_AgeNoise; a blood splash is already grown on its first frame); `from_birth`: drawn as
 # a streak from where the particle was born to where it is (CS2's blood trails), its tail sagging `tail_drop` units in
 # a second; `sort` its translucency sort priority (higher draws over lower where they overlap: a blast's fire over
-# its smoke, as CS2 draws the same particle's renderers in order). `up` may be negative: down the axis.
+# its smoke, as CS2 draws the same particle's renderers in order); `link` a name the layers drawing the same
+# particles share (CS2's renderers of one particle: a fireball's smoke and its fire), so their particles are born with
+# the same seeds; with the same flight, life and size they fly as one. `up` may be negative: down the axis.
 LAYER_DEFAULTS = {"size": SPRITE_SIZE, "lift": 0.6, "speed": (0.0, 0.0), "up": (0.0, 0.0), "gravity": 0.0,
                   "drag": 0.0, "stretch": 0.0, "max_length": 0.0, "sequence": None, "floor": False,
                   "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False, "end_fade": 0.0, "fade_in": 0.1,
                   "fade_out": 0.33, "along": (0.0, 0.0), "min_width": 0.0, "local": False, "roll_base": 0.0,
-                  "min_distance": 0.0, "age": (0.0, 0.0), "from_birth": False, "tail_drop": 0.0, "sort": 0}
+                  "min_distance": 0.0, "age": (0.0, 0.0), "from_birth": False, "tail_drop": 0.0, "sort": 0,
+                  "link": None}
 # CS2's particle drag takes a share of the velocity per simulation step; OFAST reads it as per 1/30 s (an assumption:
 # the step is not in the files) and turns it into a rate per second, -30 ln(1 - drag): 0.025 -> 0.76, 0.1 -> 3.2.
 DRAG_STEPS_PER_SECOND = 30.0
@@ -235,9 +261,10 @@ LIGHT_FLAMES = 16
 LIGHT_RADIUS = 450.0
 FLICKER_TICKS = 4
 # A blast's and a flashbang's light: colour, peak intensity (candela; unitless with a `falloff`, spawn_light), reach
-# (units), and how it dies out: (ticks after the detonation, share of the peak). CS2's blast light lives about a third of a second, its flash's less than two
-# ticks: 2 – 4 ticks after two flashbangs of Aurora vs FURIA's round 17 (molodoy's view at 154318, 376 units away;
-# MAJ3R's at 153229, 409 units) CS2 lights nothing, where 40 – 60 % of this pulse turned a wall white (2026-10-30).
+# (units), and how it dies out: (ticks after the detonation, share of the peak). CS2's blast light lives about a third
+# of a second, its flash's less than two ticks: 2 – 4 ticks after two flashbangs of Aurora vs FURIA's round 17
+# (molodoy's view at 154318, 376 units away; MAJ3R's at 153229, 409 units) CS2 lights nothing, where 40 – 60 % of
+# this pulse turned a wall white (2026-10-30).
 # (1500 cd over 600 units washed a whole room out white 2 ticks after a blast 272 units away.) The blast's is CS2's
 # explosion_hegrenade_light: orange (255, 108, 34), 0.225 s, whole for its first quarter and fading out over the rest
 # (C_OP_FadeOutSimple 0.75); its intensity (3) and radius (160) have no Unreal units, so the peak is fitted to CS2's
@@ -245,8 +272,10 @@ FLICKER_TICKS = 4
 # ground in front of them red-orange, where 200 cd of a paler orange over twice as long showed nothing there. CS2's
 # particle lights fade smoothly to their radius: an inverse-square light strong enough to turn that wall orange (600
 # cd) burned the door beside the blast yellow-white (KSCERATO, 151912), where CS2 shows it soft orange; so a falloff
-# light (exponent 2), reaching 260 units (CS2's 160 and some: at 400 it lit the wall beside KSCERATO).
-BLAST_LIGHT = {"color": (1.0, 0.42, 0.13), "peak": 12.0, "radius": 260.0, "falloff": 2.0,
+# light (exponent 2), reaching 260 units (CS2's 160 and some: at 400 it lit the wall beside KSCERATO). Its colour in
+# linear terms, as FIRE_ORANGE; at 12 that red lit the whole doorway and the ground round it deep red (mid doors, +0 -
+# +10), where CS2 tints the walls next to a blast orange (the lower B tunnel, +1 - +5).
+BLAST_LIGHT = {"color": (1.0, 0.15, 0.016), "peak": 8.0, "radius": 260.0, "falloff": 2.0,
                "decay": [(0, 1.0), (4, 1.0), (14, 0.0)]}
 FLASH_LIGHT = {"color": (1.0, 1.0, 1.0), "peak": 600.0, "radius": 600.0,
                "decay": [(0, 1.0), (1, 0.15), (2, 0.0)]}
@@ -728,14 +757,18 @@ def add_sprites(actor, layer, instance, mesh, slots, rng, floor_cm=NO_FLOOR_CM):
             bounds_at = unreal.Vector((sx + ax * half) * UNITS_TO_CM, -(sy + ay * half) * UNITS_TO_CM,
                                       (sz + az * half) * UNITS_TO_CM)
             scale = max(SPRITE_INSTANCE_SCALE, half * UNITS_TO_CM / 50.0 * 1.1)
-        for _ in range(layer["slots"]):
+        for n in range(layer["slots"]):
             index = ism.add_instance(unreal.Transform(bounds_at, unreal.Rotator(0.0, 0.0, 0.0),
                                                       unreal.Vector(scale, scale, scale)), True)
             # A one-shot's particle is born on its tick: a phase would put its birth up to a lifetime before or
             # after it, outside the half tick the shader allows, and it would never show.
             phase = rng.random() if last > first else 0.0
-            values = [position.x, position.y, position.z, first, last, phase, rng.uniform(0.0, 100.0), floor_cm,
-                      ax, -ay, az, reach]
+            seed = rng.uniform(0.0, 100.0)
+            if option(layer, "link"):
+                # The same seed in every layer of the link for this slot and particle: the same particles.
+                seed = random.Random("%s %d %d %d %s %d" % (option(layer, "link"), round(sx * 8), round(sy * 8),
+                                                            round(sz * 8), first, n)).uniform(0.0, 100.0)
+            values = [position.x, position.y, position.z, first, last, phase, seed, floor_cm, ax, -ay, az, reach]
             for k, value in enumerate(values):
                 ism.set_custom_data_value(index, k, float(value), k == len(values) - 1)
     return ism
