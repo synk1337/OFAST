@@ -33,15 +33,22 @@ pub const EFFECT_TEXTURES: &[(&str, &str)] = &[
         "gas",
         "materials/particle/fire_gas/fire_gas_batch_a_v2.vtex_c",
     ),
-    // particles/explosions_fx/explosion_hegrenade_smoke_core.vpcf: an HE blast's fireball (grey: CS2's shader tints
-    // it) and its smoke (3 sequences each).
+    // particles/explosions_fx/explosion_hegrenade_smoke_core.vpcf: an HE blast's fireball, its burning core (a heat
+    // map CS2 colours black to orange, bright early in each sequence and fading to black over it; 5 sequences of 16
+    // frames; its flame sheet is drawn in the bloom pass only) and its smoke.
     (
-        "blast_flame",
-        "materials/particle/explosion_fireballs/flame/explosion_fireball_01_flame.vtex_c",
+        "blast_heat",
+        "materials/particle/explosion_fireballs/heat/explosion_fireball_01_heat.vtex_c",
     ),
     (
         "blast_smoke",
         "materials/particle/explosion_fireballs/smoke/explosion_fireball_01_smoke.vtex_c",
+    ),
+    // particles/explosions_fx/explosion_hegrenade_smoke_blasts.vpcf: the jets of fire a blast throws out (the same
+    // kind of heat map; 4 sequences of 16 frames).
+    (
+        "blast_jet",
+        "materials/particle/explosion_blasts/heat/explosion_blast_01_heat.vtex_c",
     ),
     // particles/explosions_fx/explosion_hegrenade.vpcf: the flare CS2's blasts and flashbangs go off with (a molotov's
     // glow, molotov_child_glow01a, is its light instead).

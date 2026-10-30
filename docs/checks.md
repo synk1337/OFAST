@@ -405,6 +405,29 @@ at the default brightness, the tick read off the demo bar) against Unreal (`shoo
   is dark (the per-map shade, above) and they hardly show.
 - Not drawn: the streaks' decals on the ground (`…_ground_decal`), CS2's bloom round the sparks.
 
+## HE blast, tick by tick (2026-10-30)
+
+Three HE grenades thrown in an offline game on de_dust2 (CS2 `-insecure`, recorded with GOTV: `tv_record`), each
+filmed one tick at a time from the thrower's eyes (`tools/cs2/tick_shots.py`, 90 frames from the tick before the
+blast): mid (about 510 units away), A long in the sun (about 250, close up), the lower B tunnel indoors (about 190).
+The same in all three:
+
+| Ticks after | CS2 |
+|---|---|
+| +0 | a soft white-peach flash about a hundred units across, a lens streak across the screen |
+| +1 – +3 | orange puffs bursting out, rays of sparks (white and dense indoors), the walls lit orange |
+| +2 – +7 | a puffy fireball about 180 units across, orange with a yellow-white core, darkening at its edges |
+| +8 – +10 | dark red inside black smoke |
+| +11 – +18 | brown-black smoke thinning |
+| from about +22 | gone (indoors a faint haze to about +28); the scorch stays |
+
+Unreal, round 17's blast at the mid doors (tick 151907, 228 units from where the mid one went off) through a camera
+placed the same way relative to it, before: a small white flare for 15 ticks and a fireball burning orange past +60.
+After rebuilding the blast (`grenade_effects.py`: CS2's heat sheet in orange over the fireball's own dark smoke, its
+jets of fire, a 4-tick flash, lifetimes following the table rather than the files' 1 – 6 s): flash +0 – +3, orange
+fire +4 – +8, dark smoke +9 – +15, gone by +17. Its fire is a little yellower than CS2's; the blast at the doorway
+hides some of it behind the door frame. Not drawn: the lens streak, the heat trails and embers.
+
 ## What was wrong
 
 ### Fixed

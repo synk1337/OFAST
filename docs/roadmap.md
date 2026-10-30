@@ -315,9 +315,10 @@ player and round.
     volumes' indirect light was set only by the import and the renders; now in the project's settings.
   - [x] **Earlier rounds' bullet holes**: Unreal covered crates, doors and walls with them, CS2 shows none there
     (decision 018); no longer drawn.
-  - [ ] **HE blast's light**: CS2's lights the wall and ground in front of the door it went off behind (molodoy at
+  - [x] **HE blast's light**: CS2's lights the wall and ground in front of the door it went off behind (molodoy at
     151910), its particle lights casting no shadows. Tried without shadows: the light came through walls, which looked
-    wrong, so OFAST's keep them (the user's choice). Still too weak: CS2's turns that wall red-orange.
+    wrong, so OFAST's keep them (the user's choice). Now CS2's: orange (255, 108, 34), 0.225 s, and a smooth falloff
+    to 260 units instead of inverse-square (which burned the door beside the blast white): the wall turns orange.
   - [x] **Flashbang's light**: a wall turned white 2 – 4 ticks after a pop where CS2 lights nothing; the pulse now
     dies within two ticks. Without it those views show their own light: half CS2's (below).
   - [x] **Blood**: CS2's headshot is a bright red spray with white streaks, dark droplets and splatter on the crate
@@ -331,7 +332,12 @@ player and round.
     ticks after a hit) and its red haze round the head is denser; the decals the streaks leave on the ground
     (`…_ground_decal`: two splats under where each lands, 5 – 10 s) are not drawn.
   - [ ] **Smokes' look**: CS2's puffy and broken up, Unreal's a flat even fill (same views).
-  - [ ] **HE fireball**: CS2 a fiery orange burst with sparks, Unreal a white glow.
+  - [x] **HE fireball**: CS2 a fiery orange burst with sparks, Unreal a white glow. Filmed tick by tick in CS2 (three
+    HEs thrown offline on de_dust2: mid, A long, lower B; `tools/cs2/tick_shots.py`, `docs/checks.md`) and rebuilt to
+    match: CS2's heat sheet in orange over its dark smoke, jets of fire, a 4-tick flash; all gone by about +20 ticks
+    (Unreal's burned for over a second before).
+  - [ ] **HE, what is left**: the lens streak across the screen at +0 (`explosion_hegrenade_flash_ana`), the heat
+    trails and embers flying up, and the fire a little yellower than CS2's red-orange.
   - [ ] **Muzzle flashes**: CS2's AK picks no flame about one shot in four (its effect's empty child) and showed
     none on two shot-ticks + 1 where Unreal draws one; bigger in Unreal when both show one. Needs frames read at the
     demo bar's tick (the console's is one or two later) before any timing change.

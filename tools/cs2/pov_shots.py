@@ -86,4 +86,5 @@ def main():
         print("%s: demo tick %s -> %s" % (item, got, path))
 
 
-main()
+if __name__ == "__main__":
+    main()
