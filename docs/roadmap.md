@@ -324,8 +324,9 @@ player and round.
     and wall behind (MAJ3R's kill at 153359); Unreal's was a faint dark-red haze. Now CS2's own choice per hit: the
     demo's blood dispatch carries the damage CS2 sizes its blood by (high above 40, medium from 20, low below), and
     a headshot a helmet took has its sparks dispatched beside it (the "white streaks": all five in the round drawn);
-    each size's pieces rebuilt with CS2's numbers, flying to the shooter's left as CS2's do. Compared on 12 frames
-    (MAJ3R's two body hits and kill on yuurih, his hits on molodoy): same pieces, directions and timing.
+    each size's pieces rebuilt with CS2's numbers, the splashes on the player hit and the dark streaks to the
+    shooter's left as CS2's. Compared on 12 frames (MAJ3R's two body hits and kill on yuurih, his hits on molodoy):
+    same pieces, directions and timing.
   - [ ] **Blood, what is left**: CS2's dark streaks reach about twice as far from the wound (35 – 45 units 2 – 3
     ticks after a hit) and its red haze round the head is denser; the decals the streaks leave on the ground
     (`…_ground_decal`: two splats under where each lands, 5 – 10 s) are not drawn.

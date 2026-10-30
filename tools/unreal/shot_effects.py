@@ -184,13 +184,16 @@ FAMILY_LAYERS = {
 }
 # Blood (particles/blood_impact/, read 2026-10-30). A bullet's hit on a player is drawn by its damage as CS2's client
 # picks blood_impact_high, _med or _low (blood_tier: export::shots' `damage`, the damage the demo's blood dispatch
-# carries); each is a handful of children, rebuilt here as layers. They fly along their effect's x axis (`up` here),
-# which points to the shooter's left: CS2's streaks of MAJ3R's hits on yuurih (shooting north, ticks 153347 - 153366)
-# and on molodoy (shooting east, 154514 - 154521) all go to the left of the player hit on his screen, and a little up,
-# so the axis is the dispatch's normal (back toward the shooter) crossed with up (blood_axis); the splashes and streaks
-# go along it (+x), the mists the other way (-x). Their sideways speeds, random speeds and velocity noise make
-# `speed`. The splashes (blood_spray_top) are a white sheet CS2 colours through a gradient (34 3 36
-# to 154 13 13 of 255), each with a static_smoke puff under it in the same colours (its second renderer: haze_layer);
+# carries); each is a handful of children, rebuilt here as layers. A child flies along the x axis (`up` here) of one
+# of its effect's control points. Point 2's (the splashes, their haze and the mists) is the dispatch's normal, back
+# toward the shooter: the splashes fly toward him (+x), the mists away (-x), so on his screen both stay on the
+# player hit, as CS2's bright red does (MAJ3R's view of his hits on yuurih, ticks 153347 - 153366; drawn to the side,
+# they sat on the crate beside him). Point 0's (the streaks: `frame` "left") points to the shooter's left: CS2's dark
+# streaks of those hits (shooting north) and of his hits on molodoy (shooting east, 154514 - 154521) all go to the
+# left of the player hit on his screen, a little up; it is the normal crossed with up (blood_axes). Their sideways
+# speeds, random speeds and velocity noise make `speed`. The splashes (blood_spray_top) are a white sheet CS2 colours
+# through a gradient (34 3 36 to 154 13 13 of 255), each with a static_smoke puff under it in the same colours (its
+# second renderer: haze_layer);
 # the streaks a frame of blood_spray_high / _med / _low stretched from the wound to the droplet (its trail renderer
 # takes the tail from the particle's birth point, attribute 17, sagging by a curve over the system's age: -11 units at
 # 0.36 s, -110 at 1 s), coloured from red to near black (178 11 11 to 16 0 0; med's 143 1 1 to 30 1 1); the mists are
@@ -248,7 +251,7 @@ def streak_layer(name, role, slots, life, radius, scale, up, speed, gravity, seq
     last fifth (0.125 - 0.25); `more` overrides (drag 0.05, the age, the streaks' tint)."""
     values = {"gravity": gravity, "drag": 0.05, "age": (0.1, 0.125), "from_birth": True,
               "tail_drop": STREAK_TAIL_DROP, "sequence": sequence, "tint": STREAK_TINT, "bright": 1.0,
-              "fade_out": 0.2}
+              "fade_out": 0.2, "frame": "left"}
     values.update(more)
     return blood_layer(name, role, slots, life, radius, scale, up, speed, **values)
 
@@ -261,17 +264,17 @@ def mist_layer(name, life, radius, alpha, up, speed, drag, fade_out=0.8):
                        fade_out=fade_out)
 
 
-# …_low_forw_spray (every size): 2 splashes to the left at 150 - 250 units/s, drag 0.2, radius 5 - 8 growing to
+# …_low_forw_spray (every size): 2 splashes toward the shooter at 150 - 250 units/s, drag 0.2, radius 5 - 8 growing to
 # 3 times, rolled -45 to -90 degrees.
 BLOOD_FORWARD = blood_layer("blood_forward", "blood_spray", 2, (0.35, 0.75), (5.0, 8.0), (0.1, 3.0), (150.0, 250.0),
                             (0.0, 20.0), alpha=(0.78, 0.86), roll=22.5, roll_base=-67.5, drag=0.2, fade_out=0.25,
                             age=(0.25, 0.5), sequence=(1, 2))
 BLOOD_FORWARD_HAZE = haze_layer(BLOOD_FORWARD, 0.5)
-# blood_impact_high's _vis_spray: 2 splashes to the left at 50 - 120, radius 14 - 20 grown from a quarter,
+# blood_impact_high's _vis_spray: 2 splashes toward the shooter at 50 - 120, radius 14 - 20 grown from a quarter,
 # gravity 100.
 HIGH_SPRAY = blood_layer("blood_high_spray", "blood_spray", 2, (0.5, 0.75), (14.0, 20.0), (0.25, 1.0), (50.0, 120.0),
                          gravity=100.0, drag=0.05, fade_out=0.3, sequence=(0, 3), age=(0.0, 0.1))
-# blood_impact_med's _vis_spray: 2 splashes to the left at 50 - 120 (sideways 12 - 15), radius 11 - 16 grown
+# blood_impact_med's _vis_spray: 2 splashes toward the shooter at 50 - 120 (sideways 12 - 15), radius 11 - 16 grown
 # from a tenth to twice, gravity 250, rolled -45 to -90.
 MED_SPRAY = blood_layer("blood_med_spray", "blood_spray", 2, (0.5, 0.7), (11.0, 16.0), (0.1, 2.0), (50.0, 120.0),
                         (0.0, 20.0), alpha=(0.78, 0.86), roll=22.5, roll_base=-67.5, gravity=250.0, drag=0.05,
@@ -293,7 +296,7 @@ BLOOD_TIERS = {
         # gravity 550.
         streak_layer("blood_high_streak", "blood_streak_high", 1, (0.5, 0.75), (16.0, 32.0), (0.25, 2.0),
                      (100.0, 200.0), (25.0, 60.0), 550.0, (1, 1)),
-        # _mist_away: to the right at 120 - 200 (sideways 50 - 75, 80 any way), alpha 0.3 - 0.65, drag 0.15.
+        # _mist_away: away from the shooter at 120 - 200 (sideways 50 - 75, 80 any way), alpha 0.3 - 0.65, drag 0.15.
         mist_layer("blood_high_mist", (0.75, 1.25), (10.0, 15.0), (0.3, 0.65), (-200.0, -120.0), (50.0, 110.0),
                    0.15),
         # _spray_away: a thin streak to the left at 200 - 400 (50 any way), radius 8 - 16 to 4 times, gravity 450.
@@ -307,7 +310,7 @@ BLOOD_TIERS = {
         # _vis_spray_trail: 2 streaks to the left at 120 - 250 (50 any way, up 25 - 50), radius 14 - 20 to twice.
         streak_layer("blood_med_streak", "blood_streak_med", 2, (0.5, 0.75), (14.0, 20.0), (0.25, 2.0),
                      (120.0, 250.0), (25.0, 60.0), 450.0, (0, 4)),
-        # _mist_away: to the right at 75 - 250 (sideways 20 - 50, 35 - 65 any way), drag 0.135.
+        # _mist_away: away from the shooter at 75 - 250 (sideways 20 - 50, 35 - 65 any way), drag 0.135.
         mist_layer("blood_med_mist", (0.5, 1.0), (9.0, 12.0), (0.3, 0.65), (-250.0, -75.0), (40.0, 100.0), 0.135),
         # _spray_away and _spray_screen: thin streaks to the left at 250 - 450, radius 4 - 8 to twice.
         streak_layer("blood_med_away", "blood_streak_high", 1, (0.5, 0.65), (4.0, 8.0), (0.25, 2.0),
@@ -317,7 +320,8 @@ BLOOD_TIERS = {
     ],
     # blood_impact_low (damage below 20, and a headshot a helmet took).
     "low": [
-        # _mist_away: to the right at 50 - 100 (sideways and up +-50, 25 any way), radius 7 - 8 to twice, alpha 0.5 - 1.
+        # _mist_away: away from the shooter at 50 - 100 (sideways and up +-50, 25 any way), radius 7 - 8 to twice,
+        # alpha 0.5 - 1.
         mist_layer("blood_low_mist", (0.5, 1.0), (7.0, 8.0), (0.5, 1.0), (-100.0, -50.0), (25.0, 75.0), 0.125,
                    fade_out=0.33),
         # _vis_spray_trail: a streak to the left at 200 - 350 (sideways 50, 50 any way, up 25 - 50), radius 16 - 32,
@@ -357,12 +361,14 @@ BLOOD_EVERY = [BLOOD_FORWARD, BLOOD_FORWARD_HAZE, BLOOD_FLASH]
 BLOOD_LAYERS = BLOOD_EVERY + [layer for tier in BLOOD_TIERS.values() for layer in tier] + HELMET_LAYERS[:2]
 
 
-def blood_axis(hit, eye):
-    """The axis a blood flies along (Source axes): the shooter's left at the player hit, the blood dispatch's normal
-    (from `hit` back toward `eye`) crossed with up; straight up for a shot from right above."""
+def blood_axes(hit, eye):
+    """The axes a blood's children fly along (Source axes): "back", the blood dispatch's normal (from `hit` back
+    toward `eye`); "left", the shooter's left at the player hit, that normal crossed with up (straight up for a shot
+    from right above); "up"."""
     back = unit([e - h for h, e in zip(hit, eye)])
     left = [back[1], -back[0], 0.0]
-    return unit(left) if math.hypot(left[0], left[1]) > 1e-3 else [0.0, 0.0, 1.0]
+    left = unit(left) if math.hypot(left[0], left[1]) > 1e-3 else [0.0, 0.0, 1.0]
+    return {"back": back, "left": left, "up": [0.0, 0.0, 1.0]}
 
 
 def blood_tier(damage):
@@ -378,11 +384,12 @@ def blood_tier(damage):
 
 def blood_layers(hit):
     """The layers of the blood of a hit on a player (export::shots' player entries): its size's (blood_tier) with
-    BLOOD_EVERY, and a helmet's sparks and glow when CS2 dispatched them (`helmet`; its flash is the blood's), as
-    (layers, whether they fly along blood_axis): the sparks fly up."""
-    out = [(BLOOD_TIERS[blood_tier(hit.get("damage"))] + BLOOD_EVERY, True)]
+    BLOOD_EVERY, and a helmet's sparks and glow when CS2 dispatched them (`helmet`; its flash is the blood's), each as
+    (layer, the axis it flies along: "back" toward the shooter, "left" of him (a layer's `frame`), or "up": the
+    sparks)."""
+    out = [(layer, layer.get("frame", "back")) for layer in BLOOD_TIERS[blood_tier(hit.get("damage"))] + BLOOD_EVERY]
     if hit.get("helmet"):
-        out.append((HELMET_LAYERS[:2], False))
+        out += [(layer, "up") for layer in HELMET_LAYERS[:2]]
     return out
 
 
@@ -507,14 +514,14 @@ def sprite_slots(shots, alt=True, own_views=None):
                 if at["on"] == "world" and at.get("normal"):
                     add(FAMILY_LAYERS[family_of(at)], (at["end"], tick, tick, at["normal"], 0.0), slots)
                 elif at["on"] == "player":
-                    # The blood along the shooter's left (blood_axis), a helmet's sparks straight up. On the player
-                    # hit's own actor when the export names them (`victim`).
+                    # Each child along its own axis (blood_axes). On the player hit's own actor when the export names
+                    # them (`victim`).
                     hit = at["end"]
                     victim = at.get("victim")
                     into = slots if victim is None else blood.setdefault(victim, {})
-                    axis = blood_axis(hit, shot["eye"])
-                    for layers, along in blood_layers(at):
-                        add(layers, (hit, tick, tick, axis if along else [0.0, 0.0, 1.0], 0.0), into)
+                    axes = blood_axes(hit, shot["eye"])
+                    for layer, axis in blood_layers(at):
+                        add([layer], (hit, tick, tick, axes[axis], 0.0), into)
     return muzzles, views, own, blood, slots
 
 

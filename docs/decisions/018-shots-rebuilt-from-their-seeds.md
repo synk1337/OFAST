@@ -54,8 +54,10 @@ collision triangle its surface property (`world_physics`), per weapon model its 
   client.dll), and a headshot a helmet took carries 1 with a `ParticleEffect` dispatch of
   `impact_helmet_headshot` beside it: its sparks are drawn exactly where CS2's server sent them. Each size's children
   are rebuilt as sprite layers with CS2's numbers. Two things the files do not say were read off CS2's pictures: the
-  effect's x axis points to the shooter's left (the dispatch's normal crossed with up: the streaks of hits from the
-  south and from the west both fly to the left on the shooter's screen), and the age particles are born at
+  splashes and mists fly along the dispatch's normal (their control point 2: toward and away from the shooter, so
+  they stay on the player hit on his screen), the streaks along control point 0's x axis, which points to the
+  shooter's left (the normal crossed with up: the streaks of hits from the south and from the west both fly to the
+  left on the shooter's screen); and the age particles are born at
   (`C_INIT_AgeNoise`) moves them too (the streaks reach 25 – 35 units from the wound one tick after a hit). The
   ground decals the streaks leave are not drawn yet.
 - **A tracer on every shot, from the moment it was fired**: CS2 draws one on each shot of a gun with a tracer system
