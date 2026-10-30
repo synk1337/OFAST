@@ -463,9 +463,14 @@ player and round.
 A first pass on each milestone left, M7 to M10, then a second pass through every milestone to fix, tweak and
 polish (2026-10-26). That pass includes the effects rework and the installer:
 
-- [ ] **The picture's colour**: Unreal's rounds are more saturated than CS2's (de_dust2's mid, 2026-10-29: red paint
-  0.80 against CS2's 0.67 at equal brightness), and metals a little darker (gold stickers a tenth); indoors CS2 reads
-  greyer still.
+- [x] **The picture's colour** (measured 2026-10-30, [checks](checks.md#colour-against-cs2-2026-10-30)): not more
+  saturated than CS2's after all. On the reference views of de_dust2, de_mirage and de_nuke the sunlit surfaces match
+  CS2 within 1 – 2 % in colour and the saturation within 5 % (1.05, 1.00, 0.97); the differences are in the shade,
+  per map (de_dust2 2 % warm, de_mirage 6 % blue and 18 % dark, de_nuke's interiors dark), which is the maps'
+  lighting below, not a colour correction. `tools/compare/colour_balance.py` measures it.
+- [ ] **The shade, map by map**: de_mirage's shade 0.82 of CS2's and bluer, de_nuke's interiors 0.82 (with the open
+  items of [checks](checks.md#open-follow-ups): self-illumination, A site); woxic's passage on de_dust2 lit warm
+  where CS2's is bluish; metals a little darker (gold stickers a tenth, lit by the reflections).
 - [ ] **Bodies against CS2's**: Wicadia's (round 17, dead at tick 154410) lies on the AK he dropped in Unreal; CS2
   shows the AK alone there at tick 155002. The AK itself rests tilted a little differently.
 - [ ] **Skins' finer shading**: glitter and iridescence in OFAST's weapon master (`pearlescence.py`'s copy of

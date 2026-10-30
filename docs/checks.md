@@ -359,6 +359,32 @@ Per view, before → after (Unreal / CS2; the rule alone from the whole image):
 | ct0 | 0.82 → 0.82 | 1.04 → 1.00 | 0.77 → 0.76 | −1 % |
 | t0 | 1.61 → 1.48 | 1.19 → 1.09 | 1.73 → 1.63 | −8 % |
 
+## Colour against CS2 (2026-10-30)
+
+The question: is Unreal's picture more saturated than CS2's, as round 17's first-person views suggested (FalleN's MP9
+at tick 152488, "red paint 0.80 against 0.67")? Measured with `tools/compare/colour_balance.py` on the reference
+views of the three linear maps, shot again with the current code (`shoot_views.py`), CS2's references brought back
+to the default picture (`--cs2-gamma 2.013074`). Per 16 × 9 cell, Unreal over CS2: colour balance (R/G, B/G) and
+brightness in the sun (CS2 luminance > 0.25) and the shade (< 0.12), and saturation (chroma over luminance):
+
+| Map | Sun R/G, B/G, brightness | Shade R/G, B/G, brightness | Saturation |
+|---|---|---|---|
+| de_dust2 (12 views) | 1.01, 0.99, 1.06 | 1.02, 0.97, 1.00 | 1.05 |
+| de_mirage (15) | 1.02, 1.00, 0.99 | 0.98, 1.06, 0.82 | 1.00 |
+| de_nuke (18) | 1.01, 0.96, 0.87 | 0.99, 1.01, 0.82 | 0.97 |
+
+No: the sunlit surfaces of all three match CS2 within 1 – 2 % in colour, and the saturation within 5 %. What
+differs is the shade, and not the same way on each map: de_dust2's is 2 % warmer (woxic's passage at tick 153201:
+6 % warmer, 12 % less blue, the ceiling brown where CS2's is bluish grey), de_mirage's 6 % bluer and 18 % dark,
+de_nuke's interiors dark (its open items above: A site, the lamps' self-illumination). The cool colours read a little
+pale on de_dust2 (saturation 0.92 on blue cells, warm ones 1.06).
+
+A fit of the shade's light was tried: renders with the sun's bounce off and with the sky light off split it into
+direct light, sun bounce and sky light, and gains on the two were fitted to CS2's cells (all three channels). On
+de_dust2 alone it asks for a fifth less sun bounce (0.87 ×, sky 0.98 ×); de_mirage wants the opposite in colour; over
+the three maps 0.88 × and 1.07 × move every map by 1 – 2 % only. `OUTDOOR_BOUNCE_GAIN` stays: the shade is a per-map
+lighting question (the open items), not the picture's colour.
+
 ## What was wrong
 
 ### Fixed
