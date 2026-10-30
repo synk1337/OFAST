@@ -1095,7 +1095,9 @@ def build(replay, looks):
         name, "/Game/OFAST/Replays", unreal.LevelSequence, unreal.LevelSequenceFactoryNew())
     sequence.set_display_rate(unreal.FrameRate(fps, 1))
     sequence.set_playback_start(0)
-    sequence.set_playback_end(end_frame)
+    # Played to the cameras file's last tick (a round about one player ends after their death); keyed to the round's
+    # end all the same, so its cameras can change later (import_cameras.py).
+    sequence.set_playback_end(min(end_frame, cameras_file.get("last_tick", replay["end_tick"]) - tick0 + 1))
 
     cameras = {}
     # Each player's body (frame, visible) changes: their muzzle flashes and the blood on them follow it

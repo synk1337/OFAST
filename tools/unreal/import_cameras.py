@@ -16,7 +16,8 @@ level /Game/OFAST/Maps/<map>. What changes (replay_cameras.py makes them as impo
   made;
 - the camera cut track replaced by the file's cuts (cuts made by hand go too; cameras added by hand stay, ready to
   cut to again);
-- the muzzle lights' visibility keyed again for the new cuts.
+- the muzzle lights' visibility keyed again for the new cuts;
+- the sequence played to the file's `last_tick` (a round about one player ends 2 s after their death).
 
 Nothing else is touched: the players, their animation, the effects. Their visibility needs no change, as each
 player's own camera hides what it must by owner.
@@ -80,7 +81,8 @@ def update(cameras):
         raise RuntimeError("%s was built by an older OFAST: send the round to Unreal again" % path)
     levels.load_level(level)
     tick0 = cameras["start_tick"]
-    end_frame = sequence.get_playback_end()
+    # Keyed to the round's end, played to the file's last tick (a round about one player ends after their death).
+    end_frame = cameras["end_tick"] - tick0 + 1
     bindings = {str(b.get_display_name()): b for b in sequence.get_bindings()}
     names = {int(c): n for c, n in cameras["players"].items()}
 
@@ -115,6 +117,7 @@ def update(cameras):
     for track in sequence.find_tracks_by_type(unreal.MovieSceneCameraCutTrack):
         sequence.remove_track(track)
     cuts = replay_cameras.add_cuts(sequence, cameras, eyes, shots)
+    sequence.set_playback_end(min(end_frame, cameras.get("last_tick", cameras["end_tick"]) - tick0 + 1))
 
     # The muzzle lights: the third-person one outside the cuts through its shooter's eyes, the viewmodel's inside.
     own_views = replay_cameras.own_views(cameras)

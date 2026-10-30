@@ -24,11 +24,13 @@ default, 106.26° on a 16:9 picture).
 | `format`, `version` | `"ofast-cameras"`, 1 |
 | `demo`, `map`, `round`, `start_tick`, `end_tick`, `tick_interval` | as the replay file's |
 | `server_tick_offset` | how far the server's tick runs ahead of the demo's (`RoundTrack::server_tick_offset`; `null` without one): HLAE's times are `(tick + offset) × tick_interval` |
-| `plan` | what was asked: `shots` (kill tick → `pov`, `victim`, `behind`, `orbit`, `tripod`, `above`), `smoothing` (0 – 1), `hlae` (the files read) |
+| `plan` | what was asked: `shots` (kill tick → `pov`, `victim`, `behind`, `orbit`, `tripod`, `above`), `smoothing` (0 – 1), `hlae` (the files read), `player` (the player the round is about: a Steam id, a bot's name; `null`: each kill's killer) |
 | `players` | controller (as text) → the player's last known name (Unreal finds their camera by it: `POV <name>`) |
 | `eyes` | controller (as text) → `[tick, x, y, z, pitch, yaw]` on every sample tick with a pawn: the first-person camera |
 | `cameras` | the cameras of their own: `name` (`Orbit around XANTARES, kill at 153245`), `kind` (`behind`, `orbit`, `tripod`, `above`, `hlae`), `subject` (controller or `null`), `keys`: `[tick, x, y, z, pitch, yaw, roll, fov]` (ticks may fall between ticks: an HLAE recording's frames) |
 | `cuts` | in order: `{start, end, eyes: controller}` or `{start, end, camera: index into cameras}`, ticks, `end` not included |
+| `subject` | the controller of the player the round is about (`plan.player`), `null` for none |
+| `last_tick` | the last tick shown: the round's `end_tick`, or 2 s after the death of the player it is about (Unreal plays the sequence to it) |
 
 ### Eyes
 
@@ -56,6 +58,12 @@ default):
 | `behind`, `orbit`, `tripod`, `above` | the killer's eyes, then the shot's camera for the last 4 s (`LEAD_S`) to the cut's end |
 
 An HLAE camera takes the cuts over for its whole time in the round (those it covers are cut short or split).
+
+**A round about one player** (`plan.player`: the Studio's "Point of view", `export-demo --pov`; the Studio's default
+since 2026-10-30, as jumping from killer to killer each kill made a round hard to follow): only that player's kills
+make cuts, so the cuts stay on their eyes (or their kills' shots: `victim` still shows the victim's eyes before the
+kill) from the round's start to 2 s after their death (`DEATH_HOLD_S`), the round's end if they live; a player with
+no kill is one cut through their eyes. `last_tick` is where it ends, and Unreal's sequence plays to it.
 
 ### Shot cameras
 

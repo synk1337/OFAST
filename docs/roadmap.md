@@ -495,6 +495,20 @@ player and round.
 
 ## Order from here
 
+### Before the next release (the user's list, 2026-10-30)
+
+- [ ] **One player, one point of view** (very high): a round sent to Unreal is about one player, seen through their
+  eyes from start to end; switching between players (the default cuts to each killer) ruins it.
+- [ ] **Flashbangs and smokes remade** (high), as the HE blast was: filmed tick by tick in CS2 offline and rebuilt to
+  match; smokes volumetric, as CS2's are.
+- [ ] **HE blast denser, with more momentum** (high): its fireball and smoke too thin, not thrown out hard enough.
+- [ ] **Molotov fixed** (high): remade the same way (filmed tick by tick in CS2 offline, rebuilt to match).
+- [ ] **Weapons through walls** (low): a player's gun poking through the wall they stand against.
+- [ ] **Blood in one colour** (low): the splash on the body a bright pink-red beside the dark red streaks, two shades
+  where CS2 shows one (the user's screenshot of round 17, 2026-10-30).
+- [ ] **Realistic lighting as an export option** (low): the Studio's choice between CS2's look and a realistic one,
+  with an ambiance of its own: depth of field, light shafts, atmosphere and fog.
+
 A first pass on each milestone left, M7 to M10, then a second pass through every milestone to fix, tweak and
 polish (2026-10-26). That pass includes the effects rework and the installer:
 

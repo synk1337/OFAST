@@ -113,6 +113,11 @@ enum Command {
         /// recording (`.cam`). Repeatable.
         #[arg(long)]
         hlae: Vec<PathBuf>,
+        /// The player the round is about, their Steam id or (a bot) their name: the round through their eyes from
+        /// its start to 2 seconds after their death, their kills through `--shots`. Without it each kill is seen
+        /// through its killer's eyes in turn.
+        #[arg(long)]
+        pov: Option<String>,
     },
     /// Write one camera of a cameras file (`export-demo`'s, or one written from Unreal by
     /// `tools/unreal/export_camera.py`) as an HLAE file: `.xml` a `mirv_campath` path, `.cam` a `mirv_camio`
@@ -186,11 +191,17 @@ fn print_report(report: &ExportReport, started: Instant) {
     }
 }
 
-/// The cameras `export-demo` was asked for: `--shots TICK:KIND,…`, `--smooth`, `--hlae`.
-fn camera_plan(shots: &[String], smoothing: f64, hlae: &[PathBuf]) -> Result<CameraPlan, String> {
+/// The cameras `export-demo` was asked for: `--shots TICK:KIND,…`, `--smooth`, `--hlae`, `--pov`.
+fn camera_plan(
+    shots: &[String],
+    smoothing: f64,
+    hlae: &[PathBuf],
+    pov: Option<&str>,
+) -> Result<CameraPlan, String> {
     let mut plan = CameraPlan {
         smoothing,
         hlae: hlae.to_vec(),
+        player: pov.map(str::to_owned),
         ..CameraPlan::default()
     };
     for shot in shots {
@@ -232,8 +243,9 @@ fn run(cli: Cli) -> Result<(), String> {
             shots,
             smooth,
             hlae,
+            pov,
         } => {
-            let plan = camera_plan(shots, *smooth, hlae)?;
+            let plan = camera_plan(shots, *smooth, hlae, pov.as_deref())?;
             let data = std::fs::read(demo).map_err(|e| format!("{}: {e}", demo.display()))?;
             let name = demo.file_stem().and_then(|s| s.to_str()).unwrap_or("demo");
             let track = track_round(&data, *round).map_err(|e| e.to_string())?;

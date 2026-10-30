@@ -6,7 +6,10 @@
 //! The cuts follow the kills: each kill's cut runs from the one before to half a second after it (the last to the
 //! round's end), through the killer's eyes unless the [`CameraPlan`] picks another shot for that kill; a shot of its
 //! own covers the last [`LEAD_S`] seconds before the kill, the victim's eyes up to the kill's tick, and the killer's
-//! eyes show the rest of the cut. An HLAE camera takes over the cuts for its whole time in the round.
+//! eyes show the rest of the cut. A round about one player ([`CameraPlan::player`]) keeps to their kills: the cuts
+//! stay on their eyes (or their kills' shots) from the round's start to [`DEATH_HOLD_S`] after their death, where it
+//! ends ([`RoundCameras::last_tick`]); switching between players each kill made a round hard to follow. An HLAE
+//! camera takes over the cuts for its whole time in the round.
 //!
 //! Each player's eyes are the first-person camera: the eyes' position, and the eye angles turned by recoil
 //! ([`super::punch`]: 0.9 × the aim punch + the view punch), smoothed when the plan asks
@@ -55,7 +58,15 @@ pub struct CameraPlan {
     pub smoothing: f64,
     /// HLAE camera files to add (`mirv_campath` `.xml`, `mirv_camio` `.cam`).
     pub hlae: Vec<PathBuf>,
+    /// The player the round is about, their Steam id (a bot: their name): the round is seen through their eyes from
+    /// its start to [`DEATH_HOLD_S`] after their death (its end if they live), their kills through the shots picked
+    /// for them. `None`: each kill through its killer's eyes in turn.
+    pub player: Option<String>,
 }
+
+/// How long a round about one player ([`CameraPlan::player`]) goes on after their death (seconds): their last view,
+/// then the end.
+pub const DEATH_HOLD_S: f64 = 2.0;
 
 /// What a cut looks through.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +112,10 @@ pub struct RoundCameras {
     pub cameras: Vec<NamedCamera>,
     /// The cuts, in order.
     pub cuts: Vec<Cut>,
+    /// The player the round is about ([`CameraPlan::player`], their controller), if any.
+    pub subject: Option<u32>,
+    /// The last tick shown: the round's last, or [`DEATH_HOLD_S`] after the death of the player it is about.
+    pub last_tick: u32,
     /// What could not be done as asked.
     pub warnings: Vec<String>,
 }
@@ -127,6 +142,32 @@ pub fn load_hlae(path: &Path, clock: Clock) -> Result<NamedCamera, String> {
         subject: None,
         keys,
     })
+}
+
+/// The controller of the player `wanted` names ([`CameraPlan::player`]): a Steam id, or a name for a bot (Steam id
+/// 0); `None` when no player of the round has it.
+fn subject(track: &RoundTrack, poses: &Poses, wanted: &str) -> Option<u32> {
+    let steam_id = wanted.parse::<u64>().ok().filter(|&id| id != 0);
+    track
+        .samples
+        .iter()
+        .flat_map(|s| &s.players)
+        .find(|p| match steam_id {
+            Some(id) => p.steam_id == id,
+            None => p.steam_id == 0 && p.name == wanted,
+        })
+        .map(|p| p.controller)
+        .filter(|&c| poses.of(c).is_some())
+}
+
+/// The tick `controller` died in the round (their `player_death`), if they did.
+fn death_of(track: &RoundTrack, controller: u32) -> Option<u32> {
+    track
+        .events
+        .iter()
+        .filter(|e| e.name == "player_death" && e.controller("userid") == Some(controller))
+        .map(|e| e.tick)
+        .min()
 }
 
 /// The round's kills a camera can follow: `(tick, killer, victim)` of each `player_death` whose killer is a player of
@@ -159,16 +200,43 @@ pub fn round_cameras(
 ) -> RoundCameras {
     let poses = Poses::new(track);
     let interval = f64::from(track.tick_interval);
-    let kills = kills(track, &poses);
+    let all_kills = kills(track, &poses);
     let mut out = RoundCameras {
         players: poses
             .controllers()
             .map(|c| (c, poses.name(c).unwrap_or_default().to_owned()))
             .collect(),
-        eyes: eyes(track, &poses, &kills, plan.smoothing, recoil),
+        eyes: eyes(track, &poses, &all_kills, plan.smoothing, recoil),
+        last_tick: track.end_tick,
         ..RoundCameras::default()
     };
-    let end_tick = track.end_tick + 1;
+    let mut end_tick = track.end_tick + 1;
+    // A round about one player: their kills only, and it ends a little after their death.
+    let mut kills = all_kills;
+    if let Some(wanted) = &plan.player {
+        match subject(track, &poses, wanted) {
+            Some(subject) => {
+                out.subject = Some(subject);
+                if let Some(death) = death_of(track, subject) {
+                    let hold = (DEATH_HOLD_S / interval).round() as u32;
+                    end_tick = end_tick.min(death + hold + 1);
+                }
+                out.last_tick = end_tick - 1;
+                kills.retain(|k| k.1 == subject && k.0 < end_tick);
+                if kills.is_empty() {
+                    out.cuts.push(Cut {
+                        start: track.start_tick,
+                        end: end_tick,
+                        view: View::Eyes(subject),
+                    });
+                }
+            }
+            None => out.warnings.push(format!(
+                "no player {wanted} in round {}: each kill through its killer's eyes",
+                track.round
+            )),
+        }
+    }
     let after = (CUT_AFTER_KILL_S / interval).round() as u32;
     let lead = (LEAD_S / interval).round() as u32;
     let mut start = track.start_tick;
@@ -452,6 +520,8 @@ pub fn cameras_json(
         "eyes": eyes,
         "cameras": named,
         "cuts": cuts,
+        "subject": cameras.subject,
+        "last_tick": cameras.last_tick,
     })
 }
 
@@ -674,6 +744,59 @@ mod tests {
         let eyes = &cameras.eyes[&1][100];
         assert_eq!(eyes.position, [100.0, 0.0, 64.0]);
         assert_eq!(eyes.fov, DEFAULT_FOV);
+    }
+
+    #[test]
+    fn a_round_about_one_player_stays_on_them() {
+        let mut t = track();
+        // Player 3 kills player 1 at 1400 (player 1's kill of player 3 at 1600 is gone).
+        t.events = vec![death(1300, 1, 2), death(1400, 3, 1)];
+        let about = |t: &RoundTrack, player: &str| {
+            let plan = CameraPlan {
+                player: Some(player.into()),
+                ..CameraPlan::default()
+            };
+            round_cameras(t, &plan, Vec::new(), None, None)
+        };
+        // Player 1 kills at 1300 and dies at 1400: their eyes to 2 s after, where the round ends.
+        let one = about(&t, "p1");
+        let hold = (DEATH_HOLD_S * 64.0).round() as u32;
+        assert_eq!(one.subject, Some(1));
+        assert_eq!(one.last_tick, 1400 + hold);
+        assert_eq!(
+            one.cuts,
+            vec![Cut {
+                start: 1000,
+                end: 1400 + hold + 1,
+                view: View::Eyes(1)
+            }]
+        );
+        // Player 3 lives: their eyes to the round's end, never player 1's (who killed first).
+        let three = about(&t, "p3");
+        assert_eq!(three.last_tick, 1639);
+        assert!(three.cuts.iter().all(|c| c.view == View::Eyes(3)));
+        assert_eq!(three.cuts.first().map(|c| c.start), Some(1000));
+        assert_eq!(three.cuts.last().map(|c| c.end), Some(1640));
+        // A player without a kill, named by Steam id.
+        for sample in &mut t.samples {
+            sample.players[1].steam_id = 76_561_198_000_000_002;
+        }
+        let two = about(&t, "76561198000000002");
+        assert_eq!(two.subject, Some(2));
+        assert_eq!(
+            two.cuts,
+            vec![Cut {
+                start: 1000,
+                end: 1300 + hold + 1,
+                view: View::Eyes(2)
+            }]
+        );
+        // Nobody of that name: each killer, with a warning.
+        let nobody = about(&t, "nobody");
+        assert_eq!(nobody.subject, None);
+        assert_eq!(nobody.last_tick, 1639);
+        assert_eq!(nobody.warnings.len(), 1);
+        assert_eq!(nobody.cuts.first().map(|c| c.view), Some(View::Eyes(1)));
     }
 
     #[test]

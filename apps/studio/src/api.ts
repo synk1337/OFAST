@@ -179,9 +179,17 @@ export interface CameraPlan {
   smoothing: number;
   /** HLAE camera files (`mirv_campath` .xml, `mirv_camio` .cam). */
   hlae: string[];
+  /** The player the round is about (their Steam id; a bot: their name), seen through their eyes from the round's
+   * start to 2 s after their death; `null`: each kill through its killer's eyes; `undefined`: not picked yet (the
+   * page picks one, `povOf`). */
+  player?: string | null;
 }
 
 export const NO_PLAN: CameraPlan = { shots: {}, smoothing: 0, hlae: [] };
+
+/** How the plan names a summary player (`CameraPlan.player`): their Steam id, or a bot's name. */
+export const playerKey = (player: { name: string; steam_id: string }) =>
+  player.steam_id && player.steam_id !== "0" ? player.steam_id : player.name;
 
 /** One line of a sending's progress. */
 export interface SendProgress {

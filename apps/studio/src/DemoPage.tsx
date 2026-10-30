@@ -11,6 +11,7 @@ import {
   RenderPreset,
   RoundSummary,
   ShotKind,
+  playerKey,
   Side,
   sentRounds,
   summarizeDemo,
@@ -146,13 +147,18 @@ function DemoView({ summary, path, unreal }: { summary: DemoSummary; path: strin
       current = false;
     };
   }, [path, unreal.version]);
-  const plan = plans[selected] ?? NO_PLAN;
-  const setPlan = (p: CameraPlan) => setPlans((all) => ({ ...all, [selected]: p }));
   const [marked, setMarked] = useState<{ round: number; kills: number[] } | null>(null);
   // The 2D replay instead of the finder, and the kill it was last asked to jump to.
   const [replay, setReplay] = useState(false);
   const [seek, setSeek] = useState<{ tick: number; n: number } | null>(null);
   const round = summary.rounds[selected] ?? null;
+  // The round's cameras: about one player unless the user picked "each kill's killer" (`player: null`).
+  const picked = plans[selected] ?? NO_PLAN;
+  const plan: CameraPlan =
+    picked.player !== undefined || !round
+      ? picked
+      : { ...picked, player: povOf(summary, round, marked?.round === selected ? marked.kills : []) };
+  const setPlan = (p: CameraPlan) => setPlans((all) => ({ ...all, [selected]: p }));
 
   const pick = (round: number, kills: number[]) => {
     setSelected(round);
@@ -374,6 +380,28 @@ function Finder({ summary, onPick }: { summary: DemoSummary; onPick: (round: num
 const name = (summary: DemoSummary, player: number | null) =>
   player === null ? "World" : (summary.players[player]?.name ?? "?");
 
+/** The player a round is about until the user picks one (`CameraPlan.player`): the killer of the kills the finder
+ * picked, else the round's top fragger (the first to get there on a tie), else its first player. */
+function povOf(summary: DemoSummary, round: RoundSummary, marked: number[]): string | null {
+  let player = marked.map((i) => round.kills[i]?.attacker).find((a) => a !== null && a !== undefined) ?? null;
+  if (player === null) {
+    const counts = new Map<number, number>();
+    for (const k of round.kills) {
+      if (k.attacker !== null && !k.team_kill) counts.set(k.attacker, (counts.get(k.attacker) ?? 0) + 1);
+    }
+    let best = 0;
+    for (const [p, n] of counts) {
+      if (n > best) {
+        best = n;
+        player = p;
+      }
+    }
+  }
+  player ??= round.players[0]?.player ?? null;
+  const info = player === null ? undefined : summary.players[player];
+  return info ? playerKey(info) : null;
+}
+
 function RoundFeed({
   summary,
   teams,
@@ -423,6 +451,14 @@ function RoundFeed({
     if (files.length) onPlan({ ...plan, hlae: [...plan.hlae, ...files.filter((f) => !plan.hlae.includes(f))] });
   };
   const sides = new Map(round.players.map((p) => [p.player, p.side]));
+  // The player the round is about (an index into the summary's players), or null: each kill's killer.
+  const pov =
+    plan.player === null || plan.player === undefined
+      ? null
+      : (round.players.find(({ player }) => {
+          const info = summary.players[player];
+          return info !== undefined && playerKey(info) === plan.player;
+        })?.player ?? null);
   const side0 = teams.sideOf(round);
   const [a, b] = scoreAfter(teams, round);
   const start = round.freeze_end_tick ?? round.start_tick;
@@ -459,6 +495,25 @@ function RoundFeed({
         </button>
       </div>
       <div className="cameras-row">
+        <label title="Whose round this is: seen through their eyes from the start to 2 seconds after their death, their kills through the camera picked for each. Each kill's killer: the view jumps from killer to killer">
+          Point of view{" "}
+          <select
+            value={plan.player ?? ""}
+            onChange={(e) => onPlan({ ...plan, player: e.target.value === "" ? null : e.target.value })}
+          >
+            {round.players.map(({ player }) => {
+              const info = summary.players[player];
+              return (
+                info && (
+                  <option key={player} value={playerKey(info)}>
+                    {info.name}
+                  </option>
+                )
+              );
+            })}
+            <option value="">Each kill's killer</option>
+          </select>
+        </label>
         <label title="Smooths the mouse's jitter out of the players' own views; the aim stays exact at every shot">
           First-person view{" "}
           <select value={plan.smoothing} onChange={(e) => onPlan({ ...plan, smoothing: Number(e.target.value) })}>
@@ -525,7 +580,7 @@ function RoundFeed({
             {k.team_kill && <span className="flag bad">team kill</span>}
           </span>
           {who(k.victim)}
-          {k.attacker !== null && (
+          {k.attacker !== null && (pov === null || k.attacker === pov) && (
             <select
               className="shot"
               value={plan.shots[k.tick] ?? "pov"}

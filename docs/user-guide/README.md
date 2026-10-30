@@ -87,8 +87,13 @@ The first replay of a round reads the demo up to that round: a few seconds, more
 
 ## Choosing the cameras
 
-Each kill in the round's feed has a camera to its right. By default a round is cut kill by kill through each
-killer's eyes; for any kill you can pick instead, for its last 4 seconds:
+A round is about one player: **Point of view**, above the feed, picks whose. The round is seen through their eyes
+from its start to 2 seconds after their death (to the end if they live), and Unreal's sequence stops there. OFAST
+picks the player of the highlight you clicked in the finder, or else the one with the most kills in the round. Pick
+**Each kill's killer** to have the round cut kill by kill through each killer's eyes instead.
+
+Each of that player's kills has a camera to its right (with *Each kill's killer*, every kill has one). By default it
+is their eyes; for any kill you can pick instead, for its last 4 seconds:
 
 - **Victim's eyes**: what the victim saw coming;
 - **Behind the killer**: over his right shoulder, looking where he looks;
