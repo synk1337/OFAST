@@ -202,12 +202,14 @@ LIGHT_FLAMES = 16
 LIGHT_RADIUS = 450.0
 FLICKER_TICKS = 4
 # A blast's and a flashbang's light: colour, peak intensity (candela), reach (units), and how it dies out: (ticks after
-# the detonation, share of the peak). CS2's blast light lives about a third of a second, its flash less.
+# the detonation, share of the peak). CS2's blast light lives about a third of a second, its flash's less than two
+# ticks: 2 – 4 ticks after two flashbangs of Aurora vs FURIA's round 17 (molodoy's view at 154318, 376 units away;
+# MAJ3R's at 153229, 409 units) CS2 lights nothing, where 40 – 60 % of this pulse turned a wall white (2026-10-30).
 # (1500 cd over 600 units washed a whole room out white 2 ticks after a blast 272 units away.)
 BLAST_LIGHT = {"color": (1.0, 0.62, 0.3), "peak": 200.0, "radius": 400.0,
                "decay": [(0, 1.0), (4, 0.6), (10, 0.25), (20, 0.05), (28, 0.0)]}
 FLASH_LIGHT = {"color": (1.0, 1.0, 1.0), "peak": 600.0, "radius": 600.0,
-               "decay": [(0, 1.0), (3, 0.4), (8, 0.08), (14, 0.0)]}
+               "decay": [(0, 1.0), (1, 0.15), (2, 0.0)]}
 # Blindings per player the flashed material holds (two per vector parameter).
 FLASHED_SLOTS = 12
 # How white a blinding makes the view: FLASH_WHITE x saturate((seconds left - FLASH_END) / FLASH_FADE), in a warm
@@ -666,7 +668,7 @@ def add_sprites(actor, layer, instance, mesh, slots, rng, floor_cm=NO_FLOOR_CM):
     return ism
 
 
-def spawn_light(spawn, label, position, color, radius):
+def spawn_light(spawn, label, position, color, radius, shadows=True):
     light = spawn(unreal.PointLight, label, (position[0] * UNITS_TO_CM, -position[1] * UNITS_TO_CM,
                                              position[2] * UNITS_TO_CM))
     component = light.get_editor_property("light_component")
@@ -675,7 +677,7 @@ def spawn_light(spawn, label, position, color, radius):
     component.set_light_color(unreal.LinearColor(r=r, g=g, b=b, a=1.0))
     component.set_editor_property("attenuation_radius", radius * UNITS_TO_CM)
     component.set_editor_property("intensity", 0.0)
-    component.set_editor_property("cast_shadows", True)
+    component.set_editor_property("cast_shadows", shadows)
     return light
 
 
@@ -830,7 +832,10 @@ def place_bursts(sequence, replay, end_frame, instances, mesh, grounds, spawn):
             if layer_name(layer) in instances:
                 add_sprites(actor, layer, instances[layer_name(layer)], mesh, [((x, y, z), tick, tick)], rng,
                             floor_cm if option(layer, "floor") else NO_FLOOR_CM)
-        light = spawn_light(spawn, burst_light_label(grenade), (x, y, z + 20.0), pulse["color"], pulse["radius"])
+        # Without shadows, as CS2's particle lights: molodoy's view at tick 151910 shows a blast's orange on the wall
+        # and ground in front of the door it went off behind.
+        light = spawn_light(spawn, burst_light_label(grenade), (x, y, z + 20.0), pulse["color"], pulse["radius"],
+                            shadows=False)
         channel = intensity_channel(sequence, light, end_frame)
         if tick - tick0 > 0:
             add_key(channel, tick - tick0 - 1, 0.0)

@@ -308,6 +308,27 @@ player and round.
   flashbangs, muzzle flashes, tracers, impacts, blood and holes. When the rework starts, each effect's gaps get
   listed against CS2, side by side. Scheduled last (2026-10-26), after the Studio app.
 
+  **The gaps, side by side** (started 2026-10-30): 14 first-person views of de_dust2's round 17 of Aurora vs FURIA
+  looking at its effects, CS2 (`tools/cs2/pov_shots.py`, players picked by where their eyes point) against Unreal
+  (`shoot_sequence.py -PovShots`), at the tick CS2 drew. By how much they show:
+  - [x] **Smokes black in the shade** (B tunnel, YEKINDAR at 153183: CS2 tan and puffy, Unreal a black hole): the
+    volumes' indirect light was set only by the import and the renders; now in the project's settings.
+  - [x] **Earlier rounds' bullet holes**: Unreal covered crates, doors and walls with them, CS2 shows none there
+    (decision 018); no longer drawn.
+  - [x] **HE blast's light blocked**: CS2's lights the wall and ground in front of the door it went off behind
+    (molodoy at 151910); OFAST's cast shadows. Now without, as CS2's particle lights. Still too weak: CS2's turns
+    that wall red-orange, OFAST's barely tints it.
+  - [x] **Flashbang's light**: a wall turned white 2 – 4 ticks after a pop where CS2 lights nothing; the pulse now
+    dies within two ticks. Without it those views show their own light: half CS2's (below).
+  - [ ] **Blood**: CS2's headshot is a bright red spray with white streaks, dark droplets and splatter on the crate
+    and wall behind (MAJ3R's kill at 153359); Unreal's a faint dark-red haze.
+  - [ ] **Smokes' look**: CS2's puffy and broken up, Unreal's a flat even fill (same views).
+  - [ ] **HE fireball**: CS2 a fiery orange burst with sparks, Unreal a white glow.
+  - [ ] **Muzzle flashes**: CS2's AK picks no flame about one shot in four (its effect's empty child) and showed
+    none on two shot-ticks + 1 where Unreal draws one; bigger in Unreal when both show one. Needs frames read at the
+    demo bar's tick (the console's is one or two later) before any timing change.
+  - [ ] **Fires**: no view had one in sight yet.
+
 ## M7 progress
 
 - [x] **Design** ([decision 021](decisions/021-cameras.md)): every camera of a round made in Rust (`camera`,
@@ -468,7 +489,9 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   CS2 within 1 – 2 % in colour and the saturation within 5 % (1.05, 1.00, 0.97); the differences are in the shade,
   per map (de_dust2 2 % warm, de_mirage 6 % blue and 18 % dark, de_nuke's interiors dark), which is the maps'
   lighting below, not a colour correction. `tools/compare/colour_balance.py` measures it.
-- [ ] **The shade, map by map**: de_mirage's shade 0.82 of CS2's and bluer, de_nuke's interiors 0.82 (with the open
+- [ ] **The shade, map by map**: de_dust2's lower tunnel and the stairway up from it at half CS2's brightness
+  (lowertunnel view 0.55; MAJ3R's and molodoy's views of round 17: 37 and 35 against CS2's 76 and 61 mean grey);
+  de_mirage's shade 0.82 of CS2's and bluer, de_nuke's interiors 0.82 (with the open
   items of [checks](checks.md#open-follow-ups): self-illumination, A site); woxic's passage on de_dust2 lit warm
   where CS2's is bluish; metals a little darker (gold stickers a tenth, lit by the reflections).
 - [ ] **Bodies against CS2's**: Wicadia's (round 17, dead at tick 154410) lies on the AK he dropped in Unreal; CS2

@@ -27,8 +27,8 @@ main layers with grenade_effects' "particle system in a material" (CS2's own spr
 - A decal actor per bullet hole: one of its decal group's textures, where the bullet met the world (both sides of a
   wall it went through), facing the surface; it shows
   from its shot's tick on. The tick rides in the decal's colour (DecalColor's red), read by the material: one material
-  instance per texture, not per hole. The holes the shots before the round left (the agents manifest's
-  `earlier_holes`) show from the start: CS2's clients keep them from round to round.
+  instance per texture, not per hole. Not the holes the shots before the round left (the agents manifest's
+  `earlier_holes`): CS2 does not show them (place_holes).
 """
 
 import math
@@ -531,11 +531,15 @@ def place_hole(spawn, label, tick, end, normal, options, rng, depth=HOLE_DEPTH):
     component.set_fade_screen_size(0.0)
 
 
-def place_holes(shots, earlier, instances, spawn):
+def place_holes(shots, instances, spawn):
     """A bullet hole (place_hole) per place a bullet of `shots` met the world with a decal group (`instances`:
-    hole_instances: both sides of each wall it went through, and where it stopped), showing from its shot's tick, and
-    per hole of `earlier` (the agents manifest's `earlier_holes`: left by the shots before the round, which CS2
-    keeps), showing from the round's start. Returns the number placed."""
+    hole_instances: both sides of each wall it went through, and where it stopped), showing from its shot's tick.
+    Returns the number placed.
+
+    Not the holes of earlier rounds (the agents manifest's `earlier_holes`): CS2 does not show them where it was
+    checked (2026-10-30, round 17 of Aurora vs FURIA: none of the 391 in YEKINDAR's view at tick 153183, on the B
+    entrance's crates and walls, nor those on the wall molodoy faces at 154318), where Unreal covered crates, doors and
+    walls with them (2504 on de_dust2 by round 17)."""
     placed = 0
     for shot in shots:
         for k, bullet in enumerate(shot["bullets"]):
@@ -547,14 +551,6 @@ def place_holes(shots, earlier, instances, spawn):
                 place_hole(spawn, "bullet hole %d %d.%d.%d" % (shot["controller"], shot["tick"], k, n), shot["tick"],
                            at["end"], at["normal"], options, rng, hole_depth(at))
                 placed += 1
-    for k, hole in enumerate(earlier):
-        options = instances.get(hole.get("decal") or "")
-        if not options or not hole.get("normal"):
-            continue
-        rng = random.Random(hole["tick"] * 7919 + k)
-        place_hole(spawn, "earlier bullet hole %d.%d" % (hole["tick"], k), hole["tick"], hole["end"], hole["normal"],
-                   options, rng, hole_depth(hole))
-        placed += 1
     return placed
 
 
@@ -572,10 +568,6 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, v
     shots = agents.get("shots", [])
     effects = agents.get("effects", [])
     if not shots:
-        holes = place_holes([], agents.get("earlier_holes", []),
-                            hole_instances(replay_path, agents.get("decals", {})), spawn)
-        if holes:
-            log("shots: none; %d earlier bullet holes" % holes)
         return 0
     rebuild = not assets.does_asset_exist(grenade_effects.SPRITE_MATERIALS[False])
     instances = grenade_effects.update_layers(replay, replay_path, effects, shot_layers(), rebuild) if effects else {}
@@ -629,8 +621,7 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, v
     drawn += first_person + draw(spawn(unreal.Actor, "shots", (0.0, 0.0, 0.0)), shared)
     lights = place_lights(sequence, replay, shots, end_frame, spawn, light,
                           viewmodels if show_first_person else {}) if light else 0
-    holes = place_holes(shots, agents.get("earlier_holes", []), hole_instances(replay_path, agents.get("decals", {})),
-                        spawn)
+    holes = place_holes(shots, hole_instances(replay_path, agents.get("decals", {})), spawn)
     log("shots: %d (%d sprite slots, %d of them first person; %d muzzle lights, %d bullet holes)"
         % (len(shots), drawn, first_person, lights, holes))
     return len(shots)

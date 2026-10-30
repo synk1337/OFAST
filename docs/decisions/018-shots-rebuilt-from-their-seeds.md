@@ -76,7 +76,10 @@ collision triangle its surface property (`world_physics`), per weapon model its 
   the baked agents, as the blasts' ground and the fires' walls do.
 - **Keep the earlier rounds' bullet holes**: CS2's clients do (a hole on de_nuke's A site in round 5 is an AWP
   bullet's from round 3), so the export traces every shot before the round too and Unreal shows their holes from the
-  round's start.
+  round's start. **Reversed 2026-10-30** (the effects rework): by de_dust2's round 17 that was 2504 holes, covering
+  crates, doors and walls, and CS2 showed none of the 391 in YEKINDAR's view at tick 153183 (the B entrance's
+  crates and walls) nor those on the wall molodoy faces at 154318. The export still writes them (`earlier_holes`);
+  Unreal draws only the round's own. The de_nuke pair stays unexplained (a hole budget CS2 keeps, perhaps).
 
 ## Alternatives considered
 
