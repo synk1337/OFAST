@@ -315,9 +315,9 @@ player and round.
     volumes' indirect light was set only by the import and the renders; now in the project's settings.
   - [x] **Earlier rounds' bullet holes**: Unreal covered crates, doors and walls with them, CS2 shows none there
     (decision 018); no longer drawn.
-  - [x] **HE blast's light blocked**: CS2's lights the wall and ground in front of the door it went off behind
-    (molodoy at 151910); OFAST's cast shadows. Now without, as CS2's particle lights. Still too weak: CS2's turns
-    that wall red-orange, OFAST's barely tints it.
+  - [ ] **HE blast's light**: CS2's lights the wall and ground in front of the door it went off behind (molodoy at
+    151910), its particle lights casting no shadows. Tried without shadows: the light came through walls, which looked
+    wrong, so OFAST's keep them (the user's choice). Still too weak: CS2's turns that wall red-orange.
   - [x] **Flashbang's light**: a wall turned white 2 – 4 ticks after a pop where CS2 lights nothing; the pulse now
     dies within two ticks. Without it those views show their own light: half CS2's (below).
   - [ ] **Blood**: CS2's headshot is a bright red spray with white streaks, dark droplets and splatter on the crate

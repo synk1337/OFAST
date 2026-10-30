@@ -832,10 +832,10 @@ def place_bursts(sequence, replay, end_frame, instances, mesh, grounds, spawn):
             if layer_name(layer) in instances:
                 add_sprites(actor, layer, instances[layer_name(layer)], mesh, [((x, y, z), tick, tick)], rng,
                             floor_cm if option(layer, "floor") else NO_FLOOR_CM)
-        # Without shadows, as CS2's particle lights: molodoy's view at tick 151910 shows a blast's orange on the wall
-        # and ground in front of the door it went off behind.
-        light = spawn_light(spawn, burst_light_label(grenade), (x, y, z + 20.0), pulse["color"], pulse["radius"],
-                            shadows=False)
+        # With shadows, unlike CS2's particle lights (molodoy's view at tick 151910 shows a blast's orange on the wall
+        # in front of the door it went off behind): without them the light came through walls, which looked wrong
+        # (the user's choice, 2026-10-30).
+        light = spawn_light(spawn, burst_light_label(grenade), (x, y, z + 20.0), pulse["color"], pulse["radius"])
         channel = intensity_channel(sequence, light, end_frame)
         if tick - tick0 > 0:
             add_key(channel, tick - tick0 - 1, 0.0)
