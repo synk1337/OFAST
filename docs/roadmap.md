@@ -535,7 +535,9 @@ Released in 1.0.2 (2026-10-31): the point of view, the HE, molotov, flashbang an
   a warm volumetric haze the sun's beams show in, the sun's light shafts, film grain, fringing and lens flare, and depth
   of field on the players' eyes (focused where they look: the cameras file's `focus`); the effects brightened to its
   exposure, the sun lighting the haze 3 times as much as a lamp (at 8 times the smokes came out white).
-  Update cameras keys the focus again. Not yet: depth of field on the shot cameras (they keep it off).
+  Update cameras keys the focus again. The bullets' dust and smoke lit by the scene (they glowed in the shade at the
+  end of round 17, the user's look). Not yet: depth of field on the shot cameras (they keep it off); the grenades'
+  smoke sprites (a fire's wisps, an HE's smoke) are still unlit, brightened to the sun like the flames.
 
 A first pass on each milestone left, M7 to M10, then a second pass through every milestone to fix, tweak and
 polish (2026-10-26). That pass includes the effects rework and the installer:

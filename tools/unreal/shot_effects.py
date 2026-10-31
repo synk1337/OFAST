@@ -73,8 +73,8 @@ MUZZLE_ALT = {"name": "muzzle_alt", "role": "muzzle_alt", "slots": 6, "life": (0
 # _gen_smoke: 2 puffs of smokeloop_i_0_sc_hardedge, 0.2 - 0.5 s, alpha 0.15 - 0.3.
 MUZZLE_SMOKE = {"name": "muzzle_smoke", "role": "muzzle_smoke", "slots": 2, "life": (0.2, 0.5), "radius": (4.0, 8.0),
                 "scale": (0.6, 1.6), "alpha": (0.15, 0.3), "roll": 180.0, "spread": 1.0, "rise": 2.0, "bright": 1.0,
-                "tint": (0.6, 0.6, 0.6), "translucent": True, "size": 1.0, "lift": 0.0, "along": (2.0, 8.0),
-                "up": (10.0, 30.0)}
+                "tint": (0.6, 0.6, 0.6), "translucent": True, "lit": True, "size": 1.0, "lift": 0.0,
+                "along": (2.0, 8.0), "up": (10.0, 30.0)}
 MUZZLE_LAYERS = [MUZZLE_FLAME, MUZZLE_ALT, MUZZLE_SMOKE]
 # The share of shots drawing _primaryflash rather than _primaryflash_alt (1 of the 3 flames the chooser has).
 FLAME_CHOICE = 1.0 / 3.0
@@ -136,21 +136,27 @@ TRACER_LAYERS = [tracer_layer(kind) for kind in TRACERS]
 # (0.75 - 1.5 s, alpha 0.16 - 0.63), a wispy_steam_set puff (radius 4 - 12, growing to at most 30), 8 flecks thrown
 # out (models/particle/flecks3.vmdl, radius 0.75 - 1.5, speed +-100 across and 50 - 350 out, gravity 500: drawn as
 # fleks.vtex sprites here) and 2 sparks. Tinted per surface family (CS2 has one system per surface, alike in shape).
+# The dust, the puff and the flecks are lit by the scene (`lit`, their tint the albedo), as CS2 lights them: drawn
+# unlit, their light grey glowed in the shade, and in the realistic look, whose unlit effects are brightened to its
+# sun and whose exposure opens up in the shade, they were bright puffs in a dark passage (the user's look at the end
+# of round 17, MAJ3R's and soulfly's bursts at 154511 - 154646, 2026-10-31). Smoke of the shots likewise (MUZZLE_SMOKE,
+# the metal impact's).
 def dust_layers(family, tint):
     """The layers of a dusty impact (concrete, plaster, tile, dirt, wood) in `tint`."""
     r, g, b = tint
     return [
         {"name": "impact_dust_" + family, "role": "impact_smoke", "slots": 2, "life": (0.75, 1.5),
          "radius": (6.0, 12.0), "scale": (0.5, 1.6), "alpha": (0.16, 0.63), "roll": 180.0, "spread": 2.0, "rise": 0.0,
-         "bright": 1.0, "tint": (r, g, b), "translucent": True, "size": 1.0, "lift": 0.0, "up": (15.0, 60.0),
-         "speed": (0.0, 15.0), "gravity": -5.0, "fade_in": 0.05},
+         "bright": 1.0, "tint": (r, g, b), "translucent": True, "lit": True, "size": 1.0, "lift": 0.0,
+         "up": (15.0, 60.0), "speed": (0.0, 15.0), "gravity": -5.0, "fade_in": 0.05},
         {"name": "impact_puff_" + family, "role": "fire_smoke", "slots": 1, "life": (0.4, 0.8), "radius": (4.0, 12.0),
          "scale": (1.0, 2.5), "alpha": (0.4, 0.6), "roll": 180.0, "spread": 0.0, "rise": 0.0, "bright": 1.0,
-         "tint": (r, g, b), "translucent": True, "size": 1.0, "lift": 0.0, "up": (20.0, 40.0), "fade_in": 0.05},
+         "tint": (r, g, b), "translucent": True, "lit": True, "size": 1.0, "lift": 0.0, "up": (20.0, 40.0),
+         "fade_in": 0.05},
         {"name": "impact_flecks_" + family, "role": "debris", "slots": 8, "life": (0.6, 1.2), "radius": (0.75, 1.5),
          "scale": (1.0, 1.0), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 1.0, "rise": 0.0, "bright": 1.0,
-         "tint": (r * 0.8, g * 0.8, b * 0.8), "translucent": True, "size": 1.0, "lift": 0.0, "speed": (0.0, 140.0),
-         "up": (50.0, 350.0), "gravity": 500.0, "sequence": (15, 25), "fade_in": 0.0},
+         "tint": (r * 0.8, g * 0.8, b * 0.8), "translucent": True, "lit": True, "size": 1.0, "lift": 0.0,
+         "speed": (0.0, 140.0), "up": (50.0, 350.0), "gravity": 500.0, "sequence": (15, 25), "fade_in": 0.0},
     ]
 
 
@@ -166,7 +172,7 @@ METAL_LAYERS = [
      "tint": (1.0, 0.8, 0.5), "size": 1.0, "lift": 0.0, "along": (1.0, 1.0), "fade_in": 0.0},
     {"name": "impact_smoke_metal", "role": "impact_smoke", "slots": 1, "life": (0.5, 1.0), "radius": (4.0, 8.0),
      "scale": (0.5, 1.5), "alpha": (0.2, 0.4), "roll": 180.0, "spread": 0.0, "rise": 0.0, "bright": 1.0,
-     "tint": (0.42, 0.44, 0.47), "translucent": True, "size": 1.0, "lift": 0.0, "up": (10.0, 40.0)},
+     "tint": (0.42, 0.44, 0.47), "translucent": True, "lit": True, "size": 1.0, "lift": 0.0, "up": (10.0, 40.0)},
 ]
 # Each impact system of export::shots' `impact` (particles/impact_fx/<name>.vpcf) -> the family drawn; any other is
 # concrete's.

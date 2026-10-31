@@ -1,5 +1,5 @@
-"""Probe: the smoke volumes' look, without re-importing the round. Run after import_demo.py (the level keeps its smoke
-volumes and their material instances):
+"""Probe: the smoke volumes' look, without re-importing the round. Run after import_demo.py (the level the round was
+built in, CS2's look or the realistic one, keeps its smoke volumes and their material instances):
 
     powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/probe_smoke.py -Shot test-data/shots/probe_smoke \
         -Replay test-data/exports/demos_m6/<demo>_r5.ofast-replay.json -Name "34848:10,36839:10"
@@ -139,7 +139,12 @@ def main():
     unreal.EditorPythonScripting.set_keep_python_script_alive(True)
     with open(REPLAY_PATH, encoding="utf-8") as f:
         replay = json.load(f)
-    levels.load_level("/Game/OFAST/Maps/" + replay["map"])
+    # The level the round was built in, CS2's look or the realistic one (import_demo.py's `OFAST_level`).
+    sequence_path = "/Game/OFAST/Replays/%s_r%d" % (replay["demo"], replay["round"])
+    level = None
+    if assets.does_asset_exist(sequence_path):
+        level = assets.get_metadata_tag(assets.load_asset(sequence_path), "OFAST_level")
+    levels.load_level(level or "/Game/OFAST/Maps/" + replay["map"])
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
     collection = assets.load_asset(smoke_volumes.REPLAY_COLLECTION)
     material = smoke_volumes.smoke_material()
@@ -185,7 +190,7 @@ def main():
     # Views through the sequence's cameras: the round's sequence open, played to each view's tick.
     in_sequence = any(len(view) == 3 and view[2] == "seq" for view in VIEWS)
     if in_sequence:
-        sequence = assets.load_asset("/Game/OFAST/Replays/%s_r%d" % (replay["demo"], replay["round"]))
+        sequence = assets.load_asset(sequence_path)
         unreal.LevelSequenceEditorBlueprintLibrary.open_level_sequence(sequence)
     # (file name, tick, camera, material for the diagnosed volume or None)
     shots = [("probe_smoke_%s.png" % name, tick, camera, None) for tick, camera, name in cameras]
