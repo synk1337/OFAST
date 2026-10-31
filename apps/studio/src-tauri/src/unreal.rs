@@ -47,7 +47,7 @@ const LOG: &str = r"Saved\Logs\OFASTSandbox.log";
 
 /// The environment variables OFAST's Unreal scripts read: all are set for each run (empty when unused), so none
 /// leaks from the Studio's own environment.
-const SCRIPT_VARIABLES: [&str; 17] = [
+const SCRIPT_VARIABLES: [&str; 18] = [
     "OFAST_CAMERAS",
     "OFAST_GLTF",
     "OFAST_SHOT",
@@ -65,6 +65,7 @@ const SCRIPT_VARIABLES: [&str; 17] = [
     "OFAST_LEVEL",
     "OFAST_SEQUENCE",
     "OFAST_TICKS",
+    "OFAST_FPS",
 ];
 
 /// Where a sending is.
@@ -170,20 +171,25 @@ pub async fn update_cameras(
 
 /// Renders round `round` of the demo at `path`, already sent, with Movie Render Queue (see the
 /// [module docs](self)): `preset`'s frames and passes between the demo ticks `ticks` (the end left out; the whole
-/// round without them), into a folder of its own in `Videos\OFAST`. Returns that folder. About two seconds a frame
-/// for `final` on a recent graphics card, after a minute or two of Unreal starting.
+/// round without them), `fps` frames a second (60 without it; 250 or more for slow motion made in the editing
+/// software), into a folder of its own in `Videos\OFAST`. Returns that folder. About two seconds a frame for `final`
+/// on a recent graphics card, after a minute or two of Unreal starting.
 #[tauri::command]
 pub async fn render_round(
     path: String,
     round: u32,
     preset: String,
     ticks: Option<[u32; 2]>,
+    fps: Option<u32>,
     app: AppHandle,
     sending: tauri::State<'_, Sending>,
 ) -> Result<String, String> {
     let _only = sending.0.try_lock().map_err(|_| BUSY.to_owned())?;
-    blocking(move || render(&app, &path, round, &preset, ticks)).await?
+    blocking(move || render(&app, &path, round, &preset, ticks, fps)).await?
 }
+
+/// The frame rates a render may ask for (`tools/unreal/render_round.py`'s FPS_RANGE).
+pub const FPS_RANGE: std::ops::RangeInclusive<u32> = 10..=1000;
 
 /// Shows a render's folder (as [`render_round`] returned it) in Windows' Explorer; no other folder.
 #[tauri::command]
@@ -220,11 +226,20 @@ fn render(
     round: u32,
     preset: &str,
     ticks: Option<[u32; 2]>,
+    fps: Option<u32>,
 ) -> Result<String, String> {
     let report = |message: String, warning: bool| emit(app, Step::Render, message, warning);
     if !PRESETS.contains(&preset) {
         return Err(format!("There is no render preset \"{preset}\"."));
     }
+    if let Some(fps) = fps.filter(|f| !FPS_RANGE.contains(f)) {
+        return Err(format!(
+            "{fps} frames a second: pick from {} to {}.",
+            FPS_RANGE.start(),
+            FPS_RANGE.end()
+        ));
+    }
+    let fps = fps.map(|f| f.to_string()).unwrap_or_default();
     let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
     let side = unreal_side().ok_or("OFAST's Unreal project was not found.")?;
     unreal_closed()?;
@@ -265,6 +280,7 @@ fn render(
             ("OFAST_SEQUENCE", sequence.as_ref()),
             ("OFAST_PRESET", preset.as_ref()),
             ("OFAST_TICKS", range.as_ref()),
+            ("OFAST_FPS", fps.as_ref()),
             ("OFAST_SHOT", out.as_os_str()),
         ],
         "rendered ",

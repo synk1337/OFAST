@@ -103,7 +103,8 @@ powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/render_round.py -S
 ```
 
 `-Preset` is `preview`, `final` or `4k`; `-Ticks` the demo ticks to render (the end left out; the whole round
-without); frames go to `<-Shot>/<demo>_r17_final_153320-153391/`. From Git Bash, prefix `MSYS_NO_PATHCONV=1` (it
+without); `-Fps` the frames a second (60 without; 10 to 1000, the folder then ends in `_<fps>fps` before the
+ticks); frames go to `<-Shot>/<demo>_r17_final_153320-153391/`. From Git Bash, prefix `MSYS_NO_PATHCONV=1` (it
 rewrites `/Game/...` arguments into Windows paths). The editor renders with a renderer (not `-nullrhi`) and opens
 Movie Render Queue's progress window; it quits once the frames are written. The Studio's "Render" runs the same
 script into `Videos\OFAST`.

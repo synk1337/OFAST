@@ -221,9 +221,17 @@ export const openInUnreal = (sent: Sent) => invoke<void>("open_in_unreal", { ...
 
 /** Movie Render Queue presets (`tools/unreal/render_round.py`). */
 export type RenderPreset = "preview" | "final" | "4k";
-/** Renders a round already in Unreal between two demo ticks (the whole round with null); gives the frames' folder. */
-export const renderRound = (path: string, round: number, preset: RenderPreset, ticks: [number, number] | null) =>
-  invoke<string>("render_round", { path, round, preset, ticks });
+/** Renders a round already in Unreal between two demo ticks (the whole round with null), `fps` frames a second;
+ * gives the frames' folder. */
+export const renderRound = (
+  path: string,
+  round: number,
+  preset: RenderPreset,
+  ticks: [number, number] | null,
+  fps: number,
+) => invoke<string>("render_round", { path, round, preset, ticks, fps });
+/** The frame rates a render may ask for (`src-tauri/src/unreal.rs`, FPS_RANGE). */
+export const FPS_RANGE: [number, number] = [10, 1000];
 export const openRenderFolder = (folder: string) => invoke<void>("open_render_folder", { folder });
 export const onSendProgress = (handler: (progress: SendProgress) => void) =>
   listen<SendProgress>("unreal-progress", (event) => handler(event.payload));

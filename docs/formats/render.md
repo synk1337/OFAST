@@ -8,7 +8,7 @@ a round's Level Sequence rendered by Unreal's Movie Render Queue, as image seque
 One folder per render, in the folder it was given (the Studio: `Videos\OFAST`):
 
 ```
-<demo>_r<round>_<preset>[_<start tick>-<end tick>]/
+<demo>_r<round>_<preset>[_<fps>fps][_<start tick>-<end tick>]/
     FinalImage/<demo>_r<round>.<frame>.png               the picture
     FinalImagePlayers/<demo>_r<round>.<frame>.png        final, 4k: the players alone, the rest transparent
     FinalImageDefaultLayer/<demo>_r<round>.<frame>.png   final, 4k: the world, the players' shapes transparent
@@ -16,10 +16,16 @@ One folder per render, in the folder it was given (the Studio: `Videos\OFAST`):
     <demo>_r<round>.<frame>.exr                          final, 4k: all of the above, one layer each
 ```
 
+- `<fps>fps`: the frames a second asked for, when not 60.
 - `<start tick>-<end tick>`: the demo ticks asked for (the end left out); no suffix for the whole round.
-- `<frame>`: 5 digits, the frame's number at 60 frames a second from the sequence's start (the round's start), so
-  two renders of one round line up by number.
-- 60 frames a second, whatever the demo's 64 ticks a second.
+- `<frame>`: 5 digits (6 above 600 frames a second), the frame's number at the render's frame rate from the
+  sequence's start (the round's start), so two renders of one round at one rate line up by number.
+- 60 frames a second by default, or any rate from 10 to 1000 (`OFAST_FPS`, the Studio's fps box), whatever the demo's
+  64 ticks a second. Above 64 every frame is still a picture of its own moment, not a copy or a blend: the keys
+  (players, cameras, bones) are interpolated between ticks, the effects are played at the frame's fraction of a tick
+  and the smokes' volumes blend between their baked frames (250 frames a second over 24 ticks: 95 frames, no two
+  alike). Motion blur is a 180° shutter at any rate, so at 250 each frame is blurred over 1/500 s, as a real camera
+  would.
 
 ## Passes
 

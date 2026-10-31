@@ -195,6 +195,14 @@ that shows the frames as they render (closing it stops the render); the bar coun
 about 2 seconds a frame on a recent graphics card, at 60 frames a second (a 20-second highlight: 1200 frames, about
 40 minutes).
 
+The **fps** box beside it is the frames a second: 60 plays at normal speed. For slow motion made in your editing
+software (Vegas, Premiere, After Effects), render more, 250 for example: slowed to a quarter, the clip still has over
+60 frames a second, each a real picture of its own moment, none blended from its neighbours. Type any number from 10
+to 1000, or pick a common one from its list; the Studio remembers it. The frame count beside it grows in proportion,
+and so does the render's time (that 20-second highlight at 250: 5000 frames, about 3 hours in Final). Import the
+images at the frame rate you rendered (in Vegas: the frame rate in the image sequence's import dialog, or its Media
+Properties; in Premiere: Clip → Modify → Interpret Footage), then slow the clip down there.
+
 The images go to `Videos\OFAST`, a folder per render, and **Open folder** in the bar shows it. In it, a folder per
 pass, each an image sequence your editor imports in one go (pick the first image and tick "image sequence"):
 

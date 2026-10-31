@@ -11,14 +11,18 @@ Inputs (environment variables):
     OFAST_SEQUENCE   the round's sequence (import_demo.py made it and stored the demo's clock and map on it)
     OFAST_PRESET     preview | final | 4k (PRESETS below); final by default
     OFAST_TICKS      optional "start,end": demo ticks to render (end not included); the whole round without it
-    OFAST_SHOT       the folder the render's folder goes in: <sequence>_<preset>[_<start>-<end>]/
+    OFAST_FPS        optional frames a second (FPS_RANGE), OUTPUT_FPS without it: 250 or more for slow motion made
+                     in the editing software (Vegas, Premiere), which then has a real frame for every slowed one
+    OFAST_SHOT       the folder the render's folder goes in: <sequence>_<preset>[_<fps>fps][_<start>-<end>]/
 
 Every preset is also saved as a Movie Render Queue configuration, /Game/OFAST/Render/OFAST_<preset>, to pick in
 Unreal's own Movie Render Queue window (Window > Cinematics > Movie Render Queue, then the job's settings).
 
 What a render holds (docs/formats/render.md):
-- the picture (PNG, and 16-bit EXR for final and 4k), at 60 frames a second whatever the sequence's 64; a folder
-  per pass, and one EXR a frame with every pass as its layers;
+- the picture (PNG, and 16-bit EXR for final and 4k), at 60 frames a second (or OFAST_FPS) whatever the sequence's
+  64: everything in a round moves smoothly between the demo's ticks (keys interpolated, the effects and smokes
+  functions of a fractional tick), so 250 frames a second are 250 different pictures; a folder per pass, and one EXR
+  a frame with every pass as its layers;
 - final and 4k: temporal samples (8: motion blur as a camera's shutter makes it), 32 warm-up frames (Lumen and the
   smokes settle), depth (Movie Render Queue's own WorldDepth material: the EXR's R channel, in centimetres), and a
   players layer: the frame with everything but the players cut out (stencil layer "Players": each player's body and
@@ -50,8 +54,11 @@ PRESETS = {
     "4k": {"resolution": (3840, 2160), "temporal": 8, "exr": True, "passes": True},
 }
 OUTPUT_FPS = 60
+# The frame rates a render may ask for (OFAST_FPS); also checked by the Studio (unreal.rs, FPS_RANGE).
+FPS_RANGE = (10, 1000)
 WARM_UP_FRAMES = 32
 FRAME_DIGITS = 5  # a long round runs past frame 9999 at 60 frames a second
+FRAME_DIGITS_FAST = 6  # and past 99999 above 600 (a round with its 2 s after a death runs up to about 160 s)
 PLAYERS_LAYER = "Players"
 WORLD_DEPTH = "/MovieRenderPipeline/Materials/MovieRenderQueue_WorldDepth.MovieRenderQueue_WorldDepth"
 CONFIG_FOLDER = "/Game/OFAST/Render"
@@ -122,10 +129,14 @@ def make_config(name, preset):
     return config
 
 
-def render_into(job, folder, frames):
-    """The job's own copy of its configuration: the output folder, and the range in the sequence's frames (or all)."""
+def render_into(job, folder, frames, fps):
+    """The job's own copy of its configuration: the output folder, the frame rate, and the range in the sequence's
+    frames (or all: Movie Render Queue takes the range in the sequence's own frames, one a demo tick, whatever the
+    output's rate)."""
     output = job.get_configuration().find_or_add_setting_by_class(unreal.MoviePipelineOutputSetting)
     output.set_editor_property("output_directory", unreal.DirectoryPath(folder))
+    output.set_editor_property("output_frame_rate", unreal.FrameRate(fps, 1))
+    output.set_editor_property("zero_pad_frame_numbers", FRAME_DIGITS_FAST if fps > 600 else FRAME_DIGITS)
     if frames is not None:
         output.set_editor_property("use_custom_playback_range", True)
         output.set_editor_property("custom_start_frame", frames[0])
@@ -148,16 +159,21 @@ def main():
         raise RuntimeError("%s has no demo clock: send the round to Unreal again" % path)
     ticks = [int(t) for t in os.environ.get("OFAST_TICKS", "").split(",") if t.strip()]
     frames = (ticks[0] - int(tick0), ticks[1] - int(tick0)) if len(ticks) == 2 else None
-    # A folder per range: frames are numbered from the sequence's start, so two ranges in one folder would interleave.
-    folder = "%s_%s" % (path.rsplit("/", 1)[-1], name) + ("_%d-%d" % tuple(ticks) if frames else "")
+    fps = int(os.environ.get("OFAST_FPS") or OUTPUT_FPS)
+    if not FPS_RANGE[0] <= fps <= FPS_RANGE[1]:
+        raise RuntimeError("%d frames a second: from %d to %d" % (fps, *FPS_RANGE))
+    # A folder per rate and range: frames are numbered from the sequence's start, so two ranges (or two rates) in one
+    # folder would interleave.
+    folder = ("%s_%s" % (path.rsplit("/", 1)[-1], name) + ("_%dfps" % fps if fps != OUTPUT_FPS else "")
+              + ("_%d-%d" % tuple(ticks) if frames else ""))
     folder = os.path.join(os.environ["OFAST_SHOT"], folder)
     levels.load_level(level)
     # The Look panel's settings (ofast_look.py), even if the level was not saved after they were changed.
     ofast_look.apply_level_look()
     players = put_players_in_layer()
     config = make_config(name, PRESETS[name])
-    log("render %s, preset %s, frames %s, %d player actors in layer %r, into %s"
-        % (path, name, frames or "all", players, PLAYERS_LAYER, folder))
+    log("render %s, preset %s, %d frames a second, frames %s, %d player actors in layer %r, into %s"
+        % (path, name, fps, frames or "all", players, PLAYERS_LAYER, folder))
     queue_subsystem = unreal.get_editor_subsystem(unreal.MoviePipelineQueueSubsystem)
     state = {"ticks": 0, "done": False, "percent": 0}
 
@@ -183,7 +199,7 @@ def main():
         job.set_editor_property("map", unreal.SoftObjectPath(object_path(level)))
         job.set_editor_property("job_name", "OFAST %s" % name)
         job.set_configuration(config)
-        render_into(job, folder, frames)
+        render_into(job, folder, frames, fps)
         executor = unreal.MoviePipelinePIEExecutor()
         executor.on_executor_finished_delegate.add_callable(finished)
         # Kept for the whole render: a Python callable bound to a delegate goes when its owner does.

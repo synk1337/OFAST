@@ -6,6 +6,7 @@ import {
   CameraPlan,
   DemoEntry,
   DemoSummary,
+  FPS_RANGE,
   Kill,
   Look,
   NO_PLAN,
@@ -38,8 +39,8 @@ export interface UnrealActions {
   send?: (round: RoundSummary, plan: CameraPlan, look: Look) => void;
   /** Changes the cameras of a round sent before. */
   updateCameras?: (round: RoundSummary, plan: CameraPlan) => void;
-  /** Renders a round sent before, between two demo ticks or whole (null). */
-  render?: (round: RoundSummary, preset: RenderPreset, ticks: [number, number] | null) => void;
+  /** Renders a round sent before, between two demo ticks or whole (null), at a frame rate. */
+  render?: (round: RoundSummary, preset: RenderPreset, ticks: [number, number] | null, fps: number) => void;
   /** Changes when a job ends: the rounds in Unreal are looked up again. */
   version: number;
 }
@@ -223,7 +224,7 @@ function DemoView({ summary, path, unreal }: { summary: DemoSummary; path: strin
               }
               onRender={
                 unreal.render && sent.includes(round.round)
-                  ? (preset, ticks) => unreal.render?.(round, preset, ticks)
+                  ? (preset, ticks, fps) => unreal.render?.(round, preset, ticks, fps)
                   : undefined
               }
               onKill={replay ? (tick) => setSeek((s) => ({ tick, n: (s?.n ?? 0) + 1 })) : undefined}
@@ -463,7 +464,7 @@ function RoundFeed({
   /** Changes its cameras in Unreal (missing when it cannot be now, or the round was not sent). */
   onUpdateCameras?: () => void;
   /** Renders it in Unreal (missing when it cannot be now, or the round was not sent). */
-  onRender?: (preset: RenderPreset, ticks: [number, number] | null) => void;
+  onRender?: (preset: RenderPreset, ticks: [number, number] | null, fps: number) => void;
 }) {
   const setShot = (tick: number, kind: ShotKind) => {
     const shots = { ...plan.shots };
@@ -644,8 +645,25 @@ function RoundFeed({
 const BEFORE_KILLS_S = 4;
 const AFTER_KILLS_S = 2;
 
-/** A round's render: the preset, how much of the round (around the kills marked by the finder, else all of them),
- * and the button (Movie Render Queue, in Unreal). */
+/** Where the Studio keeps the render frame rate last picked. */
+const FPS_KEY = "ofast.renderFps";
+/** Unreal's frame rate for a render played at normal speed. */
+const DEFAULT_FPS = 60;
+/** Frame rates offered in the render's box (any other can be typed). */
+const FPS_CHOICES = [30, 60, 120, 240, 250, 300, 500];
+
+/** The render frame rate last picked, or DEFAULT_FPS. */
+function storedFps(): number {
+  try {
+    const fps = Number(localStorage.getItem(FPS_KEY));
+    return fps >= FPS_RANGE[0] && fps <= FPS_RANGE[1] ? fps : DEFAULT_FPS;
+  } catch {
+    return DEFAULT_FPS;
+  }
+}
+
+/** A round's render: the preset, the frame rate, how much of the round (around the kills marked by the finder, else
+ * all of them), and the button (Movie Render Queue, in Unreal). */
 function RenderRow({
   summary,
   round,
@@ -656,10 +674,21 @@ function RenderRow({
   round: RoundSummary;
   /** The finder's kills in the round (indices into its kills). */
   marked: number[];
-  onRender?: (preset: RenderPreset, ticks: [number, number] | null) => void;
+  onRender?: (preset: RenderPreset, ticks: [number, number] | null, fps: number) => void;
 }) {
   const [preset, setPreset] = useState<RenderPreset>("preview");
   const [whole, setWhole] = useState(false);
+  // Frames a second, kept for the next render (this browser's storage; 60 without it).
+  const [fps, setFps] = useState<number>(storedFps);
+  const fpsValid = Number.isInteger(fps) && fps >= FPS_RANGE[0] && fps <= FPS_RANGE[1];
+  const pickFps = (value: number) => {
+    setFps(value);
+    try {
+      localStorage.setItem(FPS_KEY, String(value));
+    } catch {
+      // No storage: the choice lasts this page only.
+    }
+  };
   const kills = (marked.length ? marked.map((i) => round.kills[i]) : round.kills).map((k) => k.tick);
   const seconds = (s: number) => Math.round(s / summary.tick_interval);
   const ticks: [number, number] | null =
@@ -692,14 +721,43 @@ function RenderRow({
         </option>
         <option value="round">the whole round</option>
       </select>
-      <span className="muted">{clock(length)}</span>
-      <button
-        onClick={onRender && (() => onRender(preset, ticks))}
-        disabled={!onRender}
+      <label
         title={
-          onRender
-            ? "Render this round with its cameras in Unreal, into OFAST in your Videos folder (Unreal must be closed)"
-            : "For a round already sent to Unreal, while nothing else runs in Unreal"
+          "Frames a second. 60 plays at normal speed. For slow motion in your editing software (Vegas, Premiere), " +
+          "render more: at 250, slowed to a quarter it still has over 60 real frames a second, none blended. More frames " +
+          `take longer to render, in proportion. From ${FPS_RANGE[0]} to ${FPS_RANGE[1]}.`
+        }
+      >
+        <input
+          className={`fps ${fpsValid ? "" : "invalid"}`}
+          type="number"
+          min={FPS_RANGE[0]}
+          max={FPS_RANGE[1]}
+          step={10}
+          list="ofast-fps-choices"
+          value={Number.isNaN(fps) ? "" : fps}
+          onChange={(e) => pickFps(e.target.valueAsNumber)}
+        />{" "}
+        fps
+      </label>
+      <datalist id="ofast-fps-choices">
+        {FPS_CHOICES.map((value) => (
+          <option key={value} value={value} />
+        ))}
+      </datalist>
+      <span className="muted">
+        {clock(length)}
+        {fpsValid ? `, ${Math.round(length * fps).toLocaleString()} frames` : ""}
+      </span>
+      <button
+        onClick={onRender && fpsValid ? () => onRender(preset, ticks, fps) : undefined}
+        disabled={!onRender || !fpsValid}
+        title={
+          !fpsValid
+            ? `Frames a second: from ${FPS_RANGE[0]} to ${FPS_RANGE[1]}`
+            : onRender
+              ? "Render this round with its cameras in Unreal, into OFAST in your Videos folder (Unreal must be closed)"
+              : "For a round already sent to Unreal, while nothing else runs in Unreal"
         }
       >
         Render
