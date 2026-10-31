@@ -2,7 +2,7 @@
 // release workflow writes it, `.github/workflows/release.yml`); if its version is newer, a bar under the header says
 // so, with its notes, and "Update" downloads its setup program, checks its signature against the public key in
 // tauri.conf.json, installs it over this one and starts it again. Not in development (`npm run app`).
-import { useEffect, useState } from "react";
+import { ReactElement, useEffect, useState } from "react";
 import { check, Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 
@@ -78,7 +78,52 @@ export function UpdateBar({ busy }: { busy: boolean }) {
         </button>
         {!working && <button onClick={() => setUpdate(null)}>Later</button>}
       </div>
-      {notes && update.body && <pre className="update-notes">{update.body}</pre>}
+      {notes && update.body && <Notes text={update.body} />}
     </div>
   );
+}
+
+/** The release notes (docs/releases/<version>.md) as the release page shows them, from the little Markdown they use:
+ * `## ` headings, `- ` bullets, paragraphs, **bold** and `code`. */
+function Notes({ text }: { text: string }) {
+  const blocks: ReactElement[] = [];
+  let bullets: string[] = [];
+  const flush = () => {
+    if (bullets.length) {
+      blocks.push(
+        <ul key={blocks.length}>
+          {bullets.map((b, i) => (
+            <li key={i}>{inline(b)}</li>
+          ))}
+        </ul>,
+      );
+      bullets = [];
+    }
+  };
+  for (const line of text.split("\n").map((l) => l.trim())) {
+    if (line.startsWith("- ")) {
+      bullets.push(line.slice(2));
+      continue;
+    }
+    flush();
+    if (line.startsWith("## ")) blocks.push(<h4 key={blocks.length}>{inline(line.slice(3))}</h4>);
+    else if (line) blocks.push(<p key={blocks.length}>{inline(line)}</p>);
+  }
+  flush();
+  return <div className="update-notes">{blocks}</div>;
+}
+
+/** **bold** and `code` within a line. */
+function inline(line: string) {
+  return line
+    .split(/(\*\*[^*]+\*\*|`[^`]+`)/)
+    .map((part, i) =>
+      part.startsWith("**") ? (
+        <b key={i}>{part.slice(2, -2)}</b>
+      ) : part.startsWith("`") ? (
+        <code key={i}>{part.slice(1, -1)}</code>
+      ) : (
+        part
+      ),
+    );
 }

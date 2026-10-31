@@ -636,10 +636,22 @@ button.link {
 }
 
 .update-notes {
-  max-height: 240px;
+  max-height: 260px;
   overflow: auto;
-  margin: 8px 0 0;
-  white-space: pre-wrap;
-  font-family: inherit;
+  margin-top: 8px;
   color: var(--muted);
+}
+
+.update-notes h4 {
+  margin: 10px 0 4px;
+  color: var(--text);
+}
+
+.update-notes p,
+.update-notes ul {
+  margin: 4px 0;
+}
+
+.update-notes b {
+  color: var(--text);
 }

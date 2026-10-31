@@ -65,8 +65,10 @@ jobs:
           $signature = (Get-Content -Raw (Get-Item "target/release/bundle/nsis/*-setup.exe.sig").FullName).Trim()
           $latest = [ordered]@{
             version   = $version
-            # A plain string: Get-Content's carries properties ConvertTo-Json would write out as an object.
-            notes     = [System.IO.File]::ReadAllText("$PWD/docs/releases/$version.md")
+            # The notes without their "**Download** … run it over your current version" paragraph (the updater does
+            # that); a plain string: Get-Content's carries properties ConvertTo-Json would write out as an object.
+            notes     = ([System.IO.File]::ReadAllLines("$PWD/docs/releases/$version.md") |
+                         Where-Object { -not $_.StartsWith("**Download**") }) -join "`n"
             pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
             platforms = @{
               "windows-x86_64" = [ordered]@{
