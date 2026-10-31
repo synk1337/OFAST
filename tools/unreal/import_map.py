@@ -2735,8 +2735,26 @@ def setup_environment(manifest, imported):
 # exposure and filmic tone curve turn that range into a picture. CS2's sun direction and the map's lights are kept.
 REALISTIC_SUN_LUX = 100000.0
 REALISTIC_SUN_KELVIN = 5800.0
+# What it is on the ground, the atmosphere having dimmed it.
+REALISTIC_GROUND_LUX = 80000.0
 # Auto exposure range in EV100 (project setting ExtendDefaultLuminanceRange): from dim interiors to bright sun.
 REALISTIC_EV100_RANGE = (2.0, 16.0)
+# Its ambiance. Volumetric fog: a thin haze (density 0.016, thinning upward over a few hundred metres, 3 times as
+# thick to the volumetric fog), scattering the light fairly evenly (0.3: at 0.6 the beams through de_dust2's upper
+# tunnel roof did not show from the side), warm, out to 6000 units; a light's share of it is its volumetric scattering
+# intensity (1 for the map's lamps, which glow in it). Thicker or brighter, long A turned into a beige dust storm.
+REALISTIC_FOG = {"fog_density": 0.016, "fog_height_falloff": 0.15, "start_distance": 0.0,
+                 "enable_volumetric_fog": True, "volumetric_fog_scattering_distribution": 0.3,
+                 "volumetric_fog_albedo": unreal.Color(r=255, g=244, b=228, a=255),
+                 "volumetric_fog_extinction_scale": 3.0, "volumetric_fog_distance": 6000.0}
+# The sun's beams in it, 3 times a lamp's, and its light shafts: the bright sky round the sun streaking past what stands
+# in front of it (screen-space bloom shafts, warm, from what is brighter than 4 times the exposure). The scattering
+# intensity also lights the smoke volumes: at 8 the round's smokes came out blown white, at 1 the beams faded.
+REALISTIC_SUN_SHAFTS = {"volumetric_scattering_intensity": 3.0, "enable_light_shaft_bloom": True,
+                        "bloom_scale": 0.15, "bloom_threshold": 4.0, "bloom_max_brightness": 50.0,
+                        "bloom_tint": unreal.Color(r=255, g=232, b=200, a=255)}
+# A camera's touch: a little film grain and colour fringing at the edges, a faint lens flare from the sun.
+REALISTIC_LENS = {"film_grain_intensity": 0.15, "scene_fringe_intensity": 0.6, "lens_flare_intensity": 0.2}
 
 
 def setup_realistic(manifest, imported):
@@ -2762,11 +2780,24 @@ def setup_realistic(manifest, imported):
         }
     )
 
+    # Its ambiance (the user's list, 2026-10-30: depth of field, rays, atmosphere, fog): the sun lights the haze, so
+    # its beams show through doorways and windows, and looking towards it the bright sky streaks round what blocks it.
+    component.set_editor_properties(REALISTIC_SUN_SHAFTS)
+
+    # How much brighter this sun is than CS2's on the map: what the effects of a round built here are multiplied by
+    # (import_demo.py; they are unlit, and this look's exposure is set for a real sun).
+    cs2_lux = (sun or {}).get("illuminance_lux")
+    if cs2_lux:
+        brightness = REALISTIC_GROUND_LUX / cs2_lux
+        world = unreal.EditorLevelLibrary.get_editor_world()
+        unreal.EditorAssetLibrary.set_metadata_tag(world, "OFAST_effect_brightness", "%.0f" % brightness)
+        log("realistic: effects x %.0f (CS2's sun %.2f lux)" % (brightness, cs2_lux))
+
     spawn_physical_sky(0.0 if "sky" in disabled else 1.0)
 
-    # A light desert haze; the atmosphere already adds aerial perspective to the distant 3D skybox.
+    # A desert haze lit in volume: the atmosphere already adds aerial perspective to the distant 3D skybox.
     fog = spawn(unreal.ExponentialHeightFog).get_component_by_class(unreal.ExponentialHeightFogComponent)
-    fog.set_editor_properties({"fog_density": 0.004, "fog_height_falloff": 0.2, "start_distance": 1000.0})
+    fog.set_editor_properties(REALISTIC_FOG)
 
     setup_local_lights(manifest, imported, physical=True)
 
@@ -2783,6 +2814,8 @@ def setup_realistic(manifest, imported):
     override("local_exposure_shadow_contrast_scale", 0.8)
     override("bloom_intensity", 0.3)
     override("vignette_intensity", 0.25)
+    for name, value in REALISTIC_LENS.items():
+        override(name, value)
     volume.set_editor_property("settings", settings)
     log("realistic: sun %.0f lux, physical sky, photometric local lights, auto exposure EV100 %.0f-%.0f" % (REALISTIC_SUN_LUX, low, high))
 

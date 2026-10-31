@@ -31,6 +31,7 @@ default, 106.26° on a 16:9 picture).
 | `cuts` | in order: `{start, end, eyes: controller}` or `{start, end, camera: index into cameras}`, ticks, `end` not included |
 | `subject` | the controller of the player the round is about (`plan.player`), `null` for none |
 | `last_tick` | the last tick shown: the round's `end_tick`, or 2 s after the death of the player it is about (Unreal plays the sequence to it) |
+| `focus` | where each player's eyes focus, by controller: `[tick, distance]` rows every 4 ticks, the distance (units) along the view to the first wall (the map's collision) or player's body in it, between 40 and 4000, smoothed over 0.15 s (in its logarithm); the realistic look's depth of field (since 2026-10-31) |
 
 ### Eyes
 

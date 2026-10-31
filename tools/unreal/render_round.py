@@ -140,7 +140,9 @@ def main():
     if sequence is None:
         raise RuntimeError("no sequence %s" % path)
     tick0 = assets.get_metadata_tag(sequence, "OFAST_start_tick")
-    level = "/Game/OFAST/Maps/%s" % assets.get_metadata_tag(sequence, "OFAST_map")
+    # The level it was built in (a round built before 2026-10-31 has only its map: the standard look's level).
+    level = (assets.get_metadata_tag(sequence, "OFAST_level")
+             or "/Game/OFAST/Maps/%s" % assets.get_metadata_tag(sequence, "OFAST_map"))
     if not tick0:
         raise RuntimeError("%s has no demo clock: send the round to Unreal again" % path)
     ticks = [int(t) for t in os.environ.get("OFAST_TICKS", "").split(",") if t.strip()]

@@ -184,7 +184,8 @@ when the PNG changed, and what the current glTF no longer uses is deleted at the
 
 `-Style realistic` lights the same map physically instead (Unreal sky, 100 000 lux sun, real-world candela, auto
 exposure, filmic tone curve) in its own level `<map>_realistic`; see the styles table in
-[lighting.md](formats/lighting.md#import-styles).
+[lighting.md](formats/lighting.md#import-styles). `import_demo.py -Style realistic` builds a round in that level, its
+players' eyes with depth of field (the Studio's look **Realistic**).
 
 The sandbox needs **DirectX 12 + Shader Model 6** for Nanite (set in `unreal/Sandbox/Config/DefaultEngine.ini`);
 switching it on recompiles all shaders once (long).

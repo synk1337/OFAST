@@ -93,7 +93,9 @@ def main():
     if sequence is None:
         raise RuntimeError("no sequence %s" % path)
     tick0 = int(assets.get_metadata_tag(sequence, "OFAST_start_tick") or 0)
-    level = "/Game/OFAST/Maps/" + assets.get_metadata_tag(sequence, "OFAST_map")
+    # The level it was built in, CS2's look or the realistic one (a round built before 2026-10-31: its map's).
+    level = (assets.get_metadata_tag(sequence, "OFAST_level")
+             or "/Game/OFAST/Maps/" + assets.get_metadata_tag(sequence, "OFAST_map"))
     levels.load_level(level)
     by_label = {a.get_actor_label(): a for a in actors.get_all_level_actors()}
     name = path.rsplit("/", 1)[-1]

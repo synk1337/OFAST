@@ -201,14 +201,18 @@ export interface SendProgress {
 
 /** Where to look in Unreal once a round is sent. */
 export interface Sent {
-  /** /Game/OFAST/Maps/<map> */
+  /** /Game/OFAST/Maps/<map>, or <map>_realistic */
   level: string;
   /** /Game/OFAST/Replays/<demo>_r<round> */
   sequence: string;
 }
 
-export const sendToUnreal = (path: string, startTick: number, plan: CameraPlan) =>
-  invoke<Sent>("send_to_unreal", { path, startTick, plan });
+/** The map's look a round is built in: CS2's own, or lit physically with an ambiance (haze, light shafts, depth of
+ * field). */
+export type Look = "standard" | "realistic";
+
+export const sendToUnreal = (path: string, startTick: number, plan: CameraPlan, look: Look) =>
+  invoke<Sent>("send_to_unreal", { path, startTick, plan, look });
 export const updateCameras = (path: string, startTick: number, plan: CameraPlan) =>
   invoke<Sent>("update_cameras", { path, startTick, plan });
 /** The round numbers of a demo already in OFAST's Unreal project. */

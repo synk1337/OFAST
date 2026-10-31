@@ -116,8 +116,101 @@ pub struct RoundCameras {
     pub subject: Option<u32>,
     /// The last tick shown: the round's last, or [`DEATH_HOLD_S`] after the death of the player it is about.
     pub last_tick: u32,
+    /// Where each player's eyes focus, by controller: `(tick, distance in units)` every [`FOCUS_STEP`] ticks
+    /// (the distance along the view to the first wall or player in it, smoothed), for the depth of field of a round
+    /// built in the realistic look.
+    pub focus: BTreeMap<u32, Vec<(u32, f64)>>,
     /// What could not be done as asked.
     pub warnings: Vec<String>,
+}
+
+/// How often a player's focus is measured (ticks): a focus puller follows the aim, not each twitch of it.
+pub const FOCUS_STEP: u32 = 4;
+/// The farthest a focus goes (units): past it, the sky or the far end of a long street, all sharp enough.
+pub const FOCUS_REACH: f64 = 4000.0;
+/// The nearest (units): a wall pressed against is not focused closer.
+pub const FOCUS_NEAR: f64 = 40.0;
+/// A player's body as the focus sees it: a standing cylinder this wide (radius, units) from the feet to 8 units above
+/// the eyes.
+const FOCUS_BODY_RADIUS: f64 = 16.0;
+/// How quickly the focus follows what is in the middle of the view (seconds, its smoothing's time constant, in the
+/// distance's logarithm: a pull from a near wall to a far player as fast as the other way).
+pub const FOCUS_LAG_S: f64 = 0.15;
+
+/// Where each player's eyes focus ([`RoundCameras::focus`]): every [`FOCUS_STEP`] ticks of their `eyes`, the
+/// distance along the view to the first thing in it, the world (`collision`; without it, only players) or another
+/// living player's body, between [`FOCUS_NEAR`] and [`FOCUS_REACH`], smoothed over [`FOCUS_LAG_S`] seconds.
+fn focus(
+    poses: &Poses,
+    eyes: &BTreeMap<u32, Vec<CameraKey>>,
+    collision: Option<&WorldCollision>,
+    interval: f64,
+) -> BTreeMap<u32, Vec<(u32, f64)>> {
+    let ticks = poses.ticks();
+    let keep = 1.0 - (-f64::from(FOCUS_STEP) * interval / FOCUS_LAG_S).exp();
+    let mut out = BTreeMap::new();
+    for (&controller, keys) in eyes {
+        let mut track: Vec<(u32, f64)> = Vec::new();
+        let mut smoothed: Option<f64> = None;
+        for key in keys
+            .iter()
+            .filter(|k| (k.tick as u32).is_multiple_of(FOCUS_STEP))
+        {
+            let tick = key.tick as u32;
+            let from = key.position;
+            let along = crate::camera::forward(key.angles[0], key.angles[1]);
+            let mut nearest = collision
+                .and_then(|w| {
+                    w.ray_hit(
+                        from.map(|v| v as f32),
+                        along.map(|v| v as f32),
+                        FOCUS_REACH as f32,
+                    )
+                })
+                .map_or(FOCUS_REACH, |hit| f64::from(hit.distance));
+            if let Ok(at) = ticks.binary_search(&tick) {
+                for other in poses.controllers().filter(|&c| c != controller) {
+                    let Some(Some(pose)) = poses.of(other).map(|p| p[at]) else {
+                        continue;
+                    };
+                    if pose.alive
+                        && let Some(d) = body_along(from, along, pose.feet, pose.eyes[2] + 8.0)
+                    {
+                        nearest = nearest.min(d);
+                    }
+                }
+            }
+            let distance = nearest.clamp(FOCUS_NEAR, FOCUS_REACH);
+            let value = smoothed.map_or(distance.ln(), |s| s + keep * (distance.ln() - s));
+            smoothed = Some(value);
+            track.push((tick, value.exp()));
+        }
+        out.insert(controller, track);
+    }
+    out
+}
+
+/// Where a ray from `from` along the unit `along` meets a player's body standing at `feet` up to `top` (a standing
+/// cylinder of [`FOCUS_BODY_RADIUS`]): the distance along the ray where it passes nearest the body's axis, if it
+/// passes within the radius there, in front, between the feet and the top.
+fn body_along(
+    from: crate::camera::Vec3,
+    along: crate::camera::Vec3,
+    feet: crate::camera::Vec3,
+    top: f64,
+) -> Option<f64> {
+    let flat = along[0] * along[0] + along[1] * along[1];
+    if flat < 1e-6 {
+        return None;
+    }
+    let s = ((feet[0] - from[0]) * along[0] + (feet[1] - from[1]) * along[1]) / flat;
+    let (x, y, z) = (
+        from[0] + s * along[0],
+        from[1] + s * along[1],
+        from[2] + s * along[2],
+    );
+    let off = ((x - feet[0]).powi(2) + (y - feet[1]).powi(2)).sqrt();
+    (s > 0.0 && off <= FOCUS_BODY_RADIUS && z >= feet[2] && z <= top).then_some(s)
 }
 
 /// An HLAE camera file as camera keys on the demo's ticks (a campath sampled on every tick); `name` from the file.
@@ -210,6 +303,7 @@ pub fn round_cameras(
         last_tick: track.end_tick,
         ..RoundCameras::default()
     };
+    out.focus = focus(&poses, &out.eyes, collision, interval);
     let mut end_tick = track.end_tick + 1;
     // A round about one player: their kills only, and it ends a little after their death.
     let mut kills = all_kills;
@@ -522,6 +616,14 @@ pub fn cameras_json(
         "cuts": cuts,
         "subject": cameras.subject,
         "last_tick": cameras.last_tick,
+        "focus": cameras
+            .focus
+            .iter()
+            .map(|(c, keys)| {
+                let rows: Vec<Json> = keys.iter().map(|&(t, d)| json!([t, rounded(d, 0)])).collect();
+                (c.to_string(), Json::Array(rows))
+            })
+            .collect::<serde_json::Map<_, _>>(),
     })
 }
 
@@ -718,6 +820,46 @@ mod tests {
             skins: Default::default(),
             stattrak: Default::default(),
         }
+    }
+
+    #[test]
+    fn eyes_focus_on_the_player_in_front() {
+        let track = track();
+        let cameras = round_cameras(&track, &CameraPlan::default(), Vec::new(), None, None);
+        let at = |c: u32, tick: u32| {
+            cameras.focus[&c]
+                .iter()
+                .find(|&&(t, _)| t == tick)
+                .map(|&(_, d)| d)
+                .unwrap()
+        };
+        // Player 3 at x = 900 looks back at player 2, 400 units away, a steady focus while player 1 walks up to
+        // player 2; once player 1 is past (x 636 at the end), the focus pulls in to them.
+        assert!((at(3, 1000) - 400.0).abs() < 1e-6);
+        assert!((at(3, 1400) - 400.0).abs() < 1e-6);
+        assert!(at(3, 1636) < 300.0);
+        // Player 1 starts 500 units from player 2, and focuses there at once.
+        assert!((at(1, 1000) - 500.0).abs() < 1e-6);
+        // Player 2 looks back along -x: at player 1 coming, then, once player 1 is past (tick 1500 on), at nothing:
+        // the focus pulls out towards FOCUS_REACH, smoothly.
+        assert!((at(2, 1100) - 400.0).abs() < 20.0);
+        let late = at(2, 1636);
+        assert!(late > 2000.0 && late <= FOCUS_REACH, "{late}");
+        assert_eq!(cameras.focus[&1][1].0 - cameras.focus[&1][0].0, FOCUS_STEP);
+        // A ray over a player's head misses them.
+        let up = crate::camera::forward(-30.0, 0.0);
+        assert_eq!(
+            body_along([0.0, 0.0, 64.0], up, [300.0, 0.0, 0.0], 72.0),
+            None
+        );
+        let level = crate::camera::forward(0.0, 0.0);
+        assert_eq!(
+            body_along([0.0, 0.0, 64.0], level, [300.0, 0.0, 0.0], 72.0),
+            Some(300.0)
+        );
+        // Written to the file, a row per measured tick.
+        let file = cameras_json(&cameras, &track, "demo", &CameraPlan::default());
+        assert_eq!(file["focus"]["3"][0], json!([1000, 400.0]));
     }
 
     #[test]

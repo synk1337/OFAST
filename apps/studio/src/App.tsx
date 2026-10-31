@@ -6,6 +6,7 @@ import {
   CameraPlan,
   DemoEntry,
   Environment,
+  Look,
   RenderPreset,
   RoundSummary,
   VersionCheck,
@@ -42,11 +43,11 @@ export function App() {
       (e) => setJob({ id, heading, title, error: String(e) }),
     );
   };
-  const send = (demo: DemoEntry, round: RoundSummary, plan: CameraPlan) =>
+  const send = (demo: DemoEntry, round: RoundSummary, plan: CameraPlan, look: Look) =>
     run(
       "Send to Unreal",
       `${demo.name}, round ${round.round}`,
-      sendToUnreal(demo.path, round.start_tick, plan).then((sent) => ({ sent })),
+      sendToUnreal(demo.path, round.start_tick, plan, look).then((sent) => ({ sent })),
     );
   const cameras = (demo: DemoEntry, round: RoundSummary, plan: CameraPlan) =>
     run(
@@ -107,7 +108,7 @@ export function App() {
             demo={opened}
             onBack={() => setOpened(null)}
             unreal={{
-              send: canSend ? (round, plan) => send(opened, round, plan) : undefined,
+              send: canSend ? (round, plan, look) => send(opened, round, plan, look) : undefined,
               updateCameras: canSend ? (round, plan) => cameras(opened, round, plan) : undefined,
               render: canSend ? (round, preset, ticks) => render(opened, round, preset, ticks) : undefined,
               version,

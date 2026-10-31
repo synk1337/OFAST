@@ -68,7 +68,8 @@ def main():
     if not tag("OFAST_start_tick"):
         raise RuntimeError("%s has no demo clock: send the round to Unreal again (import_demo.py stores it)" % path)
     tick0 = int(tag("OFAST_start_tick"))
-    levels.load_level("/Game/OFAST/Maps/" + tag("OFAST_map"))
+    # The level it was built in (a round built before 2026-10-31 names only its map).
+    levels.load_level(tag("OFAST_level") or "/Game/OFAST/Maps/" + tag("OFAST_map"))
     camera = next((a for a in actors.get_all_level_actors() if a.get_actor_label() == label), None)
     if not isinstance(camera, unreal.CameraActor):
         raise RuntimeError("no camera %r in the level" % label)

@@ -15,9 +15,12 @@ Inputs (environment variables):
     OFAST_VIEW_SHOTS optional screenshots from a camera placed as CS2's `getpos` prints it while spectating the demo,
                      "tick:x:y:z:pitch:yaw,…" (Source units and degrees; e.g. CS2's Chase Cam, to compare the same
                      view), with CS2's field of view; every living player is shown (into OFAST_SHOT)
+    OFAST_STYLE      optional (run_ue.ps1 -Style): "standard" (default) or "realistic", the map's look to build in
 
-The map must have been imported first (tools/unreal/import_map.py): the sequence is built in its level
-/Game/OFAST/Maps/<map>. What the script makes, all rebuilt on every run:
+The map must have been imported first (tools/unreal/import_map.py, in the same style): the sequence is built in its
+level /Game/OFAST/Maps/<map>, or <map>_realistic for the realistic look (whose cameras then focus: depth of field).
+The sequence remembers its level (metadata `OFAST_level`) for render_round.py and import_cameras.py. What the script
+makes, all rebuilt on every run:
 
 - /Game/OFAST/Replays/<demo>_r<round>: a Level Sequence at the demo's tick rate (64 fps: one frame per tick),
   playback from the round's start (freeze time included) to its end;
@@ -97,6 +100,12 @@ from replay_cameras import (  # noqa: E402
 
 REPLAY_PATH = os.environ["OFAST_REPLAY"]
 SHOT_DIR = os.environ.get("OFAST_SHOT", "")
+# The map's look the round is built in (run_ue.ps1 -Style): "standard", CS2's, in /Game/OFAST/Maps/<map>, or
+# "realistic", import_map.py's physically lit one in /Game/OFAST/Maps/<map>_realistic (its cameras then focus: depth of
+# field).
+STYLE = os.environ.get("OFAST_STYLE") or "standard"
+if STYLE not in ("standard", "realistic"):
+    raise RuntimeError("unknown OFAST_STYLE %r (standard or realistic)" % STYLE)
 POV_SHOTS = [tuple(int(v) for v in item.split(":")) for item in os.environ.get("OFAST_POV_SHOTS", "").split(",")
              if ":" in item]
 CLOSE_SHOTS = [tuple(int(v) for v in item.split(":"))
@@ -183,10 +192,32 @@ def runs(frames, values):
         yield run
 
 
+def map_level(map_name):
+    """The level a round of `map_name` is built in, for STYLE."""
+    return "/Game/OFAST/Maps/" + map_name + ("" if STYLE == "standard" else "_" + STYLE)
+
+
+# The realistic look's effect brightness when its level does not say (one imported before 2026-10-31): about how
+# much brighter its sun is than CS2's (80 000 lux on the ground against 7.85 on de_dust2).
+REALISTIC_EFFECT_BRIGHTNESS = 10000.0
+
+
+def set_look(level):
+    """In the realistic look, the effects' brightness (grenade_effects.EFFECT_BRIGHTNESS, keyed into the sequence's
+    `EffectBrightness`): what its level says (import_map.py's `OFAST_effect_brightness`). The smokes are lit volumes
+    and need nothing (how brightly the sun lights them: import_map.py's REALISTIC_SUN_SHAFTS)."""
+    if STYLE != "realistic":
+        return
+    tag = assets.get_metadata_tag(assets.load_asset(level), "OFAST_effect_brightness")
+    grenade_effects.EFFECT_BRIGHTNESS = float(tag) if tag else REALISTIC_EFFECT_BRIGHTNESS
+    log("realistic look: effects x %.0f%s" % (grenade_effects.EFFECT_BRIGHTNESS, "" if tag else " (the default)"))
+
+
 def clean_level(map_name):
-    level = "/Game/OFAST/Maps/" + map_name
+    level = map_level(map_name)
     if not assets.does_asset_exist(level):
-        raise RuntimeError("%s is not imported yet: run import_map.py for %s first" % (level, map_name))
+        raise RuntimeError("%s is not imported yet: run import_map.py for %s first (-Style %s)"
+                           % (level, map_name, STYLE))
     levels.load_level(level)
     old = [a for a in actors.get_all_level_actors() if TAG in a.tags]
     for actor in old:
@@ -1130,6 +1161,10 @@ def build(replay, looks):
         camera_binding = sequence.add_possessable(camera)
         keys += replay_cameras.key_eyes(camera_binding, cameras_file["eyes"].get(str(controller), []), tick0,
                                         end_frame)
+        if STYLE == "realistic":
+            # Its depth of field: focused where the player looks (the file's `focus`, export::cameras).
+            focus_rows = (cameras_file.get("focus") or {}).get(str(controller), [])
+            keys += replay_cameras.key_focus(sequence, camera, focus_rows, tick0, end_frame)
         cameras[controller] = (camera, camera_binding)
         agent = agents.get(controller)
         if agent is not None:
@@ -1178,7 +1213,7 @@ def build(replay, looks):
     keys += place_grenades(sequence, replay, world_models, end_frame)
     # The demo tick the smokes, fires, blasts and flashed views read: keyed whatever the round has (a round without
     # a smoke still has its fires and flashes).
-    smoke_volumes.key_replay_tick(sequence, replay, end_frame)
+    smoke_volumes.key_replay_tick(sequence, replay, end_frame, grenade_effects.EFFECT_BRIGHTNESS)
     smoke_volumes.place_smokes(sequence, replay, REPLAY_PATH, end_frame, spawn_tagged)
     grenade_effects.place_effects(sequence, replay, REPLAY_PATH, end_frame, manifest[2] if manifest else {},
                                   {controller: camera for controller, (camera, _) in cameras.items()}, spawn_tagged)
@@ -1222,7 +1257,8 @@ def build(replay, looks):
     for tag, value in (("OFAST_start_tick", tick0), ("OFAST_tick_interval", replay["tick_interval"]),
                        ("OFAST_server_tick_offset", cameras_file.get("server_tick_offset")),
                        ("OFAST_demo", replay["demo"]), ("OFAST_map", replay["map"]),
-                       ("OFAST_round", replay["round"])):
+                       ("OFAST_round", replay["round"]), ("OFAST_level", map_level(replay["map"])),
+                       ("OFAST_style", STYLE)):
         if value is not None:
             assets.set_metadata_tag(sequence, tag, str(value))
     assets.save_loaded_asset(sequence)
@@ -1397,6 +1433,7 @@ def main():
         raise RuntimeError("%s is not an OFAST replay (version 1)" % REPLAY_PATH)
     looks = import_looks(replay)
     clean_level(replay["map"])
+    set_look(map_level(replay["map"]))
     sequence, cameras, shot_actors = build(replay, looks)
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world().get_path_name()
     if not world.startswith("/Game/"):

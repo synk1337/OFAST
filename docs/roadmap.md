@@ -524,8 +524,13 @@ Released in 1.0.2 (2026-10-31): the point of view, the HE, molotov, flashbang an
 - [ ] **Weapons through walls** (low): a player's gun poking through the wall they stand against.
 - [ ] **Blood in one colour** (low): the splash on the body a bright pink-red beside the dark red streaks, two shades
   where CS2 shows one (the user's screenshot of round 17, 2026-10-30).
-- [ ] **Realistic lighting as an export option** (low): the Studio's choice between CS2's look and a realistic one,
-  with an ambiance of its own: depth of field, light shafts, atmosphere and fog.
+- [x] **Realistic lighting as an export option** (low): the Studio's choice between CS2's look and a realistic one,
+  with an ambiance of its own: depth of field, light shafts, atmosphere and fog. Done (2026-10-31): the Studio's look
+  **Realistic** builds the round in `<map>_realistic` (import_map.py's physically lit style, imported once per map), with
+  a warm volumetric haze the sun's beams show in, the sun's light shafts, film grain, fringing and lens flare, and depth
+  of field on the players' eyes (focused where they look: the cameras file's `focus`); the effects brightened to its
+  exposure, the sun lighting the haze 3 times as much as a lamp (at 8 times the smokes came out white).
+  Update cameras keys the focus again. Not yet: depth of field on the shot cameras (they keep it off).
 
 A first pass on each milestone left, M7 to M10, then a second pass through every milestone to fix, tweak and
 polish (2026-10-26). That pass includes the effects rework and the installer:

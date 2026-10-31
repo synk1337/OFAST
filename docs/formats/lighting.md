@@ -833,6 +833,7 @@ a decal (CS2 2.29×).
 | Local lights | CS2-matched candela (`intensity_cd`), CS2 bounce × gain | Hammer's real candela (`intensity_cd_photometric` = 79.6 × linear), plain bounce |
 | Exposure | fixed, measured on CS2 (EV100 0.322 on de_mirage) | auto (histogram), EV100 2 – 16 |
 | Tone curve | CS2's (a straight line or Hable's), then CS2's colour-correction table | Unreal's filmic curve, local exposure, light bloom and vignette |
+| Ambiance | none (CS2's picture) | a warm volumetric haze the sun's beams show in (density 0.016, 3 × for the volumetric fog, scattering 0.3, the sun 3 × a lamp's share, which also lights the smokes; a finer volumetric grid in the project's `DefaultEngine.ini`), the sun's light shafts, a little film grain, colour fringing and lens flare; a round built in it (`import_demo.py -Style realistic`) focuses its players' eyes where they look (depth of field at f/1.8 on a full-frame sensor, the cameras file's `focus`) |
 
 The realistic style does **not** keep CS2's light ratios: it pairs Hammer's photometric candela with a real-world
 sun (100 000 lux before the atmosphere, about 80 000 on the ground), so a 121 cd wall lamp is far fainter next to the

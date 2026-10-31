@@ -9,9 +9,10 @@ Inputs (environment variables):
     OFAST_CAMERAS    the round's cameras file, written by `ofast export-demo` (format: docs/formats/cameras.md)
 
 The round must have been built by import_demo.py: its sequence /Game/OFAST/Replays/<demo>_r<round> in its map's
-level /Game/OFAST/Maps/<map>. What changes (replay_cameras.py makes them as import_demo.py does):
+level /Game/OFAST/Maps/<map> (or <map>_realistic). What changes (replay_cameras.py makes them as import_demo.py does):
 
-- each player's first-person camera ("POV <name>") keyed again on the file's eyes (a new smoothing);
+- each player's first-person camera ("POV <name>") keyed again on the file's eyes (a new smoothing), and in the
+  realistic look on its `focus` (depth of field);
 - the shot and HLAE cameras of earlier runs (actors tagged OFAST_camera) removed with their bindings, and the file's
   made;
 - the camera cut track replaced by the file's cuts (cuts made by hand go too; cameras added by hand stay, ready to
@@ -70,11 +71,14 @@ def light_bindings(bindings, controller):
 
 
 def update(cameras):
-    level = "/Game/OFAST/Maps/" + cameras["map"]
     path = "/Game/OFAST/Replays/%s_r%d" % (cameras["demo"], cameras["round"])
-    if not assets.does_asset_exist(level) or not assets.does_asset_exist(path):
+    if not assets.does_asset_exist(path):
         raise RuntimeError("%s is not built yet (send the round to Unreal first)" % path)
     sequence = assets.load_asset(path)
+    # The level it was built in, the standard or the realistic look's (a round built before 2026-10-31: its map's).
+    level = assets.get_metadata_tag(sequence, "OFAST_level") or "/Game/OFAST/Maps/" + cameras["map"]
+    if not assets.does_asset_exist(level):
+        raise RuntimeError("%s is gone: send the round to Unreal again" % level)
     # A round built before owner visibility (decision 021) hides its players by keys that follow its old cuts: other
     # cameras would show it wrong.
     if not assets.get_metadata_tag(sequence, "OFAST_start_tick"):
@@ -86,7 +90,9 @@ def update(cameras):
     bindings = {str(b.get_display_name()): b for b in sequence.get_bindings()}
     names = {int(c): n for c, n in cameras["players"].items()}
 
-    # The players' eyes.
+    # The players' eyes, and in the realistic look where they focus (its binding under the camera's, made again).
+    focus = assets.get_metadata_tag(sequence, "OFAST_style") == "realistic"
+    povs = {a.get_actor_label(): a for a in actors.get_all_level_actors() if isinstance(a, unreal.CameraActor)}
     eyes = {}
     keys = 0
     for controller, name in names.items():
@@ -97,6 +103,14 @@ def update(cameras):
         remove_tracks(binding, unreal.MovieScene3DTransformTrack)
         keys += replay_cameras.key_eyes(binding, cameras["eyes"].get(str(controller), []), tick0, end_frame)
         eyes[controller] = binding
+        camera = povs.get("POV " + name)
+        if focus and camera is not None:
+            component = str(camera.camera_component.get_name())
+            for child in binding.get_child_possessables():
+                if str(child.get_display_name()) == component:
+                    child.remove()
+            keys += replay_cameras.key_focus(sequence, camera, (cameras.get("focus") or {}).get(str(controller), []),
+                                             tick0, end_frame)
 
     # The shot cameras: the old ones out (their bindings, the component bindings under them, the actors), the new in.
     old = [a for a in actors.get_all_level_actors() if CAMERA_TAG in a.tags]

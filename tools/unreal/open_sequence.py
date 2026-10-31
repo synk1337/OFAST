@@ -8,7 +8,7 @@ save:
     UnrealEditor.exe OFASTSandbox.uproject -ExecCmds="py tools/unreal/open_sequence.py"
 
 Inputs (environment variables):
-    OFAST_LEVEL     the level to open, /Game/OFAST/Maps/<map>
+    OFAST_LEVEL     the level to open, /Game/OFAST/Maps/<map>, when the sequence does not name its own (`OFAST_level`)
     OFAST_SEQUENCE  the sequence to open, /Game/OFAST/Replays/<demo>_r<round> (import_demo.py makes it)
 """
 
@@ -30,9 +30,14 @@ def log(message):
 
 
 def open_level():
-    if LEVEL:
-        unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).load_level(LEVEL)
-    log("opened %s" % LEVEL)
+    # The level the sequence was built in (CS2's look or the realistic one: import_demo.py's `OFAST_level`), else
+    # the one asked for (a round built before 2026-10-31).
+    level = LEVEL
+    if SEQUENCE and unreal.EditorAssetLibrary.does_asset_exist(SEQUENCE):
+        level = unreal.EditorAssetLibrary.get_metadata_tag(unreal.load_asset(SEQUENCE), "OFAST_level") or LEVEL
+    if level:
+        unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).load_level(level)
+    log("opened %s" % level)
 
 
 def open_sequence():

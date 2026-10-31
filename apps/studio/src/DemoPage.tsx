@@ -7,6 +7,7 @@ import {
   DemoEntry,
   DemoSummary,
   Kill,
+  Look,
   NO_PLAN,
   RenderPreset,
   RoundSummary,
@@ -34,7 +35,7 @@ import {
  * round is on its way. */
 export interface UnrealActions {
   /** Sends a round with its cameras. */
-  send?: (round: RoundSummary, plan: CameraPlan) => void;
+  send?: (round: RoundSummary, plan: CameraPlan, look: Look) => void;
   /** Changes the cameras of a round sent before. */
   updateCameras?: (round: RoundSummary, plan: CameraPlan) => void;
   /** Renders a round sent before, between two demo ticks or whole (null). */
@@ -130,6 +131,18 @@ function FinalScore({ summary }: { summary: DemoSummary }) {
   );
 }
 
+/** Where the Studio keeps the look last picked. */
+const LOOK_KEY = "ofast.look";
+
+/** The look last picked, or CS2's when none was (or the storage cannot be read). */
+function storedLook(): Look {
+  try {
+    return localStorage.getItem(LOOK_KEY) === "realistic" ? "realistic" : "standard";
+  } catch {
+    return "standard";
+  }
+}
+
 function DemoView({ summary, path, unreal }: { summary: DemoSummary; path: string; unreal: UnrealActions }) {
   const teams = useMemo(() => teamsOf(summary), [summary]);
   // Rounds go by their index in the summary: a restarted round's number comes again.
@@ -137,6 +150,16 @@ function DemoView({ summary, path, unreal }: { summary: DemoSummary; path: strin
   // Each round's cameras as picked (by round index), and the round numbers already in Unreal.
   const [plans, setPlans] = useState<Record<number, CameraPlan>>({});
   const [sent, setSent] = useState<number[]>([]);
+  // The map's look rounds are sent in, kept for the next demo (this browser's storage; CS2's look without it).
+  const [look, setLook] = useState<Look>(storedLook);
+  const pickLook = (next: Look) => {
+    setLook(next);
+    try {
+      localStorage.setItem(LOOK_KEY, next);
+    } catch {
+      // No storage: the choice lasts this demo only.
+    }
+  };
   useEffect(() => {
     let current = true;
     sentRounds(path).then(
@@ -190,7 +213,9 @@ function DemoView({ summary, path, unreal }: { summary: DemoSummary; path: strin
               onReplay={() => setReplay((r) => !r)}
               plan={plan}
               onPlan={setPlan}
-              onSend={unreal.send && (() => unreal.send?.(round, plan))}
+              look={look}
+              onLook={pickLook}
+              onSend={unreal.send && (() => unreal.send?.(round, plan, look))}
               onUpdateCameras={
                 unreal.updateCameras && sent.includes(round.round)
                   ? () => unreal.updateCameras?.(round, plan)
@@ -412,6 +437,8 @@ function RoundFeed({
   plan,
   onPlan,
   onKill,
+  look,
+  onLook,
   onSend,
   onUpdateCameras,
   onRender,
@@ -428,6 +455,9 @@ function RoundFeed({
   onPlan: (plan: CameraPlan) => void;
   /** A kill clicked: the replay jumps there. */
   onKill?: (tick: number) => void;
+  /** The map's look the round is sent in. */
+  look: Look;
+  onLook: (look: Look) => void;
   /** Sends the round to Unreal (missing when it cannot be now). */
   onSend?: () => void;
   /** Changes its cameras in Unreal (missing when it cannot be now, or the round was not sent). */
@@ -481,6 +511,14 @@ function RoundFeed({
         <button className={replay ? "on" : ""} onClick={onReplay}>
           {replay ? "Back to the finder" : "2D replay"}
         </button>
+        <select
+          value={look}
+          onChange={(e) => onLook(e.target.value as Look)}
+          title="The map's look in Unreal. CS2's look: the picture CS2 shows. Realistic: lit like the real world, with a haze the sun's beams show in, light shafts and depth of field (the first time on a map, it imports the map again in that look)"
+        >
+          <option value="standard">CS2's look</option>
+          <option value="realistic">Realistic</option>
+        </select>
         <button
           className="primary"
           onClick={onSend}

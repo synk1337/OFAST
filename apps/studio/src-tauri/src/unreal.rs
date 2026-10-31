@@ -3,8 +3,9 @@
 //!
 //! 1. export the round with its players and its cameras (`ofast export-demo --players`, with the shots the user
 //!    picked: [`CameraPlan`]),
-//! 2. the first time a map is used, export it (`ofast export-map`) and import it (`tools/unreal/import_map.py`),
-//! 3. import the round (`tools/unreal/import_demo.py`): a Level Sequence in the map's level.
+//! 2. the first time a map is used in a look (CS2's, or realistic: `LOOKS`), export it (`ofast export-map`) and
+//!    import it (`tools/unreal/import_map.py`, its style: the realistic look's level is `<map>_realistic`),
+//! 3. import the round (`tools/unreal/import_demo.py`, in the same style): a Level Sequence in that level.
 //!
 //! "Update cameras" changes the cameras of a round already sent, without importing it again: its cameras exported
 //! (`export::cameras`), then `tools/unreal/import_cameras.py` (decision 021). "Render" renders a round already sent
@@ -98,7 +99,8 @@ pub struct Progress {
 /// What a sending made: where to look in Unreal.
 #[derive(Debug, Clone, Serialize)]
 pub struct Sent {
-    /// The map's level, `/Game/OFAST/Maps/<map>`.
+    /// The map's level, `/Game/OFAST/Maps/<map>` (or `<map>_realistic`; after "Update cameras" always the former:
+    /// `open_sequence.py` opens the level the sequence names).
     pub level: String,
     /// The round's Level Sequence, `/Game/OFAST/Replays/<demo>_r<round>`.
     pub sequence: String,
@@ -126,11 +128,30 @@ pub async fn send_to_unreal(
     path: String,
     start_tick: u32,
     plan: CameraPlan,
+    look: Option<String>,
     app: AppHandle,
     sending: tauri::State<'_, Sending>,
 ) -> Result<Sent, String> {
     let _only = sending.0.try_lock().map_err(|_| BUSY.to_owned())?;
-    blocking(move || send(&app, &path, start_tick, &plan)).await?
+    let look = look.unwrap_or_else(|| STANDARD.to_owned());
+    if !LOOKS.contains(&look.as_str()) {
+        return Err(format!("unknown look {look:?}"));
+    }
+    blocking(move || send(&app, &path, start_tick, &plan, &look)).await?
+}
+
+/// The map's looks a round can be built in (`tools/unreal/import_map.py`'s styles): CS2's own, in the level named
+/// after the map, or lit physically with an ambiance, in `<map>_realistic`.
+const LOOKS: [&str; 2] = [STANDARD, "realistic"];
+const STANDARD: &str = "standard";
+
+/// The level of `map` in `look`.
+fn level_name(map: &str, look: &str) -> String {
+    if look == STANDARD {
+        map.to_owned()
+    } else {
+        format!("{map}_{look}")
+    }
 }
 
 /// Changes the cameras of the round of `path` that starts at `start_tick`, already sent, to those of `plan` (see the
@@ -387,7 +408,13 @@ pub fn stop_sending() {
     }
 }
 
-fn send(app: &AppHandle, path: &str, start_tick: u32, plan: &CameraPlan) -> Result<Sent, String> {
+fn send(
+    app: &AppHandle,
+    path: &str,
+    start_tick: u32,
+    plan: &CameraPlan,
+    look: &str,
+) -> Result<Sent, String> {
     let report = |step: Step, message: String| emit(app, step, message, false);
     let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
     let side = unreal_side().ok_or("OFAST's Unreal project was not found.")?;
@@ -431,14 +458,17 @@ fn send(app: &AppHandle, path: &str, start_tick: u32, plan: &CameraPlan) -> Resu
     }
 
     let map = track.map_name.as_str();
-    let level = format!("/Game/OFAST/Maps/{map}");
+    // The map's level in the look picked: each look is imported once, the realistic one into a level of its own
+    // (sharing the map's meshes and materials, which its import brings up to date).
+    let level_name = level_name(map, look);
+    let level = format!("/Game/OFAST/Maps/{level_name}");
     // A map import that did not finish keeps its marker: the next sending imports the map again.
     let project = side.dir();
-    let importing = project.join(r"Saved\OFAST\importing").join(map);
+    let importing = project.join(r"Saved\OFAST\importing").join(&level_name);
     let imported = !importing.exists()
         && project
             .join(r"Content\OFAST\Maps")
-            .join(format!("{map}.umap"))
+            .join(format!("{level_name}.umap"))
             .is_file()
         && project
             .join(r"Content\OFAST")
@@ -474,6 +504,7 @@ fn send(app: &AppHandle, path: &str, start_tick: u32, plan: &CameraPlan) -> Resu
             &[
                 ("OFAST_GLTF", gltf.as_os_str()),
                 ("OFAST_NAME", map.as_ref()),
+                ("OFAST_STYLE", look.as_ref()),
             ],
             "imported ",
             |line| report(Step::MapImport, line),
@@ -493,7 +524,10 @@ fn send(app: &AppHandle, path: &str, start_tick: u32, plan: &CameraPlan) -> Resu
         &side,
         "import_demo.py",
         false,
-        &[("OFAST_REPLAY", replay.path.as_os_str())],
+        &[
+            ("OFAST_REPLAY", replay.path.as_os_str()),
+            ("OFAST_STYLE", look.as_ref()),
+        ],
         "built ",
         |line| report(Step::RoundImport, line),
     )?;

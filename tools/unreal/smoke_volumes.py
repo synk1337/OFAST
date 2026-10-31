@@ -141,30 +141,45 @@ def import_png(replay_path, file_name, folder):
     return texture
 
 
+# REPLAY_COLLECTION's parameters and their defaults: `ReplayTick`, the demo tick the sequence shows (keyed by
+# key_replay_tick), which the smoke volumes and the effects read; `EffectBrightness`, what the effects' unlit sprites
+# and their lights are multiplied by (1 in CS2's look; in the realistic look, how much brighter its sun is than
+# CS2's, keyed by the round's sequence: its auto exposure would leave them invisible otherwise).
+REPLAY_PARAMETERS = {"ReplayTick": 0.0, "EffectBrightness": 1.0}
+
+
 def replay_collection():
-    """REPLAY_COLLECTION, made once: the material parameter collection with `ReplayTick`, the demo tick the sequence
-    shows (keyed by key_replay_tick), which the smoke volumes read to pick their frame."""
+    """REPLAY_COLLECTION, made once, with REPLAY_PARAMETERS (one made before a parameter existed gains it)."""
     if assets.does_asset_exist(REPLAY_COLLECTION):
-        return assets.load_asset(REPLAY_COLLECTION)
-    folder, name = REPLAY_COLLECTION.rsplit("/", 1)
-    collection = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
-        name, folder, unreal.MaterialParameterCollection, unreal.MaterialParameterCollectionFactoryNew())
-    parameter = unreal.CollectionScalarParameter()
-    parameter.set_editor_property("parameter_name", "ReplayTick")
-    parameter.set_editor_property("default_value", 0.0)
-    collection.set_editor_property("scalar_parameters", [parameter])
-    assets.save_loaded_asset(collection)
+        collection = assets.load_asset(REPLAY_COLLECTION)
+    else:
+        folder, name = REPLAY_COLLECTION.rsplit("/", 1)
+        collection = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+            name, folder, unreal.MaterialParameterCollection, unreal.MaterialParameterCollectionFactoryNew())
+    parameters = list(collection.get_editor_property("scalar_parameters"))
+    have = {str(p.get_editor_property("parameter_name")) for p in parameters}
+    missing = [name for name in REPLAY_PARAMETERS if name not in have]
+    for name in missing:
+        parameter = unreal.CollectionScalarParameter()
+        parameter.set_editor_property("parameter_name", name)
+        parameter.set_editor_property("default_value", REPLAY_PARAMETERS[name])
+        parameters.append(parameter)
+    if missing:
+        collection.set_editor_property("scalar_parameters", parameters)
+        assets.save_loaded_asset(collection)
     return collection
 
 
-def key_replay_tick(sequence, replay, end_frame):
+def key_replay_tick(sequence, replay, end_frame, effect_brightness=1.0):
     """Keys REPLAY_COLLECTION's `ReplayTick` with the demo tick: two linear keys (the sequence runs one frame per
-    tick), so sub-frame times get fractional ticks."""
+    tick), so sub-frame times get fractional ticks; and its `EffectBrightness`, constant."""
     tick0 = replay["start_tick"]
     track = sequence.add_track(unreal.MovieSceneMaterialParameterCollectionTrack)
     track.set_editor_property("mpc", replay_collection())
     section = track.add_section()
     section.set_range(0, end_frame)
+    section.add_scalar_parameter_key("EffectBrightness", unreal.FrameNumber(0), float(effect_brightness),
+                                     unreal.MovieSceneKeyInterpolation.CONSTANT)
     linear = unreal.MovieSceneKeyInterpolation.LINEAR
     # Parameter keys take their time in the sequence's tick resolution, not its display rate (one frame per demo
     # tick): keyed at display frames, the tick ran through the whole round in its first half second.

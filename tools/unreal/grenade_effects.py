@@ -793,12 +793,20 @@ def sprite_material(translucent):
     mel.connect_material_expressions(opacity, "", soft, "A")
     mel.connect_material_expressions(unfaded, "", soft, "B")
     prop = unreal.MaterialProperty
+    # Unlit, so times the look's EffectBrightness (smoke_volumes.REPLAY_PARAMETERS): the realistic look's exposure
+    # is set for a real sun.
+    brightness = mel.create_material_expression(material, unreal.MaterialExpressionCollectionParameter, -150, -450)
+    brightness.set_editor_property("collection", smoke_volumes.replay_collection())
+    brightness.set_editor_property("parameter_name", "EffectBrightness")
+    lit = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, 50, -350)
+    mel.connect_material_expressions(rgb, "", lit, "A")
+    mel.connect_material_expressions(brightness, "", lit, "B")
     if translucent:
-        ok = (mel.connect_material_property(rgb, "", prop.MP_EMISSIVE_COLOR)
+        ok = (mel.connect_material_property(lit, "", prop.MP_EMISSIVE_COLOR)
               and mel.connect_material_property(soft, "", prop.MP_OPACITY))
     else:
         emissive = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, 150, -250)
-        mel.connect_material_expressions(rgb, "", emissive, "A")
+        mel.connect_material_expressions(lit, "", emissive, "A")
         mel.connect_material_expressions(soft, "", emissive, "B")
         ok = mel.connect_material_property(emissive, "", prop.MP_EMISSIVE_COLOR)
     if not (ok and mel.connect_material_property(wpo, "", prop.MP_WORLD_POSITION_OFFSET)):
@@ -1040,8 +1048,14 @@ def intensity_channel(sequence, light, end_frame):
     return section.get_all_channels()[0]
 
 
+# What the effects' lights are multiplied by: 1 in CS2's look; import_demo.py sets the realistic look's
+# EffectBrightness (smoke_volumes.REPLAY_PARAMETERS) before placing them.
+EFFECT_BRIGHTNESS = 1.0
+
+
 def add_key(channel, frame, value):
-    channel.add_key(unreal.FrameNumber(frame), value, 0.0, unreal.MovieSceneTimeUnit.DISPLAY_RATE,
+    """A light's intensity key (fires, blasts, flashes, muzzles), times EFFECT_BRIGHTNESS."""
+    channel.add_key(unreal.FrameNumber(frame), value * EFFECT_BRIGHTNESS, 0.0, unreal.MovieSceneTimeUnit.DISPLAY_RATE,
                     unreal.MovieSceneKeyInterpolation.LINEAR)
 
 

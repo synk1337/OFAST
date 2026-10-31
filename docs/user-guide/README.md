@@ -137,6 +137,17 @@ you can keep browsing meanwhile. It:
 Close Unreal before sending (the import needs the project to itself), and if you can, close CS2 too: Unreal needs a
 lot of memory. A round takes about ten minutes the first time.
 
+The select beside **Send to Unreal** picks the map's look:
+
+- **CS2's look**: the picture CS2 shows, its sun, sky, lights and colours.
+- **Realistic**: the map lit like the real world (a real sun and sky, real light levels, a camera's exposure), with an
+  ambiance: a warm haze the sun's beams show in through doorways and roofs, light shafts round the sun, a little film
+  grain, and depth of field on the players' eyes, which focus on what they look at. The first round you send in
+  this look on a map imports that map again in it (a while, once per map); after that rounds take as long as in
+  CS2's look. A round is in one look at a time: sending it in the other look builds it again there.
+
+The Studio remembers the look you picked.
+
 When it is done, **Open in Unreal** opens the project at the map's level with the round's sequence in Sequencer
 (the timeline at the bottom of Unreal's window); the viewport shows the sequence's cameras. Press the space bar
 in Sequencer to play it. The sequence is `Content/OFAST/Replays/<demo>_r<round>` in Unreal's Content Browser.
