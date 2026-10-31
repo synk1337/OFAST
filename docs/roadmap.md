@@ -521,7 +521,10 @@ Released in 1.0.2 (2026-10-31): the point of view, the HE, molotov, flashbang an
   fire flung through walls, 2026-10-31).
 - [x] **Molotov fixed** (high): remade the same way (filmed tick by tick in CS2 offline, rebuilt to match). Done:
   rebuilt from CS2's files and checked on round 17's molotov played slowly (burst, carpet, heart, magenta edge).
-- [ ] **Weapons through walls** (low): a player's gun poking through the wall they stand against.
+- [x] **Weapons through walls** (low): a player's gun poking through the wall they stand against, in the POV view
+  (in third person it is normal: CS2's do too). Done (2026-10-31): the viewmodel drawn shrunk toward the camera
+  (Unreal's first-person scale 0.2, near clip plane 2 cm, the realistic look's foreground blur capped), as CS2 draws
+  its own over the world: AWPs and M4s against walls show whole (decision 016).
 - [x] **Blood in one colour** (low): the splash on the body a bright pink-red beside the dark red streaks, two shades
   where CS2 shows one (the user's screenshot of round 17, 2026-10-30). Done (2026-10-31): blood lit by the scene as
   CS2 lights it, in CS2's own gradients (a lit sprite material, `M_SpriteLit`): one red, warm in the sun, dark in the

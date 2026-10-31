@@ -931,6 +931,17 @@ def import_viewmodels(replay):
     return viewmodels
 
 
+# How much the viewmodel is shrunk toward its camera (Unreal's first-person scale): it looks the same on screen but
+# reaches a fifth as far in depth, so a gun never sinks into a wall the player stands against, as CS2's never does
+# (players edge walls all the time: woxic's AWP and yuurih's M4A4 in round 17, ticks 153040 and 153220, half in the
+# wall at full size). The closest a wall gets is 16 units, the player's half-width; an AWP's muzzle about 45 units
+# ahead comes to 9. Shrunk this much, the parts nearest the eye need the project's near clip plane at 2 cm
+# (DefaultEngine.ini; at 10 cm the hands and the back of the gun were cut away from a scale of 0.3 down), and the
+# realistic look's depth of field its foreground blur capped (r.DOF.Kernel.MaxForegroundRadius 0.003): the gun, a
+# fifth as far from the lens, would blur five times as much.
+FIRST_PERSON_SCALE = 0.2
+
+
 def viewmodel_fov_16_9(fov):
     """CS2's viewmodel_fov is horizontal at 4:3 like its world FOV: the horizontal FOV of a 16:9 picture."""
     return math.degrees(2 * math.atan(math.tan(math.radians(fov / 2)) * (16 / 9) / (4 / 3)))
@@ -938,8 +949,9 @@ def viewmodel_fov_16_9(fov):
 
 def spawn_viewmodel(player, mesh, camera):
     """The player's viewmodel on their first-person camera, as CS2 draws it (decision 016): the rig's root is the
-    camera, drawn with Unreal's first-person rendering at the player's viewmodel_fov (FirstPersonFieldOfView),
-    without shadows. Its place on the camera (the player's offsets, and the hand) is keyed by key_viewmodel_hand."""
+    camera, drawn with Unreal's first-person rendering at the player's viewmodel_fov (FirstPersonFieldOfView), shrunk
+    toward the camera (FIRST_PERSON_SCALE: never in a wall), without shadows. Its place on the camera (the player's
+    offsets, and the hand) is keyed by key_viewmodel_hand."""
     settings = player.get("viewmodel") or {}
     actor = actors.spawn_actor_from_object(mesh, unreal.Vector(0.0, 0.0, 0.0))
     actor.tags = [TAG]
@@ -952,6 +964,8 @@ def spawn_viewmodel(player, mesh, camera):
     lens = camera.camera_component
     lens.set_editor_property("enable_first_person_field_of_view", True)
     lens.set_editor_property("first_person_field_of_view", viewmodel_fov_16_9(settings.get("fov", 60.0)))
+    lens.set_editor_property("enable_first_person_scale", True)
+    lens.set_editor_property("first_person_scale", FIRST_PERSON_SCALE)
     return actor
 
 

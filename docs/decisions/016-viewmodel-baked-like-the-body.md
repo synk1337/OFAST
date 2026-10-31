@@ -77,6 +77,12 @@ The viewmodel is baked in OFAST's core per player and tick, like the body (decis
   client decays it), ironsights, the shotguns' staged reloads (they need a state's current sync event), and
   `FirstPersonScale` (with Unreal's 10 cm near plane, scaling the viewmodel towards the camera clips its near parts:
   to be tuned when a shot pokes the weapon into a wall).
+- Tuned 2026-10-31, when the user saw guns go into walls in the POV view (players edge walls all the time; long guns
+  most: woxic's AWP and yuurih's M4A4 in round 17 of Aurora vs FURIA half in the wall): `FirstPersonScale` 0.2
+  (`import_demo.py`, `FIRST_PERSON_SCALE`), the project's near clip plane at 2 cm (at 10 cm the hands and the back of
+  the gun were cut from a scale of 0.3 down) and, for the realistic look's depth of field, its foreground blur capped
+  at 0.3 % of the width (`r.DOF.Kernel.MaxForegroundRadius`; a gun a fifth as far from the lens blurred into a
+  smear). The guns now show whole in front of the wall, and look the same as before everywhere else.
 - Older demos may carry a viewmodel FOV CS2 did not apply to spectators before 2026-05-07; OFAST uses the
   recorded value.
 
