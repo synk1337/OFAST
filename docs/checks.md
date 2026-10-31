@@ -441,8 +441,9 @@ blast at the mid doors, played at a quarter speed and grabbed as it played (`too
 | +47 – +75 | brown-black smoke thinning |
 | to about +110 | a faint haze |
 
-The same stages as the stepped table at 4.2 times its ticks, so the blast's layers keep their look and their
-lifetimes are the stepped fits times 4.2 (near the files' 1 – 2 s for the fireball); its light keeps the file's
+The same stages as the stepped table at 4.2 times its ticks. The blast's layers were first stretched to match (their
+lifetimes times 4.2), but the user preferred the short blast of the first rebuild (2026-10-31): it is back, 1.5
+times bigger, without the 7 tongues of fire flung out (their ropes of smoke crossed walls). Its light keeps the file's
 0.225 s, which the played frames match (the walls orange to about +11, gone by +15). Frames taken with
 `pov_shots.py` reach their tick in one 64-tick step, so their particles are about 3 ticks older than the tick:
 a check of something that lasts a few ticks (a blood splash one tick after a hit) is worth taking again played.
@@ -506,7 +507,12 @@ indirect light (Lumen's translucency volume) filled it evenly. Now (`smoke_volum
 occlusion on (`r.HeterogeneousVolumes.AmbientOcclusion`, also in the project's `DefaultEngine.ini`), a cool grey
 albedo with 5 % of the team colour (half before), billows twice as strong and a little bigger, bulging out of the
 surface (the noise's crests had carved pits: a sponge), a crisper edge. Compared at four ticks (`probe_smoke.py`):
-grey cauliflower billows, shaded creases and side, as CS2's; Unreal's still a little softer and warmer.
+grey cauliflower billows, shaded creases and side, as CS2's; Unreal's still a little softer and warmer. Then, from the
+user's look in the editor: the billows rise through the cloud (the noise drifts up 20 units a second: a fixed noise
+left the smokes standing still), the noise moves where the cloud is looked up by up to 15 units (a cloud cut by
+CS2's solid voxels, a clip over mid's low wall, showed a flat plane there), and a fading cloud turns translucent
+instead of its threshold rising to 1 (it was eaten into holes as it went). The noise's input pin is "World Position":
+the material connected it as "Position" without checking, so it had always taken its default (the same place).
 
 ## What was wrong
 

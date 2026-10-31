@@ -338,9 +338,9 @@ player and round.
   - [x] **HE fireball**: CS2 a fiery orange burst with sparks, Unreal a white glow. Filmed tick by tick in CS2 (three
     HEs thrown offline on de_dust2: mid, A long, lower B; `tools/cs2/tick_shots.py`, `docs/checks.md`) and rebuilt to
     match: CS2's heat sheet in orange over its dark smoke, jets of fire, a 4-tick flash; all gone by about +20 ticks
-    (Unreal's burned for over a second before). Re-timed 2026-10-31: stepping the demo had run CS2's particles about
-    4 times faster than the demo (each `demo_step_tick` moves them about 3 ticks further); played at a quarter speed
-    (`tools/cs2/slow_shots.py`) the blast lasts about 1.7 s, and its layers live 4.2 times longer.
+    (Unreal's burned for over a second before). Stepping the demo had run CS2's particles about 4 times faster than
+    the demo (each `demo_step_tick` moves them about 3 ticks further: CS2's blast lasts about 1.7 s played), but the
+    user preferred this short blast (2026-10-31): kept, 1.5 times bigger.
   - [ ] **HE, what is left**: its flash (Unreal's a small white ball where CS2's is a white-peach glow 150 units
     across for its first 11 ticks), the lens streak across the screen at +0 (`explosion_hegrenade_flash_ana`), the heat
     trails and embers flying up, and the fire a little yellower than CS2's red-orange.
@@ -514,7 +514,8 @@ player and round.
 - [ ] **Flashbangs and smokes remade** (high), as the HE blast was: filmed in CS2 (played slowly:
   `tools/cs2/slow_shots.py`) and rebuilt to match; smokes volumetric, as CS2's are.
 - [x] **HE blast denser, with more momentum** (high): its fireball and smoke too thin, not thrown out hard enough.
-  Done: the ground ring burning, 7 tongues of fire flung out, and (2026-10-31) its real timing, 4.2 times longer.
+  Done: the blast of the first rebuild 1.5 times bigger (the user's choice over CS2's longer timing and the tongues of
+  fire flung through walls, 2026-10-31).
 - [x] **Molotov fixed** (high): remade the same way (filmed tick by tick in CS2 offline, rebuilt to match). Done:
   rebuilt from CS2's files and checked on round 17's molotov played slowly (burst, carpet, heart, magenta edge).
 - [ ] **Weapons through walls** (low): a player's gun poking through the wall they stand against.

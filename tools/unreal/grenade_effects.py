@@ -260,85 +260,64 @@ WALL_SMOKE_LAYERS = [
      "scale": (0.5, 3.0), "alpha": (0.6, 1.0), "roll": 180.0, "spread": 2.0, "rise": 0.0, "bright": 1.0,
      "tint": (0.07, 0.07, 0.07), "translucent": True, "size": 1.0, "lift": 0.0, "up": (5.0, 10.0)},
 ]
-# An HE blast as CS2 draws it (round 17's blast at the mid doors, tick 151907, played at a quarter speed and grabbed
-# as it played, 2026-10-31): +3 - +11 a white-peach flash about 150 units across (a lens streak at first), the walls
-# lit orange, rays of sparks to about +25; +13 - +30 a puffy orange fireball with a yellow-white core, about 150 units
-# across; +28 - +45 dark red inside black smoke; +47 - +75 brown-black smoke thinning; a faint haze to about +110
-# (1.7 s), the scorch left. The same stages as three HEs filmed tick by tick on 2026-10-30, but each `demo_step_tick`
-# moved CS2's particles about 3 ticks further than the demo (tools/cs2/tick_shots.py): a stepped "+N" was +4.2 N, and
-# lifetimes fitted to those frames were 4.2 times too short. They are the stepped fits times 4.2 now, near the files'
-# (1 - 2 s for the fireball).
-# The fire's colour: the top of CS2's heat gradient, 255 77 23, which is sRGB: linear (1, 0.075, 0.01), a deep red
-# that turns orange and yellow where the brightness clips it, as CS2's core does. Taken as linear, the sRGB values
-# drew a yellow-orange fireball beside CS2's red-orange one (mid, its fireball).
-FIRE_ORANGE = (1.0, 0.075, 0.01)
+# An HE blast. CS2's, played at a quarter speed (round 17's blast at the mid doors, tick 151907, 2026-10-31): +3 - +11
+# a white-peach flash about 150 units across, the walls lit orange, rays of sparks to about +25; +13 - +30 a puffy
+# orange fireball with a yellow-white core; +28 - +45 dark red inside black smoke; +47 - +75 brown-black smoke
+# thinning; a faint haze to about +110 (1.7 s). The layers below are the user's choice (2026-10-31) over CS2's own
+# timing: the blast as first rebuilt on 2026-10-30 from three HEs filmed tick by tick (a flash, an orange fireball over
+# its own dark smoke, jets of fire, gone in about a third of a second; stepping had run CS2's particles about 4 times
+# fast, tools/cs2/slow_shots.py), 1.5 times bigger. Built at CS2's timing it lasted 4.2 times longer, and its seven
+# tongues of fire flung out at up to 1400 units/s (explosion_hegrenade_smoketrails) drew ropes of smoke through the
+# walls round it: neither is drawn.
+# The fire's colour: CS2's heat gradient's top, 255 77 23, taken as it is (linear: CS2's red-orange core, clipped to
+# orange and yellow where bright).
+BLAST_SIZE = 1.5
+HE_ORANGE = (1.0, 0.3, 0.09)
 BLAST_LAYERS = [
     # particles/explosions_fx/explosion_hegrenade: the white flash it goes off with (radius 2 - 3 grown 10 to 15
-    # times, its renderers' radius scale and bloom making it far bigger): lasting about 17 ticks, 80 - 100 units round,
-    # shrinking.
-    {"name": "blast_flare", "role": "flare", "slots": 1, "life": (0.27, 0.27), "radius": (80.0, 100.0),
-     "scale": (1.2, 0.6), "alpha": (1.0, 1.0), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 8.0,
-     "tint": (1.0, 0.8, 0.6), "size": 1.0, "fade_in": 0.0, "fade_out": 0.5, "sort": 1},
+    # times, its renderers' radius scale and bloom making it far bigger): lasting 4 ticks, shrinking.
+    {"name": "blast_flare", "role": "flare", "slots": 1, "life": (0.065, 0.065),
+     "radius": (80.0 * BLAST_SIZE, 100.0 * BLAST_SIZE), "scale": (1.2, 0.6), "alpha": (1.0, 1.0), "roll": 0.0,
+     "spread": 0.0, "rise": 0.0, "bright": 8.0, "tint": (1.0, 0.8, 0.6), "size": 1.0, "fade_in": 0.0, "fade_out": 0.5,
+     "sort": 1},
     # particles/explosions_fx/explosion_hegrenade_smoke_core: the fireball, 3 puffs (born 0, 0.05 and 0.1 s in: all
     # at once here) of radius 90 - 180, rising at 90 - 180 units/s (and 60 any way, drag 0.1, a pull up of 50), its
-    # frames fitted to the life; born at 0.8 of its size, as CS2's grows from a third with a bias of 0.81 (whole within
-    # a few ticks: grown linearly from a third, Unreal's was a third of CS2's size). Its burning core is its heat sheet,
-    # a heat map CS2 colours from black to orange (2 2 2 to 255 77 23) at an overbright of 10, additive, drawn over the
-    # smoke (`sort`): bright in each sequence's first frames, black by its middle; over a life of 0.85 - 1.25 s it burns
-    # orange to about +27 and dark red to +40, as CS2's (the grey flame sheet tinted orange, before 2026-10-30, drew a
-    # white glow where CS2 shows an orange fireball: molodoy at tick 151909, KSCERATO at 151918). CS2's radius as the
-    # sprite's half-size...
-    {"name": "blast_heat", "role": "blast_heat", "slots": 3, "life": (0.85, 1.25), "radius": (90.0, 180.0),
-     "scale": (0.8, 1.0), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 30.0, "rise": 0.0, "bright": 6.0,
-     "tint": FIRE_ORANGE, "size": 1.0, "lift": 0.0, "up": (90.0, 180.0), "speed": (0.0, 60.0), "drag": 0.1,
-     "gravity": -50.0, "fade_in": 0.0, "fade_out": 0.5, "sort": 1, "link": "blast_core"},
+    # frames fitted to the life; born at 0.8 of its size, as CS2's grows from a third with a bias of 0.81. Its burning
+    # core is its heat sheet, a heat map CS2 colours from black to orange (2 2 2 to 255 77 23) at an overbright of 10,
+    # additive, drawn over the smoke (`sort`): bright in each sequence's first frames, black by its middle; over a life
+    # of 0.2 - 0.3 s it burns orange to about +6 and dark red to +9. CS2's radius as the sprite's half-size.
+    {"name": "blast_heat", "role": "blast_heat", "slots": 3, "life": (0.2, 0.3),
+     "radius": (90.0 * BLAST_SIZE, 180.0 * BLAST_SIZE), "scale": (0.8, 1.0), "alpha": (1.0, 1.0), "roll": 180.0,
+     "spread": 30.0 * BLAST_SIZE, "rise": 0.0, "bright": 6.0, "tint": HE_ORANGE, "size": 1.0, "lift": 0.0,
+     "up": (90.0, 180.0), "speed": (0.0, 60.0), "drag": 0.1, "gravity": -50.0, "fade_in": 0.0, "fade_out": 0.5,
+     "sort": 1},
     # explosion_hegrenade_smoke_blasts: 3 jets of fire thrown out any way at 200 - 400 units/s (and 50 - 200 up),
     # radius 30 - 60, drag 0.025, drawn as trails of explosion_blast_01_heat in the same orange at an overbright of 5;
-    # a streak as long as a fifth of a second of its flight here, out by +40 with the fireball. Brighter than CS2's
+    # a streak as long as a fifth of a second of its flight here, out by +10 as the fireball. Brighter than CS2's
     # overbright: at 3 the jets did not show against de_dust2's sunlit walls.
-    {"name": "blast_jets", "role": "blast_jet", "slots": 3, "life": (0.6, 1.25), "radius": (30.0, 60.0),
-     "scale": (0.75, 1.0), "alpha": (1.0, 1.0), "roll": 0.0, "spread": 10.0, "rise": 0.0, "bright": 8.0,
-     "tint": FIRE_ORANGE, "size": 1.0, "lift": 0.0, "up": (50.0, 200.0), "speed": (200.0, 400.0),
-     "drag": 0.025, "stretch": 0.2, "max_length": 600.0, "fade_in": 0.0, "fade_out": 0.25, "sort": 1},
+    {"name": "blast_jets", "role": "blast_jet", "slots": 3, "life": (0.15, 0.3),
+     "radius": (30.0 * BLAST_SIZE, 60.0 * BLAST_SIZE), "scale": (0.75, 1.0), "alpha": (1.0, 1.0), "roll": 0.0,
+     "spread": 10.0 * BLAST_SIZE, "rise": 0.0, "bright": 8.0, "tint": HE_ORANGE, "size": 1.0, "lift": 0.0,
+     "up": (50.0, 200.0), "speed": (200.0, 400.0), "drag": 0.025, "stretch": 0.2, "max_length": 600.0,
+     "fade_in": 0.0, "fade_out": 0.25, "sort": 1},
     # ... and the same puffs' smoke (its first renderer: explosion_fireball_01_smoke in dark grey, 64 of 255, alpha 1,
     # lit), under the fire: the heat added over dark smoke makes CS2's dark red-orange fireball, then the black smoke
-    # thinning to nothing by about +90. Peach and half transparent at first, as before 2026-10-30, the added orange
-    # washed out against sunlit walls.
-    {"role": "blast_smoke", "slots": 3, "life": (1.5, 2.1), "radius": (90.0, 180.0), "scale": (0.8, 1.0),
-     "alpha": (1.0, 1.0), "roll": 180.0, "spread": 30.0, "rise": 0.0, "bright": 1.0, "tint": (0.15, 0.14, 0.13),
-     "translucent": True, "lift": 0.0, "up": (90.0, 180.0), "speed": (0.0, 60.0), "drag": 0.1, "gravity": -50.0,
-     "fade_in": 0.0, "fade_out": 0.6, "link": "blast_core"},
-    # explosion_hegrenade_smoke_ground: puffs rolling out along the ground in a ring (born 20 out, radius 75 – 125
-    # grown from a third, out at 25 – 200 units/s and slowed by drag 0.1; colour 64 of 255), burning orange at first
-    # as the fireball does (the same heat sheet, at an overbright of 5: CS2's orange puffs bursting out 4 – 17 ticks
-    # after the blast, on A long), then a low haze thinning with the rest, gone by about +105 (+118 indoors).
-    {"name": "blast_ground", "role": "blast_smoke", "slots": 8, "life": (1.25, 1.9), "radius": (75.0, 125.0),
-     "scale": (0.8, 1.0), "alpha": (0.6, 0.7), "roll": 180.0, "spread": 20.0, "rise": 0.0, "bright": 1.0,
-     "tint": (0.18, 0.17, 0.16), "translucent": True, "speed": (25.0, 200.0), "drag": 0.1, "lift": 0.3,
-     "fade_in": 0.0, "fade_out": 0.6, "link": "blast_ground"},
-    {"name": "blast_ground_heat", "role": "blast_heat", "slots": 8, "life": (0.85, 1.25), "radius": (75.0, 125.0),
-     "scale": (0.8, 1.0), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 20.0, "rise": 0.0, "bright": 4.0,
-     "tint": FIRE_ORANGE, "size": 1.0, "speed": (25.0, 200.0), "drag": 0.1, "lift": 0.3, "fade_in": 0.0,
-     "fade_out": 0.5, "sort": 1, "link": "blast_ground"},
-    # explosion_hegrenade_smoketrails: 7 tongues of fire flung out at up to 1400 units/s (±1000 each way) and 250 - 1000
-    # up, falling (gravity 250, drag 0.05), each a ball of fire (explosion_fireball_01_flame, overbright 40) trailing a
-    # rope of dark smoke (smoke_trail_01_loop): the arcs CS2 throws out of its blasts (the lower B tunnel, +4 - +42).
-    # Here the head in the fireball's heat sheet and the rope a streak of its smoke from where it was thrown (linked:
-    # the same particles), both gone with the rest or at the ground.
-    {"name": "blast_trails", "role": "blast_smoke", "slots": 7, "life": (1.5, 2.1), "radius": (4.0, 8.0),
-     "scale": (1.0, 0.6), "alpha": (0.8, 0.9), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 1.0,
-     "tint": (0.1, 0.1, 0.1), "translucent": True, "size": 1.0, "lift": 0.0, "speed": (300.0, 1400.0),
-     "up": (250.0, 1000.0), "gravity": 250.0, "drag": 0.05, "from_birth": True, "fade_in": 0.0, "fade_out": 0.5,
-     "floor": True, "link": "blast_trails"},
-    {"name": "blast_trail_fire", "role": "blast_heat", "slots": 7, "life": (1.5, 2.1), "radius": (8.0, 14.0),
-     "scale": (1.0, 0.333), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 0.0, "rise": 0.0, "bright": 8.0,
-     "tint": FIRE_ORANGE, "size": 1.0, "lift": 0.0, "speed": (300.0, 1400.0), "up": (250.0, 1000.0),
-     "gravity": 250.0, "drag": 0.05, "fade_in": 0.0, "fade_out": 0.5, "sort": 1, "link": "blast_trails",
-     "floor": True},
+    # thinning to nothing.
+    {"role": "blast_smoke", "slots": 3, "life": (0.35, 0.5), "radius": (90.0 * BLAST_SIZE, 180.0 * BLAST_SIZE),
+     "scale": (0.8, 1.0), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 30.0 * BLAST_SIZE, "rise": 0.0,
+     "bright": 1.0, "tint": (0.15, 0.14, 0.13), "translucent": True, "lift": 0.0, "up": (90.0, 180.0),
+     "speed": (0.0, 60.0), "drag": 0.1, "gravity": -50.0, "fade_in": 0.0, "fade_out": 0.6},
+    # explosion_hegrenade_smoke_ground: dark puffs rolling out along the ground in a ring (born 20 out, radius 75 – 125
+    # grown from a third, out at 25 – 200 units/s and slowed by drag 0.1; colour 64 of 255): a low haze thinning with
+    # the rest.
+    {"name": "blast_ground", "role": "blast_smoke", "slots": 8, "life": (0.3, 0.45),
+     "radius": (75.0 * BLAST_SIZE, 125.0 * BLAST_SIZE), "scale": (0.333, 1.0), "alpha": (0.4, 0.5), "roll": 180.0,
+     "spread": 20.0 * BLAST_SIZE, "rise": 0.0, "bright": 1.0, "tint": (0.25, 0.25, 0.25), "translucent": True,
+     "speed": (25.0, 200.0), "drag": 0.1, "lift": 0.3, "fade_in": 0.0, "fade_out": 0.6},
     # explosion_hegrenade_sparktrails: 3 - 5 carriers flung out at up to 1400 units/s and 250 - 1000 up (gravity 500),
     # each shedding streaks of sparks (sparks.vtex sequence 4, 252 / 209 / 187, self-lit) for half a second. Drawn as
     # single streaks along such flights, each as long as 0.06 s of it: the lines CS2's picture shows. Orange and dim
-    # (CS2's are soft orange 45 ticks after a blast; at 4 x their colour they were hard white rays).
+    # (at 4 x their colour they were hard white rays).
     {"name": "sparks", "role": "sparks", "slots": 24, "life": (0.3, 0.7), "radius": (1.5, 3.0), "scale": (1.0, 0.3),
      "alpha": (1.0, 1.0), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 1.2, "tint": (1.0, 0.62, 0.36),
      "size": 1.0, "lift": 0.0, "speed": (300.0, 1400.0), "up": (250.0, 1000.0), "gravity": 500.0, "drag": 0.025,
@@ -350,8 +329,8 @@ BLAST_LAYERS = [
      "tint": (0.99, 0.8, 0.74), "size": 0.375, "lift": 0.0, "speed": (50.0, 100.0)},
     # explosion_hegrenade_debris_small: flecks (fleks.vtex sequences 15 - 39) thrown out at up to 250 units/s (plus up
     # to 300 more from where they are born: 350 here, together) and 62 - 500 up, falling hard (gravity 200 and a pull
-    # of 400 - 600) until they touch the world; grey, alpha-blended. Radius
-    # 0.25 - 2.5 in CS2; 1 - 3 here (a sprite that small is a speck at any distance).
+    # of 400 - 600) until they touch the world; grey, alpha-blended. Radius 0.25 - 2.5 in CS2; 1 - 3 here (a sprite
+    # that small is a speck at any distance).
     {"name": "debris", "role": "debris", "slots": 24, "life": (3.0, 4.0), "radius": (1.0, 3.0), "scale": (1.0, 0.5),
      "alpha": (1.0, 1.0), "roll": 180.0, "spread": 10.0, "rise": 0.0, "bright": 1.0, "tint": (0.55, 0.55, 0.55),
      "translucent": True, "size": 1.0, "lift": 0.0, "speed": (0.0, 350.0), "up": (62.5, 500.0), "gravity": 700.0,
@@ -449,10 +428,10 @@ FLICKER_TICKS = 4
 # ground in front of them red-orange, where 200 cd of a paler orange over twice as long showed nothing there. CS2's
 # particle lights fade smoothly to their radius: an inverse-square light strong enough to turn that wall orange (600
 # cd) burned the door beside the blast yellow-white (KSCERATO, 151912), where CS2 shows it soft orange; so a falloff
-# light (exponent 2), reaching 260 units (CS2's 160 and some: at 400 it lit the wall beside KSCERATO). Its colour in
-# linear terms, as FIRE_ORANGE; at 12 that red lit the whole doorway and the ground round it deep red (mid doors, +0 -
-# +10), where CS2 tints the walls next to a blast orange (the lower B tunnel, +1 - +5).
-BLAST_LIGHT = {"color": (1.0, 0.15, 0.016), "peak": 8.0, "radius": 260.0, "falloff": 2.0,
+# light (exponent 2), reaching 260 units (CS2's 160 and some: at 400 it lit the wall beside KSCERATO) and, with the
+# blast 1.5 times bigger, 1.5 times further. The colour of the blast as first rebuilt (the user's choice, 2026-10-31;
+# CS2's orange taken in linear terms lit the doorway deep red).
+BLAST_LIGHT = {"color": (1.0, 0.42, 0.13), "peak": 12.0, "radius": 260.0 * BLAST_SIZE, "falloff": 2.0,
                "decay": [(0, 1.0), (4, 1.0), (14, 0.0)]}
 # The flashbang's: at 600 cd for 2 ticks it blew the whole upper B tunnel out white one tick after round 17's flash
 # (154317), where CS2 played shows the room as it was round a soft glow; so a faint white glow on what is next to it,

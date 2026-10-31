@@ -48,6 +48,13 @@ SMOKE_FADE_EARLY_TICKS = 48
 # billows 20 - 30 units across.
 SMOKE_NOISE = 0.25
 SMOKE_NOISE_SCALE = 1.0 / 75.0
+# The noise rises through the cloud, SMOKE_RISE cm a tick (20 units a second): CS2's billows roll upward, where a
+# noise fixed in the world left Unreal's smokes standing still (the user's report, 2026-10-31).
+SMOKE_RISE = 20.0 * UNITS_TO_CM / 64.0
+# How far the noise moves where the cloud is looked up (cm), and how much its threshold rises as it fades out
+# (SMOKE_HLSL).
+SMOKE_WARP_CM = 15.0 * UNITS_TO_CM
+SMOKE_FADE_ERODE = 0.2
 # Console variables the smoke volumes need: indirect light from Lumen's translucency volume (single scattering), so a
 # smoke in the shade is lit by the room around it, not black. The project sets them for every session
 # (unreal/Sandbox/Config/DefaultEngine.ini, [SystemSettings]: the editor, Open in Unreal, shoot_sequence.py; before
@@ -172,11 +179,15 @@ def key_replay_tick(sequence, replay, end_frame):
 # slice z at column z % 8, row z / 8; texel = sqrt(density / full)). Two slices and two frames, blended: the hardware
 # filters within a slice, kept half a texel off its edges so neighbouring slices never bleed in. The density is
 # shaped: nothing below the threshold, opaque Ramp above it; as the cloud fades (from the frame with the fading flag
-# to FadeEnd) the threshold rises to 1, so the cloud thins away from its edges.
+# to FadeEnd) it turns translucent, its threshold rising by FadeErode only (risen to 1, the cloud was eaten into holes
+# as it went: the user's report, 2026-10-31). Where it is looked up is moved by the noise, Warp cm at most along a
+# slant: CS2's server marks voxels solid (a clip above a low wall too), and a cloud cut by them showed a flat plane
+# where CS2's edge is lumpy.
 SMOKE_HLSL = r"""
 if (Tick < FirstTick || Tick > FadeEnd) return 0.0;
 // Grid coordinates, 0 - 1, in CS2's axes: Unreal's y is CS2's -y.
 float3 g = float3(WorldPos.x - Origin.x, Origin.y - WorldPos.y, WorldPos.z - Origin.z) / Size;
+g += (Noise - 0.5) * (Warp / Size) * float3(0.8, 0.5, 0.33);
 if (any(g < 0.0) || any(g > 1.0)) return 0.0;
 float3 v = g * 32.0 - 0.5;
 float z = clamp(v.z, 0.0, 31.0);
@@ -205,13 +216,14 @@ d *= d;
 float fade = saturate((FadeEnd - Tick) / max(FadeEnd - FadeTick, 1.0));
 // The noise (0 - 1) moves the threshold: its round crests bulge out of the cloud's surface as puffs, its thin creases
 // cut into it (the other way round, the crests carved round pits: a sponge, where CS2's cloud is cauliflower).
-float t = max(lerp(1.0, Threshold, fade) - NoiseAmount * (Noise - 0.5), 0.005);
-return saturate((d - t) / max(Ramp, 0.001));
+float t = max(Threshold + (1.0 - fade) * FadeErode - NoiseAmount * (Noise - 0.5), 0.005);
+return fade * saturate((d - t) / max(Ramp, 0.001));
 """
 # The Custom node's scalar inputs, each a material parameter of the same name.
 SMOKE_SCALARS = ["Size", "FirstTick", "TicksPerFrame", "Frames", "Columns", "Width", "Height", "FadeTick", "FadeEnd",
-                 "Threshold", "Ramp", "NoiseAmount"]
-SMOKE_DEFAULTS = {"Threshold": SMOKE_THRESHOLD, "Ramp": SMOKE_RAMP, "NoiseAmount": SMOKE_NOISE}
+                 "Threshold", "Ramp", "NoiseAmount", "Warp", "FadeErode"]
+SMOKE_DEFAULTS = {"Threshold": SMOKE_THRESHOLD, "Ramp": SMOKE_RAMP, "NoiseAmount": SMOKE_NOISE,
+                  "Warp": SMOKE_WARP_CM, "FadeErode": SMOKE_FADE_ERODE}
 
 
 def smoke_material():
@@ -244,12 +256,21 @@ def smoke_material():
     noise.set_editor_property("turbulence", True)
     noise.set_editor_property("output_min", 0.0)
     noise.set_editor_property("output_max", 1.0)
-    mel.connect_material_expressions(world_position, "", noise, "Position")
-    connect(noise, "Noise")
     tick = mel.create_material_expression(material, unreal.MaterialExpressionCollectionParameter, -900, -350)
     tick.set_editor_property("collection", replay_collection())
     tick.set_editor_property("parameter_name", "ReplayTick")
     connect(tick, "Tick")
+    # Looked up SMOKE_RISE cm lower every tick: the noise's billows rise through the cloud.
+    rise = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, -1100, -520)
+    rise.set_editor_property("constant", unreal.LinearColor(0.0, 0.0, SMOKE_RISE, 0.0))
+    drift = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, -800, -520)
+    moved = mel.create_material_expression(material, unreal.MaterialExpressionSubtract, -750, -450)
+    for source, target, input_name in ((tick, drift, "A"), (rise, drift, "B"), (world_position, moved, "A"),
+                                       (drift, moved, "B"), (moved, noise, "World Position")):
+        if not mel.connect_material_expressions(source, "", target, input_name):
+            raise RuntimeError("smoke material: could not connect %s to %s.%s" % (
+                source.get_class().get_name(), target.get_class().get_name(), input_name))
+    connect(noise, "Noise")
     origin = mel.create_material_expression(material, unreal.MaterialExpressionVectorParameter, -900, -250)
     origin.set_editor_property("parameter_name", "Origin")
     connect(origin, "Origin")
