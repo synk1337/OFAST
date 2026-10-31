@@ -145,7 +145,7 @@ impl Cs2Install {
 /// A CS2 patch can change what OFAST reads (demo messages, animation graphs, shaders) without warning. After each
 /// one, a round is exported and imported again and its checks compared (docs/development.md, "After a CS2 update");
 /// the new build is added here once nothing is broken, or with the fix when something was.
-pub const CHECKED_VERSIONS: &[(&str, u32)] = &[("1.41.9.3", 2_000_938)];
+pub const CHECKED_VERSIONS: &[(&str, u32)] = &[("1.41.9.4", 2_000_939), ("1.41.9.3", 2_000_938)];
 
 /// A CS2 build, as `game/csgo/steam.inf` names it (plain `key=value` lines).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,8 +196,9 @@ mod tests {
         assert_eq!(version.patch, "1.41.9.3");
         assert_eq!(version.build, 2_000_938);
         assert!(version.is_checked());
+        // A build far ahead of any CS2 has shipped, so no patch ever checks it.
         let newer =
-            Cs2Version::parse("ClientVersion=2000939\nPatchVersion=1.41.9.4\n").expect("a version");
+            Cs2Version::parse("ClientVersion=9999999\nPatchVersion=9.9.9.9\n").expect("a version");
         assert!(!newer.is_checked());
         assert_eq!(
             Cs2Version::parse("ClientVersion=x\nPatchVersion=1.41.9.3\n"),

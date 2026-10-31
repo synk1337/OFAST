@@ -508,11 +508,14 @@ player and round.
 
 ### Before the next release (the user's list, 2026-10-30)
 
+Released in 1.0.2 (2026-10-31): the point of view, the HE, molotov, flashbang and smoke rework. The low items are left.
+
 - [x] **One player, one point of view** (very high): a round sent to Unreal is about one player, seen through their
   eyes from start to end; switching between players (the default cuts to each killer) ruins it. Done: the Studio's
   **Point of view** (`export-demo --pov`), the round ending 2 s after their death.
-- [ ] **Flashbangs and smokes remade** (high), as the HE blast was: filmed in CS2 (played slowly:
-  `tools/cs2/slow_shots.py`) and rebuilt to match; smokes volumetric, as CS2's are.
+- [x] **Flashbangs and smokes remade** (high), as the HE blast was: filmed in CS2 (played slowly:
+  `tools/cs2/slow_shots.py`) and rebuilt to match; smokes volumetric, as CS2's are. Done: the flash's soft glow; smokes
+  shaded (the volume's ambient occlusion), grey, billows rolling upward, fading without holes (`docs/checks.md`).
 - [x] **HE blast denser, with more momentum** (high): its fireball and smoke too thin, not thrown out hard enough.
   Done: the blast of the first rebuild 1.5 times bigger (the user's choice over CS2's longer timing and the tongues of
   fire flung through walls, 2026-10-31).

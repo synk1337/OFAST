@@ -1,7 +1,7 @@
 {
   "name": "ofast-studio",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "OFAST Studio: browse CS2 demos, find highlights, send rounds to Unreal.",
   "license": "MIT",
