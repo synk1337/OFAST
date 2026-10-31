@@ -89,6 +89,7 @@ import unreal
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gltf_specular  # noqa: E402
 import grenade_effects  # noqa: E402
+import ofast_look  # noqa: E402
 import pearlescence  # noqa: E402
 import replay_cameras  # noqa: E402
 import shot_effects  # noqa: E402
@@ -1175,10 +1176,10 @@ def build(replay, looks):
         camera_binding = sequence.add_possessable(camera)
         keys += replay_cameras.key_eyes(camera_binding, cameras_file["eyes"].get(str(controller), []), tick0,
                                         end_frame)
-        if STYLE == "realistic":
-            # Its depth of field: focused where the player looks (the file's `focus`, export::cameras).
-            focus_rows = (cameras_file.get("focus") or {}).get(str(controller), [])
-            keys += replay_cameras.key_focus(sequence, camera, focus_rows, tick0, end_frame)
+        # Its depth of field: focused where the player looks (the file's `focus`, export::cameras); on in the
+        # realistic look, keyed but off in CS2's (the Look panel turns it on, ofast_look.py).
+        focus_rows = (cameras_file.get("focus") or {}).get(str(controller), [])
+        keys += replay_cameras.key_focus(sequence, camera, focus_rows, tick0, end_frame, blur=STYLE == "realistic")
         cameras[controller] = (camera, camera_binding)
         agent = agents.get(controller)
         if agent is not None:
@@ -1449,6 +1450,8 @@ def main():
     clean_level(replay["map"])
     set_look(map_level(replay["map"]))
     sequence, cameras, shot_actors = build(replay, looks)
+    # The level's Look panel settings (ofast_look.py) on the new round's cameras too, if the level has a look.
+    ofast_look.apply_level_look()
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world().get_path_name()
     if not world.startswith("/Game/"):
         raise RuntimeError("refusing to save " + world)

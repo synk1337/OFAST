@@ -842,6 +842,32 @@ the auto exposure brightens them like a camera would. `-Disable` works in this s
 the project setting `r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange` (set in the sandbox's
 `DefaultEngine.ini`) for its EV100 limits.
 
+## The Look panel
+
+`tools/unreal/ofast_look.py` (2026-10-31, the user's choice of a panel in Unreal for beginners): sliders for the
+level's look, applied live. The panel is an object of a class made in Python (`OfastLook`) opened in an editor tab;
+Unreal cannot save such an object (its class is transient), so its values are kept per level in
+`<project>/Saved/OFAST/Looks/<level>.json`, with the map's own look (`base`, read from the level the first time and
+again when `import_map.py` has built it anew: the level's `OFAST_import_id`). Most sliders are changes from the map's
+own look; depth of field, motion blur, vignette, grain, bloom and lens flare are amounts starting at the look's own.
+
+| Slider | What it sets |
+|---|---|
+| Sun height, direction | the sun's elevation (kept within 1 – 89°) and yaw, as offsets |
+| Sun strength, colour | its intensity × strength; its colour temperature, 2500 K warmer or cooler at ±1 (from 6500 K when the look gives it none) |
+| Shadow brightness | the Sky Light's intensity × |
+| Haze, light beams | the height fog's density ×, the sun's volumetric scattering intensity × (realistic: the standard look has no fog) |
+| Brightness | the post-process exposure compensation + (stops) |
+| Depth of field | the POV cameras' f-stop: 22^(1 − amount) (0.8 ≈ f/1.9, the realistic look's f/1.8); 0 turns the focus off. The focus distance is keyed in both looks (`import_demo.py`), on only in the realistic one |
+| Motion blur | the post-process motion blur amount |
+| Warm / cool, saturation, contrast, vignette, grain | realistic: Unreal's white balance (6500 K + 2500 K × warmth), colour saturation and contrast, vignette and grain; CS2's look: OFAST's tone mapper (`tonemapper.py`, `M_OFAST_Tonemap_v4`), since Unreal applies nothing after a replacing tone mapper (its instance is moved onto v4 the first time; at neutral v4 draws v3's picture) |
+| Bloom, lens flare | the post-process's (realistic only) |
+
+`render_round.py`, `shoot_sequence.py`, `import_demo.py` and `import_cameras.py` apply the level's look after loading
+it (`apply_level_look`), so renders match the panel without the level being saved. Checked on round 17 of Aurora vs
+FURIA: a golden hour (the sun 38° lower, warmer, more haze and beams) and black and white in the realistic look; in
+CS2's look saturation 0.3, contrast 1.3, vignette 0.8 (the corners of the CT spawn at half their brightness), +0.5 stop.
+
 ## Fog — `env_cubemap_fog`
 
 Distance fog coloured by the sky cube map: opacity = `max_opacity × ((distance − start) / (end − start))^falloff`,

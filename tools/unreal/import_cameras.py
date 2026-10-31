@@ -11,8 +11,8 @@ Inputs (environment variables):
 The round must have been built by import_demo.py: its sequence /Game/OFAST/Replays/<demo>_r<round> in its map's
 level /Game/OFAST/Maps/<map> (or <map>_realistic). What changes (replay_cameras.py makes them as import_demo.py does):
 
-- each player's first-person camera ("POV <name>") keyed again on the file's eyes (a new smoothing), and in the
-  realistic look on its `focus` (depth of field);
+- each player's first-person camera ("POV <name>") keyed again on the file's eyes (a new smoothing) and its `focus`
+  (depth of field, on or off as it was; then the level's Look panel settings applied again, ofast_look.py);
 - the shot and HLAE cameras of earlier runs (actors tagged OFAST_camera) removed with their bindings, and the file's
   made;
 - the camera cut track replaced by the file's cuts (cuts made by hand go too; cameras added by hand stay, ready to
@@ -30,6 +30,7 @@ import sys
 import unreal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ofast_look  # noqa: E402
 import replay_cameras  # noqa: E402
 from replay_cameras import CAMERA_TAG, key_visibility, log  # noqa: E402
 
@@ -90,8 +91,8 @@ def update(cameras):
     bindings = {str(b.get_display_name()): b for b in sequence.get_bindings()}
     names = {int(c): n for c, n in cameras["players"].items()}
 
-    # The players' eyes, and in the realistic look where they focus (its binding under the camera's, made again).
-    focus = assets.get_metadata_tag(sequence, "OFAST_style") == "realistic"
+    # The players' eyes, and where they focus (its binding under the camera's, made again; the blur on or off as it
+    # was: the look's, or the Look panel's).
     povs = {a.get_actor_label(): a for a in actors.get_all_level_actors() if isinstance(a, unreal.CameraActor)}
     eyes = {}
     keys = 0
@@ -104,13 +105,15 @@ def update(cameras):
         keys += replay_cameras.key_eyes(binding, cameras["eyes"].get(str(controller), []), tick0, end_frame)
         eyes[controller] = binding
         camera = povs.get("POV " + name)
-        if focus and camera is not None:
+        if camera is not None:
             component = str(camera.camera_component.get_name())
+            blur = camera.camera_component.get_editor_property("post_process_settings").get_editor_property(
+                "override_depth_of_field_focal_distance")
             for child in binding.get_child_possessables():
                 if str(child.get_display_name()) == component:
                     child.remove()
             keys += replay_cameras.key_focus(sequence, camera, (cameras.get("focus") or {}).get(str(controller), []),
-                                             tick0, end_frame)
+                                             tick0, end_frame, blur=blur)
 
     # The shot cameras: the old ones out (their bindings, the component bindings under them, the actors), the new in.
     old = [a for a in actors.get_all_level_actors() if CAMERA_TAG in a.tags]
@@ -143,6 +146,8 @@ def update(cameras):
                            end_frame)
             lights += 1
 
+    # The level's Look panel settings (ofast_look.py: the depth of field just keyed again).
+    ofast_look.apply_level_look()
     assets.save_loaded_asset(sequence)
     levels.save_current_level()
     log("cameras of %s: %d eyes (%d keys), %d shot cameras (%d removed), %d cuts, %d muzzle lights"

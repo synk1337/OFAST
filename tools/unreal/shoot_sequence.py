@@ -27,6 +27,7 @@ import unreal
 
 # Unreal runs this file without its folder on sys.path; the shared modules sit next to it.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ofast_look  # noqa: E402
 import replay_cameras  # noqa: E402
 
 WIDTH, HEIGHT = 1920, 1080
@@ -97,6 +98,8 @@ def main():
     level = (assets.get_metadata_tag(sequence, "OFAST_level")
              or "/Game/OFAST/Maps/" + assets.get_metadata_tag(sequence, "OFAST_map"))
     levels.load_level(level)
+    # The Look panel's settings (ofast_look.py), even if the level was not saved after they were changed.
+    ofast_look.apply_level_look()
     by_label = {a.get_actor_label(): a for a in actors.get_all_level_actors()}
     name = path.rsplit("/", 1)[-1]
     shots = []

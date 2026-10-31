@@ -39,6 +39,7 @@ import time
 import unreal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ofast_look  # noqa: E402
 import smoke_volumes  # noqa: E402
 from replay_cameras import TAG, log  # noqa: E402
 
@@ -151,6 +152,8 @@ def main():
     folder = "%s_%s" % (path.rsplit("/", 1)[-1], name) + ("_%d-%d" % tuple(ticks) if frames else "")
     folder = os.path.join(os.environ["OFAST_SHOT"], folder)
     levels.load_level(level)
+    # The Look panel's settings (ofast_look.py), even if the level was not saved after they were changed.
+    ofast_look.apply_level_look()
     players = put_players_in_layer()
     config = make_config(name, PRESETS[name])
     log("render %s, preset %s, frames %s, %d player actors in layer %r, into %s"

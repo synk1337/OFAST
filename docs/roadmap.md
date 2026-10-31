@@ -568,6 +568,14 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   on it (`game::CHECKED_VERSIONS`), orange ("not synced with this CS2 version yet, it might break") otherwise.
 - [ ] **Same-day CS2 support**: each CS2 patch checked the day it ships (docs/development.md, "After a CS2 update"),
   its build added to the checked versions, or fixed, and an OFAST release out that day.
+- [x] **Customizing the look, for beginners** (the user's choice, 2026-10-31: a panel in Unreal, over presets and
+  sliders in the Studio): the Look panel (`ofast_look.py`, [lighting](formats/lighting.md#the-look-panel)), opened
+  with every round by Open in Unreal and from the menu bar (OFAST → Look): sun height, direction, strength and colour,
+  shade, haze, light beams, brightness, depth of field, motion blur, warm / cool, saturation, contrast, vignette, grain,
+  bloom, lens flare, live in the viewport, kept per level and applied to renders. Not yet: presets (golden hour,
+  overcast …), haze in CS2's look, a look keyed over the clip.
+- [x] **Charms calmer** (the user's look, 2026-10-31): they went wild, swinging to their hinges all the time; now
+  hung from the ring's smoothed path, their swing damped against it (`export::keychains`, swing).
 
 ## Hard problems we know about
 

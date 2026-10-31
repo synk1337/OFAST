@@ -157,6 +157,25 @@ When it is done, **Open in Unreal** opens the project at the map's level with th
 (the timeline at the bottom of Unreal's window); the viewport shows the sequence's cameras. Press the space bar
 in Sequencer to play it. The sequence is `Content/OFAST/Replays/<demo>_r<round>` in Unreal's Content Browser.
 
+### The Look panel
+
+**Open in Unreal** also opens the **Look** panel, a window of sliders for the map's look; you can dock it anywhere
+in Unreal's window. It is in the menu bar too: **OFAST → Look**. Drag a slider and the viewport changes at once:
+
+- **Sun**: its height (raise it, or lower it for a golden hour: in the realistic look the sky follows), its
+  direction round the map, its strength, its colour (warmer or cooler), and how bright the shade is.
+- **Atmosphere** (realistic look): how thick the haze is, and how strongly the sun's beams show in it.
+- **Camera**: brightness (in camera stops: +1 is twice as bright), depth of field (blur away from what the player
+  looks at, through their eyes: 0 is everything sharp, 0.8 a strong cinematic blur), motion blur.
+- **Colour and film**: warm or cool, saturation (0 is black and white), contrast, vignette, film grain; in the
+  realistic look also bloom and lens flare.
+- **Reset everything** puts every slider back to the map's own look. Each slider's own reset arrow puts it back to
+  its neutral value.
+
+Each map level (CS2's look and the realistic one apart) keeps its own settings, for every round you send there; the
+renders and the next **Open in Unreal** use them, even if you did not save the level. They are kept in the Unreal
+project's `Saved/OFAST/Looks` folder.
+
 ## Rendering a round
 
 Once a round is in Unreal, **Render** (under the round's cameras) renders it to images you import into your editor

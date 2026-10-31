@@ -198,15 +198,16 @@ FOCUS_FSTOP = 1.8
 FOCUS_SENSOR_MM = 36.0
 
 
-def key_focus(sequence, camera, rows, tick0, end_frame):
-    """The realistic look's depth of field on a POV camera (a CameraActor): its post-process lens (FOCUS_FSTOP,
-    FOCUS_SENSOR_MM) and its focal distance keyed linearly from the file's `focus` rows [tick, distance in units].
-    Returns the number of keys."""
+def key_focus(sequence, camera, rows, tick0, end_frame, blur=True):
+    """A POV camera's (a CameraActor's) depth of field: its post-process lens (FOCUS_FSTOP, FOCUS_SENSOR_MM) and its
+    focal distance keyed linearly from the file's `focus` rows [tick, distance in units]. On (`blur`) in the realistic
+    look; keyed but off in CS2's look, for the Look panel (ofast_look.py) to switch on. Returns the number of keys."""
     component = camera.camera_component
     settings = component.get_editor_property("post_process_settings")
     for name, value in (("depth_of_field_fstop", FOCUS_FSTOP), ("depth_of_field_sensor_width", FOCUS_SENSOR_MM),
                         ("depth_of_field_focal_distance", rows[0][1] * 2.54 if rows else 1000.0)):
-        settings.set_editor_property("override_" + name, True)
+        # Off: the focal distance not overridden is 0, which Unreal takes as no depth of field.
+        settings.set_editor_property("override_" + name, blur)
         settings.set_editor_property(name, value)
     component.set_editor_property("post_process_settings", settings)
     component.set_editor_property("post_process_blend_weight", 1.0)
