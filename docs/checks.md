@@ -404,6 +404,11 @@ at the default brightness, the tick read off the demo bar) against Unreal (`shoo
 - **In the shade** (molodoy, 154514 – 154520) CS2's near-black streaks show against a lit ground; Unreal's ground there
   is dark (the per-map shade, above) and they hardly show.
 - Not drawn: the streaks' decals on the ground (`…_ground_decal`), CS2's bloom round the sparks.
+- **Colour** (2026-10-31): Unreal's splashes were a pink-red (143, 49, 39 of 255) beside near-black streaks, unlit and
+  drawn twice as bright as their tint; CS2's blood is lit (its renderers keep their default diffuse lighting, its
+  streaks and mists are tinted by the light), one red from the splash to the streaks, (186, 66, 34) in the sun. Lit
+  now in CS2's own gradients: (177, 26, 19) on yuurih at 153356 – 153362, the streaks the same red darker. CS2's is a
+  little more orange, its red cloud wider (the sunlit wall shows through its edges).
 
 ## HE blast, tick by tick (2026-10-30)
 

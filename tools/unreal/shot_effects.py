@@ -214,53 +214,57 @@ BLOOD_SIZE = 1.0
 SPRITE_SIZE = grenade_effects.SPRITE_SIZE
 # How far a streak's tail (the wound) sags in a second, units (CS2's curve, followed as t^2.2).
 STREAK_TAIL_DROP = 110.0
-# The tints are CS2's gradients' reds; the splashes are drawn twice as bright as their tint: at 1, MAJ3R's kill showed
-# a dark red speckle where CS2 shows a bright red blob (CS2 lights its blood in the sun). The streaks are near black:
-# CS2's gradient puts their sheet's bright, opaque core at its dark end (16 0 0), and at its red end (178 11 11) they
-# were bright red lines where CS2 shows black-red splatter (MAJ3R's view, ticks 153354 - 153366).
-SPLASH_TINT = (0.6, 0.05, 0.05)
-SPLASH_BRIGHT = 2.0
-STREAK_TINT = (0.1, 0.008, 0.008)
-MIST_TINT = (0.38, 0.0, 0.0)
+# Lit by the scene, as CS2 lights its blood (its sprite renderers keep their default diffuse lighting; its streaks and
+# mists are tinted half by the light where they are born, C_INIT_RandomColor's m_flTintPerc 0.5): each layer coloured
+# by its own CS2 gradient (grenade_effects.GRADIENTS, `blood_…`) as an albedo, so the sun warms it and the shade
+# darkens it. The first pass drew blood unlit: its splashes had to be twice as bright as their tint to show, and stayed
+# a pink-red glowing alike in sun and shade beside near-black streaks, two shades where CS2 shows one blood (the
+# user's look at round 17, 2026-10-30). BLOOD_BRIGHT scales the albedos: at 5 the splashes on MAJ3R's hits on yuurih
+# (ticks 153356 - 153362, in the sun) are CS2's red, 177 of 255 against its 186; at 1 they hardly showed, at 3 they
+# were a darker red (147). CS2's reads a little more orange where its cloud, wider than OFAST's, lets the sunlit wall
+# through. MIST_TINT is CS2's 92 - 101, 0, 0 in linear terms (the mists' sheet keeps its own grey).
+BLOOD_BRIGHT = 5.0
+MIST_TINT = (0.12, 0.0, 0.0)
 # How much denser the haze is than its sheet's alpha (static_smoke is faint, about a tenth opaque): at 1 the puffs
 # barely showed under the splashes, where CS2 draws a solid red glow round the head.
 HAZE_ALPHA = (2.0, 2.5)
 
 
 def blood_layer(name, role, slots, life, radius, scale, up, speed=(0.0, 0.0), **more):
-    """A blood layer: a translucent splash, born within 2 units of the hit (CS2's m_fRadiusMax), born whole (no fade
-    in); `more` overrides."""
+    """A blood layer: a lit, translucent splash, red where faint and purple-black in its core, born within 2 units of
+    the hit (CS2's m_fRadiusMax), born whole (no fade in); `more` overrides."""
     layer = {"name": name, "role": role, "slots": slots, "life": life, "radius": radius, "scale": scale,
-             "alpha": (1.0, 1.0), "roll": 180.0, "spread": 2.0, "rise": 0.0, "bright": SPLASH_BRIGHT,
-             "tint": SPLASH_TINT, "translucent": True, "size": BLOOD_SIZE, "lift": 0.0, "up": up, "speed": speed,
-             "fade_in": 0.0}
+             "alpha": (1.0, 1.0), "roll": 180.0, "spread": 2.0, "rise": 0.0, "bright": BLOOD_BRIGHT,
+             "gradient": "blood_dark_core", "translucent": True, "lit": True, "size": BLOOD_SIZE, "lift": 0.0,
+             "up": up, "speed": speed, "fade_in": 0.0}
     layer.update(more)
     return layer
 
 
 def haze_layer(splash, radius_scale=1.0):
     """The static_smoke puff CS2 draws under a splash (its second renderer, `radius_scale` of its size): the same
-    particles' sizes, flight and colours in the blood_haze sheet's 5 puffs (here particles of their own), HAZE_ALPHA
-    times as opaque."""
+    particles' sizes and flight in the blood_haze sheet's 5 puffs (here particles of their own), red in its core,
+    HAZE_ALPHA times as opaque."""
     return dict(splash, name=splash["name"] + "_haze", role="blood_haze", sequence=(0, 5), alpha=HAZE_ALPHA,
-                radius=tuple(r * radius_scale for r in splash["radius"]))
+                gradient="blood_red_core", radius=tuple(r * radius_scale for r in splash["radius"]))
 
 
 def streak_layer(name, role, slots, life, radius, scale, up, speed, gravity, sequence, **more):
     """A blood streak (CS2's trails): from the wound to the droplet, born a tenth of its life old, faded out over its
-    last fifth (0.125 - 0.25); `more` overrides (drag 0.05, the age, the streaks' tint)."""
+    last fifth (0.125 - 0.25), coloured by its sheet's gradient (the role's name in GRADIENTS); `more` overrides (drag
+    0.05, the age)."""
     values = {"gravity": gravity, "drag": 0.05, "age": (0.1, 0.125), "from_birth": True,
-              "tail_drop": STREAK_TAIL_DROP, "sequence": sequence, "tint": STREAK_TINT, "bright": 1.0,
-              "fade_out": 0.2, "frame": "left"}
+              "tail_drop": STREAK_TAIL_DROP, "sequence": sequence, "gradient": role, "fade_out": 0.2,
+              "frame": "left"}
     values.update(more)
     return blood_layer(name, role, slots, life, radius, scale, up, speed, **values)
 
 
 def mist_layer(name, life, radius, alpha, up, speed, drag, fade_out=0.8):
     """A blood mist (…_mist_away): 4 wispy puffs flying away, rising a little (velocity noise 30 - 50 up), born a tenth
-    of their life old."""
+    of their life old, dark red."""
     return blood_layer(name, "muzzle_alt", 4, life, radius, (0.25, 3.0), up, speed, alpha=alpha, rise=8.0,
-                       age=(0.1, 0.125), gravity=50.0, drag=drag, sequence=(0, 3), tint=MIST_TINT, bright=1.0,
+                       age=(0.1, 0.125), gravity=50.0, drag=drag, sequence=(0, 3), tint=MIST_TINT, gradient=None,
                        fade_out=fade_out)
 
 
@@ -273,7 +277,8 @@ BLOOD_FORWARD_HAZE = haze_layer(BLOOD_FORWARD, 0.5)
 # blood_impact_high's _vis_spray: 2 splashes toward the shooter at 50 - 120, radius 14 - 20 grown from a quarter,
 # gravity 100.
 HIGH_SPRAY = blood_layer("blood_high_spray", "blood_spray", 2, (0.5, 0.75), (14.0, 20.0), (0.25, 1.0), (50.0, 120.0),
-                         gravity=100.0, drag=0.05, fade_out=0.3, sequence=(0, 3), age=(0.0, 0.1))
+                         gravity=100.0, drag=0.05, fade_out=0.3, sequence=(0, 3), age=(0.0, 0.1),
+                         gradient="blood_red_core")
 # blood_impact_med's _vis_spray: 2 splashes toward the shooter at 50 - 120 (sideways 12 - 15), radius 11 - 16 grown
 # from a tenth to twice, gravity 250, rolled -45 to -90.
 MED_SPRAY = blood_layer("blood_med_spray", "blood_spray", 2, (0.5, 0.7), (11.0, 16.0), (0.1, 2.0), (50.0, 120.0),
@@ -768,7 +773,7 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, v
     effects = agents.get("effects", [])
     if not shots:
         return 0
-    rebuild = not assets.does_asset_exist(grenade_effects.SPRITE_MATERIALS[False])
+    rebuild = not all(assets.does_asset_exist(path) for path in grenade_effects.SPRITE_MATERIALS.values())
     instances = grenade_effects.update_layers(replay, replay_path, effects, shot_layers(), rebuild) if effects else {}
     meshes = {local: grenade_effects.sprite_mesh(local) for local in (False, True)}
     rng = random.Random(replay["round"] * 7349 + len(shots))

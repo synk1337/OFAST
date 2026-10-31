@@ -522,8 +522,10 @@ Released in 1.0.2 (2026-10-31): the point of view, the HE, molotov, flashbang an
 - [x] **Molotov fixed** (high): remade the same way (filmed tick by tick in CS2 offline, rebuilt to match). Done:
   rebuilt from CS2's files and checked on round 17's molotov played slowly (burst, carpet, heart, magenta edge).
 - [ ] **Weapons through walls** (low): a player's gun poking through the wall they stand against.
-- [ ] **Blood in one colour** (low): the splash on the body a bright pink-red beside the dark red streaks, two shades
-  where CS2 shows one (the user's screenshot of round 17, 2026-10-30).
+- [x] **Blood in one colour** (low): the splash on the body a bright pink-red beside the dark red streaks, two shades
+  where CS2 shows one (the user's screenshot of round 17, 2026-10-30). Done (2026-10-31): blood lit by the scene as
+  CS2 lights it, in CS2's own gradients (a lit sprite material, `M_SpriteLit`): one red, warm in the sun, dark in the
+  shade ([checks](checks.md#blood-against-cs2-2026-10-30)).
 - [x] **Realistic lighting as an export option** (low): the Studio's choice between CS2's look and a realistic one,
   with an ambiance of its own: depth of field, light shafts, atmosphere and fog. Done (2026-10-31): the Studio's look
   **Realistic** builds the round in `<map>_realistic` (import_map.py's physically lit style, imported once per map), with

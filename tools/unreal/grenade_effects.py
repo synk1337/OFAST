@@ -11,7 +11,8 @@ explosion_flashbang). Niagara systems cannot be written from editor Python, so O
   found), the wisps it leaves when it goes out (SMOKE_LAYERS, WALL_SMOKE_LAYERS); a blast's or a flashbang's layers
   (BLAST_LAYERS, FLASH_LAYERS). An instance is a sprite slot; its per-instance data hold where it is (Unreal cm), the
   ticks it may spawn particles in, a phase, a seed and the floor it dies at.
-- The materials (SPRITE_MATERIALS: additive for flames and flares, translucent for smoke; unlit) read the demo tick
+- The materials (SPRITE_MATERIALS: additive for flames and flares, translucent for smoke, both unlit; translucent and
+  lit by the scene for blood, which CS2 lights too) read the demo tick
   from the parameter collection the smokes use (smoke_volumes.REPLAY_COLLECTION) and, in the vertex and the pixel
   shader alike, the same few lines (SPRITE_STATE): the slot respawns a particle every LifeMax seconds while its span
   lasts; a hash of the slot's seed and the respawn count draws the particle's lifetime, size, place, roll and sheet
@@ -38,7 +39,9 @@ import unreal
 
 import smoke_volumes
 
-SPRITE_MATERIALS = {False: "/Game/OFAST/Replays/M_SpriteAdd", True: "/Game/OFAST/Replays/M_SpriteBlend"}
+# By kind (material_kind): additive, alpha-blended, alpha-blended and lit.
+SPRITE_MATERIALS = {"add": "/Game/OFAST/Replays/M_SpriteAdd", "blend": "/Game/OFAST/Replays/M_SpriteBlend",
+                    "lit": "/Game/OFAST/Replays/M_SpriteLit"}
 FLASHED_MATERIAL = "/Game/OFAST/Replays/M_Flashed"
 # The sprites' quad: a copy of the engine's 1 m plane whose bounds reach SPRITE_BOUNDS_UP (local cm) above it and
 # SPRITE_BOUNDS_DOWN below. The vertex shader moves the quad's corners to where the sprite is drawn, but the engine
@@ -95,6 +98,16 @@ GRADIENTS = {
     "burst_spray": [(0.07, (0, 0, 0)), (0.26, (255, 0, 0)), (0.69, (255, 140, 0)), (1.0, (255, 255, 255))],
     # incen_explosion_child_sprays: the incendiary's, orange to pale yellow.
     "incendiary_spray": [(0.0, (0, 0, 0)), (0.4, (255, 140, 0)), (0.75, (222, 199, 109)), (1.0, (255, 255, 189))],
+    # Blood (particles/blood_impact/, read 2026-10-31; shot_effects.py): a splash red where faint, purple-black in its
+    # core (…_low_forw_spray, …_med_vis_spray), or the other way round (…_high_vis_spray and every splash's haze).
+    "blood_dark_core": [(0.0, (154, 13, 13)), (0.284, (127, 15, 15)), (0.525, (108, 15, 15)), (1.0, (34, 3, 36))],
+    "blood_red_core": [(0.0, (34, 3, 36)), (0.284, (127, 15, 15)), (0.525, (108, 15, 15)), (1.0, (154, 13, 13))],
+    # The streaks (…_vis_spray_trail), red at their faint edges to near black in their core.
+    "blood_streak_high": [(0.0, (178, 11, 11)), (0.284, (139, 0, 0)), (0.525, (140, 0, 0)), (0.855, (30, 1, 1)),
+                          (1.0, (16, 0, 0))],
+    "blood_streak_med": [(0.0, (143, 1, 1)), (0.39, (92, 0, 0)), (0.767, (64, 0, 0)), (1.0, (30, 1, 1))],
+    "blood_streak_low": [(0.0, (25, 0, 0)), (0.101, (178, 11, 11)), (0.284, (139, 0, 0)), (0.525, (140, 0, 0)),
+                         (0.855, (30, 1, 1)), (1.0, (16, 0, 0))],
 }
 GRADIENT_STOPS = max(len(stops) for stops in GRADIENTS.values())
 # A fire as CS2 draws it (particles/inferno_fx/molotov_groundfire, read 2026-10-30; round 17's molotov at the top of
@@ -383,14 +396,15 @@ SPRITE_SIZE = 0.5
 # ground); `near_side`: shown only where its axis, pointing into its fire, does not face the way the camera looks;
 # `frame_span`: the share of its sheet's frames a life plays (a fireball whose sheet turns to smoke within a quarter of
 # its frames, played over the first 40 %); `camera_bias` (units): drawn that much nearer the camera, shrunk to look the
-# same size (a flashbang's glow, which CS2 draws without the depth test).
+# same size (a flashbang's glow, which CS2 draws without the depth test); `lit`: translucent and lit by the scene, its
+# colour (x tint x bright) the albedo, not a light (blood, which the sun warms and the shade darkens as in CS2).
 LAYER_DEFAULTS = {"size": SPRITE_SIZE, "lift": 0.6, "speed": (0.0, 0.0), "up": (0.0, 0.0), "gravity": 0.0,
                   "drag": 0.0, "stretch": 0.0, "max_length": 0.0, "sequence": None, "floor": False,
-                  "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False, "end_fade": 0.0, "fade_in": 0.1,
-                  "fade_out": 0.33, "along": (0.0, 0.0), "min_width": 0.0, "local": False, "roll_base": 0.0,
-                  "min_distance": 0.0, "age": (0.0, 0.0), "from_birth": False, "tail_drop": 0.0, "sort": 0,
-                  "link": None, "gradient": None, "gradient_blend": 1.0, "gradient_fade": 0.0, "flat": False,
-                  "near_side": False, "frame_span": 1.0, "camera_bias": 0.0}
+                  "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False, "lit": False, "end_fade": 0.0,
+                  "fade_in": 0.1, "fade_out": 0.33, "along": (0.0, 0.0), "min_width": 0.0, "local": False,
+                  "roll_base": 0.0, "min_distance": 0.0, "age": (0.0, 0.0), "from_birth": False, "tail_drop": 0.0,
+                  "sort": 0, "link": None, "gradient": None, "gradient_blend": 1.0, "gradient_fade": 0.0,
+                  "flat": False, "near_side": False, "frame_span": 1.0, "camera_bias": 0.0}
 # CS2's particle drag takes a share of the velocity per simulation step; OFAST reads it as per 1/30 s (an assumption:
 # the step is not in the files) and turns it into a rate per second, -30 ln(1 - drag): 0.025 -> 0.76, 0.1 -> 3.2.
 DRAG_STEPS_PER_SECOND = 30.0
@@ -678,14 +692,27 @@ SPRITE_PIXEL = SPRITE_PIXEL.replace("GRADIENT_TABLE", gradient_table()).replace(
                                                                                 str(GRADIENT_STOPS))
 
 
-def sprite_material(translucent):
-    """SPRITE_MATERIALS[translucent], built on first use and rebuilt in place on every run (the layers' instances keep
-    it): unlit, two-sided, for instanced static meshes; additive (emissive = colour x opacity) or translucent
-    (emissive = colour, opacity)."""
-    material = smoke_volumes.empty_material(SPRITE_MATERIALS[translucent])
-    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT if translucent
-                                 else unreal.BlendMode.BLEND_ADDITIVE)
-    material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+def material_kind(layer):
+    """The kind of SPRITE_MATERIALS a layer is drawn with."""
+    if option(layer, "lit"):
+        return "lit"
+    return "blend" if option(layer, "translucent") else "add"
+
+
+def sprite_material(kind):
+    """SPRITE_MATERIALS[kind], built on first use and rebuilt in place on every run (the layers' instances keep it):
+    two-sided, for instanced static meshes; unlit and additive (emissive = colour x opacity) or translucent (emissive =
+    colour, opacity), or translucent and lit (base colour = colour, opacity; lit per volume, as Unreal lights
+    translucency cheaply: soft, no specular)."""
+    material = smoke_volumes.empty_material(SPRITE_MATERIALS[kind])
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_ADDITIVE if kind == "add"
+                                 else unreal.BlendMode.BLEND_TRANSLUCENT)
+    if kind == "lit":
+        material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_DEFAULT_LIT)
+        material.set_editor_property("translucency_lighting_mode",
+                                     unreal.TranslucencyLightingMode.TLM_VOLUMETRIC_NON_DIRECTIONAL)
+    else:
+        material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
     material.set_editor_property("two_sided", True)
     material.set_editor_property("used_with_instanced_static_meshes", True)
     shared = ["Tick", "LocalOrigin", "LocalAxis"] + CUSTOM_DATA + SPRITE_SCALARS
@@ -794,14 +821,17 @@ def sprite_material(translucent):
     mel.connect_material_expressions(unfaded, "", soft, "B")
     prop = unreal.MaterialProperty
     # Unlit, so times the look's EffectBrightness (smoke_volumes.REPLAY_PARAMETERS): the realistic look's exposure
-    # is set for a real sun.
+    # is set for a real sun. Lit, the scene's light does that.
     brightness = mel.create_material_expression(material, unreal.MaterialExpressionCollectionParameter, -150, -450)
     brightness.set_editor_property("collection", smoke_volumes.replay_collection())
     brightness.set_editor_property("parameter_name", "EffectBrightness")
     lit = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, 50, -350)
     mel.connect_material_expressions(rgb, "", lit, "A")
     mel.connect_material_expressions(brightness, "", lit, "B")
-    if translucent:
+    if kind == "lit":
+        ok = (mel.connect_material_property(rgb, "", prop.MP_BASE_COLOR)
+              and mel.connect_material_property(soft, "", prop.MP_OPACITY))
+    elif kind == "blend":
         ok = (mel.connect_material_property(lit, "", prop.MP_EMISSIVE_COLOR)
               and mel.connect_material_property(soft, "", prop.MP_OPACITY))
     else:
@@ -934,9 +964,8 @@ def update_layers(replay, replay_path, effects, layers=None, rebuild=True):
     level's effects keep them: probe_smoke.py's quick look at a change). Returns layer name -> instance for the layers
     whose texture the export wrote."""
     by_role = {e["role"]: e for e in effects}
-    materials = {translucent: (sprite_material(translucent) if rebuild
-                               else assets.load_asset(SPRITE_MATERIALS[translucent]))
-                 for translucent in (False, True)}
+    materials = {kind: sprite_material(kind) if rebuild else assets.load_asset(path)
+                 for kind, path in SPRITE_MATERIALS.items()}
     tick_rate = tick_rate_of(replay)
     textures = {}
     out = {}
@@ -952,7 +981,7 @@ def update_layers(replay, replay_path, effects, layers=None, rebuild=True):
             textures[role] = smoke_volumes.import_png(replay_path, effect["file"], FOLDER)
             assets.save_loaded_asset(textures[role])
         out[layer_name(layer)] = layer_instance(layer, effect, textures[role],
-                                                materials[option(layer, "translucent")], tick_rate)
+                                                materials[material_kind(layer)], tick_rate)
     return out
 
 
