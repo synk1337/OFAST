@@ -18,6 +18,12 @@
 //!   centre of the last joint's vertices), is a point moved by gravity (the cloth's 360 inches/s²) and its own speed
 //!   (Verlet integration, [`SUBSTEPS`] steps a frame), slowed by [`DAMPING`] (CS2's cloth has no point damping, but
 //!   its charms come to rest: the value is a choice, not measured);
+//! - the chain hangs from the ring's path as a critically damped follower at [`FOLLOW_HZ`] smooths it: a player's
+//!   moves (starting, stopping, a flick) swing the charm, the jolts of poses rebuilt tick by tick do not. Pushed by
+//!   every move of the ring (the walk cycle, recoil, the aim's wobble as the poses give them: fractions of an inch
+//!   each frame, many times gravity for a pendulum an inch long), the chain banged between its hinges: a median 12°
+//!   and 26° a frame at its two joints, peaks of 90 – 130°, on every charm of round 17 (2026-10-31); random jolts of
+//!   a tenth of an inch a frame alone turned it 5° a frame, a smooth walking bob 1.8°;
 //! - each rod keeps its rest length and turns at most [`LIMIT`] ([`LAST_LIMIT`] the charm's) from where its joint's
 //!   rest pose points it against the rod before (the cloth's hinge limits), the chain followed from the ring;
 //! - a joint's rotation is the shortest turn from its rod's rest direction to where the rod points.
@@ -29,10 +35,12 @@ use crate::model::{Affine, Model};
 
 /// Gravity on the charm's free nodes, inches per second² (the cloth's `flGravity`).
 const GRAVITY: f32 = 360.0;
-/// How fast a swing dies down: its speed falls by e^(−DAMPING · t), t in seconds (a swing keeps 5 % of its speed
-/// after a second). The charm's pendulum swings at about 2.7 times a second (√(g / l), l ≈ 1.2 inches), the pace of
-/// a player's A–D strafes: holding an angle, the charm swings to its hinges, as a real one would.
-pub const DAMPING: f32 = 3.0;
+/// How fast a swing dies down: its speed against the ring's (smoothed) path falls by e^(−DAMPING · t), t in seconds
+/// (a swing keeps 5 % of its speed after half a second); its speed with the path is kept (CS2's cloth has no air
+/// drag: damping a point's whole speed dragged a charm carried at a run back 64°, as a wind would). The charm's
+/// pendulum swings at about 2.7 times a second (√(g / l), l ≈ 1.2 inches): at 3, the jolts of a round (reloads,
+/// draws, stops) kept it swinging to its hinges.
+pub const DAMPING: f32 = 6.0;
 /// Integration steps per frame.
 pub const SUBSTEPS: usize = 4;
 /// The most a rod turns from its rest direction against the rod before (the cloth's ±45° hinges).
@@ -41,6 +49,11 @@ pub const LIMIT: f32 = std::f32::consts::FRAC_PI_4;
 pub const LAST_LIMIT: f32 = 3.0 * std::f32::consts::FRAC_PI_8;
 /// A ring moving farther than this in one frame, inches, starts the swing again at rest.
 pub const RESET: f32 = 64.0;
+/// The frequency (Hz) of the critically damped follower whose path the chain hangs from: it follows a move within
+/// about a sixth of a second, and a jolt of a quarter inch back and forth each frame reaches the chain as 3 % of
+/// gravity. On yuurih's charm in round 17 (its weapon's real places, held in hand), the charm's weight turns a median
+/// 3° a frame in the world, 95 % under 13° (at 2 Hz and DAMPING 3: 13° and 28°).
+pub const FOLLOW_HZ: f32 = 1.0;
 
 /// A rotation matrix, rows first.
 type Mat3 = [[f32; 3]; 3];
@@ -113,8 +126,10 @@ impl Chain {
             .collect();
         let dt = 1.0 / (fps.max(1.0) * SUBSTEPS as f32);
         let keep = (-DAMPING * dt).exp();
-        // The points in the world now and a step before, and the frame before's placement.
-        let mut state: Option<(Points, Points)> = None;
+        let omega = 2.0 * std::f32::consts::PI * FOLLOW_HZ;
+        // The points in the world now and a step before (the first, the chain's top, on the follower's path), the
+        // follower's speed, and the frame before's placement.
+        let mut state: Option<(Points, Points, [f32; 3])> = None;
         let mut before: Option<Affine> = None;
         let mut out = Vec::with_capacity(frames.len());
         for frame in frames {
@@ -126,23 +141,36 @@ impl Chain {
             };
             let at_rest: Vec<[f32; 3]> = points.iter().map(|&p| apply(h, p)).collect();
             let from = before.filter(|b| length(sub(origin(b), origin(h))) <= RESET);
-            let (now, last) = match (&mut state, from) {
-                (Some(s), Some(_)) => (&mut s.0, &mut s.1),
+            let (now, last, follow_speed) = match (&mut state, from) {
+                (Some(s), Some(_)) => (&mut s.0, &mut s.1, &mut s.2),
                 _ => {
-                    let s = state.insert((at_rest.clone(), at_rest.clone()));
-                    (&mut s.0, &mut s.1)
+                    let s = state.insert((at_rest.clone(), at_rest.clone(), [0.0; 3]));
+                    (&mut s.0, &mut s.1, &mut s.2)
                 }
             };
             let ring_from = from.map_or(at_rest[0], |b| apply(&b, points[0]));
             let mut turns = Vec::new();
             for step in 1..=SUBSTEPS {
                 let t = step as f32 / SUBSTEPS as f32;
-                now[0] = std::array::from_fn(|k| ring_from[k] + (at_rest[0][k] - ring_from[k]) * t);
+                // The follower pulled towards where the ring is in this step (semi-implicit Euler).
+                let ring: [f32; 3] =
+                    std::array::from_fn(|k| ring_from[k] + (at_rest[0][k] - ring_from[k]) * t);
+                for k in 0..3 {
+                    let pull =
+                        omega * omega * (ring[k] - now[0][k]) - 2.0 * omega * follow_speed[k];
+                    follow_speed[k] += pull * dt;
+                    now[0][k] += follow_speed[k] * dt;
+                }
                 last[0] = now[0];
+                // Each point keeps its speed, the swing's part of it (its speed against the follower's) damped: a
+                // charm carried at a run hangs, where damping all of its speed dragged it back like a wind.
+                let carried = follow_speed.map(|v| v * dt);
                 for i in 1..=n {
                     let speed = sub(now[i], last[i]);
                     last[i] = now[i];
-                    now[i] = std::array::from_fn(|k| now[i][k] + speed[k] * keep);
+                    now[i] = std::array::from_fn(|k| {
+                        now[i][k] + carried[k] + (speed[k] - carried[k]) * keep
+                    });
                     now[i][2] -= GRAVITY * dt * dt;
                 }
                 turns = follow(now, &rods, &limits, &rotation(h));
@@ -161,6 +189,28 @@ impl Chain {
             before = Some(*h);
         }
         out
+    }
+
+    /// How far the charm's weight turned about its last joint in the world from each shown frame to the next,
+    /// degrees, for the export's check (a charm hanging still in the world turns 0 however its weapon turns):
+    /// `frames` as given to [`Chain::swing`], `swung` what it returned.
+    pub fn world_turns(&self, frames: &[Option<Affine>], swung: &[Vec<Mat3>]) -> Vec<f32> {
+        let last = self.rest.len() - 1;
+        let rest = rotation(&self.rest[last]);
+        let rod = mul_vec(
+            &transpose(&rest),
+            normalize(sub(self.weight, origin(&self.rest[last]))),
+        );
+        let hanging = |k: usize| -> Option<[f32; 3]> {
+            let placed = frames[k].as_ref()?;
+            Some(mul_vec(&rotation(placed), mul_vec(&swung[k][last], rod)))
+        };
+        (1..frames.len().min(swung.len()))
+            .filter_map(|k| {
+                let (a, b) = (hanging(k - 1)?, hanging(k)?);
+                Some(dot(a, b).clamp(-1.0, 1.0).acos().to_degrees())
+            })
+            .collect()
     }
 
     /// The joints' local transforms (translation, quaternion) for one frame's `rotations` ([`Chain::swing`]): the
@@ -331,24 +381,57 @@ mod tests {
     }
 
     #[test]
-    fn a_charm_lags_behind_a_running_weapon_and_settles() {
-        // The weapon runs along +x at 250 inches/s for half a second, then stops for three.
-        let mut frames = Vec::new();
-        let mut x = 0.0;
-        for k in 0..224 {
-            if k < 32 {
-                x += 250.0 / 64.0;
-            }
-            frames.push(Some(affine([0.0, 0.0, 0.0, 1.0], [x, 0.0, 0.0])));
-        }
+    fn a_charm_shrugs_off_the_jolts_of_poses_rebuilt_tick_by_tick() {
+        // The weapon runs along +x at 250 inches/s, jolting a quarter inch up and down every frame (as a pose
+        // rebuilt tick by tick may): once it is under way the charm hangs, turning less than a degree a frame. Pushed
+        // by the jolts themselves it turned tens of degrees a frame (the swing's module docs).
+        let frames: Vec<_> = (0..192)
+            .map(|k| {
+                let jolt = if k % 2 == 0 { 0.25 } else { -0.25 };
+                Some(affine(
+                    [0.0, 0.0, 0.0, 1.0],
+                    [k as f32 * 250.0 / 64.0, 0.0, jolt],
+                ))
+            })
+            .collect();
         let swung = chain().swing(&frames, 64.0);
-        // Starting off, the charm trails behind (−x); then it swings, and three seconds later it hangs again.
+        for k in 128..191 {
+            let turn = dot(charm_down(&swung[k]), charm_down(&swung[k + 1]))
+                .clamp(-1.0, 1.0)
+                .acos();
+            assert!(turn.to_degrees() < 1.0, "frame {k}: {}°", turn.to_degrees());
+            assert!(
+                dot(charm_down(&swung[k]), [0.0, 0.0, -1.0]) > 0.99,
+                "frame {k}: {:?}",
+                charm_down(&swung[k])
+            );
+        }
+    }
+
+    #[test]
+    fn a_charm_swings_when_the_weapon_turns_and_settles() {
+        // The weapon turns 60° about z in a tenth of a second (a flick), the ring 10 inches from the turn's centre,
+        // then holds still for three seconds.
+        let frames: Vec<_> = (0..224)
+            .map(|k| {
+                let yaw = 60f32.to_radians() * (k as f32 / 6.0).min(1.0);
+                let (s, c) = (yaw / 2.0).sin_cos();
+                Some(affine(
+                    [0.0, 0.0, s, c],
+                    [10.0 * yaw.cos(), 10.0 * yaw.sin(), 0.0],
+                ))
+            })
+            .collect();
+        let swung = chain().swing(&frames, 64.0);
+        // Turned, the charm's rest pose has turned with the weapon but its rods lag: in the weapon's space the charm
+        // leans off straight down for a while; three seconds later it hangs again.
+        let lean = |k: usize| 1.0 - dot(charm_down(&swung[k]), [0.0, 0.0, -1.0]);
         assert!(
-            charm_down(&swung[4])[0] < -0.05,
+            (4..16).any(|k| lean(k) > 0.001),
             "{:?}",
-            charm_down(&swung[4])
+            (4..16).map(lean).collect::<Vec<_>>()
         );
-        assert!(dot(charm_down(&swung[223]), [0.0, 0.0, -1.0]) > 0.995);
+        assert!(lean(223) < 0.005, "{}", lean(223));
     }
 
     #[test]

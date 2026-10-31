@@ -318,8 +318,16 @@ The swing: each charm model's physics block holds a cloth model (`m_pFeModel`, S
 vertices) 0.8 inch further. OFAST does not run the cloth solver: it swings `joint2` and `joint3` as a chain of rods
 from the ring under gravity, with those hinge limits and a damping of its own choosing (`export::keychains`, swing),
 driven by where the weapon takes the ring in the world (the agent's place and pose; in first person, the eye camera
-and the viewmodel's pose). The pendulum swings about 2.7 times a second, the pace of A–D strafes: holding an angle,
-yuurih's charm swings to its hinges. Not checked against CS2's own motion (screenshots are stills).
+and the viewmodel's pose). The pendulum swings about 2.7 times a second. Not checked against CS2's own motion
+(screenshots are stills).
+
+The first swing (2026-10-29) went wild (the user's look, 2026-10-31): pushed by every move of the ring, the jolts of
+poses rebuilt tick by tick (up to 15 inches a frame in a reload or a draw, 4 at the 95th percentile on yuurih's M4A4),
+the charm swung to its hinges all the time, its weight turning a median 9.5° a frame in the world (10.4° in first
+person); its damping, on the points' whole speed, also dragged a charm carried at a run back 64°, like a wind. Now
+the chain hangs from the ring's path smoothed by a critically damped follower (1 Hz), and only the swing's speed
+against that path is damped (6 per second, a swing gone within about half a second): 4.1° and 3.3° a frame. The
+export reports it (`check: charms in third person / in first person`).
 
 Of the 143 definitions (2026-10-29), 82 name a model. 23 of those, the community charms (`missinglink_community_01`),
 share a blank model (`workshop_blanks/kc_missinglink_default.vmdl`, a grey template material, one draw call) and add

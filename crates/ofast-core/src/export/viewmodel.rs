@@ -199,10 +199,11 @@ struct Slot {
     eject: Option<(usize, Affine)>,
 }
 
-/// What [`export_viewmodel_look`] wrote: the glTF export's report, the weapon looks it holds, and where the barrel of
+/// What [`export_viewmodel_look`] wrote: the glTF export's report, the weapon looks it holds, where the barrel of
 /// the weapon in hand was at each of the players' shots, in the rig's model space ([`Muzzle`]: Source axes, inches;
-/// in Unreal the viewmodel's component space, at the camera before the player's viewmodel offsets and hand).
-pub type ViewmodelExport = (ExportReport, Vec<WeaponLook>, Vec<Muzzle>);
+/// in Unreal the viewmodel's component space, at the camera before the player's viewmodel offsets and hand), and its
+/// charms' turns in the world from frame to frame (degrees, the keychains' `Chain::world_turns`).
+pub type ViewmodelExport = (ExportReport, Vec<WeaponLook>, Vec<Muzzle>, Vec<f32>);
 
 /// One player's baked frames and, at each, the weapon in hand and the hand.
 struct Baked {
@@ -632,6 +633,7 @@ pub fn export_viewmodel_look(
         .collect();
     let mut animations = Vec::new();
     let mut muzzles = Vec::new();
+    let mut charm_turns = Vec::new();
     for player in &baked {
         let Baked {
             controller,
@@ -727,7 +729,9 @@ pub fn export_viewmodel_look(
                     ))
                 })
                 .collect();
-            for (k, rotations) in swing.chain.swing(&placed, fps).iter().enumerate() {
+            let swung = swing.chain.swing(&placed, fps);
+            charm_turns.extend(swing.chain.world_turns(&placed, &swung));
+            for (k, rotations) in swung.iter().enumerate() {
                 let locals = swing.chain.locals(&swing.offset, rotations);
                 keys[k][swing.first..swing.first + locals.len()].copy_from_slice(&locals);
             }
@@ -792,7 +796,7 @@ pub fn export_viewmodel_look(
     )?;
     written.warnings.extend(warnings);
     let looks = slots.into_iter().map(|s| s.look).collect();
-    Ok((written, looks, muzzles))
+    Ok((written, looks, muzzles, charm_turns))
 }
 
 /// Every bone of `skeleton` in model space for one frame's keys (`(translation, rotation)` relative to the parent,

@@ -432,6 +432,7 @@ pub fn export_players(
     let mut muzzles: Vec<Muzzle> = Vec::new();
     let mut bodies: Vec<Body> = Vec::new();
     let mut recipe_ticks = (0usize, 0usize);
+    let mut charm_turns = Vec::new();
     for (look, players) in &groups {
         let mut name = format!(
             "{demo_name}_r{}_{}_{}",
@@ -448,8 +449,15 @@ pub fn export_players(
         {
             name = format!("{name}_{}", paint.label);
         }
-        let (written, weapons, falls, look_muzzles, look_bodies) =
-            export_look(&round, look, players, out_dir, &name, &mut recipe_ticks)?;
+        let (written, weapons, falls, look_muzzles, look_bodies) = export_look(
+            &round,
+            look,
+            players,
+            out_dir,
+            &name,
+            &mut recipe_ticks,
+            &mut charm_turns,
+        )?;
         muzzles.extend(look_muzzles);
         bodies.extend(look_bodies);
         report.deaths += falls.len();
@@ -511,6 +519,11 @@ pub fn export_players(
             "pose recipes: CS2's pose on {} of {} living player-ticks, the rest re-decided",
             recipe_ticks.1, recipe_ticks.0
         ));
+    }
+    if !charm_turns.is_empty() {
+        report
+            .checks
+            .push(charm_check("in third person", charm_turns));
     }
     let dropped = export_dropped(&round, demo_name, out_dir, &mut report);
     let (viewmodels, view_muzzles) =
@@ -645,6 +658,7 @@ fn export_viewmodels(
     }
     let mut entries = Vec::new();
     let mut muzzles = Vec::new();
+    let mut charm_turns = Vec::new();
     for ((agent, gloves, glove_finish), mut players) in looks {
         players.sort_unstable();
         let mut name = format!(
@@ -674,8 +688,9 @@ fn export_viewmodels(
             out_dir,
             &name,
         ) {
-            Ok((written, weapons, look_muzzles)) => {
+            Ok((written, weapons, look_muzzles, turns)) => {
                 muzzles.extend(look_muzzles);
+                charm_turns.extend(turns);
                 entries.push(json!({
                     "file": format!("{name}.gltf"),
                     "model": agent,
@@ -697,7 +712,26 @@ fn export_viewmodels(
                 .push(format!("viewmodel {name}: {e}: not written")),
         }
     }
+    if !charm_turns.is_empty() {
+        report
+            .checks
+            .push(charm_check("in first person", charm_turns));
+    }
     (entries, muzzles)
+}
+
+/// The export's check on the charms' swing: how far their weights turned in the world from frame to frame (`turns`,
+/// degrees, [`keychains::Chain::world_turns`]), `whose` charms ("in third person").
+fn charm_check(whose: &str, mut turns: Vec<f32>) -> String {
+    turns.sort_by(f32::total_cmp);
+    let at = |share: f32| turns[((turns.len() - 1) as f32 * share) as usize];
+    format!(
+        "charms {whose}: turned a median {:.1}° a frame in the world, 95 % under {:.1}°, at most {:.0}° ({} frames)",
+        at(0.5),
+        at(0.95),
+        at(1.0),
+        turns.len()
+    )
 }
 
 /// Writes one glTF per case model the round's brass uses ([`super::brass`]): `<demo>_r<round>_case_<model file
@@ -1002,7 +1036,8 @@ fn muzzle_at(
 }
 
 /// Writes one look's glTF ([`LookExport`]); `recipe_ticks` counts its players' living ticks and those played from the
-/// pose recipes (with [`Round::clip_table`]).
+/// pose recipes (with [`Round::clip_table`]); `charm_turns` gathers its charms' turns in the world from frame to
+/// frame ([`keychains::Chain::world_turns`]).
 fn export_look(
     round: &Round<'_>,
     look: &Look,
@@ -1010,6 +1045,7 @@ fn export_look(
     out_dir: &Path,
     file_name: &str,
     recipe_ticks: &mut (usize, usize),
+    charm_turns: &mut Vec<f32>,
 ) -> Result<LookExport, ExportError> {
     let content = round.content;
     let track = round.track;
@@ -1488,7 +1524,9 @@ fn export_look(
                     ))
                 })
                 .collect();
-            for (k, rotations) in chain.swing(&placed, round.fps).iter().enumerate() {
+            let swung = chain.swing(&placed, round.fps);
+            charm_turns.extend(chain.world_turns(&placed, &swung));
+            for (k, rotations) in swung.iter().enumerate() {
                 let locals = chain.locals(offset, rotations);
                 frames[k][*first..*first + locals.len()].copy_from_slice(&locals);
             }
