@@ -428,6 +428,57 @@ jets of fire, a 4-tick flash, lifetimes following the table rather than the file
 fire +4 – +8, dark smoke +9 – +15, gone by +17. Its fire is a little yellower than CS2's; the blast at the doorway
 hides some of it behind the door frame. Not drawn: the lens streak, the heat trails and embers.
 
+**Correction (2026-10-31): the table's ticks are about 4.2 times too short.** Each `demo_step_tick` moves CS2's
+particles about 3 ticks further than the demo, so a stepped "+N" is about +4.2 N in the demo's own time. Round 17's
+blast at the mid doors, played at a quarter speed and grabbed as it played (`tools/cs2/slow_shots.py`, a free camera
+350 units south of it):
+
+| Ticks after | CS2, played |
+|---|---|
+| +3 – +11 | a white-peach flash about 150 units across (a lens streak at first), the walls lit orange; rays of sparks to about +25 |
+| +13 – +30 | a puffy orange fireball with a yellow-white core, about 150 units across |
+| +28 – +45 | dark red inside black smoke |
+| +47 – +75 | brown-black smoke thinning |
+| to about +110 | a faint haze |
+
+The same stages as the stepped table at 4.2 times its ticks, so the blast's layers keep their look and their
+lifetimes are the stepped fits times 4.2 (near the files' 1 – 2 s for the fireball); its light keeps the file's
+0.225 s, which the played frames match (the walls orange to about +11, gone by +15). Frames taken with
+`pov_shots.py` reach their tick in one 64-tick step, so their particles are about 3 ticks older than the tick:
+a check of something that lasts a few ticks (a blood splash one tick after a hit) is worth taking again played.
+
+## Molotov against CS2 (2026-10-31)
+
+Round 17's molotov at the top of mid (fire 251, lit at tick 153065, out at +450), from a free camera 290 units east
+of it and 195 up (`183.18 1439.73 195.64`, pitch 33.6, yaw 180), CS2 played at a quarter speed for its first two
+seconds (`tools/cs2/slow_shots.py`) and stepped 8 ticks at a time after (the look only: each step runs the
+particles about 3 ticks ahead):
+
+| Ticks after | CS2 |
+|---|---|
+| +5 | a ball of fire 40 units across where the bottle broke |
+| +7 – +22 | it swells into a yellow-orange fireball 130 units across, thrown the bottle's way (into the wall), flames licking up to the wall's top, dark at its edges from +13 |
+| +24 – +47 | deep red and black with embers; the carpet of flames lights under it from +26 |
+| +40 – +66 | black smoke rising off it and thinning, gone by +70 |
+| +45 – about +200 | a white-hot column about 60 units across and 100 high where it lit |
+| to +450 | a dense carpet over about 250 × 250 units, cream and peach where its flames overlap, orange-brown where thin; magenta specks all along its near edge |
+
+Unreal before (`grenade_effects.py` of 2026-10-30): no burst; 8 flames and 3 tongues of gas on every flame, orange,
+no edge. Rebuilt from `molotov_groundfire` and `molotov_explosion` (`grenade_effects.py`, the fire layers'
+comments): the burst from the demo's own dispatch (the replay's fire `burst`), the carpet coloured by CS2's
+gradients, a heart where it lit, the edge's flames on the side the camera sees. Compared at the same 17 ticks:
+the burst grows, rises and turns black at CS2's ticks (a little smaller and its smoke paler); the carpet is as
+wide and as dense, a little yellower than CS2's cream; the magenta edge shows where
+CS2's does. Five passes on the way: at CS2's per-point numbers on 16 flames the carpet was a few faint flames (CS2
+fills it from hundreds of points of its own); the fireball's smoke went black at +11 until its sheet played over a
+longer life (its first 40 %), and read dark brown until its unlit colours were 6 times brighter (a lit map's
+exposure); the edge burned red-orange until its lookup went down the gradient as it faded.
+
+Not drawn: CS2's flames climbing the edge of walls are drawn from the export's wall points, not CS2's (its own
+traces from the outline); the burst's ground splashes (`explosion_molotov_ground_splash07a`) and its pale steam
+(`molotov_explosion_child_fireball4`). The incendiary's burst (sparks, tongues, splashes) is built from its files
+but checked only against stepped frames.
+
 ## What was wrong
 
 ### Fixed

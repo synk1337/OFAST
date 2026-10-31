@@ -28,10 +28,49 @@ pub const EFFECT_TEXTURES: &[(&str, &str)] = &[
         "materials/particle/fire_small_sim/fire_small_sim_b.vtex_c",
     ),
     // particles/inferno_fx/molotov_child_flame03a.vpcf: taller tongues of burning gas among them (7 sequences of
-    // 16 – 19 frames).
+    // 16 – 19 frames); also the fireball a molotov lights with (molotov_explosion_child_fireball1.vpcf) and the
+    // incendiary's burning splashes (incen_explosion_child_sprays.vpcf).
     (
         "gas",
         "materials/particle/fire_gas/fire_gas_batch_a_v2.vtex_c",
+    ),
+    // particles/inferno_fx/molotov_groundfire_main_center.vpcf: the low flames filling a fire's ground.
+    (
+        "fire_fill",
+        "materials/particle/fire_small_sim/fire_small_sim_a.vtex_c",
+    ),
+    // particles/inferno_fx/molotov_groundfire_outline.vpcf and _climbingoutline.vpcf: the flames along a fire's edge
+    // and up the walls it meets (a grey sheet CS2 colours through a gradient).
+    (
+        "fire_edge",
+        "materials/particle/fire_small_sim/fire_small_sim_b_desat.vtex_c",
+    ),
+    // particles/inferno_fx/molotov_groundfire_snapshot_child_base.vpcf: flames lying flat on the ground.
+    (
+        "fire_surface",
+        "materials/particle/fire_onsurface/fire_onsurface.vtex_c",
+    ),
+    // particles/inferno_fx/molotov_explosion_child_fireball2.vpcf: tongues of fire a molotov's and an incendiary's
+    // burst throw.
+    (
+        "burst_tongue",
+        "materials/particle/fire_gas/fire_gas_batch_b_top_v2.vtex_c",
+    ),
+    // particles/inferno_fx/molotov_explosion_child_flash.vpcf: the fireball turning to dark smoke in a molotov's
+    // burst (a grey sheet CS2 colours from near black through orange to white).
+    (
+        "burst_ball",
+        "materials/particle/explosion_fireballs/explosion_fireball_01.vtex_c",
+    ),
+    // particles/inferno_fx/molotov_explosion_child_sprays.vpcf: the burning splashes it throws.
+    (
+        "burst_spray",
+        "materials/particle/fluids/blood/blood_spray_multi.vtex_c",
+    ),
+    // particles/inferno_fx/explosion_incen_ground_splash07a.vpcf: the sparks an incendiary bursts with.
+    (
+        "burst_sparks",
+        "materials/particle/sparks/sparks_burst.vtex_c",
     ),
     // particles/explosions_fx/explosion_hegrenade_smoke_core.vpcf: an HE blast's fireball, its burning core (a heat
     // map CS2 colours black to orange, bright early in each sequence and fading to black over it; 5 sequences of 16

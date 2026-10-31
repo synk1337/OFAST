@@ -39,6 +39,7 @@ use crate::demo::players::{
     track_round,
 };
 use crate::demo::smoke::{self, SmokeSettings};
+use crate::resource::resource_id;
 
 /// Format version written into the file; bump on incompatible changes.
 pub const REPLAY_VERSION: u32 = 1;
@@ -489,10 +490,57 @@ fn smoke_volume_json(log: &SmokeLog, position: [f32; 3], file_prefix: &str) -> O
     }))
 }
 
+/// The burst a molotov lights with: CS2's server dispatches it as a particle effect at the fire's start (a
+/// fireball, burning splashes and dark smoke thrown along the effect's angles: on the way the bottle flew, up off the
+/// ground), and the client plays it where the dispatch says.
+pub const MOLOTOV_BURST: &str = "particles/inferno_fx/molotov_explosion.vpcf";
+/// The incendiary grenade's (sparks, burning splashes, a small fireball).
+pub const INCENDIARY_BURST: &str = "particles/inferno_fx/incendiary_explosion.vpcf";
+/// How far from a fire's first flame, and how many ticks from its start, its burst's dispatch is looked for. In the
+/// local match demo and an offline one (2026-10-30) it came on the fire's first tick, within 7 units of the flame.
+const BURST_REACH: f32 = 64.0;
+const BURST_TICKS: u32 = 2;
+
+/// A fire's `burst` ([`MOLOTOV_BURST`], [`INCENDIARY_BURST`]): `kind` (`molotov`, `incendiary`), `tick`,
+/// `position` and `direction` (the unit vector of the dispatch's pitch and yaw). `None` when the demo has no such
+/// dispatch near the fire's start.
+fn burst_json(track: &RoundTrack, start: u32, first_flame: [f32; 3]) -> Option<Json> {
+    let kinds = [
+        (resource_id(MOLOTOV_BURST), "molotov"),
+        (resource_id(INCENDIARY_BURST), "incendiary"),
+    ];
+    let (hit, kind) = track
+        .player_hits
+        .iter()
+        .filter(|h| h.tick.abs_diff(start) <= BURST_TICKS)
+        .filter_map(|h| {
+            let kind = kinds.iter().find(|(id, _)| h.particle == Some(*id))?.1;
+            let distance = (0..3)
+                .map(|k| (h.point[k] - first_flame[k]).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            (distance <= BURST_REACH).then_some((h, kind, distance))
+        })
+        .min_by(|a, b| a.2.total_cmp(&b.2))
+        .map(|(h, kind, _)| (h, kind))?;
+    let [pitch, yaw, _] = hit.angles.unwrap_or([-90.0, 0.0, 0.0]).map(f32::to_radians);
+    let direction = [
+        pitch.cos() * yaw.cos(),
+        pitch.cos() * yaw.sin(),
+        -pitch.sin(),
+    ];
+    Some(json!({
+        "kind": kind,
+        "tick": hit.tick,
+        "position": hit.point.map(|v| round(v, 100.0)),
+        "direction": direction.map(|v| round(v, 1000.0)),
+    }))
+}
+
 /// The fires of molotovs and incendiary grenades: one entry per fire entity, with `incendiary`, `start_tick` (when
 /// it lit), `end_tick` (`inferno_expire`: a smoke can put it out early; else the entity's last tick), `lifetime`
-/// (seconds), and its flames in the order they appeared: `position`, `normal`, and the first and last tick each
-/// burned.
+/// (seconds), its flames in the order they appeared: `position`, `normal`, and the first and last tick each
+/// burned, and the `burst` it lit with ([`burst_json`]; absent when the demo has none).
 fn fires_json(track: &RoundTrack) -> Vec<Json> {
     // (entity, serial) → (first sample, first tick, last tick, flames: position, normal, first, last burning)
     type Flames = Vec<([f32; 3], [f32; 3], Option<(u32, u32)>)>;
@@ -524,6 +572,9 @@ fn fires_json(track: &RoundTrack) -> Vec<Json> {
             let start = f.start_tick.unwrap_or(first);
             let end = entity_event(track, "inferno_expire", entity, first, last)
                 .map_or(last, |(tick, _)| tick.min(last));
+            let burst = flames
+                .first()
+                .and_then(|(position, _, _)| burst_json(track, start, *position));
             let flames: Vec<Json> = flames
                 .into_iter()
                 .filter_map(|(position, normal, span)| {
@@ -536,17 +587,18 @@ fn fires_json(track: &RoundTrack) -> Vec<Json> {
                     }))
                 })
                 .collect();
-            (
-                start,
-                json!({
-                    "entity": entity,
-                    "incendiary": f.incendiary,
-                    "start_tick": start,
-                    "end_tick": end,
-                    "lifetime": f.lifetime,
-                    "flames": flames,
-                }),
-            )
+            let mut fire = json!({
+                "entity": entity,
+                "incendiary": f.incendiary,
+                "start_tick": start,
+                "end_tick": end,
+                "lifetime": f.lifetime,
+                "flames": flames,
+            });
+            if let Some(burst) = burst {
+                fire["burst"] = burst;
+            }
+            (start, fire)
         })
         .collect();
     out.sort_by_key(|(start, _)| *start);
@@ -926,7 +978,8 @@ mod tests {
             ],
             smoke_logs: Vec::new(),
             shots: Vec::new(),
-            player_hits: Vec::new(),
+            // The fire's burst, dispatched where it lit, and another far from it (a later fire's).
+            player_hits: vec![burst([2.0, 0.0, 0.0]), burst([900.0, 0.0, 0.0])],
             earlier_shots: Vec::new(),
             earlier_hits: Vec::new(),
             server_tick_offset: None,
@@ -1068,6 +1121,22 @@ mod tests {
             (json!(102), json!(102))
         );
         assert_eq!(flames[1]["position"], json!([50.0, 0.0, 0.0]));
+        assert_eq!(
+            fire["burst"],
+            json!({"kind": "molotov", "tick": 101, "position": [2.0, 0.0, 0.0], "direction": [0.0, 0.707, 0.707]})
+        );
+    }
+
+    /// A molotov's burst dispatched at `at` on tick 101, thrown along +y and 45 degrees up.
+    fn burst(at: [f32; 3]) -> crate::demo::shots::PlayerHit {
+        crate::demo::shots::PlayerHit {
+            tick: 101,
+            start: at,
+            point: at,
+            blood: None,
+            particle: Some(resource_id(MOLOTOV_BURST)),
+            angles: Some([-45.0, 90.0, 0.0]),
+        }
     }
 
     /// An HE grenade (entity 400, thrown by player 1) at `x`.

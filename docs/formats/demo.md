@@ -1024,6 +1024,10 @@ Two kinds of message show where bullets really went, and checked the rule (`exam
   left: CS2's client picks the blood's size by it (`export::shots`). A headshot a helmet took carries 1, and beside it
   a `ParticleEffect` at the same point whose field 11 (`effectindex`, fixed64) is the resource id of
   `particles/impact_fx/impact_helmet_headshot.vpcf` (`examples/particle_of_id.rs` names such ids).
+- **A fire's burst** is a `ParticleEffect` dispatch on the fire's first tick, at its first flame (within 7 units),
+  of `particles/inferno_fx/molotov_explosion.vpcf` or `incendiary_explosion.vpcf`, its field 4 the angles CS2 throws
+  it along (22 – 60 degrees up, the bottle's heading: round 17's five fires and an offline one, 2026-10-30): the fire's
+  `burst` in the replay.
 - **The damage a hit did** (`player_hurt`'s `dmg_health`, `dmg_armor`, `hitgroup`; on local demos `bullet_damage`'s
   `num_penetrations` and `distance`, from where the stretch started) checks the penetration rule
   ([replay.md](replay.md#agents-manifest-demo_rroundagentsjson), `shots`): without walls 2,860 non-lethal hits

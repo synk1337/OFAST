@@ -1724,6 +1724,7 @@ mod tests {
                     point: [200.0, 50.0, 0.0],
                     blood: None,
                     particle: None,
+                    angles: None,
                 },
                 PlayerHit {
                     tick: 40,
@@ -1731,6 +1732,7 @@ mod tests {
                     point: [600.0, 0.0, 0.0],
                     blood: None,
                     particle: None,
+                    angles: None,
                 },
             ],
             // Before the round: one shot into the wall, one into a player (no hole).
@@ -1744,6 +1746,7 @@ mod tests {
                 point: [100.0, 20.0, 0.0],
                 blood: None,
                 particle: None,
+                angles: None,
             }],
             server_tick_offset: None,
             skins: Default::default(),
@@ -2117,6 +2120,7 @@ mod tests {
             point: [200.0, 30.0, 0.0],
             blood: None,
             particle: None,
+            angles: None,
         };
         let bullet = fire([0.0, 30.0, 0.0], &[past]);
         assert_eq!(bullet["through"][0]["on"], "player");
@@ -2151,6 +2155,7 @@ mod tests {
             point: [600.0, 30.0, 0.0],
             blood: None,
             particle: None,
+            angles: None,
         };
         let bullet = fire([0.0, 30.0, 0.0], &[past, behind]);
         assert_eq!(bullet["on"], "player");
@@ -2163,6 +2168,7 @@ mod tests {
             point: [600.0, 60.0, 0.0],
             blood: None,
             particle: None,
+            angles: None,
         };
         let bullet = fire([0.0, 60.0, 0.0], &[clear]);
         assert_eq!(bullet["through"][0]["on"], "player");

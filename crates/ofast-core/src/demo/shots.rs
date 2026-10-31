@@ -158,6 +158,10 @@ pub struct EffectData {
     /// came out of the wall or player it went through before.
     #[prost(message, optional, tag = "2")]
     pub start: Option<MsgVector>,
+    /// Its angles (pitch, yaw, roll, degrees): for the burst a molotov lights with, the way it splashes (a fire's
+    /// `burst` in [`crate::export::replay`]).
+    #[prost(message, optional, tag = "4")]
+    pub angles: Option<MsgVector>,
     /// `magnitude`: CS2's blood ([`BLOOD_EFFECT`]) sends the hit's damage here (module docs of `export::shots`).
     #[prost(float, optional, tag = "8")]
     pub magnitude: Option<f32>,
@@ -202,6 +206,8 @@ pub struct PlayerHit {
     pub blood: Option<f32>,
     /// A [`PARTICLE_EFFECT`] dispatch's particle system ([`EffectData::effect_index`]); `None` for other effects.
     pub particle: Option<u64>,
+    /// The effect's angles ([`EffectData::angles`]), when it has them.
+    pub angles: Option<[f32; 3]>,
 }
 
 /// Decodes an effect dispatch (`body`) read at `tick` as a possible bullet hit; `None` without both ends. Other
@@ -226,6 +232,7 @@ pub fn decode_player_hit(
         particle: effect
             .effect_index
             .filter(|_| name == Some(PARTICLE_EFFECT)),
+        angles: effect.angles.map(|a| a.to_array()),
     })
 }
 
@@ -438,6 +445,7 @@ mod tests {
                 effect: Some(EffectData {
                     origin: v(100.0),
                     start: v(0.0),
+                    angles: v(45.0),
                     magnitude,
                     effect_index: index,
                     effect_name: Some(name),
@@ -453,6 +461,7 @@ mod tests {
         assert_eq!(friendly.blood, Some(0.0));
         let sparks = decode_player_hit(7, &dispatch(2, None, Some(42)), Some(&table)).unwrap();
         assert_eq!((sparks.blood, sparks.particle), (None, Some(42)));
+        assert_eq!(sparks.angles, Some([45.0, 0.0, 0.0]));
         // Another effect, or no table to name it: neither.
         let other = decode_player_hit(7, &dispatch(0, Some(27.0), Some(42)), Some(&table)).unwrap();
         assert_eq!((other.blood, other.particle), (None, None));

@@ -335,13 +335,21 @@ player and round.
   - [x] **HE fireball**: CS2 a fiery orange burst with sparks, Unreal a white glow. Filmed tick by tick in CS2 (three
     HEs thrown offline on de_dust2: mid, A long, lower B; `tools/cs2/tick_shots.py`, `docs/checks.md`) and rebuilt to
     match: CS2's heat sheet in orange over its dark smoke, jets of fire, a 4-tick flash; all gone by about +20 ticks
-    (Unreal's burned for over a second before).
-  - [ ] **HE, what is left**: the lens streak across the screen at +0 (`explosion_hegrenade_flash_ana`), the heat
+    (Unreal's burned for over a second before). Re-timed 2026-10-31: stepping the demo had run CS2's particles about
+    4 times faster than the demo (each `demo_step_tick` moves them about 3 ticks further); played at a quarter speed
+    (`tools/cs2/slow_shots.py`) the blast lasts about 1.7 s, and its layers live 4.2 times longer.
+  - [ ] **HE, what is left**: its flash (Unreal's a small white ball where CS2's is a white-peach glow 150 units
+    across for its first 11 ticks), the lens streak across the screen at +0 (`explosion_hegrenade_flash_ana`), the heat
     trails and embers flying up, and the fire a little yellower than CS2's red-orange.
   - [ ] **Muzzle flashes**: CS2's AK picks no flame about one shot in four (its effect's empty child) and showed
     none on two shot-ticks + 1 where Unreal draws one; bigger in Unreal when both show one. Needs frames read at the
     demo bar's tick (the console's is one or two later) before any timing change.
-  - [ ] **Fires**: no view had one in sight yet.
+  - [x] **Fires**: Unreal's were orange flames on every flame, with no burst and no edge. Rebuilt from CS2's
+    `molotov_groundfire` and `molotov_explosion` and checked on round 17's molotov at the top of mid, played at a
+    quarter speed (`docs/checks.md`): the burst from the demo's own dispatch, a dense carpet in CS2's gradients, the
+    white-hot heart, the magenta edge on the side the camera sees.
+  - [ ] **Fires, what is left**: the carpet a little yellower than CS2's cream; the burst's ground splashes and pale
+    steam; wall flames from CS2's own points; the incendiary's burst checked played.
 
 ## M7 progress
 
@@ -497,12 +505,15 @@ player and round.
 
 ### Before the next release (the user's list, 2026-10-30)
 
-- [ ] **One player, one point of view** (very high): a round sent to Unreal is about one player, seen through their
-  eyes from start to end; switching between players (the default cuts to each killer) ruins it.
-- [ ] **Flashbangs and smokes remade** (high), as the HE blast was: filmed tick by tick in CS2 offline and rebuilt to
-  match; smokes volumetric, as CS2's are.
-- [ ] **HE blast denser, with more momentum** (high): its fireball and smoke too thin, not thrown out hard enough.
-- [ ] **Molotov fixed** (high): remade the same way (filmed tick by tick in CS2 offline, rebuilt to match).
+- [x] **One player, one point of view** (very high): a round sent to Unreal is about one player, seen through their
+  eyes from start to end; switching between players (the default cuts to each killer) ruins it. Done: the Studio's
+  **Point of view** (`export-demo --pov`), the round ending 2 s after their death.
+- [ ] **Flashbangs and smokes remade** (high), as the HE blast was: filmed in CS2 (played slowly:
+  `tools/cs2/slow_shots.py`) and rebuilt to match; smokes volumetric, as CS2's are.
+- [x] **HE blast denser, with more momentum** (high): its fireball and smoke too thin, not thrown out hard enough.
+  Done: the ground ring burning, 7 tongues of fire flung out, and (2026-10-31) its real timing, 4.2 times longer.
+- [x] **Molotov fixed** (high): remade the same way (filmed tick by tick in CS2 offline, rebuilt to match). Done:
+  rebuilt from CS2's files and checked on round 17's molotov played slowly (burst, carpet, heart, magenta edge).
 - [ ] **Weapons through walls** (low): a player's gun poking through the wall they stand against.
 - [ ] **Blood in one colour** (low): the splash on the body a bright pink-red beside the dark red streaks, two shades
   where CS2 shows one (the user's screenshot of round 17, 2026-10-30).

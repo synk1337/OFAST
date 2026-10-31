@@ -71,24 +71,175 @@ UNITS_TO_CM = 2.54
 # A flame's particles go out within this of its last burning tick: at a fire's end CS2's flames are gone (the
 # system stops), where a particle living out its 1.2 s showed flames half a second after (de_nuke, 2026-10-24).
 FLAME_END_FADE = 0.15
+# CS2's colour gradients (a renderer's 1D colour lookup, read from the particle files 2026-10-30): (position, sRGB
+# colour 0 - 255) stops, which a layer's `gradient` names. CS2 colours its fires with them, the sheets' own colours
+# only half showing (`gradient_blend` 0.5): low values deep red, most of the range orange to peach, the brightest
+# white; the edge's flames dip through blue and purple at their faint ends (the magenta fringe a CS2 fire has).
+GRADIENTS = {
+    # molotov_groundfire_main_center, _main_fancy, molotov_child_flame01a.
+    "fire": [(0.0, (0, 0, 0)), (0.0646, (128, 10, 10)), (0.1705, (167, 55, 46)), (0.2584, (210, 92, 29)),
+             (0.8398, (210, 146, 97)), (0.9457, (255, 235, 201)), (0.9535, (255, 241, 218)), (1.0, (255, 255, 255))],
+    # molotov_groundfire_snapshot_child_base: the flames lying on the ground, paler sooner.
+    "fire_surface": [(0.0, (0, 0, 0)), (0.06, (128, 10, 10)), (0.12, (167, 55, 46)), (0.2, (210, 127, 86)),
+                     (0.45, (210, 146, 97)), (0.95, (255, 235, 201)), (0.953, (255, 241, 218)),
+                     (1.0, (255, 255, 255))],
+    # molotov_groundfire_outline, _climbingoutline.
+    "fire_edge": [(0.04, (0, 0, 0)), (0.4, (21, 21, 199)), (0.5, (108, 10, 128)), (0.64, (167, 55, 46)),
+                  (0.7, (210, 92, 29)), (0.8, (210, 146, 97)), (0.93, (255, 235, 201)), (0.95, (255, 241, 218)),
+                  (1.0, (255, 255, 255))],
+    # molotov_explosion_child_flash: a fireball's sheet from near-black smoke through orange to white.
+    "burst_ball": [(0.0, (28, 27, 27)), (0.28, (50, 39, 33)), (0.54, (81, 74, 63)), (0.58, (116, 42, 42)),
+                   (0.68, (238, 119, 52)), (0.78, (229, 105, 38)), (0.83, (249, 135, 69)), (0.9, (243, 185, 154)),
+                   (1.0, (255, 255, 255))],
+    # molotov_explosion_child_sprays: burning splashes, red to orange to white.
+    "burst_spray": [(0.07, (0, 0, 0)), (0.26, (255, 0, 0)), (0.69, (255, 140, 0)), (1.0, (255, 255, 255))],
+    # incen_explosion_child_sprays: the incendiary's, orange to pale yellow.
+    "incendiary_spray": [(0.0, (0, 0, 0)), (0.4, (255, 140, 0)), (0.75, (222, 199, 109)), (1.0, (255, 255, 189))],
+}
+GRADIENT_STOPS = max(len(stops) for stops in GRADIENTS.values())
+# A fire as CS2 draws it (particles/inferno_fx/molotov_groundfire, read 2026-10-30; round 17's molotov at the top of
+# mid, played at a quarter speed and every 8 ticks, 2026-10-31): a dense carpet of low flames over the ground it
+# burns, cream and peach where they overlap, orange-brown where thin, a white-hot heart where it lit for its first
+# seconds, and along its edge facing the camera flames trailing inward whose faint ends are blue and purple (the
+# magenta fringe). Its flames' colours are CS2's gradients (GRADIENTS), not the sheets'.
+# The carpet (FIRE_LAYERS), a slot set per flame: CS2 fills the ground between its flames with points of its own
+# (molotov_groundfire_filltest: the client's filler points, up to 500, which the demo does not hold), here the
+# flames' spread, with more slots, the larger radii and twice the brightness of one point's: at CS2's numbers on its 16
+# flames, round 17's molotov was a few faint flames where CS2 shows a carpet (sprites larger still stood too tall).
 FIRE_LAYERS = [
-    # particles/inferno_fx/molotov_child_flame01a: the main flames.
-    {"role": "fire", "slots": 8, "life": (0.65, 1.2), "radius": (28.0, 45.0), "scale": (1.5, 0.75),
-     "alpha": (0.47, 0.59), "roll": 24.0, "spread": 40.0, "rise": 15.0, "bright": 3.0, "end_fade": FLAME_END_FADE},
-    # particles/inferno_fx/molotov_child_flame03a: tongues of burning gas among them.
-    {"role": "gas", "slots": 3, "life": (0.75, 1.35), "radius": (24.0, 55.0), "scale": (1.0, 0.9),
-     "alpha": (0.78, 0.98), "roll": 45.0, "spread": 40.0, "rise": 25.0, "bright": 1.5, "end_fade": FLAME_END_FADE},
+    # molotov_groundfire_main_center: 0.7 a second per point, living 1 - 2 s scaled down away from the fire's heart
+    # (0.75 overall), radius 10 - 55 grown from 0.6 to 1.2 times, alpha 0.39 - 0.59, rolled -60 - 90, rising
+    # (gravity +35, at most 40 units/s), in over 0.1 - 0.15 s and out over its last half second; fire_small_sim_a
+    # half in the fire gradient, overbright 4.
+    {"name": "fire_fill", "role": "fire_fill", "slots": 10, "life": (0.6, 1.2), "radius": (35.0, 55.0),
+     "scale": (0.6, 1.2), "alpha": (0.39, 0.59), "roll": 75.0, "roll_base": 15.0, "spread": 45.0, "rise": 0.0,
+     "bright": 8.0, "tint": (1.0, 0.9, 0.8), "gravity": -35.0, "fade_in": 0.12, "fade_out": 0.5, "gradient": "fire",
+     "gradient_blend": 0.5, "end_fade": FLAME_END_FADE},
+    # molotov_groundfire_main_fancy: taller flames among them (fire_small_sim_b, grown from half, rising faster:
+    # gravity +75), overbright 2.
+    {"name": "fire_fancy", "role": "fire", "slots": 3, "life": (0.6, 1.2), "radius": (30.0, 50.0),
+     "scale": (0.5, 1.0), "alpha": (0.5, 0.7), "roll": 75.0, "roll_base": 15.0, "spread": 45.0, "rise": 0.0,
+     "bright": 4.0, "gravity": -75.0, "drag": 0.05, "sequence": (0, 2), "gradient": "fire",
+     "gradient_blend": 0.5, "end_fade": FLAME_END_FADE},
+    # molotov_groundfire_snapshot_child_base: flames lying flat on the ground (fire_onsurface, aligned to the ground's
+    # normal, radius x 0.85, self-illuminated 3 x, overbright 2).
+    {"name": "fire_surface", "role": "fire_surface", "slots": 4, "life": (1.0, 2.0), "radius": (45.0, 65.0),
+     "scale": (0.85, 0.85), "alpha": (0.5, 0.8), "roll": 180.0, "spread": 40.0, "rise": 0.0, "bright": 8.0,
+     "size": 1.0, "lift": 0.0, "along": (1.0, 1.0), "flat": True, "fade_in": 0.2, "fade_out": 0.4,
+     "gradient": "fire_surface", "end_fade": FLAME_END_FADE},
+]
+# The heart (CENTRE_LAYERS), slot sets where the fire lit (its burst's place, else its first flame): molotov_fire01's
+# flames, born in a sphere round the fire's origin that grows from 8 units across to 50 between 3 and 7 s (5 to 50
+# between 2 and 8 s for its gas): for its first seconds a white-hot column (round 17's molotov, 1 - 3 s in), then
+# spread among the rest. Here a tight set until CENTRE_TIGHT_S, a wide one from CENTRE_WIDE_S.
+CENTRE_TIGHT_S = 4.0
+CENTRE_WIDE_S = 3.0
+# molotov_child_flame01a: 10 a second, fire_small_sim_b half in the fire gradient, pale (244 237 208 - 235 172 95),
+# overbright 6: where they overlap, white (round 17's: a column about 60 units across and 100 high, blown white; at
+# overbright 6 and CS2's radius as a quarter of the sprite's size, Unreal's was a small glow).
+HEART = {"role": "fire", "slots": 14, "life": (0.65, 1.2), "radius": (30.0, 50.0), "scale": (1.5, 0.75),
+         "alpha": (0.47, 0.59), "roll": 24.0, "rise": 40.0, "bright": 12.0, "size": 1.0, "tint": (0.9, 0.7, 0.45),
+         "gradient": "fire", "gradient_blend": 0.5, "end_fade": FLAME_END_FADE}
+# molotov_child_flame03a: 10 a second slowing to 2, tongues of burning gas among them (in their sheet's colours, pale:
+# 244 237 208 - 231 215 202, overbright 3).
+HEART_GAS = {"role": "gas", "slots": 6, "life": (0.75, 1.35), "radius": (24.0, 55.0), "scale": (0.8, 1.25),
+             "alpha": (0.78, 0.98), "roll": 45.0, "rise": 25.0, "bright": 3.0, "size": 0.8, "tint": (0.88, 0.8, 0.7),
+             "end_fade": FLAME_END_FADE}
+CENTRE_LAYERS = [dict(HEART, name="fire_heart", spread=8.0), dict(HEART_GAS, name="gas_heart", spread=8.0)]
+WIDE_CENTRE_LAYERS = [dict(HEART, name="fire_heart_wide", spread=50.0),
+                      dict(HEART_GAS, name="gas_heart_wide", spread=50.0)]
+# The edge (EDGE_LAYERS), a slot set per point of the fire's outline: CS2's client draws the flames' outline (its own
+# points, not in the demo); here the hull of the flames pushed EDGE_OFFSET out, a point every EDGE_SPACING units, at
+# the nearest flame's height and burning ticks, its axis pointing inward.
+EDGE_OFFSET = 20.0
+EDGE_SPACING = 20.0
+EDGE_LAYERS = [
+    # molotov_groundfire_outline: 2 a second per point, thrown inward at 75 - 150 units/s (at most 50) and rising
+    # (gravity +20), 0.5 - 1.5 s, radius 20 - 30 grown from half, in over the first 5 - 10 % and out over the rest;
+    # trails from where it was born (fire_small_sim_b_desat through the edge gradient, alpha x 2, overbright 3); only
+    # on the side the camera sees. Looked up lower as they fade (`gradient_fade`): looked up by the sheet alone they
+    # burned red-orange with a few purple specks, where CS2's near edge is speckled magenta all along.
+    {"name": "fire_edge", "role": "fire_edge", "slots": 3, "life": (0.5, 1.5), "radius": (20.0, 30.0),
+     "scale": (0.5, 1.0), "alpha": (1.5, 2.0), "roll": 25.0, "spread": 5.0, "rise": 0.0, "bright": 4.0, "size": 1.0,
+     "lift": 0.3, "up": (40.0, 50.0), "gravity": -20.0, "from_birth": True, "fade_in": 0.08, "fade_out": 0.85,
+     "sequence": (0, 3), "gradient": "fire_edge", "gradient_fade": 0.4, "near_side": True,
+     "end_fade": FLAME_END_FADE},
 ]
 # particles/inferno_fx/molotov_groundfire_climbingoutline: flames shooting up a wall where a fire meets it (CS2's client
 # finds those places by tracing from the fire's outline; the export traces from its flames: the agents manifest's
 # `fires`' `walls`), from WALL_OFFSET off the wall and WALL_RAISE up, while the flame next to it burns: up at 40 - 120
 # units/s (pushed up by a gravity of +200, at most 100 units/s: 40 - 100 here), 0.45 - 1 s, radius 5 - 15 grown from
-# half to 1.5 times, CS2's trails from where they were born drawn as streaks along their flight.
+# half to 1.5 times, CS2's trails from where they were born drawn as streaks along their flight, in the edge's
+# colours (overbright 2).
 WALL_LAYERS = [
-    {"name": "fire_wall", "role": "fire", "slots": 2, "life": (0.45, 1.0), "radius": (5.0, 15.0), "scale": (0.5, 1.5),
-     "alpha": (0.8, 1.0), "roll": 0.0, "spread": 2.0, "rise": 0.0, "bright": 3.0, "size": 1.0, "lift": 0.0,
-     "up": (40.0, 100.0), "drag": 0.01, "stretch": 0.35, "max_length": 100.0, "sequence": (0, 3),
-     "end_fade": FLAME_END_FADE},
+    {"name": "fire_wall", "role": "fire_edge", "slots": 2, "life": (0.45, 1.0), "radius": (5.0, 15.0),
+     "scale": (0.5, 1.5), "alpha": (0.8, 1.0), "roll": 0.0, "spread": 2.0, "rise": 0.0, "bright": 2.0, "size": 1.0,
+     "lift": 0.0, "up": (40.0, 100.0), "drag": 0.01, "stretch": 0.35, "max_length": 100.0, "sequence": (0, 3),
+     "gradient": "fire_edge", "gradient_fade": 0.4, "end_fade": FLAME_END_FADE},
+]
+# The burst a fire lights with (the replay's fire `burst`: CS2's server dispatches it, thrown along `direction`, the
+# layers' axis), as CS2 draws a molotov's (particles/inferno_fx/molotov_explosion; round 17's molotov at the top of
+# mid played at a quarter speed, 2026-10-30): +5 a ball of fire 40 units across; +7 - +11 it swells, flames licking
+# up; +13 - +22 a yellow-orange fireball 130 units across, thrown its way, going dark at the edges; +24 - +38 deep red
+# and black with embers; +40 - +66 black smoke rising off it and thinning; gone by +70 (1.1 s), the fire's heart
+# burning under it from +45.
+MOLOTOV_BURST_LAYERS = [
+    # molotov_explosion_child_fireball1: 5 at once and 10 a second for 0.15 s, radius 3 - 5 grown 20 times, thrown
+    # 200 - 500 units/s its way (and +-250 across, up to 450 up; stopped by the world, here by drag), 0.75 - 1.5 s,
+    # fire_gas_batch_a_v2 tinted 244 237 208, overbright 2. Bigger here and rising (gravity -400: CS2's up to 450 up
+    # in its own frame): at CS2's radius the fireball was 100 units across and low, where CS2's reaches 150 across and
+    # the top of a wall.
+    {"name": "burst_fire", "role": "gas", "slots": 6, "life": (0.5, 0.7), "radius": (90.0, 140.0),
+     "scale": (0.15, 1.0), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 5.0, "rise": 0.0, "bright": 1.6,
+     "tint": (1.0, 0.75, 0.45), "size": 1.0, "lift": 0.0, "up": (200.0, 500.0), "speed": (0.0, 250.0),
+     "gravity": -400.0, "drag": 0.1, "fade_in": 0.05, "fade_out": 0.4, "sort": 1},
+    # molotov_explosion_child_fireball2: 6 tongues (fire_gas_batch_b_top_v2, radius 2 - 4 grown 21 times, 50 - 250
+    # units/s its way, rising), 0.5 - 1.5 s, overbright 2.
+    {"name": "burst_tongues", "role": "burst_tongue", "slots": 6, "life": (0.5, 0.9), "radius": (42.0, 84.0),
+     "scale": (0.05, 1.0), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 5.0, "rise": 0.0, "bright": 2.0,
+     "size": 1.0, "lift": 0.0, "up": (50.0, 250.0), "speed": (0.0, 100.0), "gravity": -15.0, "drag": 0.05,
+     "fade_in": 0.05, "fade_out": 0.35, "sort": 1},
+    # molotov_explosion_child_flash: 4 fireballs (explosion_fireball_01, radius 20 - 40 grown 5 times, rising:
+    # gravity +150) through a gradient from near-black smoke to orange and white, alpha-blended: the dark red and black
+    # round the fire, then the smoke rising off it. Under the fire (sort 0) where they overlap. Its sheet is orange for
+    # its first frames, dark red by the 5th of 32 and black by the 8th: over a life of 1 - 1.2 s it plays its first 40 %
+    # (dark red from about +20, black from +40, as CS2's), thrown its way with the fire (at -50 - 250 units/s along it,
+    # the smoke went black behind the fire from +11). Unlit, its colours need 6 times their value to show in the
+    # exposure of a lit map (at 1 its orange read as dark brown); grown from a tenth (CS2's ball is 40 units at +5).
+    {"name": "burst_smoke", "role": "burst_ball", "slots": 4, "life": (1.0, 1.2), "radius": (100.0, 170.0),
+     "scale": (0.1, 1.0), "alpha": (0.9, 1.0), "roll": 45.0, "spread": 5.0, "rise": 0.0, "bright": 6.0,
+     "tint": (0.9, 0.8, 0.7), "translucent": True, "size": 1.0, "lift": 0.0, "up": (100.0, 300.0),
+     "speed": (0.0, 100.0), "gravity": -150.0, "drag": 0.1, "fade_in": 0.1, "fade_out": 0.4,
+     "gradient": "burst_ball", "frame_span": 0.4},
+    # molotov_explosion_child_sprays: 3 burning splashes thrown back from its way (200 - 500 units/s, +-250 across,
+    # up to 450 up) and falling (gravity 550), 1 s, trails up to 350 long (blood_spray_multi through red - orange -
+    # white, overbright 2).
+    {"name": "burst_sprays", "role": "burst_spray", "slots": 3, "life": (0.8, 1.0), "radius": (3.0, 6.0),
+     "scale": (1.0, 5.0), "alpha": (1.0, 1.0), "roll": 0.0, "spread": 5.0, "rise": 0.0, "bright": 2.0, "size": 1.0,
+     "lift": 0.0, "up": (-500.0, -200.0), "speed": (0.0, 250.0), "gravity": 550.0, "drag": 0.1, "stretch": 0.1,
+     "max_length": 150.0, "gradient": "burst_spray", "floor": True},
+    # explosion_molotov_ground_debris: 8 flecks thrown 300 - 500 units/s its way (+-300 across, 150 up), 0.5 - 1 s.
+    {"name": "burst_debris", "role": "debris", "slots": 8, "life": (0.5, 1.0), "radius": (1.0, 2.0),
+     "scale": (1.0, 0.3), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 5.0, "rise": 0.0, "bright": 1.0,
+     "tint": (0.5, 0.5, 0.5), "translucent": True, "size": 1.0, "lift": 0.0, "up": (300.0, 500.0),
+     "speed": (0.0, 300.0), "gravity": 400.0, "drag": 0.075, "sequence": (15, 25), "floor": True},
+]
+# An incendiary's (particles/inferno_fx/incendiary_explosion; round 17's at long doors, 2026-10-30): a flash of
+# white sparks for about a third of a second, a small orange fireball, then its flames.
+INCENDIARY_BURST_LAYERS = [
+    # explosion_incen_ground_splash07a: 4 bursts of sparks (sparks_burst, radius 48 - 56 x 1.3, grown from half to 1.5
+    # times, overbright 8), falling (gravity 400); 0.8 - 1 s in the file, its sheet spent in about 0.3.
+    {"name": "burst_sparks", "role": "burst_sparks", "slots": 4, "life": (0.3, 0.4), "radius": (60.0, 75.0),
+     "scale": (0.5, 1.5), "alpha": (0.45, 0.52), "roll": 180.0, "spread": 10.0, "rise": 0.0, "bright": 8.0,
+     "size": 1.0, "lift": 0.3, "up": (10.0, 50.0), "speed": (0.0, 30.0), "gravity": 400.0, "drag": 0.05},
+    dict(MOLOTOV_BURST_LAYERS[1], name="incendiary_tongues"),
+    # incen_explosion_child_sprays: 3 burning splashes (fire_gas_batch_a_v2 through orange - pale yellow, radius x 3,
+    # overbright 2), thrown back from its way and falling (gravity 450), 0.75 - 1.5 s.
+    {"name": "incendiary_sprays", "role": "gas", "slots": 3, "life": (0.75, 1.5), "radius": (9.0, 18.0),
+     "scale": (1.0, 5.0), "alpha": (1.0, 1.0), "roll": 45.0, "spread": 5.0, "rise": 0.0, "bright": 2.0, "size": 1.0,
+     "lift": 0.0, "up": (-500.0, 0.0), "speed": (0.0, 250.0), "gravity": 450.0, "drag": 0.12,
+     "gradient": "incendiary_spray", "floor": True},
+    dict(MOLOTOV_BURST_LAYERS[4], name="incendiary_debris"),
 ]
 WALL_OFFSET = 5.0
 WALL_RAISE = 7.5
@@ -109,22 +260,23 @@ WALL_SMOKE_LAYERS = [
      "scale": (0.5, 3.0), "alpha": (0.6, 1.0), "roll": 180.0, "spread": 2.0, "rise": 0.0, "bright": 1.0,
      "tint": (0.07, 0.07, 0.07), "translucent": True, "size": 1.0, "lift": 0.0, "up": (5.0, 10.0)},
 ]
-# An HE blast as CS2 draws it, tick by tick (tools/cs2/tick_shots.py on three HEs thrown in an offline game on
-# de_dust2, 2026-10-30: mid, A long in the sun, the lower B tunnel indoors): +0 a soft white flash a hundred units
-# across (and a lens streak across the screen); +1 - +3 orange puffs bursting out with rays of sparks; +2 - +7 a
-# puffy orange fireball with a yellow-white core, about 180 units across; +8 - +10 dark red inside black smoke;
-# +11 - +18 brown-black smoke thinning; gone by about +22 (0.35 s; indoors a faint haze to +28), the scorch left.
-# The layers' lifetimes follow that, not the files' (1 - 2 s for the fireball, up to 6 s for the ground smoke: at
-# those, Unreal's fireball still burned a second after the blast, where CS2's is gone in a third of one).
+# An HE blast as CS2 draws it (round 17's blast at the mid doors, tick 151907, played at a quarter speed and grabbed
+# as it played, 2026-10-31): +3 - +11 a white-peach flash about 150 units across (a lens streak at first), the walls
+# lit orange, rays of sparks to about +25; +13 - +30 a puffy orange fireball with a yellow-white core, about 150 units
+# across; +28 - +45 dark red inside black smoke; +47 - +75 brown-black smoke thinning; a faint haze to about +110
+# (1.7 s), the scorch left. The same stages as three HEs filmed tick by tick on 2026-10-30, but each `demo_step_tick`
+# moved CS2's particles about 3 ticks further than the demo (tools/cs2/tick_shots.py): a stepped "+N" was +4.2 N, and
+# lifetimes fitted to those frames were 4.2 times too short. They are the stepped fits times 4.2 now, near the files'
+# (1 - 2 s for the fireball).
 # The fire's colour: the top of CS2's heat gradient, 255 77 23, which is sRGB: linear (1, 0.075, 0.01), a deep red
 # that turns orange and yellow where the brightness clips it, as CS2's core does. Taken as linear, the sRGB values
-# drew a yellow-orange fireball beside CS2's red-orange one (mid, +4 - +8).
+# drew a yellow-orange fireball beside CS2's red-orange one (mid, its fireball).
 FIRE_ORANGE = (1.0, 0.075, 0.01)
 BLAST_LAYERS = [
     # particles/explosions_fx/explosion_hegrenade: the white flash it goes off with (radius 2 - 3 grown 10 to 15
-    # times, its renderers' radius scale and bloom making it far bigger): lasting 4 ticks, 80 - 100 units round,
+    # times, its renderers' radius scale and bloom making it far bigger): lasting about 17 ticks, 80 - 100 units round,
     # shrinking.
-    {"name": "blast_flare", "role": "flare", "slots": 1, "life": (0.065, 0.065), "radius": (80.0, 100.0),
+    {"name": "blast_flare", "role": "flare", "slots": 1, "life": (0.27, 0.27), "radius": (80.0, 100.0),
      "scale": (1.2, 0.6), "alpha": (1.0, 1.0), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 8.0,
      "tint": (1.0, 0.8, 0.6), "size": 1.0, "fade_in": 0.0, "fade_out": 0.5, "sort": 1},
     # particles/explosions_fx/explosion_hegrenade_smoke_core: the fireball, 3 puffs (born 0, 0.05 and 0.1 s in: all
@@ -132,60 +284,61 @@ BLAST_LAYERS = [
     # frames fitted to the life; born at 0.8 of its size, as CS2's grows from a third with a bias of 0.81 (whole within
     # a few ticks: grown linearly from a third, Unreal's was a third of CS2's size). Its burning core is its heat sheet,
     # a heat map CS2 colours from black to orange (2 2 2 to 255 77 23) at an overbright of 10, additive, drawn over the
-    # smoke (`sort`): bright in each sequence's first frames, black by its middle; over a life of 0.2 - 0.3 s it burns
-    # orange to about +6 and dark red to +9, as CS2's (the grey flame sheet tinted orange, before 2026-10-30, drew a
+    # smoke (`sort`): bright in each sequence's first frames, black by its middle; over a life of 0.85 - 1.25 s it burns
+    # orange to about +27 and dark red to +40, as CS2's (the grey flame sheet tinted orange, before 2026-10-30, drew a
     # white glow where CS2 shows an orange fireball: molodoy at tick 151909, KSCERATO at 151918). CS2's radius as the
     # sprite's half-size...
-    {"name": "blast_heat", "role": "blast_heat", "slots": 3, "life": (0.2, 0.3), "radius": (90.0, 180.0),
+    {"name": "blast_heat", "role": "blast_heat", "slots": 3, "life": (0.85, 1.25), "radius": (90.0, 180.0),
      "scale": (0.8, 1.0), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 30.0, "rise": 0.0, "bright": 6.0,
      "tint": FIRE_ORANGE, "size": 1.0, "lift": 0.0, "up": (90.0, 180.0), "speed": (0.0, 60.0), "drag": 0.1,
      "gravity": -50.0, "fade_in": 0.0, "fade_out": 0.5, "sort": 1, "link": "blast_core"},
     # explosion_hegrenade_smoke_blasts: 3 jets of fire thrown out any way at 200 - 400 units/s (and 50 - 200 up),
     # radius 30 - 60, drag 0.025, drawn as trails of explosion_blast_01_heat in the same orange at an overbright of 5;
-    # a streak as long as a fifth of a second of its flight here, out by +10 as the fireball. Brighter than CS2's
+    # a streak as long as a fifth of a second of its flight here, out by +40 with the fireball. Brighter than CS2's
     # overbright: at 3 the jets did not show against de_dust2's sunlit walls.
-    {"name": "blast_jets", "role": "blast_jet", "slots": 3, "life": (0.15, 0.3), "radius": (30.0, 60.0),
+    {"name": "blast_jets", "role": "blast_jet", "slots": 3, "life": (0.6, 1.25), "radius": (30.0, 60.0),
      "scale": (0.75, 1.0), "alpha": (1.0, 1.0), "roll": 0.0, "spread": 10.0, "rise": 0.0, "bright": 8.0,
      "tint": FIRE_ORANGE, "size": 1.0, "lift": 0.0, "up": (50.0, 200.0), "speed": (200.0, 400.0),
      "drag": 0.025, "stretch": 0.2, "max_length": 600.0, "fade_in": 0.0, "fade_out": 0.25, "sort": 1},
     # ... and the same puffs' smoke (its first renderer: explosion_fireball_01_smoke in dark grey, 64 of 255, alpha 1,
     # lit), under the fire: the heat added over dark smoke makes CS2's dark red-orange fireball, then the black smoke
-    # thinning to nothing by about +22. Peach and half transparent at first, as before 2026-10-30, the added orange
+    # thinning to nothing by about +90. Peach and half transparent at first, as before 2026-10-30, the added orange
     # washed out against sunlit walls.
-    {"role": "blast_smoke", "slots": 3, "life": (0.35, 0.5), "radius": (90.0, 180.0), "scale": (0.8, 1.0),
+    {"role": "blast_smoke", "slots": 3, "life": (1.5, 2.1), "radius": (90.0, 180.0), "scale": (0.8, 1.0),
      "alpha": (1.0, 1.0), "roll": 180.0, "spread": 30.0, "rise": 0.0, "bright": 1.0, "tint": (0.15, 0.14, 0.13),
      "translucent": True, "lift": 0.0, "up": (90.0, 180.0), "speed": (0.0, 60.0), "drag": 0.1, "gravity": -50.0,
      "fade_in": 0.0, "fade_out": 0.6, "link": "blast_core"},
     # explosion_hegrenade_smoke_ground: puffs rolling out along the ground in a ring (born 20 out, radius 75 – 125
     # grown from a third, out at 25 – 200 units/s and slowed by drag 0.1; colour 64 of 255), burning orange at first
-    # as the fireball does (the same heat sheet, at an overbright of 5: CS2's orange puffs bursting out 1 – 4 ticks
-    # after the blast, on A long), then a low haze thinning with the rest, gone by about +25 (+28 indoors).
-    {"name": "blast_ground", "role": "blast_smoke", "slots": 8, "life": (0.3, 0.45), "radius": (75.0, 125.0),
+    # as the fireball does (the same heat sheet, at an overbright of 5: CS2's orange puffs bursting out 4 – 17 ticks
+    # after the blast, on A long), then a low haze thinning with the rest, gone by about +105 (+118 indoors).
+    {"name": "blast_ground", "role": "blast_smoke", "slots": 8, "life": (1.25, 1.9), "radius": (75.0, 125.0),
      "scale": (0.8, 1.0), "alpha": (0.6, 0.7), "roll": 180.0, "spread": 20.0, "rise": 0.0, "bright": 1.0,
      "tint": (0.18, 0.17, 0.16), "translucent": True, "speed": (25.0, 200.0), "drag": 0.1, "lift": 0.3,
      "fade_in": 0.0, "fade_out": 0.6, "link": "blast_ground"},
-    {"name": "blast_ground_heat", "role": "blast_heat", "slots": 8, "life": (0.2, 0.3), "radius": (75.0, 125.0),
+    {"name": "blast_ground_heat", "role": "blast_heat", "slots": 8, "life": (0.85, 1.25), "radius": (75.0, 125.0),
      "scale": (0.8, 1.0), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 20.0, "rise": 0.0, "bright": 4.0,
      "tint": FIRE_ORANGE, "size": 1.0, "speed": (25.0, 200.0), "drag": 0.1, "lift": 0.3, "fade_in": 0.0,
      "fade_out": 0.5, "sort": 1, "link": "blast_ground"},
     # explosion_hegrenade_smoketrails: 7 tongues of fire flung out at up to 1400 units/s (±1000 each way) and 250 - 1000
     # up, falling (gravity 250, drag 0.05), each a ball of fire (explosion_fireball_01_flame, overbright 40) trailing a
-    # rope of dark smoke (smoke_trail_01_loop): the arcs CS2 throws out of its blasts (the lower B tunnel, +1 - +10).
+    # rope of dark smoke (smoke_trail_01_loop): the arcs CS2 throws out of its blasts (the lower B tunnel, +4 - +42).
     # Here the head in the fireball's heat sheet and the rope a streak of its smoke from where it was thrown (linked:
-    # the same particles), both gone with the rest.
-    {"name": "blast_trails", "role": "blast_smoke", "slots": 7, "life": (0.35, 0.5), "radius": (4.0, 8.0),
+    # the same particles), both gone with the rest or at the ground.
+    {"name": "blast_trails", "role": "blast_smoke", "slots": 7, "life": (1.5, 2.1), "radius": (4.0, 8.0),
      "scale": (1.0, 0.6), "alpha": (0.8, 0.9), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 1.0,
      "tint": (0.1, 0.1, 0.1), "translucent": True, "size": 1.0, "lift": 0.0, "speed": (300.0, 1400.0),
      "up": (250.0, 1000.0), "gravity": 250.0, "drag": 0.05, "from_birth": True, "fade_in": 0.0, "fade_out": 0.5,
-     "link": "blast_trails"},
-    {"name": "blast_trail_fire", "role": "blast_heat", "slots": 7, "life": (0.35, 0.5), "radius": (8.0, 14.0),
+     "floor": True, "link": "blast_trails"},
+    {"name": "blast_trail_fire", "role": "blast_heat", "slots": 7, "life": (1.5, 2.1), "radius": (8.0, 14.0),
      "scale": (1.0, 0.333), "alpha": (1.0, 1.0), "roll": 180.0, "spread": 0.0, "rise": 0.0, "bright": 8.0,
      "tint": FIRE_ORANGE, "size": 1.0, "lift": 0.0, "speed": (300.0, 1400.0), "up": (250.0, 1000.0),
-     "gravity": 250.0, "drag": 0.05, "fade_in": 0.0, "fade_out": 0.5, "sort": 1, "link": "blast_trails"},
+     "gravity": 250.0, "drag": 0.05, "fade_in": 0.0, "fade_out": 0.5, "sort": 1, "link": "blast_trails",
+     "floor": True},
     # explosion_hegrenade_sparktrails: 3 - 5 carriers flung out at up to 1400 units/s and 250 - 1000 up (gravity 500),
     # each shedding streaks of sparks (sparks.vtex sequence 4, 252 / 209 / 187, self-lit) for half a second. Drawn as
     # single streaks along such flights, each as long as 0.06 s of it: the lines CS2's picture shows. Orange and dim
-    # (CS2's are soft orange 11 ticks after a blast; at 4 x their colour they were hard white rays).
+    # (CS2's are soft orange 45 ticks after a blast; at 4 x their colour they were hard white rays).
     {"name": "sparks", "role": "sparks", "slots": 24, "life": (0.3, 0.7), "radius": (1.5, 3.0), "scale": (1.0, 0.3),
      "alpha": (1.0, 1.0), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 1.2, "tint": (1.0, 0.62, 0.36),
      "size": 1.0, "lift": 0.0, "speed": (300.0, 1400.0), "up": (250.0, 1000.0), "gravity": 500.0, "drag": 0.025,
@@ -229,12 +382,19 @@ SPRITE_SIZE = 0.5
 # its smoke, as CS2 draws the same particle's renderers in order); `link` a name the layers drawing the same
 # particles share (CS2's renderers of one particle: a fireball's smoke and its fire), so their particles are born with
 # the same seeds; with the same flight, life and size they fly as one. `up` may be negative: down the axis.
+# `gradient` names its colours in GRADIENTS (CS2's colour lookup; None: the sheet's own), mixed in by
+# `gradient_blend`, looked up lower as the particle fades by `gradient_fade` (0 - 1: the share the lookup has lost
+# when it has faded out); `flat`: lying across its axis instead of facing the camera (no soft edge: it lies on the
+# ground); `near_side`: shown only where its axis, pointing into its fire, does not face the way the camera looks;
+# `frame_span`: the share of its sheet's frames a life plays (a fireball whose sheet turns to smoke within a quarter of
+# its frames, played over the first 40 %).
 LAYER_DEFAULTS = {"size": SPRITE_SIZE, "lift": 0.6, "speed": (0.0, 0.0), "up": (0.0, 0.0), "gravity": 0.0,
                   "drag": 0.0, "stretch": 0.0, "max_length": 0.0, "sequence": None, "floor": False,
                   "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False, "end_fade": 0.0, "fade_in": 0.1,
                   "fade_out": 0.33, "along": (0.0, 0.0), "min_width": 0.0, "local": False, "roll_base": 0.0,
                   "min_distance": 0.0, "age": (0.0, 0.0), "from_birth": False, "tail_drop": 0.0, "sort": 0,
-                  "link": None}
+                  "link": None, "gradient": None, "gradient_blend": 1.0, "gradient_fade": 0.0, "flat": False,
+                  "near_side": False, "frame_span": 1.0}
 # CS2's particle drag takes a share of the velocity per simulation step; OFAST reads it as per 1/30 s (an assumption:
 # the step is not in the files) and turns it into a rate per second, -30 ln(1 - drag): 0.025 -> 0.76, 0.1 -> 3.2.
 DRAG_STEPS_PER_SECOND = 30.0
@@ -378,6 +538,12 @@ forward = length(forward) > 0.001 ? normalize(forward) : float3(1.0, 0.0, 0.0);
 float3 right = cross(forward, float3(0.0, 0.0, 1.0));
 right = length(right) > 0.001 ? normalize(right) : float3(0.0, 1.0, 0.0);
 float3 up = cross(right, forward);
+if (Flat > 0.5)
+{
+    // Lying across its axis, rolled (CS2's PARTICLE_ORIENTATION_ALIGN_TO_PARTICLE_NORMAL: flames flat on the
+    // ground under a fire), whatever the camera.
+    return centre + (side * corner.x + cross(axis, side) * corner.y) * radius - WorldPos;
+}
 if (FromBirth > 0.5)
 {
     // A streak from where the particle was born to where it is (CS2's blood trails, whose tail is the birth point,
@@ -437,21 +603,70 @@ float4 texel = Tex.Sample(TexSampler, (float2(column, row) + UV) / float2(Column
 float fade_in = FadeIn > 0.0 ? saturate(norm / FadeIn) : 1.0;
 float fade_out = FadeOut > 0.0 ? saturate((1.0 - norm) / FadeOut) : 1.0;
 float alpha = lerp(AlphaMin, AlphaMax, h2) * fade_in * fade_out * texel.a * end_fade;
+if (NearSide > 0.5)
+{
+    // Only on the side of its fire the camera sees (its axis points into the fire): CS2 kills the outline's flames
+    // whose outward normal faces the way it looks (molotov_groundfire_outlineset: none from a dot of 0.5 on).
+    float2 look = normalize((origin - CameraPos).xy + 0.001);
+    float2 outward = -normalize(axis.xy + 0.001);
+    alpha *= saturate(1.0 - 2.0 * dot(outward, look));
+}
+float3 rgb = texel.rgb;
+if (Gradient > 0.5)
+{
+    // CS2's 1D colour lookup (m_bReplaceTextureWithGradient): the texel's brightness, as the sheet stores it (sRGB),
+    // picks a colour along the layer's gradient (GRADIENTS, sRGB 0 - 255), mixed into the texel's own by
+    // GradientBlend (CS2's m_flTextureBlend).
+    float v = pow(saturate(dot(texel.rgb, float3(0.299, 0.587, 0.114))), 1.0 / 2.2);
+    // With GradientFade, the particle's fading takes the lookup down the gradient too: a fading edge flame turns
+    // red, purple and blue before it goes (CS2's fire edge, its magenta fringe).
+    v *= lerp(1.0, fade_in * fade_out * end_fade, GradientFade);
+    float4 stops[GRADIENT_STOPS];
+GRADIENT_TABLE
+    float3 shade = stops[0].yzw;
+    for (int i = 1; i < GRADIENT_STOPS; i++)
+    {
+        if (v > stops[i - 1].x)
+        {
+            float span = max(stops[i].x - stops[i - 1].x, 0.0001);
+            shade = lerp(stops[i - 1].yzw, stops[i].yzw, saturate((v - stops[i - 1].x) / span));
+        }
+    }
+    rgb = lerp(rgb, pow(shade / 255.0, 2.2), GradientBlend);
+}
 // Born Hot (rgb), cooling to Tint over the share of its life in Hot.a (a blast's smoke is lit by its own fire at
 // first); Hot.a = 0: Tint all along.
 float3 colour = lerp(Hot.rgb, Tint, saturate(norm / max(Hot.a, 0.0001)));
-return float4(texel.rgb * colour * Bright, alpha);
+return float4(rgb * colour * Bright, alpha);
 """
 # Scalar parameters of the Custom nodes (each a material parameter), besides the per-instance data and the tick.
 SPRITE_SCALARS = ["TicksPerSecond", "LifeMin", "LifeMax", "RadiusMin", "RadiusMax", "ScaleStart", "ScaleEnd", "Roll",
                   "Spread", "Rise", "AlphaMin", "AlphaMax", "Bright", "Sequences", "SequenceFirst", "Frames", "Stride",
                   "Columns", "Rows", "Lift", "SpeedMin", "SpeedMax", "UpMin", "UpMax", "Gravity", "Drag", "Stretch",
                   "MaxLength", "EndFade", "FadeIn", "FadeOut", "AlongMin", "AlongMax", "MinWidth", "Local", "RollBase",
-                  "MinDistance", "AgeMin", "AgeMax", "FromBirth", "TailDrop"]
+                  "MinDistance", "AgeMin", "AgeMax", "FromBirth", "TailDrop", "Gradient", "GradientBlend",
+                  "GradientFade", "Flat", "NearSide"]
 # A scalar's value in the material itself, where not 1 (what an instance that does not set it reads): a layer is placed
-# in the world, its roll centred on 0, shown from any distance and born new, unless its instance says otherwise.
+# in the world, its roll centred on 0, shown from any distance, born new, in its sheet's colours and facing the
+# camera from any side, unless its instance says otherwise.
 SCALAR_DEFAULTS = {"Local": 0.0, "RollBase": 0.0, "MinDistance": 0.0, "AgeMin": 0.0, "AgeMax": 0.0, "FromBirth": 0.0,
-                   "TailDrop": 0.0}
+                   "TailDrop": 0.0, "Gradient": 0.0, "GradientFade": 0.0, "Flat": 0.0, "NearSide": 0.0}
+
+
+def gradient_table():
+    """The HLSL filling SPRITE_PIXEL's `stops` (float4: position, sRGB colour) with the gradient `Gradient` picks
+    (1-based, in GRADIENTS' order), each padded to GRADIENT_STOPS with its last stop."""
+    lines = []
+    for index, stops in enumerate(GRADIENTS.values(), 1):
+        stops = stops + [stops[-1]] * (GRADIENT_STOPS - len(stops))
+        body = " ".join("stops[%d] = float4(%g, %g, %g, %g);" % (k, p, r, g, b)
+                        for k, (p, (r, g, b)) in enumerate(stops))
+        lines.append("    %sif (Gradient < %d.5) { %s }" % ("else " if index > 1 else "", index, body))
+    return "\n".join(lines)
+
+
+SPRITE_PIXEL = SPRITE_PIXEL.replace("GRADIENT_TABLE", gradient_table()).replace("GRADIENT_STOPS",
+                                                                                str(GRADIENT_STOPS))
 
 
 def sprite_material(translucent):
@@ -468,8 +683,8 @@ def sprite_material(translucent):
     output = unreal.CustomMaterialOutputType
     wpo = smoke_volumes.custom_node(material, SPRITE_WPO, output.CMOT_FLOAT3, ["UV", "WorldPos", "CameraPos"] + shared,
                                     -400, 400)
-    pixel = smoke_volumes.custom_node(material, SPRITE_PIXEL, output.CMOT_FLOAT4, ["UV", "Tex", "Tint", "Hot"] + shared,
-                                      -400, -200)
+    pixel = smoke_volumes.custom_node(material, SPRITE_PIXEL, output.CMOT_FLOAT4,
+                                      ["UV", "Tex", "Tint", "Hot", "CameraPos"] + shared, -400, -200)
 
     def connect(node, input_name, *targets):
         for target in targets:
@@ -481,7 +696,7 @@ def sprite_material(translucent):
     connect(mel.create_material_expression(material, unreal.MaterialExpressionWorldPosition, -1200, 500), "WorldPos",
             wpo)
     connect(mel.create_material_expression(material, unreal.MaterialExpressionCameraPositionWS, -1200, 600),
-            "CameraPos", wpo)
+            "CameraPos", wpo, pixel)
     texture = mel.create_material_expression(material, unreal.MaterialExpressionTextureObjectParameter, -1200, -500)
     texture.set_editor_property("parameter_name", "Tex")
     texture.set_editor_property("texture", assets.load_asset("/Engine/EngineResources/Black"))
@@ -510,12 +725,14 @@ def sprite_material(translucent):
             node.set_editor_property("const_default_value", CUSTOM_DEFAULTS[name])
         connect(node, name, wpo, pixel)
         data[name] = node
+    scalars = {}
     for index, name in enumerate(SPRITE_SCALARS):
         node = mel.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -900,
                                               -300 + 60 * index)
         node.set_editor_property("parameter_name", name)
         node.set_editor_property("default_value", SCALAR_DEFAULTS.get(name, 1.0))
         connect(node, name, wpo, pixel)
+        scalars[name] = node
 
     # A Local layer's centre and axis in the world's space for the vertex shader (its instances sit unscaled at their
     # component's origin, so the instance's local space is the component's), as they are for the pixel shader
@@ -559,9 +776,13 @@ def sprite_material(translucent):
     opacity.set_editor_property("a", True)
     mel.connect_material_expressions(pixel, "", rgb, "")
     mel.connect_material_expressions(pixel, "", opacity, "")
+    # A Flat layer lies on the ground: no soft edge (it would fade it out entirely).
+    unfaded = mel.create_material_expression(material, unreal.MaterialExpressionMax, -50, 100)
+    mel.connect_material_expressions(depth_fade, "", unfaded, "A")
+    mel.connect_material_expressions(scalars["Flat"], "", unfaded, "B")
     soft = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, 0, -150)
     mel.connect_material_expressions(opacity, "", soft, "A")
-    mel.connect_material_expressions(depth_fade, "", soft, "B")
+    mel.connect_material_expressions(unfaded, "", soft, "B")
     prop = unreal.MaterialProperty
     if translucent:
         ok = (mel.connect_material_property(rgb, "", prop.MP_EMISSIVE_COLOR)
@@ -649,7 +870,8 @@ def layer_instance(layer, effect, texture, material, tick_rate):
         "AlphaMin": layer["alpha"][0], "AlphaMax": layer["alpha"][1], "Bright": layer["bright"],
         # Every sequence plays as many frames as the shortest of the layer's has (they differ by one or two).
         "Sequences": count, "SequenceFirst": first,
-        "Frames": min(s["frames"] for s in sequences[first:first + count]),
+        "Frames": max(1, round(option(layer, "frame_span")
+                               * min(s["frames"] for s in sequences[first:first + count]))),
         "Stride": effect["stride"], "Columns": effect["columns"], "Rows": effect["rows"],
         "Lift": option(layer, "lift"),
         "SpeedMin": option(layer, "speed")[0], "SpeedMax": option(layer, "speed")[1],
@@ -666,6 +888,10 @@ def layer_instance(layer, effect, texture, material, tick_rate):
         "MinDistance": option(layer, "min_distance"),
         "AgeMin": option(layer, "age")[0], "AgeMax": option(layer, "age")[1],
         "FromBirth": 1.0 if option(layer, "from_birth") else 0.0, "TailDrop": option(layer, "tail_drop"),
+        "Gradient": list(GRADIENTS).index(option(layer, "gradient")) + 1 if option(layer, "gradient") else 0.0,
+        "GradientBlend": option(layer, "gradient_blend"),
+        "GradientFade": option(layer, "gradient_fade"),
+        "Flat": 1.0 if option(layer, "flat") else 0.0, "NearSide": 1.0 if option(layer, "near_side") else 0.0,
     }
     for param, value in values.items():
         mel.set_material_instance_scalar_parameter_value(instance, param, float(value))
@@ -680,7 +906,8 @@ def layer_instance(layer, effect, texture, material, tick_rate):
 
 def grenade_layers():
     """Every layer of the grenades' effects."""
-    return FIRE_LAYERS + WALL_LAYERS + SMOKE_LAYERS + WALL_SMOKE_LAYERS + BLAST_LAYERS + FLASH_LAYERS
+    return (FIRE_LAYERS + CENTRE_LAYERS + WIDE_CENTRE_LAYERS + EDGE_LAYERS + WALL_LAYERS + SMOKE_LAYERS
+            + WALL_SMOKE_LAYERS + MOLOTOV_BURST_LAYERS + INCENDIARY_BURST_LAYERS + BLAST_LAYERS + FLASH_LAYERS)
 
 
 def update_layers(replay, replay_path, effects, layers=None, rebuild=True):
@@ -879,20 +1106,80 @@ def wall_slots(fire, walls):
     return out
 
 
+def hull(points):
+    """The convex hull of (x, y) points, counter-clockwise (Andrew's monotone chain); fewer than 3 points when they
+    all lie on a line."""
+    points = sorted(set(points))
+    if len(points) < 3:
+        return points
+
+    def turn(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower, upper = [], []
+    for p in points:
+        while len(lower) >= 2 and turn(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    for p in reversed(points):
+        while len(upper) >= 2 and turn(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def edge_slots(fire):
+    """The sprite slots of a fire's edge flames (EDGE_LAYERS): a point every EDGE_SPACING units along the hull of its
+    flames pushed EDGE_OFFSET out (round their middle, for a fire whose flames lie on a line), at the height and
+    burning ticks of the flame nearest it, its axis pointing inward (Source axes, level)."""
+    flames = fire["flames"]
+    corners = hull([(f["position"][0], f["position"][1]) for f in flames])
+    cx = sum(f["position"][0] for f in flames) / len(flames)
+    cy = sum(f["position"][1] for f in flames) / len(flames)
+    points = []
+    if len(corners) < 3:
+        reach = max([math.hypot(x - cx, y - cy) for x, y in corners] + [0.0]) + EDGE_OFFSET
+        count = max(6, round(2.0 * math.pi * reach / EDGE_SPACING))
+        for k in range(count):
+            a = 2.0 * math.pi * k / count
+            points.append(((cx + reach * math.cos(a), cy + reach * math.sin(a)), (math.cos(a), math.sin(a))))
+    else:
+        for (ax, ay), (bx, by) in zip(corners, corners[1:] + corners[:1]):
+            length = math.hypot(bx - ax, by - ay)
+            if length < 0.01:
+                continue
+            # Counter-clockwise: the outside is on the right of the edge.
+            nx, ny = (by - ay) / length, -(bx - ax) / length
+            steps = max(1, round(length / EDGE_SPACING))
+            for k in range(steps):
+                s = k / steps
+                points.append(((ax + (bx - ax) * s + nx * EDGE_OFFSET, ay + (by - ay) * s + ny * EDGE_OFFSET),
+                               (nx, ny)))
+    slots = []
+    for (px, py), (nx, ny) in points:
+        flame = min(flames, key=lambda f: math.hypot(f["position"][0] - px, f["position"][1] - py))
+        slots.append(((px, py, flame["position"][2]), flame["first_tick"], flame["last_tick"], (-nx, -ny, 0.0), 0.0))
+    return slots
+
+
 def place_fires(sequence, replay, end_frame, instances, mesh, walls, spawn):
     """One actor per fire of the replay (`fires`), with a sprite slot per flame and layer of FIRE_LAYERS (quads:
-    `mesh`), per wall point and layer of WALL_LAYERS (`walls`: (entity, start tick) -> the agents manifest's wall
-    points), its smoke when it goes out (SMOKE_LAYERS over its flames, WALL_SMOKE_LAYERS up its walls) and its
-    flickering light. Returns the number of fires placed."""
+    `mesh`), where it lit for CENTRE_LAYERS, per point of its edge for EDGE_LAYERS (edge_slots), per wall point and
+    layer of WALL_LAYERS (`walls`: (entity, start tick) -> the agents manifest's wall points), its burst (the fire's
+    `burst`: MOLOTOV_BURST_LAYERS or INCENDIARY_BURST_LAYERS thrown along its direction, once), its smoke when it goes
+    out (SMOKE_LAYERS over its flames, WALL_SMOKE_LAYERS up its walls) and its flickering light. Returns the number of
+    fires placed."""
     fires = [f for f in replay.get("fires", []) if f["flames"]]
     if not fires:
         return 0
     tick0 = replay["start_tick"]
     tick_rate = tick_rate_of(replay)
-    flame_layers, wall_layers, smoke_layers, wall_smoke_layers = (
+    (flame_layers, centre_layers, wide_layers, edge_layers, wall_layers, smoke_layers, wall_smoke_layers,
+     molotov_layers, incendiary_layers) = (
         [layer for layer in layers if layer_name(layer) in instances]
-        for layers in (FIRE_LAYERS, WALL_LAYERS, SMOKE_LAYERS, WALL_SMOKE_LAYERS))
-    placed_walls = 0
+        for layers in (FIRE_LAYERS, CENTRE_LAYERS, WIDE_CENTRE_LAYERS, EDGE_LAYERS, WALL_LAYERS, SMOKE_LAYERS,
+                       WALL_SMOKE_LAYERS, MOLOTOV_BURST_LAYERS, INCENDIARY_BURST_LAYERS))
+    placed_walls = bursts = 0
     for fire in fires:
         flames = fire["flames"]
         x, y, z = [sum(f["position"][k] for f in flames) / len(flames) for k in range(3)]
@@ -902,14 +1189,30 @@ def place_fires(sequence, replay, end_frame, instances, mesh, walls, spawn):
         on_walls = wall_slots(fire, walls.get((fire["entity"], fire["start_tick"]), []))
         placed_walls += len(on_walls)
         out, smoke_end = fire["end_tick"], fire["end_tick"] + round(FIRE_SMOKE_SECONDS * tick_rate)
+        burst = fire.get("burst")
+        lit_at = burst["position"] if burst else flames[0]["position"]
+        start, burning = fire["start_tick"], max(f["last_tick"] for f in flames)
+        tight_end = min(burning, start + round(CENTRE_TIGHT_S * tick_rate))
+        wide_start = start + round(CENTRE_WIDE_S * tick_rate)
         for layers, slots in (
                 (flame_layers, [(f["position"], f["first_tick"], f["last_tick"]) for f in flames]),
+                (centre_layers, [(lit_at, start, tight_end)]),
+                (wide_layers, [(lit_at, wide_start, burning)] if wide_start < burning else []),
+                (edge_layers, edge_slots(fire)),
                 (wall_layers, on_walls),
                 (smoke_layers, [(f["position"], out, smoke_end) for f in flames]),
                 (wall_smoke_layers, [(place, out, smoke_end) for place, _, _ in on_walls])):
             for layer in layers:
                 if slots:
                     add_sprites(actor, layer, instances[layer_name(layer)], mesh, slots, rng)
+        if burst:
+            # Its splashes and flecks die at the ground (the fire's lowest flame).
+            floor_cm = (min(f["position"][2] for f in flames) - 1.0) * UNITS_TO_CM
+            slot = (burst["position"], burst["tick"], burst["tick"], burst["direction"], 0.0)
+            for layer in molotov_layers if burst["kind"] == "molotov" else incendiary_layers:
+                add_sprites(actor, layer, instances[layer_name(layer)], mesh, [slot], rng,
+                            floor_cm if option(layer, "floor") else NO_FLOOR_CM)
+            bursts += 1
         light = spawn_light(spawn, light_label(fire), (x, y, z + 30.0), LIGHT_COLOR, LIGHT_RADIUS)
         channel = intensity_channel(sequence, light, end_frame)
         flicker = random.Random(fire["entity"] * 7919 + fire["start_tick"])
@@ -918,8 +1221,9 @@ def place_fires(sequence, replay, end_frame, instances, mesh, walls, spawn):
         for tick in range(start, end + 1, FLICKER_TICKS):
             add_key(channel, tick - tick0, light_intensity(fire, tick, tick_rate, flicker))
         add_key(channel, min(end - tick0 + FLICKER_TICKS, end_frame), 0.0)
-    log("fires: %d, %d sprite layers, %d wall points" % (
-        len(fires), len(flame_layers + wall_layers + smoke_layers + wall_smoke_layers), placed_walls))
+    log("fires: %d (%d with their burst), %d sprite layers, %d wall points" % (
+        len(fires), bursts, len(flame_layers + centre_layers + wide_layers + edge_layers + wall_layers + smoke_layers
+                                + wall_smoke_layers), placed_walls))
     return len(fires)
 
 
