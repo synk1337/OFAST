@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OFAST Studio",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "identifier": "com.ofast.studio",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -23,9 +23,19 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYwRjg0RDg4MUIyQzA5RUIKUldUckNTd2JpRTM0OFBBaU0rc3NHS3EzOW5CODZwaU1TaEE5NDVoWjY1TXNJUStJbjZCVW9YenQK",
+      "endpoints": ["https://github.com/synk1337/OFAST/releases/latest/download/latest.json"],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"],
     "publisher": "OFAST",
     "copyright": "MIT License, Synk1337 and the OFAST contributors",

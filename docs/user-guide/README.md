@@ -25,8 +25,13 @@ only (no administrator rights needed) and adds OFAST Studio to the Start menu. T
 Windows SmartScreen may warn about an unknown publisher (**More info → Run anyway**).
 
 The Studio keeps its Unreal project in `%LOCALAPPDATA%\OFAST\Unreal` (made the first time it starts; set the
-environment variable `OFAST_PROJECT_DIR` to keep it elsewhere). To update, run a newer setup program over it: the
-maps and rounds already sent stay.
+environment variable `OFAST_PROJECT_DIR` to keep it elsewhere).
+
+**Updates** (from 1.0.3): when the Studio starts it checks GitHub for a newer release. If there is one, a bar under
+its title says so: **What's new** shows the release notes, **Update** downloads it, checks it was signed by OFAST's
+release, installs it and restarts the Studio (not while a round is being sent or rendered: that would stop it), and
+**Later** hides the bar until the next start. Without internet nothing shows. Running a newer setup program over the
+Studio by hand works too. Either way the maps and rounds already sent stay.
 
 From the source code instead (to work on OFAST: Node.js 22 or newer and the Rust toolchain, see
 [apps/studio/README.md](../../apps/studio/README.md)), in the OFAST folder:

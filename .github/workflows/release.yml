@@ -4,7 +4,11 @@
 # - the Studio's setup program (Tauri, NSIS: `apps/studio/src-tauri/tauri.conf.json`), which carries OFAST's Unreal
 #   scripts and a template of its Unreal project;
 # - the command-line tools and the CS2 capture (`ofast.exe`, `ofast-attach.exe`, `ofast_capture.dll`), zipped;
-# and publishes them as a GitHub release whose notes are `docs/releases/<version>.md`.
+# and publishes them as a GitHub release whose notes are `docs/releases/<version>.md`, with `latest.json`: what an
+# installed Studio's updater reads (tauri-plugin-updater, the endpoint in tauri.conf.json: the latest release's
+# `latest.json`) to offer the new version, its setup program's address and its signature. The setup program is signed
+# with the repository secret TAURI_SIGNING_PRIVATE_KEY (made by `npx tauri signer generate`, no password; its public
+# key is in tauri.conf.json): without it the build stops, and a Studio refuses an update its key did not sign.
 name: Release
 
 on:
@@ -40,6 +44,9 @@ jobs:
       - name: Studio setup program
         working-directory: apps/studio
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: |
           npm ci
           npx tauri build
@@ -54,6 +61,21 @@ jobs:
           Copy-Item "target/release/bundle/nsis/*-setup.exe" "dist/OFAST-Studio_${version}_x64-setup.exe"
           Compress-Archive -DestinationPath "dist/ofast-tools-$version-windows-x64.zip" -Path `
             target/release/ofast.exe, target/release/ofast-attach.exe, target/release/ofast_capture.dll, LICENSE
+          # The updater's manifest: the version, its notes, and the renamed setup program's address and signature.
+          $signature = (Get-Content -Raw (Get-Item "target/release/bundle/nsis/*-setup.exe.sig").FullName).Trim()
+          $latest = [ordered]@{
+            version   = $version
+            # A plain string: Get-Content's carries properties ConvertTo-Json would write out as an object.
+            notes     = [System.IO.File]::ReadAllText("$PWD/docs/releases/$version.md")
+            pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = [ordered]@{
+                signature = $signature
+                url       = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/OFAST-Studio_${version}_x64-setup.exe"
+              }
+            }
+          }
+          $latest | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8NoBOM dist/latest.json
           Get-ChildItem dist
       - name: Publish
         shell: bash

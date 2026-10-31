@@ -1,7 +1,7 @@
 {
   "name": "ofast-studio",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "description": "OFAST Studio: browse CS2 demos, find highlights, send rounds to Unreal.",
   "license": "MIT",
@@ -14,6 +14,8 @@
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-dialog": "^2.8.3",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },

@@ -306,7 +306,17 @@ to the whole picture as shown ^ (gamma / 2.2): references taken at 2.013 show CS
 3. Run the checks above, commit, then `git tag v<version>` and `git push origin v<version>`.
 
 The release workflow (`.github/workflows/release.yml`) checks that the tag, the versions and the notes agree, builds
-the Studio's setup program and the tools' zip on Windows, and publishes them as the GitHub release `v<version>`.
+the Studio's setup program and the tools' zip on Windows, and publishes them as the GitHub release `v<version>`,
+with `latest.json`, which installed Studios (1.0.3 on) read when they start to offer the update (Tauri's updater,
+`apps/studio/src/UpdateBar.tsx`).
+
+The setup program is signed for the updater with the repository secret `TAURI_SIGNING_PRIVATE_KEY`, a minisign key
+without password made by `npx tauri signer generate` (2026-10-31); its public key is `plugins.updater.pubkey` in
+`tauri.conf.json`, and the private key lives outside the repository (on the maintainer's machine:
+`%USERPROFILE%\.tauri\ofast-updater.key`). Keep it: installed Studios accept only updates it signed, so with a new key
+they would have to be updated by hand once more. A local `npm run tauri build` needs it too
+(`TAURI_SIGNING_PRIVATE_KEY` set to the key file's text, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` empty), or
+`--config '{"bundle":{"createUpdaterArtifacts":false}}'` to build an unsigned installer.
 After a CS2 update that broke nothing ("After a CS2 update"), a patch release (1.0.1…) carries the new build in
 `CHECKED_VERSIONS`, so installed Studios show green again.
 

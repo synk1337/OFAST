@@ -42,8 +42,10 @@ npm run app
 files change. Its Rust side is built optimized: reading a demo in a debug build is about 20 times slower (a whole
 match: a minute instead of seconds). `npm run tauri dev` gives the debug build, quicker to rebuild while working on
 the Rust side. `npm run tauri build` makes the installer (NSIS: `target/release/bundle/nsis/OFAST
-Studio_<version>_x64-setup.exe`), with the web UI built and embedded; the release workflow
-(`.github/workflows/release.yml`) does the same on a version tag.
+Studio_<version>_x64-setup.exe`), with the web UI built and embedded, and its updater signature (`.sig`: the signing
+key is needed, see docs/development.md, "Releasing"); the release workflow (`.github/workflows/release.yml`) does the
+same on a version tag. An installed Studio checks for a newer release when it starts (`src/UpdateBar.tsx`); one run by
+`npm run app` does not.
 
 **Installed or from the source tree.** Run from the OFAST folder, the Studio uses its Unreal project
 (`unreal/Sandbox`) and scripts (`tools/unreal`). The installer instead puts the scripts and a template of the project

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the Studio's window may do: its own commands, and the native file dialog.",
+  "description": "What the Studio's window may do: its own commands, the native file dialog, and updating itself (check for a newer release, download and install it, restart).",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": ["core:default", "dialog:allow-open", "updater:default", "process:allow-restart"]
 }

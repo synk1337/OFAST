@@ -508,7 +508,8 @@ player and round.
 
 ### Before the next release (the user's list, 2026-10-30)
 
-Released in 1.0.2 (2026-10-31): the point of view, the HE, molotov, flashbang and smoke rework. The low items are left.
+Released in 1.0.2 (2026-10-31): the point of view, the HE, molotov, flashbang and smoke rework. Released in 1.0.3 (the
+same day): the low items, the realistic look, blood in one colour and guns kept out of walls. The list is done.
 
 - [x] **One player, one point of view** (very high): a round sent to Unreal is about one player, seen through their
   eyes from start to end; switching between players (the default cuts to each killer) ruins it. Done: the Studio's

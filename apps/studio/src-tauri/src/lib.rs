@@ -8,11 +8,14 @@
 pub mod commands;
 pub mod unreal;
 
-/// Starts the app: the window, its plugins (the native file dialog), its commands and their state; on the way out,
-/// stops what a sending left running.
+/// Starts the app: the window, its plugins (the native file dialog; the updater, which reads the latest release's
+/// `latest.json` on GitHub and installs a newer Studio signed by the release workflow, and the process plugin that
+/// restarts it after), its commands and their state; on the way out, stops what a sending left running.
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(commands::Summaries::default())
         .manage(commands::Radars::default())
         .manage(unreal::Sending::default())

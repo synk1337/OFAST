@@ -602,3 +602,44 @@ button:disabled {
   cursor: pointer;
   margin-left: 4px;
 }
+
+/* A newer Studio on GitHub (UpdateBar.tsx), under the header. */
+.update-bar {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+  box-shadow: inset 3px 0 var(--accent);
+}
+
+.update-bar.failed {
+  box-shadow: inset 3px 0 var(--bad);
+}
+
+.update-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.update-state {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+}
+
+.update-notes {
+  max-height: 240px;
+  overflow: auto;
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  color: var(--muted);
+}

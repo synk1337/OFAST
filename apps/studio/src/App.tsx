@@ -18,6 +18,7 @@ import {
 } from "./api";
 import { DemoPage } from "./DemoPage";
 import { SendBar, SendJob } from "./SendBar";
+import { UpdateBar } from "./UpdateBar";
 
 export function App() {
   const [env, setEnv] = useState<Environment | null>(null);
@@ -102,6 +103,7 @@ export function App() {
         <span className="logo">OFAST</span>
         <span className="subtitle">Studio</span>
       </header>
+      <UpdateBar busy={busy} />
       {opened ? (
         <main className="content">
           <DemoPage
