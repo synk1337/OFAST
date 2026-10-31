@@ -357,10 +357,26 @@ BLAST_LAYERS = [
      "translucent": True, "size": 1.0, "lift": 0.0, "speed": (0.0, 350.0), "up": (62.5, 500.0), "gravity": 700.0,
      "drag": 0.025, "sequence": (15, 25), "floor": True},
 ]
+# A flashbang as CS2 draws it (round 17's at tick 154316 in the upper B tunnel, from MAJ3R's eyes 304 units away,
+# played at a quarter speed, 2026-10-31): a soft white-peach glow about 200 units across, its middle low by the floor,
+# growing to its brightest 4 – 6 ticks in with a streak across it, fading out by +12, gone by +15; the room round it
+# hardly lit. Its particle system (particles/explosions_fx/explosion_flashbang, dispatched by the server: one flare,
+# aircraft_blue (not in CS2's archives: aircraft_white here), 0.25 s, fading over its whole life, colour 226 244 255,
+# additive, drawn without the depth test and faded by how much of it is in sight) makes its size from the bloom of one
+# very bright small flare.
 FLASH_LAYERS = [
-    # particles/explosions_fx/explosion_flashbang: one bright flare.
-    {"role": "flare", "slots": 1, "life": (0.15, 0.25), "radius": (120.0, 160.0), "scale": (1.0, 1.6),
-     "alpha": (1.0, 1.0), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 8.0},
+    # Here that sheet's bright core, and under it the broad soft glow CS2's bloom makes of it (particle_flare_001,
+    # gently bright: at 8 it was a hard white disc; the core alone, at 100 units, a small dot), both faded in over
+    # their first quarter (CS2's grows over its first ticks, as its visibility test lets it through) and out over the
+    # rest, drawn 120 units nearer the camera (camera_bias: CS2's has no depth test, and a glow bigger than its height
+    # above the floor was cut in half by it), not lifted (80 units above the flash before 2026-10-31).
+    {"name": "flash_glow", "role": "flare", "slots": 1, "life": (0.25, 0.25), "radius": (240.0, 240.0),
+     "scale": (1.0, 1.0), "alpha": (1.0, 1.0), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 1.0,
+     "tint": (1.0, 0.92, 0.82), "size": 1.0, "lift": 0.0, "fade_in": 0.25, "fade_out": 0.75, "camera_bias": 120.0},
+    {"name": "flash_core", "role": "flash_flare", "slots": 1, "life": (0.25, 0.25), "radius": (80.0, 80.0),
+     "scale": (1.0, 1.0), "alpha": (1.0, 1.0), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 2.5,
+     "tint": (1.0, 0.97, 0.94), "size": 1.0, "lift": 0.0, "fade_in": 0.25, "fade_out": 0.75, "camera_bias": 120.0,
+     "sort": 1},
 ]
 # Depth fade of the sprites against the world, cm.
 SOFT_EDGE_CM = 30.0
@@ -387,14 +403,15 @@ SPRITE_SIZE = 0.5
 # when it has faded out); `flat`: lying across its axis instead of facing the camera (no soft edge: it lies on the
 # ground); `near_side`: shown only where its axis, pointing into its fire, does not face the way the camera looks;
 # `frame_span`: the share of its sheet's frames a life plays (a fireball whose sheet turns to smoke within a quarter of
-# its frames, played over the first 40 %).
+# its frames, played over the first 40 %); `camera_bias` (units): drawn that much nearer the camera, shrunk to look the
+# same size (a flashbang's glow, which CS2 draws without the depth test).
 LAYER_DEFAULTS = {"size": SPRITE_SIZE, "lift": 0.6, "speed": (0.0, 0.0), "up": (0.0, 0.0), "gravity": 0.0,
                   "drag": 0.0, "stretch": 0.0, "max_length": 0.0, "sequence": None, "floor": False,
                   "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False, "end_fade": 0.0, "fade_in": 0.1,
                   "fade_out": 0.33, "along": (0.0, 0.0), "min_width": 0.0, "local": False, "roll_base": 0.0,
                   "min_distance": 0.0, "age": (0.0, 0.0), "from_birth": False, "tail_drop": 0.0, "sort": 0,
                   "link": None, "gradient": None, "gradient_blend": 1.0, "gradient_fade": 0.0, "flat": False,
-                  "near_side": False, "frame_span": 1.0}
+                  "near_side": False, "frame_span": 1.0, "camera_bias": 0.0}
 # CS2's particle drag takes a share of the velocity per simulation step; OFAST reads it as per 1/30 s (an assumption:
 # the step is not in the files) and turns it into a rate per second, -30 ln(1 - drag): 0.025 -> 0.76, 0.1 -> 3.2.
 DRAG_STEPS_PER_SECOND = 30.0
@@ -437,8 +454,11 @@ FLICKER_TICKS = 4
 # +10), where CS2 tints the walls next to a blast orange (the lower B tunnel, +1 - +5).
 BLAST_LIGHT = {"color": (1.0, 0.15, 0.016), "peak": 8.0, "radius": 260.0, "falloff": 2.0,
                "decay": [(0, 1.0), (4, 1.0), (14, 0.0)]}
-FLASH_LIGHT = {"color": (1.0, 1.0, 1.0), "peak": 600.0, "radius": 600.0,
-               "decay": [(0, 1.0), (1, 0.15), (2, 0.0)]}
+# The flashbang's: at 600 cd for 2 ticks it blew the whole upper B tunnel out white one tick after round 17's flash
+# (154317), where CS2 played shows the room as it was round a soft glow; so a faint white glow on what is next to it,
+# with the flare's timing.
+FLASH_LIGHT = {"color": (1.0, 0.97, 0.94), "peak": 4.0, "radius": 250.0, "falloff": 2.0,
+               "decay": [(0, 0.5), (5, 1.0), (16, 0.0)]}
 # Blindings per player the flashed material holds (two per vector parameter).
 FLASHED_SLOTS = 12
 # How white a blinding makes the view: FLASH_WHITE x saturate((seconds left - FLASH_END) / FLASH_FADE), in a warm
@@ -535,6 +555,15 @@ float radius = alive && !too_near ? lerp(RadiusMin, RadiusMax, h2) * lerp(ScaleS
 float3 centre = place + float3(0.0, 0.0, 1.0) * (Rise * norm * 2.54 + radius * Lift);
 float3 forward = CameraPos - centre;
 forward = length(forward) > 0.001 ? normalize(forward) : float3(1.0, 0.0, 0.0);
+if (CameraBias > 0.0)
+{
+    // Drawn CameraBias units nearer the camera, shrunk to look the same size: a glow bigger than its height above
+    // the floor is not cut by it (CS2 draws a flashbang's flare without the depth test).
+    float away = length(CameraPos - centre);
+    float moved = min(CameraBias * 2.54, away * 0.9);
+    centre += forward * moved;
+    radius *= (away - moved) / max(away, 0.001);
+}
 float3 right = cross(forward, float3(0.0, 0.0, 1.0));
 right = length(right) > 0.001 ? normalize(right) : float3(0.0, 1.0, 0.0);
 float3 up = cross(right, forward);
@@ -645,12 +674,13 @@ SPRITE_SCALARS = ["TicksPerSecond", "LifeMin", "LifeMax", "RadiusMin", "RadiusMa
                   "Columns", "Rows", "Lift", "SpeedMin", "SpeedMax", "UpMin", "UpMax", "Gravity", "Drag", "Stretch",
                   "MaxLength", "EndFade", "FadeIn", "FadeOut", "AlongMin", "AlongMax", "MinWidth", "Local", "RollBase",
                   "MinDistance", "AgeMin", "AgeMax", "FromBirth", "TailDrop", "Gradient", "GradientBlend",
-                  "GradientFade", "Flat", "NearSide"]
+                  "GradientFade", "Flat", "NearSide", "CameraBias"]
 # A scalar's value in the material itself, where not 1 (what an instance that does not set it reads): a layer is placed
 # in the world, its roll centred on 0, shown from any distance, born new, in its sheet's colours and facing the
 # camera from any side, unless its instance says otherwise.
 SCALAR_DEFAULTS = {"Local": 0.0, "RollBase": 0.0, "MinDistance": 0.0, "AgeMin": 0.0, "AgeMax": 0.0, "FromBirth": 0.0,
-                   "TailDrop": 0.0, "Gradient": 0.0, "GradientFade": 0.0, "Flat": 0.0, "NearSide": 0.0}
+                   "TailDrop": 0.0, "Gradient": 0.0, "GradientFade": 0.0, "Flat": 0.0, "NearSide": 0.0,
+                   "CameraBias": 0.0}
 
 
 def gradient_table():
@@ -892,6 +922,7 @@ def layer_instance(layer, effect, texture, material, tick_rate):
         "GradientBlend": option(layer, "gradient_blend"),
         "GradientFade": option(layer, "gradient_fade"),
         "Flat": 1.0 if option(layer, "flat") else 0.0, "NearSide": 1.0 if option(layer, "near_side") else 0.0,
+        "CameraBias": option(layer, "camera_bias"),
     }
     for param, value in values.items():
         mel.set_material_instance_scalar_parameter_value(instance, param, float(value))

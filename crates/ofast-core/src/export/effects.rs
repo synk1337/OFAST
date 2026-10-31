@@ -89,8 +89,14 @@ pub const EFFECT_TEXTURES: &[(&str, &str)] = &[
         "blast_jet",
         "materials/particle/explosion_blasts/heat/explosion_blast_01_heat.vtex_c",
     ),
-    // particles/explosions_fx/explosion_hegrenade.vpcf: the flare CS2's blasts and flashbangs go off with (a molotov's
-    // glow, molotov_child_glow01a, is its light instead).
+    // particles/explosions_fx/explosion_flashbang.vpcf: a flashbang's one flare. Its sheet, aircraft_blue, is not in
+    // CS2's archives (2026-10-31); its sibling in white instead.
+    (
+        "flash_flare",
+        "materials/particle/particle_flares/aircraft_white.vtex_c",
+    ),
+    // particles/explosions_fx/explosion_hegrenade.vpcf: the flare CS2's blasts go off with (a molotov's glow,
+    // molotov_child_glow01a, is its light instead).
     (
         "flare",
         "materials/particle/particle_flares/particle_flare_001.vtex_c",

@@ -331,7 +331,10 @@ player and round.
   - [ ] **Blood, what is left**: CS2's dark streaks reach about twice as far from the wound (35 – 45 units 2 – 3
     ticks after a hit) and its red haze round the head is denser; the decals the streaks leave on the ground
     (`…_ground_decal`: two splats under where each lands, 5 – 10 s) are not drawn.
-  - [ ] **Smokes' look**: CS2's puffy and broken up, Unreal's a flat even fill (same views).
+  - [x] **Smokes' look**: CS2's puffy and broken up, Unreal's a flat even fill (same views). Now shaded in its creases
+    and on its shadowed side (the volume's ambient occlusion), grey, with bulging billows (`docs/checks.md`, 2026-10-31).
+  - [ ] **Smokes, what is left**: Unreal's billows a little softer and warmer than CS2's; a smoke's first seconds (CS2's
+    swells from about 40 ticks after it pops for over 2 s) not compared yet.
   - [x] **HE fireball**: CS2 a fiery orange burst with sparks, Unreal a white glow. Filmed tick by tick in CS2 (three
     HEs thrown offline on de_dust2: mid, A long, lower B; `tools/cs2/tick_shots.py`, `docs/checks.md`) and rebuilt to
     match: CS2's heat sheet in orange over its dark smoke, jets of fire, a 4-tick flash; all gone by about +20 ticks

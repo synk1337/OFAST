@@ -29,29 +29,37 @@ SMOKE_VOLUME_RESOLUTION = 64
 # Extinction of a full smoke voxel, per cm: 0.1 hides what is 30 cm behind (CS2's smokes are opaque a step in).
 SMOKE_EXTINCTION = 0.1
 # CS2 draws smoke above 5 % of a full voxel (5stack's notes on its smoke simulation, facts only); OFAST's cloud is
-# opaque SMOKE_RAMP above that (CS2's cloud shows a clear surface, not a slow fade into the air).
+# opaque SMOKE_RAMP above that (CS2's cloud shows a clear surface, not a slow fade into the air: at 0.15 its edge was a
+# soft blur beside CS2's crisp puffs).
 SMOKE_THRESHOLD = 0.05
-SMOKE_RAMP = 0.15
-# The smoke's albedo: a light grey SMOKE_TINT of the way to its team colour (m_vSmokeColor): CS2's T smokes read tan,
-# its CT smokes grey-blue (de_nuke, 2026-10-23).
-SMOKE_ALBEDO = (0.8, 0.8, 0.8)
-SMOKE_TINT = 0.5
+SMOKE_RAMP = 0.1
+# The smoke's albedo: a cool light grey SMOKE_TINT of the way to its team colour (m_vSmokeColor): CS2's T smokes read
+# tan, its CT smokes grey-blue (de_nuke, 2026-10-23), but mostly from the light they are in. Half way, the T smoke at
+# de_dust2's mid doors (round 17, 2026-10-31) was orange-tan, and a 15 % share still tan in the map's warm bounce
+# light, where CS2's is grey with a beige cast in the sun.
+SMOKE_ALBEDO = (0.8, 0.82, 0.86)
+SMOKE_TINT = 0.05
 # CS2's cloud is gone a little before smokegrenade_expired (0.4 s before it, nothing showed): the fade ends this many
 # ticks early.
 SMOKE_FADE_EARLY_TICKS = 48
 # The cloud's surface is broken up by a fractal noise in world space that moves the threshold up and down by
 # SMOKE_NOISE (CS2's smokes show puffs a foot or two across, not the 20-unit voxels' smooth blobs); features about
-# 1 / SMOKE_NOISE_SCALE cm across.
-SMOKE_NOISE = 0.12
-SMOKE_NOISE_SCALE = 1.0 / 60.0
+# 1 / SMOKE_NOISE_SCALE cm across. At 0.12 and 60 cm the mid-doors smoke showed fine wisps where CS2's shows round
+# billows 20 - 30 units across.
+SMOKE_NOISE = 0.25
+SMOKE_NOISE_SCALE = 1.0 / 75.0
 # Console variables the smoke volumes need: indirect light from Lumen's translucency volume (single scattering), so a
 # smoke in the shade is lit by the room around it, not black. The project sets them for every session
 # (unreal/Sandbox/Config/DefaultEngine.ini, [SystemSettings]: the editor, Open in Unreal, shoot_sequence.py; before
 # 2026-10-30 they were missing there and smokes in the shade showed black); import_demo.py and probe_smoke.py set them
 # again for their own screenshots, and render_round.py's Movie Render Queue presets carry them.
+# That light is occluded inside the cloud (the volume's ambient occlusion): without it, it filled the smoke evenly, a
+# flat tan blob, where CS2's mid-doors smoke of round 17 is shaded in every crease and on its side in the wall's
+# shadow (2026-10-31; the sun alone left that side black).
 SMOKE_CVARS = [
     "r.HeterogeneousVolumes.IndirectLighting 1",
     "r.HeterogeneousVolumes.IndirectLighting.Mode 2",
+    "r.HeterogeneousVolumes.AmbientOcclusion 1",
 ]
 
 
@@ -195,8 +203,9 @@ for (int i = 0; i < 4; i++)
 }
 d *= d;
 float fade = saturate((FadeEnd - Tick) / max(FadeEnd - FadeTick, 1.0));
-// The noise (0 - 1) moves the threshold: puffs out of the cloud's surface, hollows into it.
-float t = max(lerp(1.0, Threshold, fade) + NoiseAmount * (Noise - 0.5), 0.005);
+// The noise (0 - 1) moves the threshold: its round crests bulge out of the cloud's surface as puffs, its thin creases
+// cut into it (the other way round, the crests carved round pits: a sponge, where CS2's cloud is cauliflower).
+float t = max(lerp(1.0, Threshold, fade) - NoiseAmount * (Noise - 0.5), 0.005);
 return saturate((d - t) / max(Ramp, 0.001));
 """
 # The Custom node's scalar inputs, each a material parameter of the same name.

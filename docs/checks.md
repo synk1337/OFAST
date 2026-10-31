@@ -479,6 +479,35 @@ traces from the outline); the burst's ground splashes (`explosion_molotov_ground
 (`molotov_explosion_child_fireball4`). The incendiary's burst (sparks, tongues, splashes) is built from its files
 but checked only against stepped frames.
 
+## Flashbang against CS2 (2026-10-31)
+
+Round 17's flashbang at tick 154316 in the upper B tunnel, from a free camera at MAJ3R's eyes 304 units away
+(`-1683.56 1014.23 88.96`, pitch 8.2, yaw 35.5), CS2 played at a quarter speed: a soft white-peach glow about 200
+units across, low by the floor, brightest 4 – 6 ticks in with a streak across it, fading out by +12, gone by +15; the
+room round it hardly lit. CS2's particle system is a single flare dispatched by the server
+(`explosion_flashbang`: 0.25 s, no depth test, faded by how much of it is in sight); its size is bloom. Its sheet,
+`aircraft_blue`, is not in CS2's archives.
+
+Unreal before: the whole room blown out white at +1 (a 600 cd light), then a hard white disc 80 units above the flash
+(the sprites' lift). Now (`grenade_effects.py`, `FLASH_LAYERS`): a broad soft glow (`particle_flare_001`) under a
+white core (`aircraft_white`), not lifted, faded in over the first quarter and out over the rest, drawn 120 units
+nearer the camera so the floor does not cut it (`camera_bias`), and a faint light with the same timing. Compared at
++4, +6 and +9: the same timing and place; Unreal's glow a little more compact and brighter in the middle, without
+CS2's streak.
+
+## Smokes against CS2 (2026-10-31)
+
+Round 17's smokes at de_dust2's mid doors from a free camera 700 units south (`-397.18 951.68 62.80`, pitch 8,
+yaw 90), CS2 every 3 s through their life: puffy, cauliflower-like clouds, grey with a beige cast in the sun, shaded
+in every crease and dark grey on their side in the wall's shadow. Unreal before: the same cloud (its simulated
+volume matches CS2's size and its shrinking to the door at +1414 and gone by +1990 to the tick), but a flat orange-tan
+fill. Shot with the indirect light off, the sun alone lit the cloud's sunny side and left the rest black: the
+indirect light (Lumen's translucency volume) filled it evenly. Now (`smoke_volumes.py`): the volume's ambient
+occlusion on (`r.HeterogeneousVolumes.AmbientOcclusion`, also in the project's `DefaultEngine.ini`), a cool grey
+albedo with 5 % of the team colour (half before), billows twice as strong and a little bigger, bulging out of the
+surface (the noise's crests had carved pits: a sponge), a crisper edge. Compared at four ticks (`probe_smoke.py`):
+grey cauliflower billows, shaded creases and side, as CS2's; Unreal's still a little softer and warmer.
+
 ## What was wrong
 
 ### Fixed
