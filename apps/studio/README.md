@@ -24,8 +24,8 @@ What it does so far:
   map exported and imported the first time, the round built as a Level Sequence in the map's level, with progress),
   changes the cameras of a round already there ("Update cameras"), then opens it ("Open in Unreal": the level, and
   the sequence in Sequencer)
-- Renders a round already there ("Render": Movie Render Queue, a preset, around the kills or the whole round, into
-  `Videos\OFAST`; `docs/formats/render.md`)
+- Renders a round already there ("Render": Movie Render Queue, a preset, at a frame rate, with motion blur or sharp,
+  around the kills or the whole round, into `Videos\OFAST`; `docs/formats/render.md`)
 
 How to use it, for beginners: [docs/user-guide](../../docs/user-guide/README.md).
 

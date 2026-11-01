@@ -13,7 +13,9 @@ Inputs (environment variables):
     OFAST_TICKS      optional "start,end": demo ticks to render (end not included); the whole round without it
     OFAST_FPS        optional frames a second (FPS_RANGE), OUTPUT_FPS without it: 250 or more for slow motion made
                      in the editing software (Vegas, Premiere), which then has a real frame for every slowed one
-    OFAST_SHOT       the folder the render's folder goes in: <sequence>_<preset>[_<fps>fps][_<start>-<end>]/
+    OFAST_MOTION_BLUR  "0" for sharp frames, without motion blur (velocity edits: the editor ramps the speed, then
+                     blends frames or adds blur); motion blur without it
+    OFAST_SHOT       the folder the render's folder goes in: <sequence>_<preset>[_<fps>fps][_sharp][_<start>-<end>]/
 
 Every preset is also saved as a Movie Render Queue configuration, /Game/OFAST/Render/OFAST_<preset>, to pick in
 Unreal's own Movie Render Queue window (Window > Cinematics > Movie Render Queue, then the job's settings).
@@ -23,12 +25,15 @@ What a render holds (docs/formats/render.md):
   64: everything in a round moves smoothly between the demo's ticks (keys interpolated, the effects and smokes
   functions of a fractional tick), so 250 frames a second are 250 different pictures; a folder per pass, and one EXR
   a frame with every pass as its layers;
+- sharp frames (OFAST_MOTION_BLUR=0): the preset's samples spatial instead of temporal (the edges as smooth, every
+  sample at the frame's own moment) and Unreal's own motion blur off (SHARP_CVARS), set on the job's copy only;
 - final and 4k: temporal samples (8: motion blur as a camera's shutter makes it), 32 warm-up frames (Lumen and the
   smokes settle), depth (Movie Render Queue's own WorldDepth material: the EXR's R channel, in centimetres), and a
   players layer: the frame with everything but the players cut out (stencil layer "Players": each player's body and
   viewmodel), over the rest of the world as a second layer ("DefaultLayer");
 - the console variables the smokes need (smoke_volumes.SMOKE_CVARS);
-- the round's cinematics (the Cameras panel's, ofast_cameras.py), made again from their file and cut in.
+- the round's cinematics and focus keys (the Cameras panel's, ofast_cameras.py), made again from their file and cut
+  in, and its depth of field's blur limits.
 
 Each player's own first-person camera still hides their body (decision 021): Movie Render Queue renders through the
 cut's camera as the view actor, which bOwnerNoSee checks (MoviePipelineImagePassBase.cpp sets ViewInitOptions.ViewActor
@@ -61,6 +66,8 @@ FPS_RANGE = (10, 1000)
 WARM_UP_FRAMES = 32
 FRAME_DIGITS = 5  # a long round runs past frame 9999 at 60 frames a second
 FRAME_DIGITS_FAST = 6  # and past 99999 above 600 (a round with its 2 s after a death runs up to about 160 s)
+# Sharp frames: Unreal's velocity motion blur off (with one temporal sample it would be the only blur left).
+SHARP_CVARS = {"r.MotionBlurQuality": 0.0}
 PLAYERS_LAYER = "Players"
 WORLD_DEPTH = "/MovieRenderPipeline/Materials/MovieRenderQueue_WorldDepth.MovieRenderQueue_WorldDepth"
 CONFIG_FOLDER = "/Game/OFAST/Render"
@@ -131,11 +138,16 @@ def make_config(name, preset):
     return config
 
 
-def render_into(job, folder, frames, fps):
-    """The job's own copy of its configuration: the output folder, the frame rate, and the range in the sequence's
+def render_into(job, folder, frames, fps, preset, blur, cvars):
+    """The job's own copy of its configuration: the output folder, the frame rate, the range in the sequence's
     frames (or all: Movie Render Queue takes the range in the sequence's own frames, one a demo tick, whatever the
-    output's rate)."""
-    output = job.get_configuration().find_or_add_setting_by_class(unreal.MoviePipelineOutputSetting)
+    output's rate), the round's console variables `cvars` (its depth of field's blur limits), and without motion blur
+    (`blur` False) the preset's samples spatial (SHARP_CVARS)."""
+    config = job.get_configuration()
+    settings = config.find_or_add_setting_by_class(unreal.MoviePipelineConsoleVariableSetting)
+    for cvar, value in dict(cvars, **({} if blur else SHARP_CVARS)).items():
+        settings.add_or_update_console_variable(cvar, value)
+    output = config.find_or_add_setting_by_class(unreal.MoviePipelineOutputSetting)
     output.set_editor_property("output_directory", unreal.DirectoryPath(folder))
     output.set_editor_property("output_frame_rate", unreal.FrameRate(fps, 1))
     output.set_editor_property("zero_pad_frame_numbers", FRAME_DIGITS_FAST if fps > 600 else FRAME_DIGITS)
@@ -143,6 +155,10 @@ def render_into(job, folder, frames, fps):
         output.set_editor_property("use_custom_playback_range", True)
         output.set_editor_property("custom_start_frame", frames[0])
         output.set_editor_property("custom_end_frame", frames[1])
+    if not blur:
+        aa = config.find_or_add_setting_by_class(unreal.MoviePipelineAntiAliasingSetting)
+        aa.set_editor_property("temporal_sample_count", 1)
+        aa.set_editor_property("spatial_sample_count", preset["temporal"])
 
 
 def main():
@@ -164,10 +180,11 @@ def main():
     fps = int(os.environ.get("OFAST_FPS") or OUTPUT_FPS)
     if not FPS_RANGE[0] <= fps <= FPS_RANGE[1]:
         raise RuntimeError("%d frames a second: from %d to %d" % (fps, *FPS_RANGE))
-    # A folder per rate and range: frames are numbered from the sequence's start, so two ranges (or two rates) in one
-    # folder would interleave.
+    blur = os.environ.get("OFAST_MOTION_BLUR") != "0"
+    # A folder per rate, blur and range: frames are numbered from the sequence's start, so two ranges (or two rates) in
+    # one folder would interleave, and a sharp render would overwrite a blurred one.
     folder = ("%s_%s" % (path.rsplit("/", 1)[-1], name) + ("_%dfps" % fps if fps != OUTPUT_FPS else "")
-              + ("_%d-%d" % tuple(ticks) if frames else ""))
+              + ("" if blur else "_sharp") + ("_%d-%d" % tuple(ticks) if frames else ""))
     folder = os.path.join(os.environ["OFAST_SHOT"], folder)
     levels.load_level(level)
     # The Look panel's settings (ofast_look.py), even if the level was not saved after they were changed; the Cameras
@@ -176,8 +193,8 @@ def main():
     ofast_cameras.restore(sequence)
     players = put_players_in_layer()
     config = make_config(name, PRESETS[name])
-    log("render %s, preset %s, %d frames a second, frames %s, %d player actors in layer %r, into %s"
-        % (path, name, fps, frames or "all", players, PLAYERS_LAYER, folder))
+    log("render %s, preset %s, %d frames a second, %s, frames %s, %d player actors in layer %r, into %s"
+        % (path, name, fps, "motion blur" if blur else "sharp", frames or "all", players, PLAYERS_LAYER, folder))
     queue_subsystem = unreal.get_editor_subsystem(unreal.MoviePipelineQueueSubsystem)
     state = {"ticks": 0, "done": False, "percent": 0}
 
@@ -203,7 +220,8 @@ def main():
         job.set_editor_property("map", unreal.SoftObjectPath(object_path(level)))
         job.set_editor_property("job_name", "OFAST %s" % name)
         job.set_configuration(config)
-        render_into(job, folder, frames, fps)
+        render_into(job, folder, frames, fps, PRESETS[name], blur,
+                    ofast_cameras.blur_limits(ofast_cameras.load_record(sequence)))
         executor = unreal.MoviePipelinePIEExecutor()
         executor.on_executor_finished_delegate.add_callable(finished)
         # Kept for the whole render: a Python callable bound to a delegate goes when its owner does.

@@ -65,11 +65,12 @@ export function App() {
     preset: RenderPreset,
     ticks: [number, number] | null,
     fps: number,
+    motionBlur: boolean,
   ) =>
     run(
       "Render",
-      `${demo.name}, round ${round.round}, ${preset}, ${fps} fps`,
-      renderRound(demo.path, round.round, preset, ticks, fps).then((folder) => ({ folder })),
+      `${demo.name}, round ${round.round}, ${preset}, ${fps} fps${motionBlur ? "" : ", sharp"}`,
+      renderRound(demo.path, round.round, preset, ticks, fps, motionBlur).then((folder) => ({ folder })),
     );
 
   useEffect(() => {
@@ -125,7 +126,7 @@ export function App() {
               send: canSend ? (round, plan, look) => send(opened, round, plan, look) : undefined,
               updateCameras: canSend ? (round, plan) => cameras(opened, round, plan) : undefined,
               render: canSend
-                ? (round, preset, ticks, fps) => render(opened, round, preset, ticks, fps)
+                ? (round, preset, ticks, fps, motionBlur) => render(opened, round, preset, ticks, fps, motionBlur)
                 : undefined,
               version,
             }}

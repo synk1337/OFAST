@@ -417,9 +417,15 @@ player and round.
   second. The `4k` preset is not rendered yet.
 - [x] **Studio**: "Render" on a round already sent, a preset, around the kills (the finder's highlight, or all of
   them) or the whole round, into `Videos\OFAST`, progress in the bar, "Open folder" at the end.
+- [x] **Sharp frames for velocity edits** (the user's ask, 2026-11-01): the Studio's **Motion blur** box unticked
+  renders the preset's samples spatially, Unreal's motion blur off, into a `_sharp` folder
+  ([render.md](formats/render.md)).
+- [x] **Depth of field keyed over the round** (the user's ask, 2026-11-01, instead of a depth pass for compositing):
+  the Cameras panel's focus keys (where the player looks, a player, a distance; blur strength) eased from key to key
+  on every camera, and the foreground / background blur limits ([cinematics.md](formats/cinematics.md)).
 - [ ] Movie Render Graph (the classic configuration is "legacy" in 5.8's own code), a depth pass readable in 8 bits,
-  sharp frames for velocity edits (no motion blur), the linear (HDR) picture in the EXR, the players layer without
-  the effects near them, other passes (normals, motion vectors, one matte per player).
+  the linear (HDR) picture in the EXR, the players layer without the effects near them, other passes (normals,
+  motion vectors, one matte per player).
 
 ## M10 progress
 

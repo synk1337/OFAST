@@ -88,7 +88,8 @@ class OfastLook(unreal.PrimaryDataAsset):
                          "How much moving things and fast turns smear. 0: none; 0.5 is Unreal's usual.")
     depth_of_field = slider(float, "Camera", "Depth of field", 0.0, 1.0,
                             "Blur away from what the player looks at, through their eyes. 0: everything sharp; "
-                            "0.8 about f/1.9, a strong cinematic blur; 1 stronger still.")
+                            "0.8 about f/1.9, a strong cinematic blur; 1 stronger still. A round with focus keys "
+                            "(OFAST > Cameras, Depth of field) takes them instead.")
     brightness = slider(float, "Camera", "Brightness", -3.0, 3.0,
                         "Brighter (+) or darker (−) in camera stops: +1 is twice as bright. 0 is the look's own.",
                         (-8.0, 8.0))
@@ -351,7 +352,10 @@ def apply(look, level):
                 mel.set_material_instance_scalar_parameter_value(instance, param, value)
             mel.update_material_instance(instance)
 
-    for camera in pov_cameras():
+    # The round open with focus keys (the Cameras panel's depth of field) keeps its lens as they key it.
+    import ofast_cameras
+
+    for camera in [] if ofast_cameras.focus_keyed() else pov_cameras():
         component = camera.camera_component
         settings = component.get_editor_property("post_process_settings")
         on = v["depth_of_field"] > 0.0

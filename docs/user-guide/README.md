@@ -215,9 +215,30 @@ Several cinematics can be made (pick one in **Cinematic**); **Remove cinematic**
 says how many points it has, how long its cut is and where the playhead is among them. **Render** in the Studio
 renders the cinematics with the round, at the frame rate you pick.
 
-The points are kept in a file for each round (`Saved/OFAST/Cinematics` in the Unreal project), so they come back if
-you send the round to Unreal again or change its cameras, and the render uses them even if you closed Unreal without
-saving. The panel makes the camera's keys from its points each time they change: keys changed by hand in Sequencer
+### Depth of field over the round
+
+Under **Depth of field** in the same panel, you set the camera blur for the whole round, changing over time like your
+points, on every camera (first person, the round's other cameras and your cinematics):
+
+1. Put the playhead at a moment, pick **Focus on**: **Where the player looks** (in first person, what they aim at;
+   a cinematic keeps its own focus), a player (sharp on them wherever they go), or **A distance** (in metres from the
+   camera, **Distance (m)**). Set the **Blur strength** (0 about everything sharp, 0.8 a strong cinematic blur).
+2. **Add focus key here**. Move on in time, change the settings, add the next key.
+
+Between two keys the focus glides from one to the other (a focus pull from one player to another, from the gun to
+the street behind) and the blur strength with it; before the first key and after the last, that key holds. With the
+playhead on a key, its settings show in the panel and changing them changes it. **Earlier focus key** and **Later
+focus key** jump between them; **Remove focus key here** takes one out. Without any key, each camera keeps its own
+depth of field (the Look panel's slider, a cinematic's **Focus on them**).
+
+Two limits apply to the whole round: **Foreground blur limit**, how blurred things in front of the focus can get (0.3
+keeps the gun sharp in first person; raise it to blur what passes close to a cinematic camera), and **Background blur
+limit**, how blurred things behind it can get (2.5 is Unreal's usual; 0 keeps the background sharp). Both are in % of
+the picture's width.
+
+The points and focus keys are kept in a file for each round (`Saved/OFAST/Cinematics` in the Unreal project), so they
+come back if you send the round to Unreal again or change its cameras, and the render uses them even if you closed
+Unreal without saving. The panel makes the camera's keys from its points each time they change: keys changed by hand in Sequencer
 are replaced at the next change.
 
 ## Rendering a round
@@ -226,7 +247,7 @@ Once a round is in Unreal, **Render** (under the round's cameras) renders it to 
 (After Effects, Premiere, DaVinci Resolve, Vegas), through the cameras and cuts of its sequence. Pick:
 
 - **Preview**: 1280 × 720, quick, to check the cuts and the timing.
-- **Final**: 1920 × 1080 with motion blur, plus what compositing needs: the players on a layer of their own (to put
+- **Final**: 1920 × 1080 with motion blur (or sharp: see below), plus what compositing needs: the players on a layer of their own (to put
   text or effects behind them, or to colour them alone), the world without them, and the depth (for fog or depth of
   field).
 - **4K**: as Final at 3840 × 2160, about four times as long.
@@ -259,7 +280,11 @@ Final and 4K also write an EXR file a frame beside the folders, with all the pas
 the depth in centimetres (in After Effects, read its layers with the EXtractoR effect; the depth is
 `FinalImageWorldDepth`, channel R). The [render format page](../formats/render.md) has the details.
 
-The motion blur is part of the Final images; sharp frames for slow motion and speed ramps come later.
+**Motion blur** (ticked by default) blurs what moves, as a camera does. For a velocity edit, untick it: every frame
+comes out sharp, a picture of its exact moment. Ramp the speed in your editing software, then add the blur there
+(frame blending, RSMB, Twixtor): a blur rendered in at normal speed would smear the slowed parts and be too light in
+the fast ones. With 250 fps or more it gives what HLAE gave for this. A sharp render goes to its own folder (ending in
+`_sharp`), beside a blurred one of the same moment.
 
 In Unreal itself, the same presets are Movie Render Queue settings: `Content/OFAST/Render/OFAST_preview`,
 `OFAST_final`, `OFAST_4k` (Window → Cinematics → Movie Render Queue, add the round's sequence, then pick one under

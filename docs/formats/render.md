@@ -8,7 +8,7 @@ a round's Level Sequence rendered by Unreal's Movie Render Queue, as image seque
 One folder per render, in the folder it was given (the Studio: `Videos\OFAST`):
 
 ```
-<demo>_r<round>_<preset>[_<fps>fps][_<start tick>-<end tick>]/
+<demo>_r<round>_<preset>[_<fps>fps][_sharp][_<start tick>-<end tick>]/
     FinalImage/<demo>_r<round>.<frame>.png               the picture
     FinalImagePlayers/<demo>_r<round>.<frame>.png        final, 4k: the players alone, the rest transparent
     FinalImageDefaultLayer/<demo>_r<round>.<frame>.png   final, 4k: the world, the players' shapes transparent
@@ -17,6 +17,7 @@ One folder per render, in the folder it was given (the Studio: `Videos\OFAST`):
 ```
 
 - `<fps>fps`: the frames a second asked for, when not 60.
+- `sharp`: rendered without motion blur.
 - `<start tick>-<end tick>`: the demo ticks asked for (the end left out); no suffix for the whole round.
 - `<frame>`: 5 digits (6 above 600 frames a second), the frame's number at the render's frame rate from the
   sequence's start (the round's start), so two renders of one round at one rate line up by number.
@@ -26,6 +27,10 @@ One folder per render, in the folder it was given (the Studio: `Videos\OFAST`):
   and the smokes' volumes blend between their baked frames (250 frames a second over 24 ticks: 95 frames, no two
   alike). Motion blur is a 180° shutter at any rate, so at 250 each frame is blurred over 1/500 s, as a real camera
   would.
+- Sharp frames (`OFAST_MOTION_BLUR=0`, the Studio's **Motion blur** unticked), for velocity edits: the editor ramps
+  the speed, then blends frames or adds the blur (RSMB, Twixtor), which a blur baked in at one speed would spoil. The
+  preset's samples are spatial instead of temporal (as many, so the edges are as smooth, all at the frame's own
+  moment) and Unreal's own motion blur is off (`r.MotionBlurQuality 0`).
 
 ## Passes
 
@@ -51,7 +56,7 @@ unprefixed). Movie Render Queue adds its metadata as string attributes: `unreal/
 | Preset | Size | Samples a frame | Files |
 |---|---|---|---|
 | `preview` | 1280 × 720 | 1 | `FinalImage` PNG |
-| `final` | 1920 × 1080 | 8 (motion blur: 180° shutter) | all passes, PNG and EXR |
+| `final` | 1920 × 1080 | 8 (motion blur: 180° shutter; sharp: 8 spatial) | all passes, PNG and EXR |
 | `4k` | 3840 × 2160 | 8 | as `final` |
 
 `final` and `4k` start each cut with 32 warm-up frames that are not written (Lumen's lighting and the smokes settle).

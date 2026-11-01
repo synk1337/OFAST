@@ -39,8 +39,14 @@ export interface UnrealActions {
   send?: (round: RoundSummary, plan: CameraPlan, look: Look) => void;
   /** Changes the cameras of a round sent before. */
   updateCameras?: (round: RoundSummary, plan: CameraPlan) => void;
-  /** Renders a round sent before, between two demo ticks or whole (null), at a frame rate. */
-  render?: (round: RoundSummary, preset: RenderPreset, ticks: [number, number] | null, fps: number) => void;
+  /** Renders a round sent before, between two demo ticks or whole (null), at a frame rate, blurred or sharp. */
+  render?: (
+    round: RoundSummary,
+    preset: RenderPreset,
+    ticks: [number, number] | null,
+    fps: number,
+    motionBlur: boolean,
+  ) => void;
   /** Changes when a job ends: the rounds in Unreal are looked up again. */
   version: number;
 }
@@ -224,7 +230,7 @@ function DemoView({ summary, path, unreal }: { summary: DemoSummary; path: strin
               }
               onRender={
                 unreal.render && sent.includes(round.round)
-                  ? (preset, ticks, fps) => unreal.render?.(round, preset, ticks, fps)
+                  ? (preset, ticks, fps, motionBlur) => unreal.render?.(round, preset, ticks, fps, motionBlur)
                   : undefined
               }
               onKill={replay ? (tick) => setSeek((s) => ({ tick, n: (s?.n ?? 0) + 1 })) : undefined}
@@ -464,7 +470,7 @@ function RoundFeed({
   /** Changes its cameras in Unreal (missing when it cannot be now, or the round was not sent). */
   onUpdateCameras?: () => void;
   /** Renders it in Unreal (missing when it cannot be now, or the round was not sent). */
-  onRender?: (preset: RenderPreset, ticks: [number, number] | null, fps: number) => void;
+  onRender?: (preset: RenderPreset, ticks: [number, number] | null, fps: number, motionBlur: boolean) => void;
 }) {
   const setShot = (tick: number, kind: ShotKind) => {
     const shots = { ...plan.shots };
@@ -645,8 +651,9 @@ function RoundFeed({
 const BEFORE_KILLS_S = 4;
 const AFTER_KILLS_S = 2;
 
-/** Where the Studio keeps the render frame rate last picked. */
+/** Where the Studio keeps the render frame rate last picked, and whether it was blurred. */
 const FPS_KEY = "ofast.renderFps";
+const BLUR_KEY = "ofast.renderMotionBlur";
 /** Unreal's frame rate for a render played at normal speed. */
 const DEFAULT_FPS = 60;
 /** Frame rates offered in the render's box (any other can be typed). */
@@ -662,8 +669,17 @@ function storedFps(): number {
   }
 }
 
-/** A round's render: the preset, the frame rate, how much of the round (around the kills marked by the finder, else
- * all of them), and the button (Movie Render Queue, in Unreal). */
+/** Whether the last render had motion blur (it has without storage). */
+function storedBlur(): boolean {
+  try {
+    return localStorage.getItem(BLUR_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+/** A round's render: the preset, the frame rate, motion blur or sharp frames, how much of the round (around the kills
+ * marked by the finder, else all of them), and the button (Movie Render Queue, in Unreal). */
 function RenderRow({
   summary,
   round,
@@ -674,20 +690,28 @@ function RenderRow({
   round: RoundSummary;
   /** The finder's kills in the round (indices into its kills). */
   marked: number[];
-  onRender?: (preset: RenderPreset, ticks: [number, number] | null, fps: number) => void;
+  onRender?: (preset: RenderPreset, ticks: [number, number] | null, fps: number, motionBlur: boolean) => void;
 }) {
   const [preset, setPreset] = useState<RenderPreset>("preview");
   const [whole, setWhole] = useState(false);
-  // Frames a second, kept for the next render (this browser's storage; 60 without it).
+  // Frames a second and motion blur, kept for the next render (this browser's storage; 60 and blurred without it).
   const [fps, setFps] = useState<number>(storedFps);
+  const [blur, setBlur] = useState<boolean>(storedBlur);
   const fpsValid = Number.isInteger(fps) && fps >= FPS_RANGE[0] && fps <= FPS_RANGE[1];
-  const pickFps = (value: number) => {
-    setFps(value);
+  const keep = (key: string, value: string) => {
     try {
-      localStorage.setItem(FPS_KEY, String(value));
+      localStorage.setItem(key, value);
     } catch {
       // No storage: the choice lasts this page only.
     }
+  };
+  const pickFps = (value: number) => {
+    setFps(value);
+    keep(FPS_KEY, String(value));
+  };
+  const pickBlur = (value: boolean) => {
+    setBlur(value);
+    keep(BLUR_KEY, String(value));
   };
   const kills = (marked.length ? marked.map((i) => round.kills[i]) : round.kills).map((k) => k.tick);
   const seconds = (s: number) => Math.round(s / summary.tick_interval);
@@ -748,12 +772,20 @@ function RenderRow({
           <option key={value} value={value} />
         ))}
       </datalist>
+      <label
+        title={
+          "Motion blur, as a camera makes it. Untick for sharp frames, for velocity edits: ramp the speed in your " +
+          "editing software, then blend frames or add the blur there (RSMB, Twixtor)."
+        }
+      >
+        <input type="checkbox" checked={blur} onChange={(e) => pickBlur(e.target.checked)} /> Motion blur
+      </label>
       <span className="muted">
         {clock(length)}
         {fpsValid ? `, ${Math.round(length * fps).toLocaleString()} frames` : ""}
       </span>
       <button
-        onClick={onRender && fpsValid ? () => onRender(preset, ticks, fps) : undefined}
+        onClick={onRender && fpsValid ? () => onRender(preset, ticks, fps, blur) : undefined}
         disabled={!onRender || !fpsValid}
         title={
           !fpsValid

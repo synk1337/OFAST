@@ -48,6 +48,21 @@ him kept in frame and the background blurred; the following version stays with h
 change at most 2.4 times the median, the peak an effect leaving the frame, not a jump). In the editor: buttons, the
 player lists, flying, adding, jumping between and removing points, a second cinematic made and removed, preview.
 
+## Depth of field over the round (2026-11-01)
+
+The user asked for the camera blur set in Unreal (near and far blur, strength) and changing with the scene, rather
+than a depth pass for compositing. Unreal's cinematic depth of field (Diaphragm DOF) is a lens: a focus distance and
+an aperture; the near and far blur sizes of its settings are for the mobile renderer only. What it does take apart
+is the most a thing in front of the focus and behind it can blur (`r.DOF.Kernel.MaxForegroundRadius`,
+`MaxBackgroundRadius`), one value each for the round. So the panel keys the lens, as the points key the camera: focus
+keys (what is sharp, how strong the blur), eased from one to the next on whichever camera is cut in; the limits as
+two fields. The cameras' own focus (the POV's on what the player aims at, a cinematic's on its player) is kept on
+row 0 of their tracks and only switched off while the round has keys ([cinematics.md](../formats/cinematics.md)).
+
+Checked on round 17 of aurora-vs-furia-m2-nuke: keys on the 4 POV cameras cut in and a cinematic, their own focus
+switched off then back on with the keys removed (the POV lens back to CS2's look's: off); a preview render racks
+from 0.6 m (the hallway blurred behind the gun) to where KSCERATO aims (the far end sharp).
+
 ## Later
 
 - A camera's ease in and out at its ends (now straight from the first point and into the last).

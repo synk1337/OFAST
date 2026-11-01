@@ -31,6 +31,8 @@ param(
     [string]$Preset = "",
     # For render_round.py: frames a second (60 by default; 250 or more for slow motion in the editing software).
     [string]$Fps = "",
+    # For render_round.py: sharp frames, without motion blur (for velocity edits: the blur added after the speed ramps).
+    [switch]$NoMotionBlur,
     # For import_demo.py: extra screenshots through players' eyes, "tick:controller,tick:controller".
     [string]$PovShots = "",
     # For import_demo.py: close-ups of players, "tick:controller,tick:controller".
@@ -74,6 +76,7 @@ $env:OFAST_SEQUENCE = $Sequence
 $env:OFAST_TICKS = $Ticks
 $env:OFAST_PRESET = $Preset
 $env:OFAST_FPS = $Fps
+$env:OFAST_MOTION_BLUR = if ($NoMotionBlur) { "0" } else { "" }
 $env:OFAST_POV_SHOTS = $PovShots
 $env:OFAST_CLOSE_SHOTS = $CloseShots
 $env:OFAST_VIEW_SHOTS = $ViewShots

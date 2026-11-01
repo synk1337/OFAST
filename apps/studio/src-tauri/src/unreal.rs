@@ -47,7 +47,7 @@ const LOG: &str = r"Saved\Logs\OFASTSandbox.log";
 
 /// The environment variables OFAST's Unreal scripts read: all are set for each run (empty when unused), so none
 /// leaks from the Studio's own environment.
-const SCRIPT_VARIABLES: [&str; 18] = [
+const SCRIPT_VARIABLES: [&str; 19] = [
     "OFAST_CAMERAS",
     "OFAST_GLTF",
     "OFAST_SHOT",
@@ -66,6 +66,7 @@ const SCRIPT_VARIABLES: [&str; 18] = [
     "OFAST_SEQUENCE",
     "OFAST_TICKS",
     "OFAST_FPS",
+    "OFAST_MOTION_BLUR",
 ];
 
 /// Where a sending is.
@@ -172,20 +173,24 @@ pub async fn update_cameras(
 /// Renders round `round` of the demo at `path`, already sent, with Movie Render Queue (see the
 /// [module docs](self)): `preset`'s frames and passes between the demo ticks `ticks` (the end left out; the whole
 /// round without them), `fps` frames a second (60 without it; 250 or more for slow motion made in the editing
-/// software), into a folder of its own in `Videos\OFAST`. Returns that folder. About two seconds a frame for `final`
-/// on a recent graphics card, after a minute or two of Unreal starting.
+/// software), with motion blur unless `motion_blur` is false (sharp frames, for velocity edits), into a folder of its
+/// own in `Videos\OFAST`. Returns that folder. About two seconds a frame for `final` on a recent graphics card, after
+/// a minute or two of Unreal starting.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri passes a command's arguments one by one.
 pub async fn render_round(
     path: String,
     round: u32,
     preset: String,
     ticks: Option<[u32; 2]>,
     fps: Option<u32>,
+    motion_blur: Option<bool>,
     app: AppHandle,
     sending: tauri::State<'_, Sending>,
 ) -> Result<String, String> {
     let _only = sending.0.try_lock().map_err(|_| BUSY.to_owned())?;
-    blocking(move || render(&app, &path, round, &preset, ticks, fps)).await?
+    let blur = motion_blur.unwrap_or(true);
+    blocking(move || render(&app, &path, round, &preset, ticks, fps, blur)).await?
 }
 
 /// The frame rates a render may ask for (`tools/unreal/render_round.py`'s FPS_RANGE).
@@ -227,6 +232,7 @@ fn render(
     preset: &str,
     ticks: Option<[u32; 2]>,
     fps: Option<u32>,
+    motion_blur: bool,
 ) -> Result<String, String> {
     let report = |message: String, warning: bool| emit(app, Step::Render, message, warning);
     if !PRESETS.contains(&preset) {
@@ -240,6 +246,7 @@ fn render(
         ));
     }
     let fps = fps.map(|f| f.to_string()).unwrap_or_default();
+    let blur = if motion_blur { "" } else { "0" };
     let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
     let side = unreal_side().ok_or("OFAST's Unreal project was not found.")?;
     unreal_closed()?;
@@ -281,6 +288,7 @@ fn render(
             ("OFAST_PRESET", preset.as_ref()),
             ("OFAST_TICKS", range.as_ref()),
             ("OFAST_FPS", fps.as_ref()),
+            ("OFAST_MOTION_BLUR", blur.as_ref()),
             ("OFAST_SHOT", out.as_os_str()),
         ],
         "rendered ",

@@ -30,6 +30,7 @@ import bisect
 import json
 import math
 import os
+import time
 
 import unreal
 
@@ -186,6 +187,37 @@ def key_frame(key):
     return time.frame_number.value + time.sub_frame
 
 
+def linear_curve(channel):
+    """frame -> the channel's value, straight between its keys (held before the first and after the last); None
+    without keys."""
+    keys = channel.get_keys()
+    if not keys:
+        return None
+    frames = [key_frame(k) for k in keys]
+    values = [k.get_value() for k in keys]
+
+    def at(frame):
+        i = bisect.bisect_right(frames, frame)
+        if i == 0:
+            return values[0]
+        if i == len(frames):
+            return values[-1]
+        s = (frame - frames[i - 1]) / (frames[i] - frames[i - 1])
+        return values[i - 1] + (values[i] - values[i - 1]) * s
+
+    return at
+
+
+def location_path(binding):
+    """frame -> where the actor bound by `binding` is ([x, y, z] cm), from its transform keys; None without them."""
+    tracks = binding.find_tracks_by_type(unreal.MovieScene3DTransformTrack) if binding else []
+    if not tracks or not tracks[0].get_sections():
+        return None
+    channels = replay_cameras.channels_by_name(tracks[0].get_sections()[0])
+    axes = [linear_curve(channels["Location." + axis]) for axis in ("X", "Y", "Z")]
+    return lambda frame: [axis(frame) if axis else 0.0 for axis in axes]
+
+
 def player_actors():
     """The round's players' bodies (agents, or stand-ins): label -> actor ("T molodoy", "CT Wicadia")."""
     out = {}
@@ -203,33 +235,11 @@ def player_path(sequence, label, smoothing):
     if not label:
         return None
     actor = player_actors().get(label)
-    binding = bindings_by_name(sequence).get(label)
-    tracks = binding.find_tracks_by_type(unreal.MovieScene3DTransformTrack) if binding else []
-    if actor is None or not tracks:
+    raw = location_path(bindings_by_name(sequence).get(label))
+    if actor is None or raw is None:
         log("cameras: no player %s in this round" % label)
         return None
-    channels = replay_cameras.channels_by_name(tracks[0].get_sections()[0])
     lift = AIM_ABOVE_FEET_CM if isinstance(actor, unreal.SkeletalMeshActor) else AIM_ABOVE_MIDDLE_CM
-    curves = []
-    for axis in ("X", "Y", "Z"):
-        keys = channels["Location." + axis].get_keys()
-        curves.append(([key_frame(k) for k in keys], [k.get_value() for k in keys]))
-
-    def raw(frame):
-        out = []
-        for frames, values in curves:
-            if not frames:
-                out.append(0.0)
-                continue
-            i = bisect.bisect_right(frames, frame)
-            if i == 0:
-                out.append(values[0])
-            elif i == len(frames):
-                out.append(values[-1])
-            else:
-                s = (frame - frames[i - 1]) / (frames[i] - frames[i - 1])
-                out.append(values[i - 1] + (values[i] - values[i - 1]) * s)
-        return out
 
     def smooth(frame):
         samples = [raw(frame + k) for k in range(-smoothing, smoothing + 1)]
@@ -429,15 +439,19 @@ def carve(cuts, start, end):
     return out
 
 
-def update_cuts(sequence, record):
-    """The camera cut track: the round's own cuts with each cinematic cut in, in the order they start (a later one
-    over an earlier one); the muzzle lights keyed again for them. Returns the number of cuts."""
-    base = base_cuts(sequence)
-    cuts = list(base["cuts"])
+def final_cuts(sequence, record):
+    """The round's own cuts with each cinematic cut in, in the order they start (a later one over an earlier one)."""
+    cuts = list(base_cuts(sequence)["cuts"])
     ranges = [(cut_range(sequence, c), c["name"]) for c in record["cinematics"]]
     for (start, end), name in sorted((r, n) for r, n in ranges if r):
         cuts = carve(cuts, start, end) + [{"start": start, "end": end, "camera": name}]
-    cuts.sort(key=lambda c: c["start"])
+    return sorted(cuts, key=lambda c: c["start"])
+
+
+def update_cuts(sequence, record):
+    """The camera cut track (final_cuts); the muzzle lights keyed again for them. Returns the number of cuts."""
+    base = base_cuts(sequence)
+    cuts = final_cuts(sequence, record)
     count = replay_cameras.cut_track(sequence, cuts)
     controllers = sorted({c["eyes"] for c in base["cuts"] if "eyes" in c})
     replay_cameras.key_lights(sequence, replay_cameras.views_of(cuts), controllers, base["end_frame"])
@@ -459,8 +473,230 @@ def restore(sequence):
     for cinematic in record["cinematics"]:
         build(sequence, cinematic)
     cuts = update_cuts(sequence, record)
-    log("cameras: %d cinematics of %s made again, %d cuts" % (len(record["cinematics"]), sequence.get_name(), cuts))
+    keyed = apply_focus(sequence, record)
+    apply_limits(record)
+    log("cameras: %d cinematics of %s made again, %d cuts, focus keys on %d cameras"
+        % (len(record["cinematics"]), sequence.get_name(), cuts, keyed))
     return len(record["cinematics"])
+
+
+# Depth of field over the round: focus keys, each a moment's focus (where the player looks, on a player, or at a
+# distance) and blur strength, eased from one to the next on whichever camera is cut in (POV cameras, shot cameras,
+# cinematics alike). A camera's own focus keys (the POV's "where the player looks", replay_cameras.key_focus; a
+# cinematic's focus on its player) stay as they were on row 0 of their tracks, switched off while the round has focus
+# keys; these are keyed on a row of their own (FOCUS_ROW), taken away when the keys are. The blur limits (how blurred
+# things in front of the focus and behind it can get) are console variables, one value for the round.
+
+FOCUS_EYES = "Where the player looks"
+FOCUS_DISTANCE = "A distance"
+DEFAULT_FOCUS_M = 10.0
+FOCUS_ROW = 1
+# Focus where a camera has none of its own (a shot camera with "Where the player looks"): far, nothing in front blurs
+# much.
+FAR_CM = 100000.0
+# The blur limits, % of the picture's width: the project's own (DefaultEngine.ini: the POV gun kept sharp, decision
+# 016) and Unreal's.
+LIMIT_CVARS = {"foreground": "r.DOF.Kernel.MaxForegroundRadius", "background": "r.DOF.Kernel.MaxBackgroundRadius"}
+DEFAULT_LIMITS = {"foreground": 0.3, "background": 2.5}
+# The lens properties a focus key sets: a POV camera's post-process lens (a CameraActor, replay_cameras.key_focus),
+# a CineCamera's own (shot cameras, cinematics). Each (property, path, key tolerance).
+POV_LENS = (("DepthOfFieldFocalDistance", "PostProcessSettings.DepthOfFieldFocalDistance", 1.0),
+            ("DepthOfFieldFstop", "PostProcessSettings.DepthOfFieldFstop", 0.01))
+CINE_LENS = (("ManualFocusDistance", "FocusSettings.ManualFocusDistance", 1.0),
+             ("CurrentAperture", "CurrentAperture", 0.01))
+
+
+def focus_settings(record):
+    """The round's depth of field: {"keys": [{"tick", "on", "distance" (m), "strength"}], "foreground",
+    "background"}, made empty in the record if it has none."""
+    focus = record.setdefault("focus", {})
+    focus.setdefault("keys", [])
+    for name, value in DEFAULT_LIMITS.items():
+        focus.setdefault(name, value)
+    return focus
+
+
+def blur_limits(record):
+    """The round's blur limits as console variables (fractions of the picture's width)."""
+    focus = record.get("focus") or {}
+    return {cvar: focus.get(name, DEFAULT_LIMITS[name]) / 100.0 for name, cvar in LIMIT_CVARS.items()}
+
+
+def apply_limits(record):
+    for cvar, value in blur_limits(record).items():
+        unreal.SystemLibrary.execute_console_command(None, "%s %g" % (cvar, value))
+
+
+def focus_keyed(sequence=None):
+    """Whether the round (the one open in Sequencer by default) has focus keys: the Look panel then leaves the POV
+    cameras' lens to them."""
+    sequence = sequence or sequencer.get_current_level_sequence()
+    if sequence is None or not os.path.exists(record_file(sequence)):
+        return False
+    return bool((load_record(sequence).get("focus") or {}).get("keys"))
+
+
+def ease(t):
+    return t * t * (3.0 - 2.0 * t)
+
+
+def lens_track(binding, path):
+    return next((t for t in binding.find_tracks_by_type(unreal.MovieSceneFloatTrack)
+                 if str(t.get_property_path()) == path), None)
+
+
+def own_focus(binding, path):
+    """frame -> the camera's own focus distance (cm, its track's row 0), or None."""
+    track = lens_track(binding, path)
+    sections = [s for s in track.get_sections() if s.get_row_index() < FOCUS_ROW] if track else []
+    return linear_curve(sections[0].get_all_channels()[0]) if sections else None
+
+
+def key_lens(binding, lens, rows, end):
+    """A camera's focus keys: its lens tracks' FOCUS_ROW sections made anew from `rows` [(frame, (distance cm,
+    f-stop))], its own sections switched off; with `rows` None, taken away and its own switched on again. Returns
+    whether it had focus keys before."""
+    had = False
+    for k, (name, path, tolerance) in enumerate(lens):
+        track = lens_track(binding, path)
+        if track is None:
+            if rows is None:
+                continue
+            track = binding.add_track(unreal.MovieSceneFloatTrack)
+            track.set_property_name_and_path(name, path)
+        for section in track.get_sections():
+            if section.get_row_index() >= FOCUS_ROW:
+                track.remove_section(section)
+                had = True
+            else:
+                section.set_is_active(rows is None)
+        if rows is None:
+            if not track.get_sections():
+                binding.remove_track(track)
+            continue
+        section = track.add_section()
+        section.set_row_index(FOCUS_ROW)
+        section.set_range(0, end)
+        channel = section.get_all_channels()[0]
+        for frame, (value,) in replay_cameras.reduce_keys([r[0] for r in rows], [(r[1][k],) for r in rows],
+                                                          tolerance):
+            replay_cameras.add_key(channel, frame, value, unreal.MovieSceneKeyInterpolation.LINEAR)
+    return had
+
+
+def lens_on(actor, keyed, own):
+    """A camera's static lens settings for focus keys (`keyed`) or its own (`own`: it focuses by itself)."""
+    if isinstance(actor, unreal.CineCameraActor):
+        component = actor.get_cine_camera_component()
+        focus = component.get_editor_property("focus_settings")
+        focus.set_editor_property("focus_method", unreal.CameraFocusMethod.MANUAL if keyed or own
+                                  else unreal.CameraFocusMethod.DISABLE)
+        component.set_editor_property("focus_settings", focus)
+    elif keyed:
+        component = actor.camera_component
+        settings = component.get_editor_property("post_process_settings")
+        for name in ("depth_of_field_focal_distance", "depth_of_field_fstop", "depth_of_field_sensor_width"):
+            settings.set_editor_property("override_" + name, True)
+        settings.set_editor_property("depth_of_field_sensor_width", replay_cameras.FOCUS_SENSOR_MM)
+        component.set_editor_property("post_process_settings", settings)
+
+
+def apply_focus(sequence, record):
+    """Keys the round's focus keys on every camera cut in (key_lens), or takes them away without keys. Returns the
+    number of cameras keyed."""
+    keys = sorted((record.get("focus") or {}).get("keys", []), key=lambda k: k["tick"])
+    tick0 = start_tick(sequence)
+    times = [k["tick"] - tick0 for k in keys]
+    end = keyed_end(sequence)
+    ranges = {}
+    for cut in final_cuts(sequence, record) if keys else []:
+        ranges.setdefault(cut["camera"], []).append((int(cut["start"]), int(cut["end"])))
+    by_label = {a.get_actor_label(): a for a in actors.get_all_level_actors()}
+    paths = {}
+    pov_restored = False
+    keyed = 0
+    for name, binding in bindings_by_name(sequence).items():
+        actor = by_label.get(name)
+        if not isinstance(actor, unreal.CameraActor):
+            continue
+        cine = isinstance(actor, unreal.CineCameraActor)
+        if cine:
+            lens, component = CINE_LENS, actor.get_cine_camera_component()
+        else:
+            lens, component = POV_LENS, actor.camera_component
+        children = [c for c in binding.get_child_possessables()
+                    if str(c.get_display_name()) == component.get_name()]
+        if not children and name not in ranges:
+            lens_on(actor, False, False)
+            continue
+        lens_binding = children[0] if children else sequence.add_possessable(component)
+        own = own_focus(lens_binding, lens[0][1])
+        rows = None
+        if name in ranges:
+            place = location_path(binding)
+            rows = []
+            for start, stop in ranges[name]:
+                for frame in range(start, stop):
+                    rows.append((frame, focus_at(sequence, keys, times, frame, place, own, paths)))
+            keyed += 1
+        had = key_lens(lens_binding, lens, rows, end)
+        lens_on(actor, rows is not None, own is not None)
+        pov_restored = pov_restored or (had and rows is None and not cine)
+    if pov_restored:
+        restore_pov_lens()
+    return keyed
+
+
+def restore_pov_lens():
+    """The POV cameras' lens as the Look panel has it again (its depth of field slider), or without Look settings for
+    the level as the round was built (replay_cameras.key_focus): on in the realistic look, off in CS2's."""
+    import ofast_look
+
+    if ofast_look.apply_level_look() is not None:
+        return
+    on = ofast_look.realistic(ofast_look.level_path())
+    for camera in ofast_look.pov_cameras():
+        component = camera.camera_component
+        settings = component.get_editor_property("post_process_settings")
+        for name, value in (("depth_of_field_fstop", replay_cameras.FOCUS_FSTOP),
+                            ("depth_of_field_sensor_width", replay_cameras.FOCUS_SENSOR_MM),
+                            ("depth_of_field_focal_distance", None)):
+            settings.set_editor_property("override_" + name, on)
+            if value is not None:
+                settings.set_editor_property(name, value)
+        component.set_editor_property("post_process_settings", settings)
+
+
+def focus_at(sequence, keys, times, frame, place, own, paths):
+    """(focus distance cm, f-stop) at `frame` from the keys around it, eased between them: the distances blended as
+    their inverses (a focus pull moves evenly through near and far), the strength straight. `place`: the camera's
+    location path; `own`: its own focus; `paths`: player paths made so far, by label."""
+    i = bisect.bisect_right(times, frame)
+    if i == 0 or i == len(keys):
+        pair, t = [keys[min(i, len(keys) - 1)]] * 2, 0.0
+    else:
+        pair = keys[i - 1], keys[i]
+        t = ease((frame - times[i - 1]) / (times[i] - times[i - 1]))
+    distances = [key_distance(sequence, key, frame, place, own, paths) for key in pair]
+    distance = 1.0 / ((1.0 - t) / distances[0] + t / distances[1])
+    strength = pair[0]["strength"] + (pair[1]["strength"] - pair[0]["strength"]) * t
+    return distance, fstop(strength)
+
+
+def key_distance(sequence, key, frame, place, own, paths):
+    """How far a focus key focuses at `frame`, in cm (at least 1)."""
+    on = key.get("on") or FOCUS_EYES
+    if on == FOCUS_DISTANCE:
+        return max(key.get("distance", DEFAULT_FOCUS_M) * 100.0, 1.0)
+    if on == FOCUS_EYES:
+        return max(own(frame), 1.0) if own else FAR_CM
+    if on not in paths:
+        paths[on] = player_path(sequence, on, AIM_SMOOTHING)
+    target = paths[on]
+    if target is None or place is None:
+        return FAR_CM
+    here, there = place(frame), target(frame)
+    return max(math.sqrt(sum((there[k] - here[k]) ** 2 for k in range(3))), 1.0)
 
 
 # The panel.
@@ -470,10 +706,37 @@ def tip(text):
     return {"ToolTip": text}
 
 
-# The Details panel lists a Python class's fields last first, so they are written here bottom up: Players, Points,
-# Cinematic.
+# The Details panel lists a Python class's fields last first, so they are written here bottom up: Depth of field,
+# Players, Points, Cinematic.
 @unreal.uclass()
 class OfastCameras(unreal.PrimaryDataAsset):
+    background_blur = unreal.uproperty(float, meta={
+        "Category": "Depth of field", "DisplayName": "Background blur limit", "UIMin": "0.0", "UIMax": "5.0",
+        "ClampMin": "0.0", "ClampMax": "10.0",
+        **tip("How blurred things behind the focus can get, in % of the picture's width: 0 keeps them sharp, 2.5 is "
+              "Unreal's usual. One value for the whole round.")})
+    foreground_blur = unreal.uproperty(float, meta={
+        "Category": "Depth of field", "DisplayName": "Foreground blur limit", "UIMin": "0.0", "UIMax": "5.0",
+        "ClampMin": "0.0", "ClampMax": "10.0",
+        **tip("How blurred things in front of the focus can get, in % of the picture's width: 0.3 (OFAST's usual) "
+              "keeps the gun sharp in first person; raise it to blur what passes close to a cinematic camera. One "
+              "value for the whole round.")})
+    blur = unreal.uproperty(float, meta={
+        "Category": "Depth of field", "DisplayName": "Blur strength", "UIMin": "0.0", "UIMax": "1.0",
+        "ClampMin": "0.0", "ClampMax": "1.0",
+        **tip("How strong the blur is at this key: 0 about everything sharp, 0.5 about f/4.7, 0.8 about f/1.9.")})
+    focus_distance = unreal.uproperty(float, meta={
+        "Category": "Depth of field", "DisplayName": "Distance (m)", "UIMin": "0.2", "UIMax": "50.0",
+        "ClampMin": "0.05", "ClampMax": "1000.0",
+        **tip("With Focus on: A distance, how far from the camera it is sharp, in metres.")})
+    focus_on = unreal.uproperty(str, meta={
+        "Category": "Depth of field", "DisplayName": "Focus on", "GetOptions": "focus_options",
+        **tip("What is sharp at this key: where the player looks (in first person, what they aim at; other cameras "
+              "keep their own focus), a player, or a distance from the camera.")})
+    focus_keys = unreal.uproperty(str, meta={
+        "Category": "Depth of field", "DisplayName": "Focus keys", "EditCondition": "false",
+        **tip("The round's focus keys: the depth of field eases from one to the next, on every camera. Without "
+              "keys, each camera keeps its own (the Look panel's, a cinematic's Focus on them).")})
     depth_of_field = unreal.uproperty(float, meta={
         "Category": "Players", "DisplayName": "Depth of field", "UIMin": "0.0", "UIMax": "1.0", "ClampMin": "0.0",
         "ClampMax": "1.0", "EditCondition": "focus",
@@ -506,6 +769,10 @@ class OfastCameras(unreal.PrimaryDataAsset):
     @unreal.ufunction(ret=unreal.Array(str))
     def player_options(self):
         return [NOBODY] + sorted(player_actors())
+
+    @unreal.ufunction(ret=unreal.Array(str))
+    def focus_options(self):
+        return [FOCUS_EYES, FOCUS_DISTANCE] + sorted(player_actors())
 
     # Buttons show in alphabetical order (of their names and labels alike, here): hence "Earlier" and "Later" point.
     @unreal.ufunction(meta={"CallInEditor": "true", "Category": "Cinematic", "DisplayName": "New cinematic",
@@ -551,9 +818,37 @@ class OfastCameras(unreal.PrimaryDataAsset):
     def fly(self):
         act(fly)
 
+    @unreal.ufunction(meta={"CallInEditor": "true", "Category": "Depth of field",
+                            "DisplayName": "Add focus key here",
+                            **tip("A focus key at the playhead with the settings above (the key there is replaced). "
+                                  "On a key, changing them changes it.")})
+    def add_focus_key(self):
+        act(add_focus_key)
 
-# The panel's object, the open sequence and its cinematics, what the fields held at the last tick.
-_state = {"handle": None, "panel": None, "sequence": None, "record": None, "last": None, "frame": None}
+    @unreal.ufunction(meta={"CallInEditor": "true", "Category": "Depth of field", "DisplayName": "Earlier focus key",
+                            **tip("Moves the playhead to the focus key before it.")})
+    def earlier_focus_key(self):
+        act(lambda: go_to_focus_key(-1))
+
+    @unreal.ufunction(meta={"CallInEditor": "true", "Category": "Depth of field", "DisplayName": "Later focus key",
+                            **tip("Moves the playhead to the focus key after it.")})
+    def later_focus_key(self):
+        act(lambda: go_to_focus_key(1))
+
+    @unreal.ufunction(meta={"CallInEditor": "true", "Category": "Depth of field",
+                            "DisplayName": "Remove focus key here",
+                            **tip("Removes the focus key at the playhead (Earlier and Later focus key go to one).")})
+    def remove_focus_key(self):
+        act(remove_focus_key)
+
+
+# The panel's object, the open sequence and its cinematics, what the fields held at the last tick, when the focus
+# fields last changed with the playhead on a key (the key changed once they have been left alone FOCUS_SETTLE s).
+_state = {"handle": None, "panel": None, "sequence": None, "record": None, "last": None, "frame": None,
+          "pending": None}
+FOCUS_SETTLE = 0.4
+FOCUS_FIELDS = {"focus_on": "on", "focus_distance": "distance", "blur": "strength"}
+LIMIT_FIELDS = {"foreground_blur": "foreground", "background_blur": "background"}
 # What a button did, shown in the level viewport for a few seconds (one message at a time).
 MESSAGE_SECONDS = 6.0
 MESSAGE_COLOUR = unreal.LinearColor(1.0, 0.75, 0.25, 1.0)
@@ -564,6 +859,7 @@ def panel():
         _state["panel"] = unreal.new_object(OfastCameras, name="Cameras")
         _state["panel"].set_editor_property("field_of_view", DEFAULT_FOV)
         _state["panel"].set_editor_property("depth_of_field", DEFAULT_DOF)
+        load_focus(None)
     return _state["panel"]
 
 
@@ -604,6 +900,8 @@ def current_sequence():
         if any(name not in cinematic_actors() for name in names):
             # Unreal closed without saving the level: the cameras made again from the file.
             restore(sequence)
+        apply_limits(_state["record"])
+        load_focus(None)
         load_fields(next(iter(names), ""))
     return sequence
 
@@ -630,7 +928,20 @@ def load_fields(name):
 def fields():
     p = panel()
     return {name: p.get_editor_property(name)
-            for name in ("cinematic", "keep_in_frame", "follow", "focus", "depth_of_field", "field_of_view")}
+            for name in ("cinematic", "keep_in_frame", "follow", "focus", "depth_of_field", "field_of_view",
+                         *FOCUS_FIELDS, *LIMIT_FIELDS)}
+
+
+def load_focus(key):
+    """The depth of field fields set from a focus key (the defaults without one) and the round's blur limits."""
+    p = _state["panel"]
+    key = key or {"on": FOCUS_EYES, "distance": DEFAULT_FOCUS_M, "strength": DEFAULT_DOF}
+    for name, field in FOCUS_FIELDS.items():
+        p.set_editor_property(name, key[field])
+    focus = (_state["record"] or {}).get("focus") or {}
+    for name, field in LIMIT_FIELDS.items():
+        p.set_editor_property(name, focus.get(field, DEFAULT_LIMITS[field]))
+    _state["last"] = fields() if _state["last"] is not None else None
 
 
 def player_field(value):
@@ -669,6 +980,7 @@ def changed(sequence, cinematic, actor=None):
     """Keys the cinematic again, cuts again, saves its file; Sequencer shows it."""
     actor = build(sequence, cinematic, actor)
     update_cuts(sequence, _state["record"])
+    apply_focus(sequence, _state["record"])
     save_record(sequence, _state["record"])
     sequencer.refresh_current_level_sequence()
     sequencer.force_update()
@@ -729,7 +1041,11 @@ def remove_point():
 def go_to_point(step):
     sequence = current_sequence()
     cinematic = selected()
-    frames = frames_of(sequence, cinematic) if cinematic else []
+    step_to(sequence, frames_of(sequence, cinematic) if cinematic else [], step, "point")
+
+
+def step_to(sequence, frames, step, noun):
+    """Moves the playhead to the frame before it (`step` -1) or after it (1) among `frames` (`noun`'s)."""
     now = playhead()
     if step < 0:
         targets = [f for f in frames if f < now - SAME_POINT]
@@ -738,10 +1054,65 @@ def go_to_point(step):
         targets = [f for f in frames if f > now + SAME_POINT]
         target = targets[0] if targets else None
     if target is None:
-        say("No point %s the playhead." % ("before" if step < 0 else "after"))
+        say("No %s %s the playhead." % (noun, "before" if step < 0 else "after"))
         return
     sequencer.set_current_time(int(round(target)))
-    say("At point %d of %d (%s)." % (frames.index(target) + 1, len(frames), clock(sequence, target)))
+    say("At %s %d of %d (%s)." % (noun, frames.index(target) + 1, len(frames), clock(sequence, target)))
+
+
+def focus_frames(sequence):
+    """The round's focus keys' frames, in time order."""
+    tick0 = start_tick(sequence)
+    return sorted(k["tick"] - tick0 for k in ((_state["record"] or {}).get("focus") or {}).get("keys", []))
+
+
+def focus_key_here(sequence):
+    """The focus key at the playhead, or None."""
+    tick = start_tick(sequence) + playhead()
+    keys = ((_state["record"] or {}).get("focus") or {}).get("keys", [])
+    return next((k for k in keys if abs(k["tick"] - tick) < SAME_POINT), None)
+
+
+def focus_changed(sequence):
+    """Keys the focus again on every camera, saves the file; Sequencer shows it."""
+    apply_focus(sequence, _state["record"])
+    save_record(sequence, _state["record"])
+    sequencer.refresh_current_level_sequence()
+    sequencer.force_update()
+
+
+def focus_from_fields():
+    p = panel()
+    return {field: p.get_editor_property(name) for name, field in FOCUS_FIELDS.items()}
+
+
+def add_focus_key():
+    sequence = current_sequence()
+    focus = focus_settings(_state["record"])
+    key = dict(focus_from_fields(), tick=start_tick(sequence) + playhead())
+    kept = [k for k in focus["keys"] if abs(k["tick"] - key["tick"]) >= SAME_POINT]
+    replaced = len(kept) < len(focus["keys"])
+    focus["keys"] = sorted(kept + [key], key=lambda k: k["tick"])
+    focus_changed(sequence)
+    say("Focus key %d %s at %s." % (focus["keys"].index(key) + 1, "replaced" if replaced else "added",
+                                    clock(sequence, playhead())))
+
+
+def remove_focus_key():
+    sequence = current_sequence()
+    key = focus_key_here(sequence)
+    if key is None:
+        say("No focus key at the playhead: Earlier focus key and Later focus key go to one.")
+        return
+    focus = focus_settings(_state["record"])
+    focus["keys"].remove(key)
+    focus_changed(sequence)
+    say("Focus key at %s removed; %d left." % (clock(sequence, playhead()), len(focus["keys"])))
+
+
+def go_to_focus_key(step):
+    sequence = current_sequence()
+    step_to(sequence, focus_frames(sequence), step, "focus key")
 
 
 def drop_cinematic():
@@ -766,6 +1137,7 @@ def drop_cinematic():
     if actor is not None:
         actors.destroy_actor(actor)
     update_cuts(sequence, _state["record"])
+    apply_focus(sequence, _state["record"])
     save_record(sequence, _state["record"])
     sequencer.refresh_current_level_sequence()
     load_fields(next((c["name"] for c in _state["record"]["cinematics"]), ""))
@@ -834,6 +1206,18 @@ def show():
     text = "\n".join(lines)
     if p.get_editor_property("points") != text:
         p.set_editor_property("points", text)
+    focus = focus_line(sequence) if sequence is not None else ""
+    if p.get_editor_property("focus_keys") != focus:
+        p.set_editor_property("focus_keys", focus)
+
+
+def focus_line(sequence):
+    """The Focus keys field: one line, how many keys, where the playhead is among them."""
+    frames = focus_frames(sequence)
+    if not frames:
+        return "None: each camera keeps its own focus"
+    return "%d, %s to %s; %s" % (len(frames), clock(sequence, frames[0]), clock(sequence, frames[-1]),
+                                 where(frames, playhead()).replace("point", "key"))
 
 
 def apply_fields(sequence, now):
@@ -864,7 +1248,29 @@ def apply_fields(sequence, now):
         if actor is not None and CINEMATIC_TAG in actor.tags:
             actor.get_cine_camera_component().set_editor_property("current_focal_length",
                                                                   focal_length(values["field_of_view"]))
+    if any(values[k] != last[k] for k in LIMIT_FIELDS):
+        focus = focus_settings(_state["record"])
+        for name, field in LIMIT_FIELDS.items():
+            focus[field] = values[name]
+        apply_limits(_state["record"])
+        save_record(sequence, _state["record"])
+    if any(values[k] != last[k] for k in FOCUS_FIELDS) and focus_key_here(sequence) is not None:
+        # The key at the playhead changes once the fields are left alone (a slider dragged keys it once).
+        _state["pending"] = time.monotonic()
     _state["last"] = fields()
+
+
+def settle_focus(sequence):
+    """The focus key at the playhead given the focus fields, once they were left alone FOCUS_SETTLE s."""
+    if _state["pending"] is None or time.monotonic() - _state["pending"] < FOCUS_SETTLE:
+        return
+    _state["pending"] = None
+    key = focus_key_here(sequence)
+    if key is None:
+        return
+    key.update(focus_from_fields())
+    focus_changed(sequence)
+    say("Focus key at %s changed." % clock(sequence, playhead()))
 
 
 def _tick(_delta):
@@ -878,9 +1284,15 @@ def _tick(_delta):
         values = fields()
         if values != _state["last"]:
             apply_fields(sequence, values)
+        settle_focus(sequence)
         frame = playhead()
         if frame != _state["frame"]:
             _state["frame"] = frame
+            _state["pending"] = None
+            # On a focus key, its settings in the fields (to change it).
+            key = focus_key_here(sequence)
+            if key is not None:
+                load_focus(key)
             cinematic = selected()
             if cinematic and cinematic["points"] and not sequencer.is_playing():
                 # The field of view the camera has there, for the next point.
