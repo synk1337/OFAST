@@ -332,7 +332,7 @@ pub struct Summaries(Mutex<HashMap<String, Arc<AsyncMutex<Saved>>>>);
 
 /// Bumped whenever `ofast_core::demo::summary` changes what it reads: summaries saved by an older Studio are read
 /// again. (A saved summary that no longer fits the types is read again as well.)
-const SUMMARY_FORMAT: u32 = 2;
+const SUMMARY_FORMAT: u32 = 3;
 
 /// Sums a demo up ([`ofast_core::demo::summary::summarize`]): rounds, scores, kill feed and highlights. Reading a
 /// whole match takes seconds, so each summary is kept, in memory and in the app's cache folder, until the file

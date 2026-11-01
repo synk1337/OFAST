@@ -248,7 +248,10 @@ fn run(cli: Cli) -> Result<(), String> {
             let plan = camera_plan(shots, *smooth, hlae, pov.as_deref())?;
             let data = std::fs::read(demo).map_err(|e| format!("{}: {e}", demo.display()))?;
             let name = demo.file_stem().and_then(|s| s.to_str()).unwrap_or("demo");
-            let track = track_round(&data, *round).map_err(|e| e.to_string())?;
+            // Without most of its freeze time, as the Studio sends it.
+            let track = track_round(&data, *round)
+                .map_err(|e| e.to_string())?
+                .without_freeze();
             let report = write_replay(&track, name, out).map_err(|e| e.to_string())?;
             println!("wrote {}", report.path.display());
             println!(

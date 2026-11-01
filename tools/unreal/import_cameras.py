@@ -62,7 +62,10 @@ def update(cameras):
     if not assets.get_metadata_tag(sequence, "OFAST_start_tick"):
         raise RuntimeError("%s was built by an older OFAST: send the round to Unreal again" % path)
     levels.load_level(level)
-    tick0 = cameras["start_tick"]
+    # Frames count from the sequence's own first tick: a round sent before the freeze time was cut (2026-11-01)
+    # starts earlier than its cameras file now does.
+    tick0 = int(assets.get_metadata_tag(sequence, "OFAST_start_tick"))
+    cameras["start_tick"] = tick0
     # Keyed to the round's end, played to the file's last tick (a round about one player ends after their death).
     end_frame = cameras["end_tick"] - tick0 + 1
     bindings = {str(b.get_display_name()): b for b in sequence.get_bindings()}

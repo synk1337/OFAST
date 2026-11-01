@@ -18,9 +18,11 @@
 //!
 //! Rounds come from the game rules entity (`CCSGameRulesProxy` → `m_pGameRules`). A round **starts** when the
 //! freeze time begins (`m_bFreezePeriod` turns on) outside warmup and before the match has ended (`m_gamePhase` =
-//! 5). It lasts until the tick before the next round starts, the match ends, or the demo ends — so it includes the
-//! few seconds after the round is decided. Its number is `m_totalRoundsPlayed + 1` at the start. See
-//! `docs/formats/demo.md`.
+//! 5). It lasts until the tick before the next round starts (the players respawn), or the demo ends — so it includes
+//! the restart delay after the round is decided. The match ends on the tick its last round is decided; that round
+//! runs on until the next would have started (`m_flRestartRoundTime`, set as it is decided). Its number is
+//! `m_totalRoundsPlayed + 1` at the start. Sent to Unreal, a round keeps only the end of its freeze time
+//! ([`RoundTrack::without_freeze`]). See `docs/formats/demo.md`.
 //!
 //! What drives a player's animation ([`RigInputs`]: velocity, ground, crouch, walking, the weapon in hand and its
 //! animation state, jumps and landings) comes from the pawn, its movement and weapon services, and the active
@@ -413,7 +415,48 @@ pub struct RoundTrack {
     pub stattrak: BTreeMap<u32, Vec<(u32, u32)>>,
 }
 
+/// How much of the freeze time a round keeps once sent to Unreal ([`RoundTrack::without_freeze`]), seconds before it
+/// ends: the players stand at their spawn buying for the rest of it (`mp_freezetime`, 15 to 20 s), and a short lead-in
+/// leaves room for a cinematic before the round goes live.
+pub const FREEZE_KEPT_S: f32 = 3.0;
+
+/// The first tick of a round once sent to Unreal: [`FREEZE_KEPT_S`] before its freeze time ends (`freeze_end_tick`),
+/// its own first tick when the freeze time is shorter or its end unknown.
+pub fn clip_start(start_tick: u32, freeze_end_tick: Option<u32>, tick_interval: f32) -> u32 {
+    let kept = (FREEZE_KEPT_S / tick_interval).round() as u32;
+    freeze_end_tick.map_or(start_tick, |end| end.saturating_sub(kept).max(start_tick))
+}
+
 impl RoundTrack {
+    /// The round without most of its freeze time: from [`clip_start`] on (samples and events; the shots and hits
+    /// before it, if any, join those before the round, for their bullet holes). Its weapons' finishes, StatTrak
+    /// counts and smokes stay as read.
+    pub fn without_freeze(mut self) -> Self {
+        let freeze_end = self
+            .events
+            .iter()
+            .find(|e| e.name == "round_freeze_end")
+            .map(|e| e.tick);
+        let cut = clip_start(self.start_tick, freeze_end, self.tick_interval);
+        if cut <= self.start_tick {
+            return self;
+        }
+        self.samples.retain(|s| s.tick >= cut);
+        self.events.retain(|e| e.tick >= cut);
+        let (before, after): (Vec<_>, Vec<_>) =
+            self.shots.into_iter().partition(|(_, s)| s.tick < cut);
+        self.earlier_shots
+            .extend(before.into_iter().map(|(_, s)| s));
+        self.shots = after;
+        let (before, after): (Vec<_>, Vec<_>) =
+            self.player_hits.into_iter().partition(|h| h.tick < cut);
+        self.earlier_hits.extend(before);
+        self.player_hits = after;
+        // No grenade flies in freeze time: the smokes' logs all start after it.
+        self.start_tick = self.samples.first().map_or(cut, |s| s.tick);
+        self
+    }
+
     /// The StatTrak count of weapon entity `entity` at `tick`, `None` without one.
     pub fn stattrak_at(&self, entity: u32, tick: u32) -> Option<u32> {
         let first = self.skins.get(&entity)?.stattrak?;
@@ -474,6 +517,9 @@ pub(super) struct Paths {
     freeze_period: FieldPath,
     warmup_period: FieldPath,
     game_phase: FieldPath,
+    /// `m_flRestartRoundTime`: the game time the next round starts, set when a round is decided (the match's last
+    /// round included); `None` if a CS2 update renamed it (the match's last round then ends where it is decided).
+    restart_round_time: Option<FieldPath>,
     rig: RigPaths,
     appearance: AppearancePaths,
     death: DeathPaths,
@@ -816,6 +862,7 @@ impl Paths {
             freeze_period: path(rules, "m_pGameRules.m_bFreezePeriod")?,
             warmup_period: path(rules, "m_pGameRules.m_bWarmupPeriod")?,
             game_phase: path(rules, "m_pGameRules.m_gamePhase")?,
+            restart_round_time: path(rules, "m_pGameRules.m_flRestartRoundTime").ok(),
             rig: RigPaths::find(serializers, classes),
             appearance: AppearancePaths::find(serializers),
             death: DeathPaths::find(serializers),
@@ -837,6 +884,9 @@ struct RulesState {
     freeze: bool,
     warmup: bool,
     match_ended: bool,
+    /// Ticks from now until the next round starts (`m_flRestartRoundTime` against the game clock), once a round is
+    /// decided: `mp_round_restart_delay`, 5 s in ESL's matches. `None` when no restart is due or it is unknown.
+    restart_in: Option<u32>,
 }
 
 /// What happened at a tick, according to [`RoundDetector`].
@@ -853,6 +903,8 @@ pub(super) enum RoundEvent {
 struct RoundDetector {
     was_freeze: bool,
     current: Option<RoundInfo>,
+    /// The last tick of the match's last round, once the match has ended.
+    match_end: Option<u32>,
 }
 
 impl RoundDetector {
@@ -861,13 +913,20 @@ impl RoundDetector {
         let mut events = Vec::new();
         let starts = rules.freeze && !self.was_freeze && !rules.warmup && !rules.match_ended;
         self.was_freeze = rules.freeze;
+        // The match ends on the tick its last round is decided. A round otherwise runs on until the next one starts
+        // (the restart delay after it is decided), and so does the last one: until the next round would have
+        // started. CS2 freezes the players then, but the final kill plays out (the victim falls, the smokes go on).
+        if rules.match_ended && self.current.is_some() && self.match_end.is_none() {
+            self.match_end = Some(tick + rules.restart_in.unwrap_or(0).saturating_sub(1));
+        }
+        let match_over = self.match_end.is_some_and(|end| tick >= end);
         // A return to warmup ends a round too (some servers warm up again after a knife round): its respawning
         // deathmatch is no round.
-        if (starts || rules.match_ended || rules.warmup)
+        if (starts || match_over || rules.warmup)
             && let Some(mut done) = self.current.take()
         {
-            // The match ends on the tick its last round is decided: that tick (the final kill) is the round's.
-            if rules.match_ended && !starts {
+            // The tick the match's last round reaches its end is the round's.
+            if match_over && !starts {
                 done.end_tick = tick;
             }
             events.push(RoundEvent::Ended(done));
@@ -1215,6 +1274,18 @@ fn read_rules(parser: &DemoParser<'_>, paths: &Paths) -> Option<RulesState> {
             .unwrap_or(false),
         match_ended: rules.get(&paths.game_phase).and_then(FieldValue::as_i64)
             == Some(GAME_PHASE_MATCH_ENDED),
+        // The game clock is the server's tick times the tick interval ([`RoundTrack::server_tick_offset`]).
+        restart_in: paths
+            .restart_round_time
+            .as_ref()
+            .and_then(|p| rules.get(p))
+            .and_then(FieldValue::as_f32)
+            .zip(parser.server_tick())
+            .zip(parser.tick_interval())
+            .and_then(|((time, now), interval)| {
+                let ticks = (f64::from(time) / f64::from(interval)).round() as i64 - i64::from(now);
+                (time > 0.0 && ticks > 0).then(|| ticks.min(i64::from(u32::MAX)) as u32)
+            }),
     })
 }
 
@@ -1699,6 +1770,7 @@ mod tests {
             freeze,
             warmup,
             match_ended,
+            restart_in: None,
         }
     }
 
@@ -1726,7 +1798,7 @@ mod tests {
         };
         assert_eq!(next, [RoundEvent::Ended(first), RoundEvent::Started(2)]);
         detector.update(50, rules(false, 1, false, false));
-        // The match ends on the tick its last round is decided: that tick belongs to the round.
+        // The match ends on the tick its last round is decided; without a restart time that tick is the round's last.
         let last = RoundInfo {
             round: 2,
             start_tick: 40,
@@ -1737,6 +1809,101 @@ mod tests {
             [RoundEvent::Ended(last)]
         );
         assert_eq!(detector.finish(), None);
+    }
+
+    #[test]
+    fn the_matchs_last_round_keeps_its_restart_delay() {
+        let mut detector = RoundDetector::default();
+        detector.update(20, rules(true, 0, false, false));
+        detector.update(30, rules(false, 0, false, false));
+        // Decided at 100, the next round due 320 ticks later (5 s): the round's last tick is 419.
+        let decided = RulesState {
+            restart_in: Some(320),
+            ..rules(false, 1, false, true)
+        };
+        assert!(detector.update(100, decided).is_empty());
+        let after = RulesState {
+            restart_in: Some(1),
+            ..decided
+        };
+        assert!(detector.update(418, after).is_empty());
+        let last = RoundInfo {
+            round: 1,
+            start_tick: 20,
+            end_tick: 419,
+        };
+        assert_eq!(detector.update(419, after), [RoundEvent::Ended(last)]);
+        assert!(
+            detector.update(420, after).is_empty(),
+            "no round after the match"
+        );
+        // A demo that stops sooner ends the round where it stops.
+        let mut short = RoundDetector::default();
+        short.update(20, rules(true, 0, false, false));
+        short.update(100, decided);
+        short.update(200, decided);
+        assert_eq!(
+            short.finish(),
+            Some(RoundInfo {
+                round: 1,
+                start_tick: 20,
+                end_tick: 200,
+            })
+        );
+    }
+
+    #[test]
+    fn a_round_sent_keeps_the_end_of_its_freeze_time() {
+        let interval = 1.0 / 64.0;
+        // 20 s of freeze time from tick 1000: kept from 3 s (192 ticks) before it ends.
+        assert_eq!(clip_start(1000, Some(2280), interval), 2088);
+        assert_eq!(
+            clip_start(1000, Some(1100), interval),
+            1000,
+            "shorter than 3 s"
+        );
+        assert_eq!(clip_start(1000, None, interval), 1000);
+        let sample = |tick| TickSample {
+            tick,
+            players: Vec::new(),
+            dropped: Vec::new(),
+            doors: Vec::new(),
+            props: Vec::new(),
+            grenades: Vec::new(),
+            fires: Vec::new(),
+        };
+        let event = |tick, name: &str| GameEvent {
+            tick,
+            name: name.into(),
+            keys: Vec::new(),
+        };
+        let track = RoundTrack {
+            round: 3,
+            start_tick: 1000,
+            end_tick: 9000,
+            tick_interval: interval,
+            map_name: "de_dust2".into(),
+            samples: [1000, 2000, 2088, 2280, 9000].map(sample).to_vec(),
+            events: vec![
+                event(1500, "item_purchase"),
+                event(2280, "round_freeze_end"),
+            ],
+            smoke_logs: Vec::new(),
+            shots: Vec::new(),
+            player_hits: Vec::new(),
+            earlier_shots: Vec::new(),
+            earlier_hits: Vec::new(),
+            server_tick_offset: None,
+            skins: BTreeMap::new(),
+            stattrak: BTreeMap::new(),
+        }
+        .without_freeze();
+        assert_eq!((track.start_tick, track.end_tick), (2088, 9000));
+        assert_eq!(
+            track.samples.iter().map(|s| s.tick).collect::<Vec<_>>(),
+            [2088, 2280, 9000]
+        );
+        assert_eq!(track.events.len(), 1);
     }
 
     #[test]

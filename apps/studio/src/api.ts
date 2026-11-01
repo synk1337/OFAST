@@ -76,6 +76,8 @@ export interface RoundSummary {
   round: number;
   start_tick: number;
   freeze_end_tick: number | null;
+  /** The round's first tick once in Unreal: a few seconds before its freeze time ends. */
+  clip_start_tick: number;
   /** When the winner was known; later kills are the seconds before the next round. */
   decided_tick: number | null;
   end_tick: number;

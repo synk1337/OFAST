@@ -86,14 +86,15 @@ pub struct ReplayReport {
     pub warnings: Vec<String>,
 }
 
-/// Reads round `round` of a demo and writes its replay file into `out_dir`. `demo_name` names the file.
+/// Reads round `round` of a demo and writes its replay file into `out_dir`, without most of its freeze time
+/// ([`crate::demo::players::RoundTrack::without_freeze`]). `demo_name` names the file.
 pub fn export_round(
     data: &[u8],
     demo_name: &str,
     round: u32,
     out_dir: &Path,
 ) -> Result<ReplayReport, ExportError> {
-    let track = track_round(data, round)?;
+    let track = track_round(data, round)?.without_freeze();
     write_replay(&track, demo_name, out_dir)
 }
 

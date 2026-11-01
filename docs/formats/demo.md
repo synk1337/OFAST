@@ -434,13 +434,23 @@ the round end.
 - **Camera**: `PlayerSample::eye_position()` = position + view offset, aimed along pitch and yaw — what CS2 shows
   when spectating that player in first person (see [Checked in the game](#checked-in-the-game)).
 - **Game rules** (`CCSGameRulesProxy` → pointer `m_pGameRules`): `m_totalRoundsPlayed`, `m_bFreezePeriod`,
-  `m_bWarmupPeriod`, `m_gamePhase` (5 = match ended).
+  `m_bWarmupPeriod`, `m_gamePhase` (5 = match ended), `m_flRestartRoundTime` (the game time the next round starts,
+  set on the tick a round is decided: `mp_round_restart_delay` later, 5 s in ESL's matches; the game clock is the
+  server tick × the tick interval). Also there: `m_iFreezeTime` (`mp_freezetime`, 20 s in ESL's matches).
 
 OFAST's round: starts when freeze time begins (`m_bFreezePeriod` turns on) outside warmup and before the match has
-ended; number = `m_totalRoundsPlayed + 1`; lasts until the tick before the next round starts, a warmup begins again
-(some servers warm up after a knife round), or the demo ends — so it includes the seconds after the round is
-decided. The match's last round ends on the tick the match does (`m_gamePhase` 5), which is the tick it is decided:
-that tick is the round's, sampled with its final kill. Start ticks equal the `round_start` game event. A restart or
+ended; number = `m_totalRoundsPlayed + 1`; lasts until the tick before the next round starts (the players respawn),
+a warmup begins again (some servers warm up after a knife round), or the demo ends — so it includes the restart
+delay after the round is decided. The match ends (`m_gamePhase` 5) on the tick its last round is decided; that round
+runs on until the next round would have started, `m_flRestartRoundTime` read on that tick (Aurora vs FURIA on Nuke,
+round 17: decided at tick 156124, ends at 156443, 5 s later). CS2 freezes the players then (no pawn moves after tick
+156125 there, though the demo goes on 3 minutes), but the final kill plays out: the victim falls, smokes and fires go
+on. Without a restart time the round ends on the deciding tick, as before 2026-11-01. Start ticks equal the
+`round_start` game event.
+
+Sent to Unreal (`RoundTrack::without_freeze`, the Studio and `ofast export-demo`), a round keeps only the last
+`FREEZE_KEPT_S` (3 s) of its freeze time, room for a cinematic before it goes live: its samples, events and start
+tick from `clip_start` on (the summary's `clip_start_tick`, which the Studio's render lengths use). A restart or
 a restored backup plays a round number again: `track_round` takes the first round with the number, `track_round_at`
 the one starting at a tick. A player sample for tick T is the state after the last packet of frame tick T
 (demoparser2 samples the same way).

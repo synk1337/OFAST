@@ -691,14 +691,17 @@ function RenderRow({
   };
   const kills = (marked.length ? marked.map((i) => round.kills[i]) : round.kills).map((k) => k.tick);
   const seconds = (s: number) => Math.round(s / summary.tick_interval);
+  // In Unreal a round starts a few seconds before its freeze time ends (clip_start_tick) and ends before the players
+  // respawn.
   const ticks: [number, number] | null =
     whole || kills.length === 0
       ? null
       : [
-          Math.max(round.start_tick, Math.min(...kills) - seconds(BEFORE_KILLS_S)),
+          Math.max(round.clip_start_tick, Math.min(...kills) - seconds(BEFORE_KILLS_S)),
           Math.min(round.end_tick, Math.max(...kills) + seconds(AFTER_KILLS_S)),
         ];
-  const length = (ticks ? ticks[1] - ticks[0] : round.end_tick - round.start_tick) * summary.tick_interval;
+  const length =
+    (ticks ? ticks[1] - ticks[0] : round.end_tick - round.clip_start_tick) * summary.tick_interval;
   return (
     <div className="cameras-row">
       <label title={RENDER_PRESETS.find(([p]) => p === preset)?.[2]}>

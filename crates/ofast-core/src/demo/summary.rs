@@ -17,7 +17,9 @@ use super::entity::Entity;
 use super::events::GameEvent;
 use super::fieldpath::FieldPath;
 use super::parser::DemoParser;
-use super::players::{COUNTER_TERRORISTS, Paths, RoundEvent, TERRORISTS, TrackError, walk_rounds};
+use super::players::{
+    COUNTER_TERRORISTS, Paths, RoundEvent, TERRORISTS, TrackError, clip_start, walk_rounds,
+};
 
 /// Everything [`summarize`] read from a demo.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -138,6 +140,9 @@ pub struct RoundSummary {
     pub start_tick: u32,
     /// When the freeze time ended (`round_freeze_end`), if the demo has it.
     pub freeze_end_tick: Option<u32>,
+    /// The round's first tick once sent to Unreal, a few seconds before its freeze time ends
+    /// ([`crate::demo::players::clip_start`]).
+    pub clip_start_tick: u32,
     /// When the round was decided (the winner known; the kills after it are the seconds before the next round).
     pub decided_tick: Option<u32>,
     /// Last tick that belongs to the round.
@@ -381,6 +386,7 @@ pub fn summarize(data: &[u8]) -> Result<DemoSummary, TrackError> {
                         round: number,
                         start_tick: view.tick,
                         freeze_end_tick: None,
+                        clip_start_tick: view.tick,
                         decided_tick: None,
                         end_tick: view.tick,
                         winner: None,
@@ -426,6 +432,8 @@ pub fn summarize(data: &[u8]) -> Result<DemoSummary, TrackError> {
                 }
                 "round_freeze_end" if round.freeze_end_tick.is_none() => {
                     round.freeze_end_tick = Some(event.tick);
+                    round.clip_start_tick =
+                        clip_start(round.start_tick, Some(event.tick), summary.tick_interval);
                     round.players = reader.roster(view.parser, view.paths, &mut players);
                 }
                 "round_end" => {
@@ -908,6 +916,7 @@ mod tests {
             round: 1,
             start_tick: 0,
             freeze_end_tick: Some(100),
+            clip_start_tick: 0,
             decided_tick: Some(4000),
             end_tick: 5000,
             winner: Some(winner),

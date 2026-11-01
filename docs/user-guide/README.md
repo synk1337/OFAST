@@ -139,6 +139,11 @@ you can keep browsing meanwhile. It:
    the cameras you chose, the cuts between them, and markers for the freeze time's end, the kills, the bomb and the
    round's end.
 
+The round in Unreal starts 3 seconds before the freeze time ends (the rest of it, players standing at their spawn,
+is left out; those 3 seconds leave room for a cinematic) and runs until right before the players respawn for the next
+round: the seconds after the round is decided are in it, the match's last round included. (A round about one player
+still ends 2 seconds after their death, if they die.)
+
 Close Unreal before sending (the import needs the project to itself), and if you can, close CS2 too: Unreal needs a
 lot of memory. A round takes about ten minutes the first time.
 

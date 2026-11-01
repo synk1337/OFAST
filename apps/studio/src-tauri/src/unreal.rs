@@ -370,7 +370,9 @@ fn cameras(
     report("Reading the round…".into(), false);
     let data = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let name = asset_name(stem(path));
-    let track = track_round_at(&data, start_tick).map_err(|e| format!("{path}: {e}"))?;
+    let track = track_round_at(&data, start_tick)
+        .map_err(|e| format!("{path}: {e}"))?
+        .without_freeze();
     drop(data);
     let prefix = format!("{name}_r{}", track.round);
     if !side
@@ -453,7 +455,9 @@ fn send(
     report(Step::Round, "Reading the round…".into());
     let data = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let name = asset_name(stem(path));
-    let track = track_round_at(&data, start_tick).map_err(|e| format!("{path}: {e}"))?;
+    let track = track_round_at(&data, start_tick)
+        .map_err(|e| format!("{path}: {e}"))?
+        .without_freeze();
     let demos = exports.join("demos");
     let replay = write_replay(&track, &name, &demos).map_err(|e| e.to_string())?;
     report(

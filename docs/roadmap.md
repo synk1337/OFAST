@@ -581,6 +581,9 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   overcast …), haze in CS2's look, a look keyed over the clip.
 - [x] **Charms calmer** (the user's look, 2026-10-31): they went wild, swinging to their hinges all the time; now
   hung from the ring's smoothed path, their swing damped against it (`export::keychains`, swing).
+- [x] **A round's span, for editing** (the user's ask, 2026-11-01): the match's last round runs on for its restart
+  delay after the final kill (`m_flRestartRoundTime`; it stopped on the kill), as every other round already ran to the
+  respawn; and a round sent to Unreal keeps only the last 3 s of its freeze time ([demo.md](formats/demo.md)).
 - [x] **Renders at any frame rate** (2026-10-31): the Studio's fps box, 10 to 1000 (250 for slow motion made in
   Vegas or Premiere); every frame a picture of its own moment ([render.md](formats/render.md)).
 
