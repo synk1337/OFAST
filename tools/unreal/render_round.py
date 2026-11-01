@@ -27,7 +27,8 @@ What a render holds (docs/formats/render.md):
   smokes settle), depth (Movie Render Queue's own WorldDepth material: the EXR's R channel, in centimetres), and a
   players layer: the frame with everything but the players cut out (stencil layer "Players": each player's body and
   viewmodel), over the rest of the world as a second layer ("DefaultLayer");
-- the console variables the smokes need (smoke_volumes.SMOKE_CVARS).
+- the console variables the smokes need (smoke_volumes.SMOKE_CVARS);
+- the round's cinematics (the Cameras panel's, ofast_cameras.py), made again from their file and cut in.
 
 Each player's own first-person camera still hides their body (decision 021): Movie Render Queue renders through the
 cut's camera as the view actor, which bOwnerNoSee checks (MoviePipelineImagePassBase.cpp sets ViewInitOptions.ViewActor
@@ -43,6 +44,7 @@ import time
 import unreal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ofast_cameras  # noqa: E402
 import ofast_look  # noqa: E402
 import smoke_volumes  # noqa: E402
 from replay_cameras import TAG, log  # noqa: E402
@@ -168,8 +170,10 @@ def main():
               + ("_%d-%d" % tuple(ticks) if frames else ""))
     folder = os.path.join(os.environ["OFAST_SHOT"], folder)
     levels.load_level(level)
-    # The Look panel's settings (ofast_look.py), even if the level was not saved after they were changed.
+    # The Look panel's settings (ofast_look.py), even if the level was not saved after they were changed; the Cameras
+    # panel's cinematics, from their file, likewise (ofast_cameras.py).
     ofast_look.apply_level_look()
+    ofast_cameras.restore(sequence)
     players = put_players_in_layer()
     config = make_config(name, PRESETS[name])
     log("render %s, preset %s, %d frames a second, frames %s, %d player actors in layer %r, into %s"

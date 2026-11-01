@@ -377,7 +377,12 @@ player and round.
   the Studio (6 shot cameras replaced by 2, 12 cuts, the eyes smoothed, 16 muzzle lights found by their tags).
 - [ ] A campath and a `.cam` made in CS2 with HLAE, imported (HLAE is not installed here); a camera made in Unreal
   played in CS2 with HLAE.
-- [ ] Editing in Unreal: a guide to making and keying one's own camera in Sequencer.
+- [x] **One's own cinematics in Unreal** (the user's choice, 2026-10-31: people make their own, and most do not know
+  Unreal's cameras): the Cameras panel ([decision 025](decisions/025-cinematics-panel.md),
+  [cinematics.md](formats/cinematics.md)), campath's way of working in Unreal's viewport: fly, add points at moments
+  of the round, a smooth camera cut in between their first and last; keep a player in frame, follow one, focus on
+  them; kept per round in a file and made again after a round is sent again, its cameras changed, or before a render.
+  Not yet: ease in and out, slow motion inside Unreal, cinematics back to HLAE.
 - [ ] Shots in tight places: a camera behind the killer pulled in by close walls (a stairwell: 20 – 30 units) should
   rise over his head instead; a fixed camera can frame its killer's back up close early in its shot.
 
@@ -576,6 +581,8 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   overcast …), haze in CS2's look, a look keyed over the clip.
 - [x] **Charms calmer** (the user's look, 2026-10-31): they went wild, swinging to their hinges all the time; now
   hung from the ring's smoothed path, their swing damped against it (`export::keychains`, swing).
+- [x] **Renders at any frame rate** (2026-10-31): the Studio's fps box, 10 to 1000 (250 for slow motion made in
+  Vegas or Premiere); every frame a picture of its own moment ([render.md](formats/render.md)).
 
 ## Hard problems we know about
 

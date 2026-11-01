@@ -16,7 +16,8 @@ level /Game/OFAST/Maps/<map> (or <map>_realistic). What changes (replay_cameras.
 - the shot and HLAE cameras of earlier runs (actors tagged OFAST_camera) removed with their bindings, and the file's
   made;
 - the camera cut track replaced by the file's cuts (cuts made by hand go too; cameras added by hand stay, ready to
-  cut to again);
+  cut to again), with the round's cinematics cut in again (the Cameras panel's, ofast_cameras.py: their cameras are
+  made again from their points);
 - the muzzle lights' visibility keyed again for the new cuts;
 - the sequence played to the file's `last_tick` (a round about one player ends 2 s after their death).
 
@@ -30,9 +31,10 @@ import sys
 import unreal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ofast_cameras  # noqa: E402
 import ofast_look  # noqa: E402
 import replay_cameras  # noqa: E402
-from replay_cameras import CAMERA_TAG, key_visibility, log  # noqa: E402
+from replay_cameras import CAMERA_TAG, log  # noqa: E402
 
 CAMERAS_PATH = os.environ["OFAST_CAMERAS"]
 
@@ -44,31 +46,6 @@ assets = unreal.EditorAssetLibrary
 def remove_tracks(binding, cls):
     for track in binding.find_tracks_by_type(cls):
         binding.remove_track(track)
-
-
-def light_bindings(bindings, controller):
-    """(binding, first_person) of a shooter's muzzle lights, found by their tags (replay_cameras.tag_light): the
-    third-person light's actor, and the light component on their viewmodel (a binding under the viewmodel's)."""
-    out = []
-    third = replay_cameras.light_tag(controller, False)
-    first = replay_cameras.light_tag(controller, True)
-    for actor in actors.get_all_level_actors():
-        label = actor.get_actor_label()
-        if replay_cameras.TAG not in actor.tags or label not in bindings:
-            continue
-        if third in actor.tags:
-            out.append((bindings[label], False))
-        for component in actor.get_components_by_class(unreal.LightComponent):
-            if first not in component.get_editor_property("component_tags"):
-                continue
-            name = str(component.get_name())
-            child = next((c for c in bindings[label].get_child_possessables() if str(c.get_display_name()) == name),
-                         None)
-            if child is None:
-                log("no binding for the light %s on %s: its visibility is left as it was" % (name, label))
-            else:
-                out.append((child, True))
-    return out
 
 
 def update(cameras):
@@ -130,28 +107,21 @@ def update(cameras):
         actor = replay_cameras.spawn_shot_camera(camera)
         shots.append(replay_cameras.key_shot_camera(sequence, actor, camera, tick0, end_frame))
 
-    # The cuts.
-    for track in sequence.find_tracks_by_type(unreal.MovieSceneCameraCutTrack):
-        sequence.remove_track(track)
+    # The cuts (add_cuts makes the track anew).
     cuts = replay_cameras.add_cuts(sequence, cameras, eyes, shots)
     sequence.set_playback_end(min(end_frame, cameras.get("last_tick", cameras["end_tick"]) - tick0 + 1))
 
     # The muzzle lights: the third-person one outside the cuts through its shooter's eyes, the viewmodel's inside.
-    own_views = replay_cameras.own_views(cameras)
-    lights = 0
-    for controller in names:
-        for binding, first_person in light_bindings(bindings, controller):
-            remove_tracks(binding, unreal.MovieSceneVisibilityTrack)
-            key_visibility(binding, replay_cameras.light_changes(own_views.get(controller, []), first_person),
-                           end_frame)
-            lights += 1
+    lights = replay_cameras.key_lights(sequence, replay_cameras.own_views(cameras), names, end_frame)
+    # The round's cinematics (the Cameras panel's), cut in again; the lights keyed again for them.
+    cinematics = ofast_cameras.restore(sequence)
 
     # The level's Look panel settings (ofast_look.py: the depth of field just keyed again).
     ofast_look.apply_level_look()
     assets.save_loaded_asset(sequence)
     levels.save_current_level()
-    log("cameras of %s: %d eyes (%d keys), %d shot cameras (%d removed), %d cuts, %d muzzle lights"
-        % (path, len(eyes), keys, len(shots), len(old), cuts, lights))
+    log("cameras of %s: %d eyes (%d keys), %d shot cameras (%d removed), %d cuts, %d muzzle lights, %d cinematics"
+        % (path, len(eyes), keys, len(shots), len(old), cuts, lights, cinematics))
     # The Studio takes this line as the sign it worked.
     log("cameras updated %s" % sequence.get_path_name())
 

@@ -19,3 +19,4 @@ synthetic test fixtures are built straight from them.
 | Replay (OFAST's own) | `<demo>_r<round>.ofast-replay.json` | [replay.md](replay.md) | one round for Unreal: players' tracks, kills, milestones → Level Sequence |
 | Cameras (OFAST's own) | `<demo>_r<round>.cameras.json`; HLAE `mirv_campath` `.xml`, `mirv_camio` `.cam` | [cameras.md](cameras.md) | a round's cameras and cuts; read and written for HLAE |
 | Renders (OFAST's own) | `<demo>_r<round>_<preset>/…` PNG and EXR frames | [render.md](render.md) | Movie Render Queue's output: picture, players layer, depth |
+| Cinematics (OFAST's own) | `Saved/OFAST/Cinematics/<demo>_r<round>.json` | [cinematics.md](cinematics.md) | the Cameras panel's points; the cameras and cuts made from them |

@@ -1,5 +1,6 @@
-"""Opens a round in the Unreal editor: its map's level, then its Level Sequence in Sequencer and the level's Look panel
-(ofast_look.py: the look's sliders, applied live; also in the menu bar, OFAST > Look).
+"""Opens a round in the Unreal editor: its map's level, then its Level Sequence in Sequencer, the level's Look panel
+(ofast_look.py: the look's sliders, applied live; also in the menu bar, OFAST > Look) and the Cameras panel
+(ofast_cameras.py: cinematics made with points; OFAST > Cameras).
 
 The Studio's "Open in Unreal" starts the editor (UnrealEditor.exe, with its window) with this script as a console
 command, not through -ExecutePythonScript: that one quits the editor when the script ends, unless the script is kept
@@ -52,10 +53,13 @@ def open_sequence():
     # The viewport shows the sequence's camera cuts (the players' views) rather than the editor's own camera.
     unreal.LevelSequenceEditorBlueprintLibrary.set_lock_camera_cut_to_viewport(True)
     log("opened %s" % SEQUENCE)
-    # The Look panel, beside it: the level as its look asset says (made the first time).
+    # The Look panel, beside it: the level as its look asset says (made the first time); and the Cameras panel
+    # (ofast_cameras.py: cinematics made with points).
+    import ofast_cameras
     import ofast_look
 
     ofast_look.open_panel()
+    ofast_cameras.open_panel()
 
 
 state = {"ticks": 0}

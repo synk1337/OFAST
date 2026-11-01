@@ -89,6 +89,7 @@ import unreal
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gltf_specular  # noqa: E402
 import grenade_effects  # noqa: E402
+import ofast_cameras  # noqa: E402
 import ofast_look  # noqa: E402
 import pearlescence  # noqa: E402
 import replay_cameras  # noqa: E402
@@ -1450,6 +1451,10 @@ def main():
     clean_level(replay["map"])
     set_look(map_level(replay["map"]))
     sequence, cameras, shot_actors = build(replay, looks)
+    # The round's cinematics, if it was sent before and the Cameras panel made some (ofast_cameras.py: from their
+    # file, cut in).
+    if ofast_cameras.restore(sequence):
+        assets.save_loaded_asset(sequence)
     # The level's Look panel settings (ofast_look.py) on the new round's cameras too, if the level has a look.
     ofast_look.apply_level_look()
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world().get_path_name()

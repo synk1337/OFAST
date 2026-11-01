@@ -176,6 +176,43 @@ Each map level (CS2's look and the realistic one apart) keeps its own settings, 
 renders and the next **Open in Unreal** use them, even if you did not save the level. They are kept in the Unreal
 project's `Saved/OFAST/Looks` folder.
 
+## Making your own cinematic shots
+
+The **Cameras** panel opens with **Open in Unreal**, beside the Look panel (also **OFAST → Cameras** in the menu bar).
+It makes a camera move as HLAE's campath does, without knowing Unreal's cameras: you put the camera where it should
+be at a few moments of the round, and OFAST makes a smooth move through them and cuts to it in the round.
+
+1. In Sequencer (the timeline under the viewport), move the playhead to where the shot starts.
+2. Fly the view there: hold the right mouse button and use **W A S D** (forward, left, back, right), **Q** and **E**
+   (down, up), the mouse to turn; the mouse wheel while flying sets the speed.
+3. **New cinematic**: a camera ("Cinematic 1") where the view is, its first point at the playhead. From now on the
+   viewport is that camera (its name shows at the viewport's top; the eject button beside it lets go of it).
+4. Move the playhead on (a second, two), fly the camera to where it should be then, **Add point here**. Again for
+   each point. A point at the playhead's moment is replaced; **Earlier point** and **Later point** jump between them,
+   **Remove point here** takes one out. **Field of view** is how wide the camera sees at the next point you add (less
+   zooms in); between points it changes smoothly.
+5. **Preview** plays the round through its cuts from a second before your shot (Space stops it); **Fly the camera**
+   takes the camera again to change it.
+
+From two points on, the round cuts to your camera from its first point to its last, and back to the round's own
+cameras after. Under **Players**, each cinematic can:
+
+- **Keep in frame** a player: the camera turns to keep them in the middle of the picture (where it looks at each
+  point no longer matters, only where it is).
+- **Follow** a player: the camera moves with them, as a drone would, smoothly (it does not jump when they jump); each
+  point is kept as a place round the player.
+- **Focus on them**: the player kept in frame (or followed) is sharp and the rest blurred; **Depth of field** sets how
+  strongly.
+
+Several cinematics can be made (pick one in **Cinematic**); **Remove cinematic** takes one out. The **Points** box
+says how many points it has, how long its cut is and where the playhead is among them. **Render** in the Studio
+renders the cinematics with the round, at the frame rate you pick.
+
+The points are kept in a file for each round (`Saved/OFAST/Cinematics` in the Unreal project), so they come back if
+you send the round to Unreal again or change its cameras, and the render uses them even if you closed Unreal without
+saving. The panel makes the camera's keys from its points each time they change: keys changed by hand in Sequencer
+are replaced at the next change.
+
 ## Rendering a round
 
 Once a round is in Unreal, **Render** (under the round's cameras) renders it to images you import into your editor
@@ -223,7 +260,8 @@ Settings). They exist once the Studio has rendered with them.
 
 ## Sending a round again
 
-Sending the same round again rebuilds its sequence; anything you changed in it by hand is replaced. A map's level
+Sending the same round again rebuilds its sequence; anything you changed in it by hand is replaced, except the
+Look panel's settings and the Cameras panel's cinematics, which are made again from their files. A map's level
 holds one round at a time: sending another round of the same map replaces the players and effects of the one before
 in the level (its sequence stays, but no longer plays them). If something goes wrong, the bar says what and where
 Unreal's own log is; a map whose first import did not finish is imported again the next time.

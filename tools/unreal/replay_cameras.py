@@ -15,7 +15,10 @@ and import_cameras.py (its cameras changed later, in seconds).
 What a player's own view must not show is hidden by owner instead, whatever camera a cut uses: import_demo.py makes
 each POV camera the owner of that player's body and effects (bOwnerNoSee) and of their viewmodel (bOnlyOwnerSee).
 
-Also the helpers both scripts key with (to_unreal, unwrap, reduce_keys, channels_by_name, key_visibility,
+The round's own cuts are kept on its sequence (CUTS_TAG) for the Cameras panel (ofast_cameras.py) to cut its
+cinematics into; cut_track and key_lights make the cut track and the muzzle lights' visibility from a list of cuts.
+
+Also the helpers the scripts key with (to_unreal, unwrap, reduce_keys, channels_by_name, key_visibility,
 spawn_tagged).
 """
 
@@ -137,15 +140,22 @@ def load(path):
 
 
 def own_views(cameras):
-    """controller -> the (start, end) frames of the cuts through that player's eyes, cuts that follow each other
-    merged (two kills in a row by one player are one stretch)."""
+    """controller -> the (start, end) frames of the file's cuts through that player's eyes (views_of)."""
     tick0 = cameras["start_tick"]
+    return views_of([{"start": c["start"] - tick0, "end": c["end"] - tick0, "eyes": c["eyes"]}
+                     for c in cameras["cuts"] if "eyes" in c])
+
+
+def views_of(cuts):
+    """controller -> the (start, end) frames of the cuts through that player's eyes ({"start", "end", "eyes"}, in
+    frames; the others left out), cuts that follow each other merged (two kills in a row by one player are one
+    stretch)."""
     out = {}
-    for cut in sorted(cameras["cuts"], key=lambda c: c["start"]):
+    for cut in sorted(cuts, key=lambda c: c["start"]):
         if "eyes" not in cut:
             continue
         ranges = out.setdefault(cut["eyes"], [])
-        start, end = cut["start"] - tick0, cut["end"] - tick0
+        start, end = cut["start"], cut["end"]
         if ranges and ranges[-1][1] >= start:
             ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
         else:
@@ -272,10 +282,10 @@ def key_shot_camera(sequence, actor, camera, tick0, end_frame):
 
 def add_cuts(sequence, cameras, eyes, shots):
     """The camera cut track of the file's cuts. `eyes`: controller -> binding of the player's POV camera; `shots`:
-    the shot cameras' bindings, in the file's order. Returns the number of cuts."""
+    the shot cameras' bindings, in the file's order. The cuts are also kept on the sequence (CUTS_TAG), for the
+    Cameras panel (ofast_cameras.py) to cut its cinematics into. Returns the number of cuts."""
     tick0 = cameras["start_tick"]
-    track = sequence.add_track(unreal.MovieSceneCameraCutTrack)
-    count = 0
+    cuts = []
     for cut in cameras["cuts"]:
         if "eyes" in cut:
             binding = eyes.get(cut["eyes"])
@@ -283,11 +293,80 @@ def add_cuts(sequence, cameras, eyes, shots):
             binding = shots[cut["camera"]] if cut["camera"] < len(shots) else None
         if binding is None:
             continue
+        entry = {"start": cut["start"] - tick0, "end": cut["end"] - tick0, "camera": str(binding.get_display_name())}
+        if "eyes" in cut:
+            entry["eyes"] = cut["eyes"]
+        cuts.append(entry)
+    end_frame = cameras["end_tick"] - tick0 + 1
+    unreal.EditorAssetLibrary.set_metadata_tag(sequence, CUTS_TAG, json.dumps({"end_frame": end_frame, "cuts": cuts}))
+    return cut_track(sequence, cuts)
+
+
+# The sequence's own cuts (add_cuts), as JSON: {"end_frame": the round's keyed end, "cuts": [{"start", "end" (frames),
+# "camera" (its binding's name), "eyes" (the controller, for a cut through a player's eyes)}]}.
+CUTS_TAG = "OFAST_cuts"
+
+
+def cut_track(sequence, cuts):
+    """The sequence's camera cut track made anew from `cuts` ({"start", "end", "camera": the binding's name}).
+    Returns the number of cuts."""
+    for track in sequence.find_tracks_by_type(unreal.MovieSceneCameraCutTrack):
+        sequence.remove_track(track)
+    bindings = {}
+    for binding in sequence.get_bindings():
+        bindings.setdefault(str(binding.get_display_name()), binding)
+    track = sequence.add_track(unreal.MovieSceneCameraCutTrack)
+    count = 0
+    for cut in cuts:
+        binding = bindings.get(cut["camera"])
+        if binding is None:
+            log("no camera %s in %s: its cut is left out" % (cut["camera"], sequence.get_name()))
+            continue
         section = track.add_section()
-        section.set_range(cut["start"] - tick0, cut["end"] - tick0)
+        section.set_range(cut["start"], cut["end"])
         section.set_camera_binding_id(sequence.get_binding_id(binding))
         count += 1
     return count
+
+
+def light_bindings(bindings, controller):
+    """(binding, first_person) of a shooter's muzzle lights, found by their tags (tag_light): the third-person light's
+    actor, and the light component on their viewmodel (a binding under the viewmodel's). `bindings`: name ->
+    binding."""
+    out = []
+    third = light_tag(controller, False)
+    first = light_tag(controller, True)
+    for actor in actors.get_all_level_actors():
+        label = actor.get_actor_label()
+        if TAG not in actor.tags or label not in bindings:
+            continue
+        if third in actor.tags:
+            out.append((bindings[label], False))
+        for component in actor.get_components_by_class(unreal.LightComponent):
+            if first not in component.get_editor_property("component_tags"):
+                continue
+            name = str(component.get_name())
+            child = next((c for c in bindings[label].get_child_possessables() if str(c.get_display_name()) == name),
+                         None)
+            if child is None:
+                log("no binding for the light %s on %s: its visibility is left as it was" % (name, label))
+            else:
+                out.append((child, True))
+    return out
+
+
+def key_lights(sequence, views, controllers, end_frame):
+    """The muzzle lights' visibility keyed again for the cuts through their shooters' eyes (`views`: views_of), for
+    each of `controllers`. Returns the number of lights."""
+    bindings = {str(b.get_display_name()): b for b in sequence.get_bindings()}
+    lights = 0
+    for controller in controllers:
+        for binding, first_person in light_bindings(bindings, controller):
+            for track in binding.find_tracks_by_type(unreal.MovieSceneVisibilityTrack):
+                binding.remove_track(track)
+            key_visibility(binding, light_changes(views.get(controller, []), first_person), end_frame)
+            lights += 1
+    return lights
 
 
 def light_changes(own_view, first_person):
