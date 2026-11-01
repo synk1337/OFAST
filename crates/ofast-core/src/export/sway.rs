@@ -8,14 +8,14 @@
 //! nothing after each stretch ([`sway_json`]).
 //!
 //! Measured on CS2's own first-person frames (2026-11-01, Aurora vs FURIA on Nuke, round 17, played at 0.25 speed
-//! and the gun followed on 2560 × 1440 frames). CS2 draws a spectated player's gun at the viewer's own viewmodel
-//! settings, it seems (XANTARES, FOV 60, showed a gun smaller than OFAST draws at 60; yuurih, 68, the same size), so
-//! every frame here was at 68: about 25 pixels a degree.
+//! and the gun followed on 2560 × 1440 frames). CS2 draws a spectated player's gun at that player's own viewmodel
+//! settings (the viewer's changed nothing: frames grabbed under four of them were identical), so a degree is about 29
+//! pixels for XANTARES (FOV 60) and 25 for the others (68).
 //!
-//! - **Bob**, only when running: XANTARES with a Galil at 215 units/s swings ±12.5 px (0.5°) side to side every 45
-//!   ticks and 15 px (0.6°) up and down twice as often, lowest about 7 ticks after each side; yuurih with a knife at
+//! - **Bob**, only when running: XANTARES with a Galil at 215 units/s swings ±12.5 px (0.43°) side to side every 45
+//!   ticks and 15 px (0.52°) up and down twice as often, lowest about 7 ticks after each side; yuurih with a knife at
 //!   250 units/s ±16 px (0.64°) every 42 ticks, 16 px (0.64°) up and down. Walking (112 units/s) shows none.
-//! - **Lowered while running**: when XANTARES slows from 207 to 112 units/s the gun rises 46 px (1.85°) within 9
+//! - **Lowered while running**: when XANTARES slows from 207 to 112 units/s the gun rises 46 px (1.6°) within 9
 //!   ticks.
 //! - **Lowered while falling**: Wicadia's gun sinks about 50 px (2°) as he falls to 538 units/s and is back up within
 //!   4 ticks of landing; no dip after it.
@@ -46,7 +46,7 @@ pub const BOB_SPEED: f32 = 250.0;
 pub const BOB_PERIOD: f32 = 0.656;
 /// See [`BOB_PERIOD`].
 pub const BOB_PERIOD_EXPONENT: f32 = 0.45;
-/// Side-to-side bob at [`BOB_SPEED`], degrees either way, scaled by (speed over it) ^ 1.5 (0.51° at 215).
+/// Side-to-side bob at [`BOB_SPEED`], degrees either way, scaled by the square of speed over it (0.47° at 215).
 pub const BOB_SIDE: f32 = 0.64;
 /// Up-and-down bob at [`BOB_SPEED`], degrees from top to bottom, twice per side-to-side bob, scaled by speed over it
 /// (0.55° at 215).
@@ -55,7 +55,7 @@ pub const BOB_DOWN: f32 = 0.64;
 /// 45).
 pub const BOB_DOWN_LAG: f32 = 0.98;
 /// The gun lowered while running, degrees, and how fast it follows (seconds).
-pub const RUN_LOWER: f32 = 1.85;
+pub const RUN_LOWER: f32 = 1.6;
 /// See [`RUN_LOWER`].
 pub const RUN_LOWER_TIME: f32 = 0.06;
 /// The gun lowered while falling: degrees at [`FALL_FULL`] units/s down (50 px), and how fast it follows (seconds).
@@ -170,7 +170,7 @@ impl State {
         }
         let pace = (speed / BOB_SPEED).min(1.1);
         let size = run * pace;
-        let side = size * pace.sqrt() * BOB_SIDE * self.phase.sin();
+        let side = size * pace * BOB_SIDE * self.phase.sin();
         // Lowest a quarter turn after BOB_DOWN_LAG, and again half a turn later.
         let down = size * BOB_DOWN * 0.5 * (1.0 - (2.0 * (self.phase - BOB_DOWN_LAG)).cos());
         self.lower = follow(self.lower, run * RUN_LOWER, dt, RUN_LOWER_TIME);

@@ -193,7 +193,7 @@ Viewmodel**) to change it, for every round of the project; the viewport changes 
 slider:
 
 - **Viewmodel**: **Same for everyone** (the settings below) or **Each player's own** (what each player had set in
-  the demo).
+  the demo: what CS2 shows when you spectate them).
 - **Field of view**: smaller makes the gun bigger (CS2's `viewmodel_fov`: 54 to 68).
 - **Offset X (right)**, **Offset Y (forward)**, **Offset Z (up)**: where the gun sits (CS2's `viewmodel_offset_x`,
   `_y`, `_z`).
