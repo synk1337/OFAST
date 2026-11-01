@@ -27,6 +27,8 @@ Windows SmartScreen may warn about an unknown publisher (**More info → Run any
 The Studio keeps its Unreal project in `%LOCALAPPDATA%\OFAST\Unreal` (made the first time it starts; set the
 environment variable `OFAST_PROJECT_DIR` to keep it elsewhere).
 
+The version you are running shows next to the Studio's title (from 1.0.6): **OFAST Studio 1.0.6**, for example.
+
 **Updates** (from 1.0.3): when the Studio starts it checks GitHub for a newer release. If there is one, a bar under
 its title says so: **What's new** shows the release notes, **Update** downloads it, checks it was signed by OFAST's
 release, installs it and restarts the Studio (not while a round is being sent or rendered: that would stop it), and

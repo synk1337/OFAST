@@ -1,6 +1,7 @@
-// The Studio's window: the setup checks on top, then the demo list. Opening a demo leads to its page (rounds, kill
-// feed, highlights: DemoPage.tsx).
+// The Studio's window: the header with the Studio's version, the setup checks, then the demo list. Opening a demo
+// leads to its page (rounds, kill feed, highlights: DemoPage.tsx).
 import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   CameraPlan,
@@ -21,6 +22,8 @@ import { SendBar, SendJob } from "./SendBar";
 import { UpdateBar } from "./UpdateBar";
 
 export function App() {
+  // The Studio's own version (tauri.conf.json's, built into it), shown in the header.
+  const [studio, setStudio] = useState<string | null>(null);
   const [env, setEnv] = useState<Environment | null>(null);
   const [folder, setFolder] = useState<string | null>(null);
   const [demos, setDemos] = useState<DemoEntry[] | null>(null);
@@ -70,6 +73,8 @@ export function App() {
     );
 
   useEffect(() => {
+    // Outside Tauri (the front end alone in a browser) there is no version: the header leaves it out.
+    getVersion().then(setStudio, () => setStudio(null));
     environment().then(
       (e) => {
         setEnv(e);
@@ -108,6 +113,7 @@ export function App() {
       <header className="top">
         <span className="logo">OFAST</span>
         <span className="subtitle">Studio</span>
+        {studio && <span className="app-version">{studio}</span>}
       </header>
       <UpdateBar busy={busy} />
       {opened ? (

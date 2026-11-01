@@ -51,6 +51,11 @@ body {
   color: var(--muted);
 }
 
+.app-version {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .content {
   flex: 1;
   overflow: auto;

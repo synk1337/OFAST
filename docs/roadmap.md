@@ -571,6 +571,7 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   Node.js, Rust or Visual Studio. Not signed yet (SmartScreen warns).
 - [x] **CS2 version check** (2026-10-29): the Studio shows the installed CS2 version, green when OFAST was checked
   on it (`game::CHECKED_VERSIONS`), orange ("not synced with this CS2 version yet, it might break") otherwise.
+- [x] **The Studio's own version** (the user's ask, 2026-11-01): shown next to its title in the header.
 - [ ] **Same-day CS2 support**: each CS2 patch checked the day it ships (docs/development.md, "After a CS2 update"),
   its build added to the checked versions, or fixed, and an OFAST release out that day.
 - [x] **Customizing the look, for beginners** (the user's choice, 2026-10-31: a panel in Unreal, over presets and

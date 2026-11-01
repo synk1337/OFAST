@@ -5,6 +5,7 @@ goes through `crates/ofast-core`, as the CLI does.
 
 What it does so far:
 
+- Shows its own version in the header (tauri.conf.json's, read through `@tauri-apps/api/app`)
 - Finds CS2, Unreal Engine 5.8 and OFAST's Unreal project (`unreal/Sandbox`, or its own copy when installed), and
   shows CS2's version: green when OFAST was checked on it, orange when CS2 updated since
   (`ofast_core::game::CHECKED_VERSIONS`)
