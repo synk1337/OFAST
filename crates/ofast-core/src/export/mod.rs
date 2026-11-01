@@ -41,6 +41,7 @@ pub mod sky;
 pub mod smoke;
 pub mod stattrak;
 pub mod stickers;
+pub mod sway;
 mod tint;
 pub mod viewmodel;
 

@@ -527,9 +527,34 @@ prints CS2's data above.
 In Unreal ([replay.md](replay.md#in-unreal-import_demopy)) each viewmodel is attached to its player's camera at the
 player's offsets and hand, with Unreal's first-person rendering at the player's viewmodel FOV.
 
-Not yet: the viewmodel's sway behind fast turns, bob while running and dip on landing (CS2's client code, no
-networked state); the view punch on the camera; ironsights (AUG, SG 553: `weapon_ironsight_amount`); the staged
-reloads of the shotguns (`reload_stage`, `CNmCurrentSyncEventIDNode`); weapon skins.
+**The gun's motion with the player** (`export::sway`): CS2's client moves the viewmodel with the player's movement
+in code (no networked state), so OFAST models it from the demo's velocity, ground flag and eye angles, as small
+turns of the viewmodel off the camera added to the recoil's (the agents manifest's `punch`, keyed by
+`import_demo.py`, its yaw mirrored for the left hand as CS2 mirrors the whole viewmodel). Measured on CS2's own
+first-person frames of Nuke round 17 played at 0.25 speed (2560 × 1440). CS2 seems to draw a spectated player's gun
+at the viewer's own viewmodel settings (XANTARES, FOV 60, showed a gun smaller than OFAST draws at 60; yuurih, 68, the
+same size), so every frame was at 68: about 25 px a degree.
+
+| Motion | CS2 | Model |
+|---|---|---|
+| Bob, side to side | ±0.5° every 45 ticks (XANTARES, Galil, 215 units/s); ±0.64° every 42 ticks (yuurih, knife, 250) | ±0.64° × (speed / 250) ^ 1.5, its period 0.656 s × (250 / speed) ^ 0.45 |
+| Bob, up and down | 0.6° and 0.64°, twice per side-to-side, lowest ~7 ticks after each side | 0.64° × speed / 250 |
+| Lowered while running | 1.85° (46 px), gone within 9 ticks of slowing to a walk | 1.85°, following in 0.06 s |
+| Bob and lowering by speed | none at a walk (112 units/s), most at 171 | smoothstep from 120 to 200 units/s, on the ground only |
+| Lowered while falling | ~2° (50 px) at 538 units/s down, back within 4 ticks of landing, no dip after | 2° × fall speed / 540, following in 0.05 s |
+| Lag behind turns | small: 37 px over a 911°/s turn while speeding up (the bob's share unknown), a few px at 668°/s | 0.0008 s × the turn rate (0.72° at 900°/s), at most 1.5°, following in 0.1 s |
+
+The bob's phase is CS2's own client state: OFAST's starts with the round, so a bob matches CS2's in size and pace,
+not stroke for stroke. Checked in Unreal (`shoot_sequence.py -PovShots`, XANTARES's run every 3 ticks): the gun bobs
+±17 px side to side every ~45 ticks and 16 px up and down, and rises 57 px as he slows, at his own FOV 60 (in px of a
+2560-wide frame; at 60 a degree covers 24 % more of the picture than CS2's spectator view at 68 showed).
+
+To look into: whether CS2 draws a spectated gun at the viewer's settings (then OFAST, which draws each player's
+own, shows what the player saw, not what a spectator sees); XANTARES's gun stands about 2° higher for three shots
+(ticks 153065 – 153071, as he steps down the stairs at B) in Unreal, with the keyed motion smooth there.
+
+Not yet: the view punch on the camera; ironsights (AUG, SG 553: `weapon_ironsight_amount`); the staged reloads of the
+shotguns (`reload_stage`, `CNmCurrentSyncEventIDNode`); weapon skins.
 
 ## Verified
 

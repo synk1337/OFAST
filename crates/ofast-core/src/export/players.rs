@@ -52,6 +52,7 @@ use super::shots::{
     Body, Capsule, Doors, ShotData, earlier_holes_json, export_decals, hitbox_check, shots_json,
 };
 use super::stattrak;
+use super::sway::motion_by_tick;
 use super::viewmodel::{export_viewmodel_look, load_viewmodel_rig};
 use crate::anim::aim::AimBones;
 use crate::anim::bake::{
@@ -591,7 +592,7 @@ pub fn export_players(
             "earlier_holes": earlier_holes,
             "decals": decals,
             "brass": brass,
-            "punch": punch_json(&recoil),
+            "punch": punch_json(&recoil, &motion_by_tick(track)),
             "cases": cases,
         }))
         .expect("JSON serializes"),

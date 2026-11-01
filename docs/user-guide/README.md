@@ -115,7 +115,8 @@ Above the feed:
 
 - **First-person view**: *as played* is the player's view exactly as CS2 shows it; *smoothed* and *very smooth*
   take the mouse's jitter out. At every shot the view is still exactly where the player aimed, so the crosshair stays
-  on the bullets.
+  on the bullets. The gun in hand moves as CS2's does: it kicks with the recoil, bobs and sits lower while the player
+  runs, sinks while they fall, and trails a little behind fast turns (from 1.0.6; send a round again to get it).
 - **HLAE camera…**: a camera path you made in CS2 with HLAE (`mirv_campath save`, an `.xml` file) or a camera
   recording (`mirv_camio`, a `.cam` file) of this demo. The round cuts to it for its whole time.
 - **Update cameras**: once the round is in Unreal, changes its cameras without sending it again (about a minute

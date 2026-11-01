@@ -244,7 +244,11 @@ player and round.
   punch (rebuilt from the shots: each kick from the view punch the demo sends, or the gun's recoil table) and the view
   punch, the viewmodel past it; YEKINDAR's view mid-spray frames as CS2's does. The third-person body aims where the
   bullets go (the eyes plus twice the punch): a sprayer's gun keeps to the bullets' line as in CS2's side views.
-- [ ] Sway behind turns, bob while running, landing dip (CS2's client code); ironsights; shotguns' staged reloads;
+- [x] **The gun's motion with the player** (the user's ask, 2026-11-01; `export::sway`): measured on CS2's own
+  first-person frames played slowly, then modelled from the demo's movement: the bob while running, the gun lowered
+  while running and while falling (no dip after a landing in CS2), a small lag behind turns
+  ([animation.md](formats/animation.md#first-person-view-animviewmodel-exportviewmodel)).
+- [ ] Ironsights; shotguns' staged reloads;
   `FirstPersonScale` against walls; grenade throws and knife swings checked against CS2; the viewmodel's place
   mid-spray (its muzzle 4 % of the frame higher than CS2's).
 

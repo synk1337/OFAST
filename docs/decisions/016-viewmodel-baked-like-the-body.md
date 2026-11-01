@@ -71,7 +71,10 @@ The viewmodel is baked in OFAST's core per player and tick, like the body (decis
 - The evaluator grows the viewmodel graphs' node types; the body and the viewmodel share the state tables and the
   blend constants, each with its own segment logic.
 - Walking bob, landing and turn lag are not in CS2's data: a first version draws none (a still viewmodel while
-  running), to be modelled and checked against CS2 later.
+  running), to be modelled and checked against CS2 later. Done 2026-11-01 (`export::sway`, measured on CS2's own
+  first-person frames: [animation.md](../formats/animation.md#first-person-view-animviewmodel-exportviewmodel)): a
+  bob while running, the gun lowered while running and while falling, a small lag behind turns, as turns of the
+  viewmodel off the camera keyed with the recoil's.
 - Weapon skins are M10: the viewmodel shows default finishes, like the agents' weapons.
 - Not in the first version: the view punch on the POV camera (the pawn networks it with the tick it was set; the
   client decays it), ironsights, the shotguns' staged reloads (they need a state's current sync event), and

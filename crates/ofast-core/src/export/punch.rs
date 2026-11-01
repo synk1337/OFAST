@@ -15,7 +15,8 @@
 //! Written to the agents manifest as `punch`: per player (controller, as text), `[tick, camera pitch, camera yaw,
 //! viewmodel pitch, viewmodel yaw]` (degrees, Source's: negative pitch up, positive yaw left) on each tick either is
 //! not nothing, and one of nothing after each stretch of them: the camera's offset from the eye angles, and the
-//! viewmodel's from the camera.
+//! viewmodel's from the camera, the gun's motion with the player included ([`super::sway`]: bob, lowered while
+//! running or falling, lag behind turns).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -181,15 +182,24 @@ pub fn recoil_by_tick(track: &RoundTrack, data: &ShotData) -> BTreeMap<u32, Vec<
     out
 }
 
-/// The round's `punch` (module docs) from every player's recoil ([`recoil_by_tick`]).
-pub fn punch_json(recoil: &BTreeMap<u32, Vec<Recoil>>) -> Json {
+/// The round's `punch` (module docs) from every player's recoil ([`recoil_by_tick`]) and gun motion
+/// ([`super::sway::motion_by_tick`], added to the viewmodel's).
+pub fn punch_json(
+    recoil: &BTreeMap<u32, Vec<Recoil>>,
+    motion: &BTreeMap<u32, Vec<super::sway::Motion>>,
+) -> Json {
     let mut out = serde_json::Map::new();
     for (controller, ticks) in recoil {
+        let moved: BTreeMap<u32, [f32; 2]> = motion
+            .get(controller)
+            .map(|m| m.iter().copied().collect())
+            .unwrap_or_default();
         let mut keys = Vec::new();
         let mut active = false;
         for r in ticks {
             let camera: [f32; 2] = std::array::from_fn(|k| r.aim[k] * VIEW_SCALE + r.view[k]);
-            let viewmodel = r.aim.map(|a| a * VIEWMODEL_EXTRA);
+            let sway = moved.get(&r.tick).copied().unwrap_or([0.0; 2]);
+            let viewmodel: [f32; 2] = std::array::from_fn(|k| r.aim[k] * VIEWMODEL_EXTRA + sway[k]);
             let something = camera.iter().chain(&viewmodel).any(|v| v.abs() >= NOTHING);
             if something || active {
                 let round = |v: f32| (f64::from(v) * 1000.0).round() / 1000.0;
