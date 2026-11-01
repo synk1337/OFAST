@@ -248,6 +248,9 @@ player and round.
   first-person frames played slowly, then modelled from the demo's movement: the bob while running, the gun lowered
   while running and while falling (no dip after a landing in CS2), a small lag behind turns
   ([animation.md](formats/animation.md#first-person-view-animviewmodel-exportviewmodel)).
+- [x] **One viewmodel for the movie** (the user's ask, 2026-11-01): CS2's default viewmodel for every player, changed
+  in Unreal's Viewmodel panel (field of view, offsets, hand, how much the gun moves; or each player's own), for every
+  round of the project ([viewmodel.md](formats/viewmodel.md)).
 - [ ] Ironsights; shotguns' staged reloads;
   `FirstPersonScale` against walls; grenade throws and knife swings checked against CS2; the viewmodel's place
   mid-spray (its muzzle 4 % of the frame higher than CS2's).

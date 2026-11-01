@@ -33,7 +33,8 @@ What a render holds (docs/formats/render.md):
   viewmodel), over the rest of the world as a second layer ("DefaultLayer");
 - the console variables the smokes need (smoke_volumes.SMOKE_CVARS);
 - the round's cinematics and focus keys (the Cameras panel's, ofast_cameras.py), made again from their file and cut
-  in, and its depth of field's blur limits.
+  in, and its depth of field's blur limits;
+- the first-person gun as the Viewmodel panel's settings say (ofast_viewmodel.py).
 
 Each player's own first-person camera still hides their body (decision 021): Movie Render Queue renders through the
 cut's camera as the view actor, which bOwnerNoSee checks (MoviePipelineImagePassBase.cpp sets ViewInitOptions.ViewActor
@@ -51,6 +52,7 @@ import unreal
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ofast_cameras  # noqa: E402
 import ofast_look  # noqa: E402
+import ofast_viewmodel  # noqa: E402
 import smoke_volumes  # noqa: E402
 from replay_cameras import TAG, log  # noqa: E402
 
@@ -191,6 +193,8 @@ def main():
     # panel's cinematics, from their file, likewise (ofast_cameras.py).
     ofast_look.apply_level_look()
     ofast_cameras.restore(sequence)
+    # The Viewmodel panel's settings (ofast_viewmodel.py), whichever round they were last changed on.
+    ofast_viewmodel.key(sequence)
     players = put_players_in_layer()
     config = make_config(name, PRESETS[name])
     log("render %s, preset %s, %d frames a second, %s, frames %s, %d player actors in layer %r, into %s"

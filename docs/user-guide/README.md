@@ -116,7 +116,8 @@ Above the feed:
 - **First-person view**: *as played* is the player's view exactly as CS2 shows it; *smoothed* and *very smooth*
   take the mouse's jitter out. At every shot the view is still exactly where the player aimed, so the crosshair stays
   on the bullets. The gun in hand moves as CS2's does: it kicks with the recoil, bobs and sits lower while the player
-  runs, sinks while they fall, and trails a little behind fast turns (from 1.0.6; send a round again to get it).
+  runs, sinks while they fall, and trails a little behind fast turns (from 1.0.6; send a round again to get it). How
+  it is drawn is set in Unreal's Viewmodel panel (below).
 - **HLAE camera…**: a camera path you made in CS2 with HLAE (`mirv_campath save`, an `.xml` file) or a camera
   recording (`mirv_camio`, a `.cam` file) of this demo. The round cuts to it for its whole time.
 - **Update cameras**: once the round is in Unreal, changes its cameras without sending it again (about a minute
@@ -183,6 +184,25 @@ in Unreal's window. It is in the menu bar too: **OFAST → Look**. Drag a slider
 Each map level (CS2's look and the realistic one apart) keeps its own settings, for every round you send there; the
 renders and the next **Open in Unreal** use them, even if you did not save the level. They are kept in the Unreal
 project's `Saved/OFAST/Looks` folder.
+
+### The gun in first person: the Viewmodel panel
+
+Every player's gun is drawn with CS2's default viewmodel (field of view 68, offsets 2.5, 0, −1.5), so a movie made of
+several players' views looks like one game. **Open in Unreal** also opens the **Viewmodel** panel (**OFAST →
+Viewmodel**) to change it, for every round of the project; the viewport changes a moment after you let go of a
+slider:
+
+- **Viewmodel**: **Same for everyone** (the settings below) or **Each player's own** (what each player had set in
+  the demo).
+- **Field of view**: smaller makes the gun bigger (CS2's `viewmodel_fov`: 54 to 68).
+- **Offset X (right)**, **Offset Y (forward)**, **Offset Z (up)**: where the gun sits (CS2's `viewmodel_offset_x`,
+  `_y`, `_z`).
+- **Hand**: **As played** (some players play left-handed), or **Right** or **Left** for everyone.
+- **Gun motion**: how much the gun bobs, sits lower and trails behind the player's moves; 1 is CS2's, 0 a still gun.
+- **CS2's default** puts everything back.
+
+The settings are kept in the Unreal project's `Saved/OFAST/Viewmodel.json`; renders and rounds sent later use them.
+A round sent before this version has to be sent again first.
 
 ## Making your own cinematic shots
 
@@ -307,6 +327,8 @@ Unreal's own log is; a map whose first import did not finish is imported again t
 - What is imported into Unreal is in the project's `Content/OFAST` (`%LOCALAPPDATA%\OFAST\Unreal\Content\OFAST`,
   or `unreal/Sandbox/Content/OFAST` from the source code): each map once, and each round sent with its players'
   looks (their textures shared). `Replays` can be emptied from Unreal's Content Browser when it grows.
+- The panels' settings are in the project's `Saved/OFAST`: `Looks` (each map's look), `Cinematics` (each round's
+  points and focus keys), `Viewmodel.json` (the gun in first person) and `Viewmodels` (each round's data for it).
 - Renders are in `Videos\OFAST`, a folder per render, and they are big: Preview about 1 MB a frame (a 20-second
   highlight, 1200 frames: over a gigabyte), Final about 20 MB a frame (the same highlight: about 25 GB), 4K about
   four times that. Delete the folders you no longer need.

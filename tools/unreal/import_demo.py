@@ -91,6 +91,7 @@ import gltf_specular  # noqa: E402
 import grenade_effects  # noqa: E402
 import ofast_cameras  # noqa: E402
 import ofast_look  # noqa: E402
+import ofast_viewmodel  # noqa: E402
 import pearlescence  # noqa: E402
 import replay_cameras  # noqa: E402
 import shot_effects  # noqa: E402
@@ -944,17 +945,11 @@ def import_viewmodels(replay):
 FIRST_PERSON_SCALE = 0.2
 
 
-def viewmodel_fov_16_9(fov):
-    """CS2's viewmodel_fov is horizontal at 4:3 like its world FOV: the horizontal FOV of a 16:9 picture."""
-    return math.degrees(2 * math.atan(math.tan(math.radians(fov / 2)) * (16 / 9) / (4 / 3)))
-
-
 def spawn_viewmodel(player, mesh, camera):
     """The player's viewmodel on their first-person camera, as CS2 draws it (decision 016): the rig's root is the
-    camera, drawn with Unreal's first-person rendering at the player's viewmodel_fov (FirstPersonFieldOfView), shrunk
-    toward the camera (FIRST_PERSON_SCALE: never in a wall), without shadows. Its place on the camera (the player's
-    offsets, and the hand) is keyed by key_viewmodel_hand."""
-    settings = player.get("viewmodel") or {}
+    camera, drawn with Unreal's first-person rendering (FirstPersonFieldOfView), shrunk toward the camera
+    (FIRST_PERSON_SCALE: never in a wall), without shadows. Its field of view and its place on the camera (offsets,
+    hand, recoil, motion) are keyed by ofast_viewmodel.key, as the Viewmodel panel's settings say."""
     actor = actors.spawn_actor_from_object(mesh, unreal.Vector(0.0, 0.0, 0.0))
     actor.tags = [TAG]
     actor.set_actor_label("VM %s" % player["name"])
@@ -965,60 +960,26 @@ def spawn_viewmodel(player, mesh, camera):
     actor.attach_to_actor(camera, "", keep, keep, keep, False)
     lens = camera.camera_component
     lens.set_editor_property("enable_first_person_field_of_view", True)
-    lens.set_editor_property("first_person_field_of_view", viewmodel_fov_16_9(settings.get("fov", 60.0)))
     lens.set_editor_property("enable_first_person_scale", True)
     lens.set_editor_property("first_person_scale", FIRST_PERSON_SCALE)
     return actor
 
 
-def key_viewmodel_hand(binding, frames, hands, offset, end_frame, punch=None):
-    """The viewmodel's transform on its camera: moved by the player's viewmodel_offset_x / _y / _z (inches in view
-    space: right, forward, up; Unreal's camera looks along +X with +Y to the right), and mirrored from every tick the
-    player holds it in the left hand (m_bLeftHanded, which the switch-hands key flips during a round), the sideways
-    offset with it — CS2 mirrors the whole viewmodel (cl_righthand 0; the mirrored offset is not checked against CS2
-    yet). Step keys: the hand changes from one tick to the next. Turned past the camera by recoil on the ticks
-    `punch` (per frame: export::punch's (camera pitch, yaw, viewmodel pitch, yaw), or None) has it, linear keys, the
-    yaw mirrored with the viewmodel."""
-    right, forward, up = offset
-    track = binding.add_track(unreal.MovieScene3DTransformTrack)
-    section = track.add_section()
-    section.set_range(0, end_frame)
-    channels = channels_by_name(section)
-    for name, value in (("Location.X", forward * UNITS_TO_CM), ("Location.Y", right * UNITS_TO_CM),
-                        ("Location.Z", up * UNITS_TO_CM), ("Rotation.X", 0.0), ("Rotation.Y", 0.0),
-                        ("Rotation.Z", 0.0), ("Scale.X", 1.0), ("Scale.Y", 1.0), ("Scale.Z", 1.0)):
-        channels[name].set_default(value)
-    constant = unreal.MovieSceneKeyInterpolation.CONSTANT
-    previous = None
-    for frame, left in zip(frames, hands):
-        if left is None or left == previous:
-            continue
-        side = -1.0 if left else 1.0
-        for name, value in (("Location.Y", side * right * UNITS_TO_CM), ("Scale.Y", side)):
-            channels[name].add_key(unreal.FrameNumber(frame), value, 0.0, unreal.MovieSceneTimeUnit.DISPLAY_RATE,
-                                   constant)
-        previous = left
-    # Recoil: Source's pitch and yaw negated, as the camera's are; keyed while turned, with a key of nothing on the
-    # tick before and the tick after each stretch (a channel holds its first key's value before it, and a linear
-    # segment between two stretches would drift).
-    linear = unreal.MovieSceneKeyInterpolation.LINEAR
-    turned = False
-    left = False
-    before = None
-    for frame, hand, turn in zip(frames, hands, punch or []):
-        left = left if hand is None else hand
-        now = turn is not None and (abs(turn[2]) > 0.0 or abs(turn[3]) > 0.0)
-        keyed = []
-        if now and not turned and before is not None:
-            keyed.append((before, 0.0, 0.0))
-        if now or turned:
-            keyed.append((frame, -turn[2], -turn[3]) if now else (frame, 0.0, 0.0))
-        for at, pitch, yaw in keyed:
-            for name, value in (("Rotation.Y", pitch), ("Rotation.Z", -yaw if left else yaw)):
-                channels[name].add_key(unreal.FrameNumber(at), value, 0.0,
-                                       unreal.MovieSceneTimeUnit.DISPLAY_RATE, linear)
-        turned = now
-        before = frame
+def viewmodel_data(player, track, ticks, tick0, punch, sway):
+    """What ofast_viewmodel keeps of a player's viewmodel (save_round): the settings they played with, the frames they
+    switched hands (m_bLeftHanded, which the switch-hands key flips during a round; `track`'s per sample `ticks`), the
+    recoil on their viewmodel (`punch`: export::punch's rows, tick -> camera pitch, yaw, viewmodel pitch, yaw) and the
+    gun's motion (`sway`: export::sway's rows [tick, pitch, yaw])."""
+    settings = player.get("viewmodel") or {}
+    hands, previous = [], None
+    for tick, left in zip(ticks, track.get("left_handed", [])):
+        if left is not None and left != previous:
+            hands.append([tick - tick0, left])
+            previous = left
+    return {"name": player["name"], "fov": settings.get("fov", ofast_viewmodel.CS2_DEFAULT["fov"]),
+            "offset": settings.get("offset", ofast_viewmodel.CS2_DEFAULT["offset"]), "hands": hands,
+            "punch": [[t - tick0, row[2], row[3]] for t, row in sorted(punch.items())],
+            "sway": [[row[0] - tick0, row[1], row[2]] for row in sway]}
 
 
 def spawn_agent(player, mesh):
@@ -1164,6 +1125,10 @@ def build(replay, looks):
     # the cameras file has the camera's part in the eyes already.
     punches = {int(c): {k[0]: k[1:] for k in keys}
                for c, keys in ((manifest[2] if manifest else {}).get("punch") or {}).items()}
+    # The gun's motion with each player (export::sway): rows [tick, pitch, yaw], Source's.
+    sways = {int(c): rows for c, rows in ((manifest[2] if manifest else {}).get("sway") or {}).items()}
+    # Each player's viewmodel as ofast_viewmodel keys it (its offsets, hand, recoil and motion), once all are spawned.
+    viewmodel_players = []
     for player in replay["players"]:
         controller = player["controller"]
         track = replay["samples"]["players"][str(controller)]
@@ -1215,15 +1180,17 @@ def build(replay, looks):
             viewmodel_actors[controller] = vm
             vm_binding = sequence.add_possessable(vm)
             key_animation(vm_binding, viewmodel[1], end_frame)
-            offset = (player.get("viewmodel") or {}).get("offset", [1.0, 1.0, -1.0])
-            punch = punches.get(controller, {})
-            key_viewmodel_hand(vm_binding, frames, track.get("left_handed", []), offset, end_frame,
-                               [punch.get(t) for t in ticks])
+            viewmodel_players.append(viewmodel_data(player, track, ticks, tick0, punches.get(controller, {}),
+                                                    sways.get(controller, [])))
             living = [bool(a) and p is not None for a, p in zip(track["alive"], positions)]
             vm_changes = life_changes(frames, living)
             viewmodel_life[controller] = vm_changes
             key_visibility(vm_binding, vm_changes, end_frame)
             own_view_only.setdefault(controller, []).append(vm)
+    # The viewmodels keyed as the Viewmodel panel's settings say (CS2's default viewmodel for everyone unless
+    # changed), their data kept for the panel to key them again.
+    ofast_viewmodel.save_round(sequence, frames, end_frame, viewmodel_players)
+    ofast_viewmodel.key(sequence)
     world_models = looks["world_models"]
     keys += place_dropped_weapons(sequence, replay, world_models, end_frame)
     keys += place_grenades(sequence, replay, world_models, end_frame)

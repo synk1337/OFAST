@@ -1,8 +1,11 @@
 //! The first-person gun's motion with the player (M5): the bob while running, the gun lowered while running and
 //! while falling, and its lag behind fast turns. CS2's client adds these to the viewmodel from the player's movement,
 //! in code (no networked state and no cvar since 2024: decision 016), so they are modelled here from the demo's
-//! velocity, ground flag and eye angles, as small turns of the viewmodel off the camera, written with the recoil's
-//! ([`super::punch::punch_json`]'s viewmodel pitch and yaw).
+//! velocity, ground flag and eye angles, as small turns of the viewmodel off the camera, added to the recoil's
+//! ([`super::punch`]) in Unreal. Kept apart from it so Unreal's Viewmodel panel can scale it (`tools/unreal/
+//! ofast_viewmodel.py`): written to the agents manifest as `sway`, per player (controller, as text), `[tick, pitch,
+//! yaw]` (degrees, Source's: positive pitch down, positive yaw left) on each tick it is not nothing, and one of
+//! nothing after each stretch ([`sway_json`]).
 //!
 //! Measured on CS2's own first-person frames (2026-11-01, Aurora vs FURIA on Nuke, round 17, played at 0.25 speed
 //! and the gun followed on 2560 × 1440 frames). CS2 draws a spectated player's gun at the viewer's own viewmodel
@@ -24,7 +27,12 @@
 use std::collections::BTreeMap;
 use std::f32::consts::TAU;
 
+use serde_json::{Value as Json, json};
+
 use crate::demo::players::RoundTrack;
+
+/// Below this (degrees) a turn is nothing.
+const NOTHING: f32 = 0.001;
 
 /// Running speed (units/s) at which the bob and the lowering start, and at which they are full (smoothstep between):
 /// none at a walk (112), most of it at 171, all of it from 200.
@@ -105,6 +113,28 @@ pub fn motion_by_tick(track: &RoundTrack) -> BTreeMap<u32, Vec<Motion>> {
         }
     }
     states.into_iter().map(|(c, (_, out))| (c, out)).collect()
+}
+
+/// The round's `sway` (module docs) from every player's motion ([`motion_by_tick`]).
+pub fn sway_json(motion: &BTreeMap<u32, Vec<Motion>>) -> Json {
+    let mut out = serde_json::Map::new();
+    for (controller, ticks) in motion {
+        let mut keys = Vec::new();
+        let mut active = false;
+        for &(tick, turn) in ticks {
+            let something = turn.iter().any(|v| v.abs() >= NOTHING);
+            if something || active {
+                let round = |v: f32| (f64::from(v) * 1000.0).round() / 1000.0;
+                let turn = if something { turn } else { [0.0; 2] };
+                keys.push(json!([tick, round(turn[0]), round(turn[1])]));
+            }
+            active = something;
+        }
+        if !keys.is_empty() {
+            out.insert(controller.to_string(), Json::Array(keys));
+        }
+    }
+    Json::Object(out)
 }
 
 /// Degrees into -180 – 180.
@@ -205,6 +235,28 @@ mod tests {
         assert!((turn[63][1] + 0.72).abs() < 0.01, "{}", turn[63][1]);
         let flick = run(64, 0.0, 0.0, true, [0.0, 5000.0]);
         assert!((flick[63][1] + LAG_MAX).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_manifest_keeps_each_stretch_and_a_nothing_after_it() {
+        let motion = BTreeMap::from([(
+            4,
+            vec![
+                (10, [0.0, 0.0]),
+                (11, [0.5, -0.25]),
+                (12, [0.1, 0.0]),
+                (13, [0.0, 0.0]),
+                (14, [0.0, 0.0]),
+            ],
+        )]);
+        assert_eq!(
+            sway_json(&motion),
+            json!({"4": [[11, 0.5, -0.25], [12, 0.1, 0.0], [13, 0.0, 0.0]]})
+        );
+        assert_eq!(
+            sway_json(&BTreeMap::from([(5, vec![(1, [0.0; 2])])])),
+            json!({})
+        );
     }
 
     #[test]
