@@ -61,9 +61,13 @@ def open_sequence():
     import ofast_look
     import ofast_viewmodel
 
-    ofast_look.open_panel()
-    ofast_cameras.open_panel()
-    ofast_viewmodel.open_panel()
+    # Each on its own: one that fails leaves the others open.
+    for name, opener in (("Look", ofast_look.open_panel), ("Cameras", ofast_cameras.open_panel),
+                         ("Viewmodel", ofast_viewmodel.open_panel)):
+        try:
+            opener()
+        except Exception as error:
+            log("FAILED: the %s panel: %s" % (name, error))
 
 
 state = {"ticks": 0}

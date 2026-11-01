@@ -706,8 +706,8 @@ def tip(text):
     return {"ToolTip": text}
 
 
-# The Details panel lists a Python class's fields last first, so they are written here bottom up: Depth of field,
-# Players, Points, Cinematic.
+# The Details panel lists a Python class's fields last first, so they are written here bottom up (it shows the
+# categories as Cinematic, Depth of field, Points, Players, Preview).
 @unreal.uclass()
 class OfastCameras(unreal.PrimaryDataAsset):
     background_blur = unreal.uproperty(float, meta={
@@ -934,7 +934,8 @@ def fields():
 
 def load_focus(key):
     """The depth of field fields set from a focus key (the defaults without one) and the round's blur limits."""
-    p = _state["panel"]
+    # panel(), not _state's: Open in Unreal finds the round (current_sequence) before the panel is made.
+    p = panel()
     key = key or {"on": FOCUS_EYES, "distance": DEFAULT_FOCUS_M, "strength": DEFAULT_DOF}
     for name, field in FOCUS_FIELDS.items():
         p.set_editor_property(name, key[field])

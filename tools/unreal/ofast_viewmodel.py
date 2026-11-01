@@ -295,7 +295,7 @@ def panel():
 
 
 def load_fields(settings):
-    p = _state["panel"]
+    p = panel()
     for name, field in FIELDS.items():
         value = settings["offset"][field] if isinstance(field, int) else settings[field]
         p.set_editor_property(name, value)
