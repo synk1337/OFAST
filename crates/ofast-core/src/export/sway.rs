@@ -8,9 +8,11 @@
 //! nothing after each stretch ([`sway_json`]).
 //!
 //! Measured on CS2's own first-person frames (2026-11-01, Aurora vs FURIA on Nuke, round 17, played at 0.25 speed
-//! and the gun followed on 2560 × 1440 frames). CS2 draws a spectated player's gun at that player's own viewmodel
-//! settings (the viewer's changed nothing: frames grabbed under four of them were identical), so a degree is about 29
-//! pixels for XANTARES (FOV 60) and 25 for the others (68).
+//! and the gun followed on 2560 × 1440 frames). CS2's demo playback draws the first-person gun its own way: the
+//! viewer's viewmodel settings change nothing (frames grabbed under four of them were identical), and the gun is
+//! smaller than the player's own settings draw it in a game (XANTARES's 60 / 1 1 −1 in a local game, as OFAST draws
+//! it). The degrees below take the players' own FOV (about 29 pixels a degree for XANTARES at 60, 25 for the others
+//! at 68), so they may be a fifth or so too small.
 //!
 //! - **Bob**, only when running: XANTARES with a Galil at 215 units/s swings ±12.5 px (0.43°) side to side every 45
 //!   ticks and 15 px (0.52°) up and down twice as often, lowest about 7 ticks after each side; yuurih with a knife at

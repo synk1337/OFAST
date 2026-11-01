@@ -29,9 +29,10 @@ viewmodel for everyone (a new install's `viewmodel_presetpos 1`).
 | `motion` | the gun's motion with the player (the agents manifest's `sway`, [animation.md](animation.md#first-person-view-animviewmodel-exportviewmodel)) times this: 0 a still gun, 1 CS2's |
 
 Why a default for everyone (the user's choice, 2026-11-01): players' own differ (Nuke round 17 of Aurora vs FURIA:
-FOV 60, 65 and 68, five sets of offsets), and one viewmodel through a whole movie looks like one game. CS2's own
-first-person spectating shows each player's own (the viewer's settings change nothing there): `Each player's own` is
-what it shows.
+FOV 60, 65 and 68, five sets of offsets), and one viewmodel through a whole movie looks like one game. OFAST draws a
+setting as CS2 does in a game (checked with a local game's Galil at XANTARES's 60 / 1 1 −1); CS2's demo playback
+draws every first-person gun smaller and further away than that, whatever the settings
+([animation.md](animation.md#first-person-view-animviewmodel-exportviewmodel)).
 
 ## Each round's data
 

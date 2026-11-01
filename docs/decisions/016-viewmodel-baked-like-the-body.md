@@ -94,3 +94,8 @@ The viewmodel is baked in OFAST's core per player and tick, like the body (decis
 Against CS2's first-person spectating of the Aurora vs FURIA de_nuke demo (round 5): four kills (right- and
 left-handed, FOV 60, 65 and 68, three different offsets), two reloads and two inspects — the weapon's size, angle and
 place and the hands match ([animation.md](../formats/animation.md#first-person-view-animviewmodel-exportviewmodel)).
+
+Looked at closer on 2026-11-01: the size was measured muzzle to rear sight, the gun's far part. Nearer the eye (the
+hands, the rear of the gun) OFAST's is bigger than CS2's demo view shows, because CS2's demo playback draws every
+first-person gun smaller than in a game, whatever the settings; in a local game CS2 draws a setting as OFAST does.
+OFAST keeps the in-game look.

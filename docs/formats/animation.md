@@ -531,10 +531,9 @@ player's offsets and hand, with Unreal's first-person rendering at the player's 
 in code (no networked state), so OFAST models it from the demo's velocity, ground flag and eye angles, as small
 turns of the viewmodel off the camera added to the recoil's (the agents manifest's `punch`, keyed by
 `import_demo.py`, its yaw mirrored for the left hand as CS2 mirrors the whole viewmodel). Measured on CS2's own
-first-person frames of Nuke round 17 played at 0.25 speed (2560 × 1440). CS2 draws a spectated player's gun at that
-player's own viewmodel settings: the viewer's change nothing (XANTARES's frame at tick 153803 grabbed under four of
-this machine's settings, FOV 54 and offsets 0 0 0 among them, was the same to the pixel). So a degree is about 29 px
-for XANTARES (FOV 60) and 25 for the others (68).
+first-person frames of Nuke round 17 played at 0.25 speed (2560 × 1440), in degrees at the players' own FOV (about
+29 px a degree for XANTARES at 60, 25 for the others at 68; CS2's demo playback draws the gun smaller than that, see
+below, so these may be a fifth or so too small).
 
 | Motion | CS2 | Model |
 |---|---|---|
@@ -550,11 +549,20 @@ not stroke for stroke. Checked in Unreal (`shoot_sequence.py -PovShots`, XANTARE
 ±17 px side to side every ~45 ticks and 16 px up and down, and rises 57 px as he slows (in px of a 2560-wide frame,
 with 1.85° of lowering and the side bob scaled by speed ^ 1.5, since corrected).
 
-To look into: in round 17 OFAST draws XANTARES's Galil (FOV 60) larger and lower than CS2's first-person view does,
-standing still at tick 153805 too, and KSCERATO's AK steeper, while round 5's kills still match as on 2026-10-23 (the
-baked pose, the import, the keys and the engine are unchanged since; the players' settings are the same in both
-rounds; the Galil sits on `wpn` as the M4A1-S does). XANTARES's gun also stands about 2° higher for three shots (ticks
-153065 – 153071, as he steps down the stairs at B), with the keyed motion smooth there.
+**CS2's demo view draws the gun smaller than the player saw it** (2026-11-01). In round 17 OFAST's Galil in
+XANTARES's hands (FOV 60, offsets 1 1 −1) looked larger than CS2's first-person spectating shows it, its front at the
+same place, the hands and the rear of the gun bigger and lower — standing (tick 152723) and crouched (153805) alike.
+Not a regression: the baked pose (bone for bone), the import, the keys and the engine are as on 2026-10-23, and
+round 5's kills look as they did then (that check measured muzzle to rear sight, which this barely changes). In a
+local game with a Galil at XANTARES's settings, CS2 draws it as OFAST does: big and close. In demo playback CS2
+draws every first-person gun smaller and further away than in a game, and neither the viewer's settings (four grabbed,
+the same to the pixel) nor the player's recorded ones explain it; at CS2's default (68, 2.5 0 −1.5) a local gun is
+still bigger than the spectated one. So OFAST shows each player's gun as they saw it while playing; the demo view's
+smaller gun (what HLAE records) is a preset to calibrate later. In a local game CS2 applies new viewmodel settings
+when the gun is drawn again, and FOV 54 drew as 60 (CS2's least, it seems).
+
+XANTARES's gun also stands about 2° higher for three shots (ticks 153065 – 153071, as he steps down the stairs at
+B), with the keyed motion smooth there: to look into.
 
 Not yet: the view punch on the camera; ironsights (AUG, SG 553: `weapon_ironsight_amount`); the staged reloads of the
 shotguns (`reload_stage`, `CNmCurrentSyncEventIDNode`); weapon skins.
