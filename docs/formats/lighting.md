@@ -83,7 +83,9 @@ the floor), so a radius equal to the range left those floors almost unlit: de_du
 de_nuke's B site 0.50 and its decontamination room 0.24 ([checks.md](../checks.md)). `import_map.py`
 (`light_radius`) sets the radius to range × (1.375 − 0.725 × skirt): the factor that fits the window to CS2's fade
 best (least squares, weighted by 1 / distance²), within 0.04 for any skirt from 0 to 1 — 1.375 for skirt 0, 1.3 for
-the default 0.1. Some light then reaches a little past CS2's cut, and a little less arrives just before it.
+the default 0.1. Some light then reaches a little past CS2's cut, and a little less arrives just before it. A barn
+light's range is a depth, not a radius ([barn lights](#barn-lights-and-their-cookies)): its radius is stretched to
+range / cos θ.
 
 **Bounce-only lights (`directlight` 0).** Unreal has no light that only bounces, but Lumen lights its surface cache
 with the light's colour × Indirect Lighting Intensity × Diffuse Scale (`LumenSceneDirectLighting.cpp` / `.ush`),
@@ -117,9 +119,29 @@ A `light_barn` ("Barn Door Light") does not light the hemisphere in front of it.
 - Inside the frustum the intensity is uniform: the linear brightness 100 units past the luminaire, falling off with
   the square of the distance from the eye. Outside it there is none. Hammer's stored lumens agree: lumens ≈ 81 ×
   linear brightness × the frustum's solid angle, on every barn light of de_vertigo.
+- `range` is the frustum's **depth**: its far plane lies `range` past the light (`farPlane = nearPlane + Range` in
+  `ComputePerspectiveBarnGeometry`), `skirt` fades the light over the last part of that depth and `skirt_near` over
+  the first; there is no fade with distance around the light. A ray θ off the axis is lit up to range / cos θ.
+  de_dust2's lower-tunnel lamps (range 205, 199 units above the floor, 62° each way) light the whole floor below them,
+  some 800 units across; with the range as a radius, Unreal left the floor under the lower tunnel view's camera,
+  320 units from the lamp, unlit. `import_map.py` (`barn_reach`) stretches the radius of a barn light without a
+  cookie to range / cos θ, θ its frustum's corner, and a cookie spot's to range / cos (outer cone), θ at most 60° (on
+  the far plane the light has fallen to cos³ θ, an eighth, there).
+- `soft_x`, `soft_y` (0.25 by default) fade the frustum's edges from (1 − soft) of its half-width to its edge; past
+  it there is no light. Unreal's rect lights light their whole hemisphere, so with the longer reach they lit the walls
+  beside the lamps, outside CS2's frustum (de_dust2's lower tunnel 1.14 of CS2's picture, its upper walls 1.3 –
+  1.7). `import_map.py` (`barn_doors`) gives a barn light without a cookie Unreal's **barn doors**: at the angle off the
+  axis where CS2's fade starts (atan(0.75 × tan), the mean of the frustum's two directions: Unreal has one angle for
+  the four doors), 4 × the rect long, so they close over the next ~6°. Unreal measures the doors' angle off the axis
+  (what-ifs on the lower tunnel's lamps: 62° 1.01, 30° 0.38).
 - A `lightcookie` texture is stretched over the frustum (`uv = ndc × −0.5 + 0.5`) and multiplies the light, in place
   of the soft edges (`soft_x`, `soft_y`, `shape`).
 - The light is also cut to its precomputed box (`precomputedobb*`) when that is valid and the light casts shadows.
+
+The reach and the doors together (2026-11-02, [checks](../checks.md#shade-map-by-map-2026-11-02)): de_dust2's lower
+tunnel 0.61 → 0.92 of CS2's picture, its other views within 0.01; de_nuke's lamp-lit rooms, whose 124 barn lights have
+no cookie, mostly closer (B site 0.60 → 0.85, lobby 0.57 → 0.69, tunnels 2.05 → 1.80), the decontamination room past
+it (0.70 → 1.41, most of that the white glass and sink it already had); de_inferno's library 0.47 → 0.67.
 
 **The cookies are sRGB.** `materials/effects/lightcookies/flashlight.vtex` stores a linear average of 0.098: the mean
 of its sRGB-decoded pixels (0.099), not of the raw ones (0.22). Decoded, it lets through 0.33 – 0.47 within half the

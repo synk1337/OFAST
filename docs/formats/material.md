@@ -547,6 +547,38 @@ lit skybox master (they need its depth offset); for `csgo_black_unlit` lit black
 
 [Decision 012](../decisions/012-unlit-cards.md) has the checks against CS2.
 
+## Self-illumination (`F_SELF_ILLUM`)
+
+Lamp bulbs, fluorescent tubes, screens, lit signs and windows glow on their own. `csgo_weapon` (the StatTrak
+display), `csgo_complex` and `csgo_vertexlitgeneric` share the parameters: their pixel shader (`S_SELF_ILLUM`,
+decompiled on `csgo_weapon`) adds
+
+    mask × 2^g_flSelfIllumBrightness × g_flSelfIllumScale × g_vSelfIllumTint × lerp(1, albedo, g_flSelfIllumAlbedoFactor)
+
+to the light it computes, with the mask (`g_tSelfIllumMask`) and the tint read as sRGB colours. A material whose
+mask is a plain value has a generated texture of it (`…_vmat_g_tselfillummask_….vtex`). The value is scene light, as
+Unreal's emissive is ([lighting.md](lighting.md#one-unit-system-lux_per_unit)): it goes over unchanged.
+
+The exporter writes it as glTF's `emissiveTexture` and `emissiveFactor` (tint × 2^brightness × scale), above 1
+through `KHR_materials_emissive_strength`:
+
+- albedo factor ½ or more on a map shader: the colour texture × the mask, texel by texel (`<colour>_glow_<hash>.png`,
+  the two-texture product of "Unlit materials" above), so a lamp's housing stays dark and only its bulb glows;
+- albedo factor ½ or more on a weapon: its colour texture (which may be painted) times the mask's average;
+- below ½: the mask alone;
+- a material that switches its glow off (scale 0, de_inferno's `…_glow_off` lamps) gets none.
+
+Interchange imports the emissive into its glTF master; Lumen also bounces it a little onto what is around.
+
+| Map | Self-illuminated materials |
+|---|---|
+| de_dust2 | `dust_hanging_light_02_on` (the lower tunnel's hanging lamps, 2^2.975) |
+| de_mirage | `light_shop`, `lightbulb01a_on`, `wall_lamp_bulb` |
+| de_nuke | 23: fluorescent tubes (2^3.8), bell lamps (2^5), recessed and office lights, control-room displays, the vending machine, lit windows (`window_001b`, 2^5) |
+| de_inferno | 30 (`csgo_complex`): bulbs, lamp kits, the church's stained glass, a skybox mountain (albedo factor 0.9) |
+
+Before (2026-11-02) only weapons had theirs: every map lamp looked switched off ([checks](../checks.md), item 6).
+
 ## Other rules
 
 | Case | Handling |

@@ -519,6 +519,65 @@ CS2's solid voxels, a clip over mid's low wall, showed a flat plane there), and 
 instead of its threshold rising to 1 (it was eaten into holes as it went). The noise's input pin is "World Position":
 the material connected it as "Position" without checking, so it had always taken its default (the same place).
 
+## Shade, map by map (2026-11-02)
+
+The roadmap's open item: de_dust2's lower tunnel at half CS2's brightness, de_mirage's shade 0.82 of CS2's and bluer,
+de_nuke's interiors dark. Every reference view shot again on the levels as they were (`shade_before`), then after
+each change (`test-data/shots/shade_*`, local only), Unreal / CS2's default picture, whole image
+(`compare_views.py --cs2-gamma 2.013074`); the shade's colour with `colour_balance.py`.
+
+Two changes, both on what CS2 draws and OFAST did not:
+
+- **Self-illumination on map materials** (item 6 below): lamp bulbs, fluorescent tubes, screens and lit windows glow
+  ([material.md](formats/material.md#self-illumination-f_self_illum)). The lower tunnel's bulb, a dark disc before, is
+  white as in CS2.
+- **Barn lights' range is a depth** and their light stops at their frustum: a longer reach and Unreal barn doors
+  ([lighting.md](formats/lighting.md#barn-lights-and-their-cookies)). de_dust2 has 3 such lights, de_nuke 124,
+  de_mirage none.
+
+| Map | View | Before | Barn reach only | Both and the glow |
+|---|---|---|---|---|
+| de_dust2 | lowertunnel | 0.61 | 1.14 | **0.92** |
+| de_dust2 | the 11 other views | | | within 0.01 of before |
+| de_nuke | bsite / bsite2 | 0.60 / 0.40 | 0.84 / 0.52 | **0.85 / 0.55** |
+| de_nuke | lobby | 0.57 | 0.73 | **0.69** |
+| de_nuke | tunnels | 2.05 | 2.74 | **1.80** |
+| de_nuke | observation | 1.56 | 1.86 | 1.67 |
+| de_nuke | decon / decondoor | 0.70 / 0.79 | 1.68 / 1.28 | 1.41 / 1.17 |
+| de_nuke | secret / ramproom | 1.11 / 1.10 | 1.22 / 1.30 | 1.18 / 1.16 |
+| de_nuke | asite / outside / garage | 0.21 / 0.91 / 1.22 | | unchanged |
+| de_inferno | library | 0.47 | | **0.67** |
+| de_inferno | apartments (wall lamp) | 1.25 | | **0.89** |
+| de_inferno | ruins (church) | 1.71 | | 2.02 |
+| de_inferno | the 9 other views | | | within 0.03 of before |
+
+"Both" is the levels exported and imported with the two changes (de_inferno's 25 barn lights without a cookie too:
+its earlier export predated the barn keys), shot again with `shoot_views.py`: the import's own shot of de_inferno's A
+site had caught the scene before its shadows and Lumen settled (0.65, the buildings in shade; 0.80 re-shot, as before).
+
+On de_nuke the sum of the lamp-lit views' errors (|log| of the ratio) drops from 3.95 to 3.04. The decontamination
+room went from too dark to too bright: its floor and lower walls now read 1.05 – 1.4, and most of the view's excess is
+its observation window (2.9) and stainless sink, which render white and were already white before (item 14).
+de_inferno's church rises with its stained glass, which now glows as CS2's does: with the glass's glow switched off
+(what-if) it reads 1.71 again; the windows themselves make the top third 1.35× brighter, their light bounced by Lumen
+the floor and walls 1.05×. The church was already too bright (item 9).
+
+**de_mirage's shade is not lamps.** It has no barn lights and three glowing materials, so neither change moves it. Its
+pattern: rooms lit by daylight bouncing in from sunlit streets too dark and too blue (B apartments 0.75, B/G 1.11;
+shop 0.77; T ramp 0.79, B/G 1.18; B balcony 0.89), enclosed rooms open to the sky too bright (underpass 1.23,
+connector 1.16, sniper's nest 1.17), the palace right as a whole (0.98) but its beam's underside dark and grey where
+CS2's is lit warm by the floor's bounce. That is software Lumen: it traces against coarse distance fields, which leak
+sky light into enclosed rooms and lose the bounce through openings (items 9, 11). Two what-ifs on the saved level:
+
+- Lumen's quality settings at 4 (scene lighting, scene detail, final gather; trace distance 200 m): no view moved by
+  more than 0.01. Quality lowers noise, not this bias.
+- **Lumen with hardware ray tracing** (`r.RayTracing`, `r.Lumen.HardwareRayTracing`, surface-cache lighting; the
+  sandbox's `DefaultEngine.ini` for one run, reverted): underpass 1.23 → 0.99, T ramp 0.79 → 0.96, shop 0.77 → 0.89,
+  connector 1.16 → 1.11, but sniper's nest 1.17 → 1.58, B apartments 0.75 → 0.65, palace 0.98 → 0.88, B site 0.88 →
+  0.80 and the outdoor shade about 4 % darker. Mean |log| error 0.153 against 0.137: not better as it stands, and the
+  bounce gains were fitted for software Lumen. Worth a second look only with the gains refitted for it, and it would
+  ask every user for a ray-tracing GPU (Lumen falls back to software tracing without one).
+
 ## What was wrong
 
 ### Fixed
@@ -560,7 +619,9 @@ the material connected it as "Position" without checking, so it had always taken
 6. **No self-illumination.** Materials with `F_SELF_ILLUM` (`g_tSelfIllumMask`, `g_flSelfIllumBrightness`) are
    exported as plain lit materials: de_inferno's stained-glass church windows render grey (CS2: glowing colours),
    de_nuke's fluorescent tubes and bell lamps, lit signs, vending machine and control-room screens look switched off
-   (de_mirage 3, de_dust2 1, de_inferno 30, de_nuke 23 materials).
+   (de_mirage 3, de_dust2 1, de_inferno 30, de_nuke 23 materials). Fixed 2026-11-02: `csgo_complex` and
+   `csgo_vertexlitgeneric` glow as weapons did, the colour × mask texel by texel
+   ([material.md](formats/material.md#self-illumination-f_self_illum); [above](#shade-map-by-map-2026-11-02)).
 7. **Local lights shine through the back of single-sided geometry.** Shadow proxies are sun-only (lighting channel
    1), so a local light behind a floor or wall lights what is on the other side. de_nuke has two 19 × 29 m blue
    `light_rect`s 400 units below its lowest floor (EV 8.6, one pointing up), baked with full occlusion in CS2; in
@@ -596,4 +657,10 @@ the material connected it as "Position" without checking, so it had always taken
     lamps are next to absent in CS2's bake (the T spawn reads 1.09 without them, 1.81 with), de_nuke's garage lamps
     are not; their `skirt_near` (0 against 0.1) is the only difference found
     ([lighting.md](formats/lighting.md#barn-lights-and-their-cookies)). de_vertigo's CT floor is now short of sky
-    light in Unreal (a third of the sky's blue).
+    light in Unreal (a third of the sky's blue). Barn lights without a cookie (2026-11-02): their range is the
+    frustum's depth and their light stops at its edges, now a longer reach and Unreal barn doors
+    ([above](#shade-map-by-map-2026-11-02)).
+14. **White glass and steel on de_nuke** (seen 2026-11-02, already in the earlier levels): in the decontamination
+    room the frosted observation window (`hr_glass_frosted_004`) renders as an opaque white glare where CS2 shows the
+    reactor room through it, and the stainless sink (`nuke_sink_color`) and floor grate render white where CS2's are
+    grey steel. They make most of that view's excess.

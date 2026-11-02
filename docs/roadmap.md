@@ -570,7 +570,12 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   (lowertunnel view 0.55; MAJ3R's and molodoy's views of round 17: 37 and 35 against CS2's 76 and 61 mean grey);
   de_mirage's shade 0.82 of CS2's and bluer, de_nuke's interiors 0.82 (with the open
   items of [checks](checks.md#open-follow-ups): self-illumination, A site); woxic's passage on de_dust2 lit warm
-  where CS2's is bluish; metals a little darker (gold stickers a tenth, lit by the reflections).
+  where CS2's is bluish; metals a little darker (gold stickers a tenth, lit by the reflections). Done (2026-11-02,
+  [checks](checks.md#shade-map-by-map-2026-11-02)): map lamps glow (self-illumination), barn lights reach their
+  frustum's depth and stop at its edges (Unreal barn doors): de_dust2's lower tunnel 0.61 → 0.92, de_nuke's B site
+  0.60 → 0.85, lobby 0.57 → 0.69, tunnels 2.05 → 1.80, de_inferno's library 0.47 → 0.67. Left: de_mirage's rooms
+  lit by bounce from the street (too dark and blue) or open to the sky (too bright), software Lumen's limit (hardware
+  ray tracing tried: mixed, not kept); de_nuke's A site and its white glass and steel; woxic's passage; metals.
 - [ ] **Bodies against CS2's**: Wicadia's (round 17, dead at tick 154410) lies on the AK he dropped in Unreal; CS2
   shows the AK alone there at tick 155002. The AK itself rests tilted a little differently.
 - [ ] **Skins' finer shading**: glitter and iridescence in OFAST's weapon master (`pearlescence.py`'s copy of

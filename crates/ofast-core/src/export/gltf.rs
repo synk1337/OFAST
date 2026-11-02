@@ -920,6 +920,15 @@ const SKIPPED_SHADERS: &[&str] = &["csgo_effects.vfx"];
 /// its unlit master (`MI_Unlit_Opaque` / `_Mask` / `_Blend`). `csgo_black_unlit` draws plain black.
 const UNLIT_SHADERS: &[&str] = &["csgo_unlitgeneric.vfx", "csgo_black_unlit.vfx"];
 
+/// Shaders whose `F_SELF_ILLUM` OFAST writes as glTF emissive ([`GltfWriter::fill_self_illum`]): the weapons' and
+/// the two the official maps' glowing materials use (`csgo_complex`: de_nuke's 23, de_inferno's 30;
+/// `csgo_vertexlitgeneric`: de_dust2's hanging lamp, de_mirage's 3 bulbs).
+const SELF_ILLUM_SHADERS: &[&str] = &[
+    "csgo_weapon.vfx",
+    "csgo_complex.vfx",
+    "csgo_vertexlitgeneric.vfx",
+];
+
 /// Texture parameter names, in priority order, for each glTF slot.
 const COLOR_PARAMS: &[&str] = &["g_tColor", "g_tColor1", "g_tLayer1Color", "g_tColorA"];
 const NORMAL_PARAMS: &[&str] = &[
@@ -1940,17 +1949,21 @@ impl<'c> GltfWriter<'c> {
         if let Some(layers) = self.layer_textures(info) {
             material["extras"]["ofast"]["layers"] = layers;
         }
-        if info.shader == "csgo_weapon.vfx" && info.flag("F_SELF_ILLUM") {
+        if SELF_ILLUM_SHADERS.contains(&info.shader.as_str()) && info.flag("F_SELF_ILLUM") {
             self.fill_self_illum(material, info);
         }
     }
 
-    /// A weapon material's self-illumination (`F_SELF_ILLUM`: the StatTrak display's lit digits) as glTF's
-    /// emissive. `csgo_weapon.vfx` adds mask × 2^`g_flSelfIllumBrightness` × `g_flSelfIllumScale` ×
-    /// `g_vSelfIllumTint` × lerp(1, albedo, `g_flSelfIllumAlbedoFactor`) to its light (decompiled, pixel shader static
-    /// combo `S_SELF_ILLUM`), the mask an sRGB colour texture and the tint an sRGB colour. Written as the colour
-    /// texture times the mask's average (albedo factor ½ or more) or as the mask times the rest; above 1 through
-    /// `KHR_materials_emissive_strength`.
+    /// A material's self-illumination (`F_SELF_ILLUM`: the StatTrak display's lit digits, a map's lamp bulbs,
+    /// fluorescent tubes, screens and lit windows) as glTF's emissive. `csgo_weapon.vfx` adds mask ×
+    /// 2^`g_flSelfIllumBrightness` × `g_flSelfIllumScale` × `g_vSelfIllumTint` × lerp(1, albedo,
+    /// `g_flSelfIllumAlbedoFactor`) to its light (decompiled, pixel shader static combo `S_SELF_ILLUM`), the mask an
+    /// sRGB colour texture and the tint an sRGB colour; the map shaders in [`SELF_ILLUM_SHADERS`] take the same
+    /// parameters. Albedo factor ½ or more: a map material's emissive is its colour × mask texel by texel (a lamp's
+    /// housing stays dark, its bulb glows), a weapon's its colour texture (possibly painted) times the mask's average;
+    /// below ½, the mask. Above 1 through `KHR_materials_emissive_strength`. CS2's values are scene light, as
+    /// Unreal's emissive is (lighting.md, `LUX_PER_UNIT`), so they go over unchanged. A material that switches its
+    /// glow off (scale 0: de_inferno's `…_glow_off` lamps) gets none.
     fn fill_self_illum(&mut self, material: &mut Json, info: &MaterialInfo) {
         let float =
             |name: &str, default: f64| info.floats.get(name).copied().unwrap_or(default) as f32;
@@ -1959,11 +1972,27 @@ impl<'c> GltfWriter<'c> {
         });
         let gain =
             2f32.powf(float("g_flSelfIllumBrightness", 0.0)) * float("g_flSelfIllumScale", 1.0);
+        if gain <= 0.0 || tint.iter().all(|c| *c <= 0.0) {
+            return;
+        }
         let mask = info.textures.get("g_tSelfIllumMask").cloned();
         let albedo = float("g_flSelfIllumAlbedoFactor", 1.0) >= 0.5;
         let colour = &material["pbrMetallicRoughness"]["baseColorTexture"];
-        let (texture, mask_mean) = match (&mask, albedo) {
-            (_, true) if !colour.is_null() => {
+        let map_colour = if info.shader == "csgo_weapon.vfx" {
+            None
+        } else {
+            info.first_texture(COLOR_PARAMS)
+                .map(|(_, path)| path.to_owned())
+        };
+        let (texture, mask_mean) = match (&mask, albedo, &map_colour) {
+            (Some(mask), true, Some(colour)) => {
+                let id = self.register(
+                    TextureJob::TwoTexture(colour.clone(), mask.clone(), false),
+                    format!("{}_glow", stem(colour)),
+                );
+                (Some(json!({ "index": id })), [1.0; 3])
+            }
+            (_, true, _) if !colour.is_null() => {
                 let mean = mask.as_deref().map_or([1.0; 3], |path| {
                     decode_raw(self.content, path).map_or([1.0; 3], |(_, image)| {
                         let texels = image.rgba.as_chunks::<4>().0;
@@ -1977,11 +2006,11 @@ impl<'c> GltfWriter<'c> {
                 });
                 (Some(colour.clone()), mean)
             }
-            (Some(path), _) => {
+            (Some(path), _, _) => {
                 let id = self.texture(path, TextureRole::Color { keep_alpha: false });
                 (Some(json!({ "index": id })), [1.0; 3])
             }
-            (None, _) => (None, [1.0; 3]),
+            (None, _, _) => (None, [1.0; 3]),
         };
         let Some(texture) = texture else { return };
         let factor: [f32; 3] = std::array::from_fn(|k| tint[k] * gain * mask_mean[k]);
@@ -3999,6 +4028,73 @@ mod tests {
             squared.rgba
         );
         assert_eq!(squared.rgba[3], 255);
+    }
+
+    /// Map lamps glow where their mask says: de_nuke's fluorescent tube (`csgo_complex`, albedo factor 1) takes its
+    /// colour × mask texel by texel at 2^3.8; de_inferno's bulb (albedo factor 0) its mask; a lamp switched off
+    /// (scale 0) nothing.
+    #[test]
+    fn map_self_illumination_is_colour_times_mask() {
+        let lamp = |albedo: f64, scale: f64| MaterialInfo {
+            shader: "csgo_complex.vfx".into(),
+            textures: [
+                ("g_tColor", "materials/tube_color.vtex"),
+                ("g_tSelfIllumMask", "materials/tube_selfillum.vtex"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .into(),
+            ints: [("F_SELF_ILLUM".to_owned(), 1)].into(),
+            floats: [
+                ("g_flSelfIllumBrightness", 3.8),
+                ("g_flSelfIllumScale", scale),
+                ("g_flSelfIllumAlbedoFactor", albedo),
+            ]
+            .map(|(k, v)| (k.to_owned(), v))
+            .into(),
+            vectors: [("g_vSelfIllumTint".to_owned(), [1.0, 1.0, 1.0, 0.0])].into(),
+            ..Default::default()
+        };
+        let content = Content::new();
+        let dir = temp_folder("self-illum");
+        let mut writer = GltfWriter::new(&content, &dir, ExportOptions::default()).expect("writer");
+        let emissive = |writer: &mut GltfWriter, info: &MaterialInfo| {
+            let mut material = json!({});
+            writer.fill_material(&mut material, info, [255; 4]);
+            let job = material["emissiveTexture"]["index"]
+                .as_u64()
+                .map(|i| writer.texture_jobs[i as usize].job.clone());
+            (job, material)
+        };
+
+        let (job, material) = emissive(&mut writer, &lamp(1.0, 1.0));
+        assert_eq!(
+            job,
+            Some(TextureJob::TwoTexture(
+                "materials/tube_color.vtex".into(),
+                "materials/tube_selfillum.vtex".into(),
+                false
+            ))
+        );
+        assert_eq!(material["emissiveFactor"], json!([1.0, 1.0, 1.0]));
+        let strength =
+            material["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"]
+                .as_f64()
+                .expect("strength");
+        assert!((strength - 2f64.powf(3.8)).abs() < 1e-3, "{strength}");
+
+        let (job, _) = emissive(&mut writer, &lamp(0.0, 1.0));
+        assert_eq!(
+            job,
+            Some(TextureJob::Single(
+                "materials/tube_selfillum.vtex".into(),
+                TextureRole::Color { keep_alpha: false }
+            ))
+        );
+
+        let (job, material) = emissive(&mut writer, &lamp(1.0, 0.0));
+        assert_eq!(job, None);
+        assert!(material.get("emissiveFactor").is_none());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

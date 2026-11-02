@@ -2411,9 +2411,65 @@ def light_radius(light):
     a radius equal to the range left those floors nearly unlit. The radius is the range × (1.375 − 0.725 × skirt):
     the factor that fits Unreal's window to CS2's fade best (least squares, weighted by 1 / distance², the falloff
     both share), within 0.04 for every skirt from 0 to 1 (1.375 at 0, 1.3 at the default 0.1). Light then reaches a
-    little past CS2's cut, and a little less of it arrives near the range."""
+    little past CS2's cut, and a little less of it arrives near the range. A barn light's range is a depth instead
+    (barn_reach)."""
     skirt = min(max(light.get("skirt", 0.1), 0.0), 1.0)
-    return light["attenuation_radius"] * (1.375 - 0.725 * skirt)
+    return light["attenuation_radius"] * (1.375 - 0.725 * skirt) * barn_reach(light)
+
+
+# The widest angle off a barn light's axis its reach is stretched for (barn_reach): on the far plane the light falls
+# off with cos³ of that angle (inverse square and the slant), an eighth at 60°.
+BARN_REACH_ANGLE = 60.0
+
+
+def barn_reach(light):
+    """How far a perspective barn light reaches, as a multiple of its range (1 for every other light).
+
+    Its `range` is not a distance around it but the depth of its frustum: its far plane lies `range` past the light
+    (Source 2 Viewer's SceneLight.ComputePerspectiveBarnGeometry, farPlane = nearPlane + Range), and inside the frustum
+    the light only falls off with the inverse square. A ray at angle θ off the axis therefore reaches range / cos θ.
+    de_dust2's lower-tunnel lamp (range 205, 199 units above the floor, a frustum 62° wide each way) lights the whole
+    floor below it in CS2; with the range as a radius the floor 320 units away, under the camera of the lower tunnel
+    view, got nothing (0.26 – 0.37 of CS2). The reach is range / cos θ with θ the frustum's corner (a cookie spot's
+    outer cone), at most BARN_REACH_ANGLE. Static barn lights with a cookie keep their rect and their range (open,
+    docs/formats/lighting.md "Barn lights and their cookies")."""
+    barn = light.get("barn") or {}
+    tan = barn.get("tan")
+    if not tan:  # not a barn light, or an orthographic one (a box of light, its range a depth along parallel rays)
+        return 1.0
+    if cookie_spot(light):
+        angle = barn["spot"]["outer_cone"]
+    elif barn.get("cookie"):
+        return 1.0
+    else:
+        angle = math.degrees(math.atan(math.hypot(tan[0], tan[1])))
+    return 1.0 / math.cos(math.radians(min(angle, BARN_REACH_ANGLE)))
+
+
+# CS2 fades a barn light's frustum out from (1 − soft) of its half-width to its edge (`soft_x`, `soft_y`: 0.25 and
+# 0.246 on de_dust2's, the FGD's default 0.25; Source 2 Viewer's lighting_barn.slang).
+BARN_SOFT = 0.25
+# Barn door length per unit of the rect's size: the doors then close over about 6° past their angle.
+BARN_DOOR_LENGTH = 4.0
+
+
+def barn_doors(light):
+    """(angle, length) of the Unreal barn doors that close a barn light's rect down to its frustum, or None.
+
+    Unreal's rect lights light their whole hemisphere; CS2's barn lights only their frustum, its edges faded
+    (BARN_SOFT). The doors stand at the angle off the axis where CS2's fade starts, the mean of the frustum's two
+    directions (Unreal has one angle for the four doors), BARN_DOOR_LENGTH × the rect long, so they shade it over the
+    next ~6°. Measured on de_dust2's lower-tunnel lamps (2026-11-02): what-ifs with doors of 40 cm at 62° and 30°
+    took the lower tunnel view from 1.14 to 1.01 and 0.38 of CS2's picture (Unreal measures the angle off the axis);
+    their own 55° here, imported, 0.92 (docs/checks.md, "Shade, map by map"). Barn lights with a cookie are spot
+    lights (cookie_spot) or keep their plain rect."""
+    barn = light.get("barn") or {}
+    tan = barn.get("tan")
+    if not tan or barn.get("cookie") or light.get("shape") != "rect":
+        return None
+    angle = sum(math.degrees(math.atan(t * (1.0 - BARN_SOFT))) for t in tan[:2]) / 2.0
+    size = max(light.get("source_width", 0.0), light.get("source_height", 0.0))
+    return angle, BARN_DOOR_LENGTH * size
 
 
 # A light with `directlight` 0 ("None") only adds bounce light to CS2's bake. Unreal has no bounce-only light, but
@@ -2446,6 +2502,7 @@ def setup_local_lights(manifest, imported, physical=False):
     bounce_only = 0
     highlights = {"none": 0, "own": 0, "cubemap": 0, "unknown": 0}
     cookie_spots = 0
+    barn_door_lights = 0
     for light in lights:
         pitch, yaw, roll = light["rotation"]
         rotation = unreal.Rotator(roll=roll, pitch=pitch, yaw=yaw)
@@ -2516,17 +2573,22 @@ def setup_local_lights(manifest, imported, physical=False):
                 }
             )
         elif shape == "rect":
-            # No barn doors: CS2's rect lights emit over the whole hemisphere in front of them.
+            # No barn doors on CS2's rect lights: they emit over the whole hemisphere in front of them. A barn light
+            # without a cookie gets them, closing its light down to its frustum (barn_doors).
             settings.update(
                 {"source_width": light["source_width"], "source_height": light["source_height"], "barn_door_length": 0.0}
             )
+            doors = barn_doors(light)
+            if doors:
+                settings.update({"barn_door_angle": doors[0], "barn_door_length": doors[1]})
+                barn_door_lights += 1
         else:
             settings["source_radius"] = light.get("source_radius", 0.0)
         if shape == "spot" and not barn:
             settings.update({"inner_cone_angle": light["inner_cone"], "outer_cone_angle": min(light["outer_cone"], 80.0)})
         component.set_editor_properties(settings)
-    log("local lights: %d from the manifest (%d bounce only, %d barn lights as cookie spots)"
-        % (len(lights), bounce_only, cookie_spots))
+    log("local lights: %d from the manifest (%d bounce only, %d barn lights as cookie spots, %d with barn doors)"
+        % (len(lights), bounce_only, cookie_spots, barn_door_lights))
     if not physical:
         log("local light highlights as in CS2: %(own)d own (stationary / dynamic), %(cubemap)d baked into cubemaps, "
             "%(none)d none (baked, or bounce only)" % highlights)
