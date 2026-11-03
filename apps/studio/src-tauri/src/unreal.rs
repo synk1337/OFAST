@@ -4,7 +4,8 @@
 //! 1. export the round with its players and its cameras (`ofast export-demo --players`, with the shots the user
 //!    picked: [`CameraPlan`]),
 //! 2. the first time a map is used in a look (CS2's, or realistic: `LOOKS`), export it (`ofast export-map`) and
-//!    import it (`tools/unreal/import_map.py`, its style: the realistic look's level is `<map>_realistic`),
+//!    import it (`tools/unreal/import_map.py`, its style: the realistic look's level is `<map>_realistic`); again
+//!    once when a release changed how maps are made (`MAP_VERSION`),
 //! 3. import the round (`tools/unreal/import_demo.py`, in the same style): a Level Sequence in that level.
 //!
 //! "Update cameras" changes the cameras of a round already sent, without importing it again: its cameras exported
@@ -154,6 +155,35 @@ fn level_name(map: &str, look: &str) -> String {
     } else {
         format!("{map}_{look}")
     }
+}
+
+/// How OFAST exports and imports maps. A release that changes what a map looks like in Unreal (its materials, lights,
+/// shading) counts it up: a level imported by an older Studio is then imported again, once, the next time a round is
+/// sent on it. "1": OFAST 1.0.7 (map lamps, barn lights, glass and steel); the Studios before it wrote no version.
+const MAP_VERSION: &str = "1";
+
+/// Where each level's map version is kept once its import finished (a file named after the level, in the project).
+const IMPORTED: &str = r"Saved\OFAST\imported";
+
+/// The level's file `level_name`, in the project.
+fn level_file(level_name: &str) -> PathBuf {
+    Path::new(r"Content\OFAST\Maps").join(format!("{level_name}.umap"))
+}
+
+/// `map`'s import record (`import_map.py`'s `SceneImport_<map>`, shared by its looks), in the project.
+fn import_record(map: &str) -> PathBuf {
+    Path::new(r"Content\OFAST")
+        .join(map)
+        .join(map)
+        .join(format!("SceneImport_{map}.uasset"))
+}
+
+/// Whether `map`'s level `level_name` is in the project at today's [`MAP_VERSION`], with the map's import record.
+fn level_imported(project: &Path, map: &str, level_name: &str) -> bool {
+    let version = std::fs::read_to_string(project.join(IMPORTED).join(level_name));
+    version.is_ok_and(|v| v.trim() == MAP_VERSION)
+        && project.join(level_file(level_name)).is_file()
+        && project.join(import_record(map)).is_file()
 }
 
 /// Changes the cameras of the round of `path` that starts at `start_tick`, already sent, to those of `plan` (see the
@@ -486,43 +516,43 @@ fn send(
     }
 
     let map = track.map_name.as_str();
-    // The map's level in the look picked: each look is imported once, the realistic one into a level of its own
-    // (sharing the map's meshes and materials, which its import brings up to date).
+    // The map's level in the look picked: each look is imported once per map version (`MAP_VERSION`), the realistic
+    // one into a level of its own (sharing the map's meshes and materials, which its import brings up to date).
     let level_name = level_name(map, look);
     let level = format!("/Game/OFAST/Maps/{level_name}");
-    // A map import that did not finish keeps its marker: the next sending imports the map again.
     let project = side.dir();
-    let importing = project.join(r"Saved\OFAST\importing").join(&level_name);
-    let imported = !importing.exists()
-        && project
-            .join(r"Content\OFAST\Maps")
-            .join(format!("{level_name}.umap"))
-            .is_file()
-        && project
-            .join(r"Content\OFAST")
-            .join(map)
-            .join(map)
-            .join(format!("SceneImport_{map}.uasset"))
-            .is_file();
-    if !imported {
+    if !level_imported(project, map, &level_name) {
+        // A level already there was imported by an older Studio, or its import did not finish.
+        let again = project.join(level_file(&level_name)).is_file();
         report(
             Step::MapExport,
-            format!("Exporting {map} from CS2's files (the first time only: a few minutes)…"),
+            if again {
+                format!("Exporting {map} from CS2's files again (a few minutes)…")
+            } else {
+                format!("Exporting {map} from CS2's files (the first time only: a few minutes)…")
+            },
         );
         let out = exports.join("maps").join(map);
         export_installed_map(&install, map, &out, ExportOptions::default())
             .map_err(|e| format!("{map} could not be exported from CS2's files: {e}"))?;
         report(
             Step::MapImport,
-            format!(
-                "Importing {map} into Unreal (the first time only: Unreal compiles its shaders, it can take long)…"
-            ),
+            if again {
+                format!("Importing {map} into Unreal again (it can take long)…")
+            } else {
+                format!(
+                    "Importing {map} into Unreal (the first time only: Unreal compiles its shaders, it can take long)…"
+                )
+            },
         );
         unreal_closed()?;
-        if let Some(dir) = importing.parent() {
+        // Written once the import finished: an import that did not finish leaves none, and the next sending imports
+        // the map again.
+        let version = project.join(IMPORTED).join(&level_name);
+        let _ = std::fs::remove_file(&version);
+        if let Some(dir) = version.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        std::fs::write(&importing, "").map_err(|e| e.to_string())?;
         let gltf = out.join(format!("{map}.gltf"));
         run_script(
             &engine,
@@ -537,7 +567,7 @@ fn send(
             "imported ",
             |line| report(Step::MapImport, line),
         )?;
-        let _ = std::fs::remove_file(&importing);
+        std::fs::write(&version, MAP_VERSION).map_err(|e| e.to_string())?;
         // Imported: Unreal keeps what it needs, the export can go.
         let _ = std::fs::remove_dir_all(&out);
     }
@@ -780,5 +810,27 @@ mod tests {
         assert_eq!(asset_name("my clutch.v2"), "my_clutch_v2");
         assert_eq!(asset_name("match730_0038"), "match730_0038");
         assert_eq!(asset_name(""), "demo");
+    }
+
+    #[test]
+    fn levels_of_an_older_map_version_are_imported_again() {
+        let project =
+            std::env::temp_dir().join(format!("ofast-map-version-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&project);
+        for file in [import_record("de_nuke"), level_file("de_nuke")] {
+            let file = project.join(file);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "").unwrap();
+        }
+        // Imported by a Studio before 1.0.7: no version.
+        assert!(!level_imported(&project, "de_nuke", "de_nuke"));
+        std::fs::create_dir_all(project.join(IMPORTED)).unwrap();
+        std::fs::write(project.join(IMPORTED).join("de_nuke"), "0").unwrap();
+        assert!(!level_imported(&project, "de_nuke", "de_nuke"));
+        std::fs::write(project.join(IMPORTED).join("de_nuke"), MAP_VERSION).unwrap();
+        assert!(level_imported(&project, "de_nuke", "de_nuke"));
+        // Each look's level goes by its own version.
+        assert!(!level_imported(&project, "de_nuke", "de_nuke_realistic"));
+        let _ = std::fs::remove_dir_all(&project);
     }
 }

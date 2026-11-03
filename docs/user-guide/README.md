@@ -138,7 +138,8 @@ you can keep browsing meanwhile. It:
    (swinging as the weapon moves), name tags and StatTrak counters, which count up on the round's kills),
    the grenades, the shots;
 2. the first time a map is used, exports the map from CS2's files and imports it into Unreal (this can take a long
-   time: Unreal compiles its shaders the first time);
+   time: Unreal compiles its shaders the first time); a new OFAST that draws maps better imports each map again
+   once, the first time you send a round on it;
 3. builds the round in Unreal: a **Level Sequence** in the map's level, with a camera through each player's eyes,
    the cameras you chose, the cuts between them, and markers for the freeze time's end, the kills, the bomb and the
    round's end.
