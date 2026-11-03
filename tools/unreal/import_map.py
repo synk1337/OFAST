@@ -1832,6 +1832,60 @@ def light_translucent_per_pixel(skip):
     return changed, kept, restored
 
 
+# CS2's glass casts shadows unless its material says not (F_DO_NOT_CAST_SHADOWS), and its light bake takes the dust's
+# alpha as the glass's opacity (LightSim_Opacity_A g_tGlassDust in the decompiled csgo_glass): a pane holds back the
+# light its dust covers. Unreal's translucent surfaces hold back nothing, neither in shadows nor in Lumen, which does
+# not see them. de_inferno's lanterns (lamp_02_glass: dust over three quarters of the pane), opaque white until the
+# glass export of 2026-11-03, let all of their lamps' light into Lumen once translucent: the church 2.02 -> 2.81 of
+# CS2's brightness, the library 0.81 -> 0.67 (the export with only the glass reverted: 2.02 and 0.81). Tried and
+# dropped: Cast Dynamic Shadow as Masked on the glass (also without Nanite, which draws no translucent material into
+# its shadow maps): no view moved, the light reaches the room through Lumen. So a pane that casts shadows in CS2 and
+# whose dust holds back at least GLASS_OCCLUDER_OPACITY of the light on average (extras.ofast.glass_opacity, from the
+# exporter) gets an occluder: an invisible copy that casts shadows for every light and absorbs light in Lumen
+# (make_shadow_only), as CS2's bake absorbs it in the dust. The thinly dusted windows (de_nuke's frosted window 0.21,
+# its panels 0.13) keep letting all the light through.
+GLASS_OCCLUDER_OPACITY = 0.5
+GLASS_OCCLUDER_CHANNELS = unreal.LightingChannels(channel0=True, channel1=True, channel2=False)
+
+
+def add_glass_occluders(imported):
+    """An occluder (see GLASS_OCCLUDER_OPACITY) for every `imported` mesh whose every slot is a csgo_glass material
+    that casts shadows in CS2 with a dust opacity of at least GLASS_OCCLUDER_OPACITY. Returns the number of
+    occluders and of the glass materials that get them."""
+    with open(GLTF) as f:
+        document = json.load(f)
+    paths = set()
+    for material in document.get("materials", []):
+        ofast = material.get("extras", {}).get("ofast", {})
+        if ofast.get("shader") != "csgo_glass.vfx" or ofast.get("ints", {}).get("F_DO_NOT_CAST_SHADOWS"):
+            continue
+        if ofast.get("glass_opacity", 0.0) < GLASS_OCCLUDER_OPACITY:
+            continue
+        instance = interchange_instance(material["name"])
+        if instance is not None:
+            paths.add(instance.get_path_name())
+    if not paths:
+        return 0, 0
+    material = ensure_shadow_proxy_material()
+    count = 0
+    for actor in imported:
+        if not isinstance(actor, unreal.StaticMeshActor):
+            continue
+        component = actor.static_mesh_component
+        mesh = component.static_mesh
+        slots = component.get_materials()
+        if mesh is None or not slots or not all(s is not None and s.get_path_name() in paths for s in slots):
+            continue
+        occluder = actors.spawn_actor_from_object(mesh, actor.get_actor_location(), actor.get_actor_rotation())
+        occluder.set_actor_transform(actor.get_actor_transform(), False, False)
+        occluder.tags = [TAG]
+        occluder.set_actor_label("glassoccluder_" + actor.get_actor_label())
+        make_shadow_only(occluder.static_mesh_component, material, len(slots), affect_lumen=True)
+        occluder.static_mesh_component.set_editor_property("lighting_channels", GLASS_OCCLUDER_CHANNELS)
+        count += 1
+    return count, len(paths)
+
+
 # Versioned like BLEND_MASTER: csgo_static_overlay's Mod2x blend mode (F_BLEND_MODE 3: de_nuke's 30 grime, scuff,
 # floor-marking and caustics overlays, 1-4 on the other maps). CS2 draws it unlit, after the lit surfaces, with
 # DstBlend One and its colour texture read without sRGB decoding (SrgbRead(false)): what lies under the overlay is
@@ -2835,6 +2889,9 @@ def main():
     # Sunlight must not leak into interiors: CS2's light blockers and two-sided shadows for single-sided walls.
     hide_light_blockers(imported)
     add_shadow_proxies(imported)
+    occluders, glass = add_glass_occluders(imported)
+    if glass:
+        log("glass occluders: %d for %d dusty glass materials" % (occluders, glass))
     # The 3D skybox stays behind the world and out of its lighting, as in CS2.
     setup_skybox(imported)
     delete_unused_ofast_assets(SKYBOX_FOLDER)

@@ -7,8 +7,9 @@
 //!
 //! Builds the camera of the first CT (`ct0`) or T (`t0`) spawn, or of CS2 `setpos x y z; setang pitch yaw` values,
 //! exactly like the Unreal script (eye 64 units above the origin, CS2's 90° fov on 16:9), casts a ray through each pixel of a 1920×1080 frame and prints the nearest
-//! triangle hit: which placement (scene object, aggregate fragment or entity), model and material, and the draw
-//! call's own tint when it has one. "nothing" means the exported geometry has a hole there.
+//! triangle hit: which placement (scene object, aggregate fragment or entity), model and material, the texture
+//! coordinate (`TEXCOORD 0`) there, and the draw call's own tint when it has one. "nothing" means the exported
+//! geometry has a hole there.
 //!
 //! `OFAST_LAYERS=2` also lists every surface up to 2 units behind the nearest one: overlays and decals stacked on a
 //! wall or floor, and what they lie on.
@@ -39,7 +40,8 @@ fn apply(t: &Transform, p: V3) -> V3 {
 }
 
 /// Möller–Trumbore ray/triangle intersection (both faces). Returns the distance along the ray.
-fn hit(origin: V3, dir: V3, a: V3, b: V3, c: V3) -> Option<f32> {
+/// Möller–Trumbore: the distance along the ray and the barycentric (u, v) of b and c.
+fn hit(origin: V3, dir: V3, a: V3, b: V3, c: V3) -> Option<(f32, f32, f32)> {
     let e1 = sub(b, a);
     let e2 = sub(c, a);
     let p = cross(dir, e2);
@@ -59,7 +61,7 @@ fn hit(origin: V3, dir: V3, a: V3, b: V3, c: V3) -> Option<f32> {
         return None;
     }
     let t = dot(e2, q) * inv;
-    (t > 0.1).then_some(t)
+    (t > 0.1).then_some((t, u, v))
 }
 
 fn main() {
@@ -200,7 +202,7 @@ fn main() {
                         world[tri[2] as usize],
                     ];
                     for (r, dir) in rays.iter().enumerate() {
-                        if let Some(t) = hit(eye, *dir, a, b, c) {
+                        if let Some((t, u, v)) = hit(eye, *dir, a, b, c) {
                             // Facing: winding normal and stored vertex normal against the view ray (< 0 = faces us).
                             let winding = cross(sub(b, a), sub(c, a));
                             let vertex_normal =
@@ -214,6 +216,20 @@ fn main() {
                             };
                             let color = rgba(g.colors.get(tri[0] as usize));
                             let paint = rgba(g.blend.get(tri[0] as usize));
+                            // The texture coordinate at the hit, interpolated across the triangle.
+                            let uv = g
+                                .uvs
+                                .first()
+                                .and_then(|set| {
+                                    let [ta, tb, tc] = tri.map(|k| set.get(k as usize));
+                                    Some((ta?, tb?, tc?))
+                                })
+                                .map(|(ta, tb, tc)| {
+                                    let w = 1.0 - u - v;
+                                    let at = |k: usize| w * ta[k] + u * tb[k] + v * tc[k];
+                                    format!(" | uv {:.3}/{:.3}", at(0), at(1))
+                                })
+                                .unwrap_or_default();
                             // The draw call's own tint (linear) and alpha, when it has one.
                             let tint = if draw.is_untinted() {
                                 String::new()
@@ -226,7 +242,7 @@ fn main() {
                             hits[r].push((
                                 t,
                                 format!(
-                                    "{label} {model_path} draw {i} {} | winding·ray {:+.2} normal·ray {:+.2} | colour{color} paint{paint}{tint}",
+                                    "{label} {model_path} draw {i} {} | winding·ray {:+.2} normal·ray {:+.2} | colour{color} paint{paint}{uv}{tint}",
                                     draw.material,
                                     dot(winding, *dir).signum(),
                                     dot(vertex_normal, *dir)

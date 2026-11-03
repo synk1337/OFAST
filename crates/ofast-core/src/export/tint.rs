@@ -23,6 +23,10 @@
 //! `M_OFAST_TintMask_v1`, [`apply`] in a material graph); `ExportOptions::bake_model_tints` bakes it into the colour
 //! instead ([`TintJob`], [`bake_color`]), for other glTF readers.
 //!
+//! `csgo_glass` builds the same tint (`tint_texture × lerp(1, rendercolor, g_flModelTintAmount)` in its decompiled
+//! pixel shader, no `g_vColorTint`), but it colours the light the pane lets through, not the dust on it: the glTF
+//! writer bakes it into the pane's texture (`gltf.rs`, `bake_glass`).
+//!
 //! Not this module: `csgo_environment(_blend)` recolour their tint mask towards the tint's hue instead of multiplying
 //! (`environment::model_tint`).
 
@@ -34,12 +38,13 @@ use crate::texture::Image;
 
 /// The shaders whose model tint this module reproduces (each checked in its decompiled code). Other shaders keep a
 /// plain multiply by the placement tint ([`ModelTint::plain`]).
-const SHADERS: [&str; 5] = [
+const SHADERS: [&str; 6] = [
     "csgo_complex.vfx",
     "csgo_vertexlitgeneric.vfx",
     "csgo_foliage.vfx",
     "csgo_simple_3layer_parallax.vfx",
     "csgo_unlitgeneric.vfx",
+    "csgo_glass.vfx",
 ];
 
 /// A material's model tint under one placement.

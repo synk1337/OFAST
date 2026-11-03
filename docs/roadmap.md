@@ -573,9 +573,14 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   where CS2's is bluish; metals a little darker (gold stickers a tenth, lit by the reflections). Done (2026-11-02,
   [checks](checks.md#shade-map-by-map-2026-11-02)): map lamps glow (self-illumination), barn lights reach their
   frustum's depth and stop at its edges (Unreal barn doors): de_dust2's lower tunnel 0.61 → 0.92, de_nuke's B site
-  0.60 → 0.85, lobby 0.57 → 0.69, tunnels 2.05 → 1.80, de_inferno's library 0.47 → 0.67. Left: de_mirage's rooms
-  lit by bounce from the street (too dark and blue) or open to the sky (too bright), software Lumen's limit (hardware
-  ray tracing tried: mixed, not kept); de_nuke's A site and its white glass and steel; woxic's passage; metals.
+  0.60 → 0.85, lobby 0.57 → 0.69, tunnels 2.05 → 1.80, de_inferno's library 0.47 → 0.67. Done (2026-11-03,
+  [checks](checks.md#glass-and-steel-2026-11-03)): glass see-through as CS2 blends it, metals that were exported as
+  paint now metal (metalness in the colour's alpha; uniform metalness zeroed), dusty lantern glass holding back
+  its lamps' light: de_nuke's observation room 1.67 → 0.93, decontamination room 1.41 → 0.97, de_inferno's church
+  2.02 → 1.34, de_mirage's shop 0.77 → 0.99. Left: de_mirage's rooms lit by bounce from the street (too dark and
+  blue) or open to the sky (too bright), software Lumen's limit (hardware ray tracing tried: mixed, not kept);
+  de_nuke's A site; woxic's passage; metals, darker than CS2's now that all of them are metal (de_nuke's B site 0.85
+  → 0.60: its floor plates and corrugated ceiling were white paint).
 - [ ] **Bodies against CS2's**: Wicadia's (round 17, dead at tick 154410) lies on the AK he dropped in Unreal; CS2
   shows the AK alone there at tick 155002. The AK itself rests tilted a little differently.
 - [ ] **Skins' finer shading**: glitter and iridescence in OFAST's weapon master (`pearlescence.py`'s copy of

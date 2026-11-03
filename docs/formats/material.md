@@ -15,14 +15,31 @@ These were the source of the "missing textures" and the blue-grey mirror walls i
 
 | Texture | Channels |
 |---|---|
-| `g_tColor` | RGB colour. **Alpha is a mask, not opacity**, unless `F_TRANSLUCENT` / `F_ALPHA_TEST` / overlay. |
+| `g_tColor` | RGB colour. **Alpha is a mask, not opacity**, unless `F_TRANSLUCENT` / `F_ALPHA_TEST` / overlay. On an opaque `csgo_complex` with `F_METALNESS_TEXTURE` and no `g_tMetalness`, **alpha is metalness** (below). |
 | `g_tNormal`, `g_tLayer*NormalRoughness` | **Hemi-octahedral normal in RG, roughness in B** — except where the material keeps roughness elsewhere (below): then the texture is two-channel BC5 and has no B. |
 | `g_tAnisoGloss` | roughness along two surface directions in R and G (anisotropic roughness; the normal map is then BC5). OFAST writes their mean. |
 | `g_tMetalness` | **Metalness in G**. R is roughness only for `csgo_weapon` (otherwise retro-reflectivity); B is a cloth mask on characters. |
-| no `g_tMetalness` | uniform `g_flMetalness`. |
+| no `g_tMetalness` | uniform `g_flMetalness`, except `csgo_complex` with `F_METALNESS_TEXTURE`: `g_tColor` A when opaque. |
 
 glTF wants roughness in G and metalness in B of one texture, so OFAST assembles that texture from the channels
 above (sampling the smaller source at the larger size).
+
+**`csgo_complex`'s metalness in the colour's alpha** (2026-11-03). With `F_METALNESS_TEXTURE` the shader reads
+metalness from `g_tMetalness` G only when the material is alpha-tested or translucent, whose colour alpha is taken;
+otherwise from `g_tColor` A (Source 2 Viewer's `csgo/csgo_complex.frag.slang`), and the material has no
+`g_tMetalness` at all. 215 materials on de_nuke, de_dust2, de_mirage, de_inferno, de_anubis and de_vertigo are such
+(12 others have a `g_tMetalness`). OFAST read neither and made them non-metals: de_nuke's stainless sink
+(`nuke_sink_color`: alpha 1 on 98 % of it, its colour a steel's bright reflectance, 0.74 linear) rendered white where
+CS2's is grey steel reflecting a dim room. The two `csgo_simple` materials with the flag (de_inferno's door fittings
+and a shop sign) keep a uniform metalness: no reference says where that shader keeps it.
+
+**A uniform metalness needs B = 1** (2026-11-03). glTF's metalness is `metallicFactor` × the texture's B, and every
+Unreal material OFAST uses multiplies the same way (Interchange's glTF masters, the tint-mask, overlay and decal
+masters). A material with a roughness texture but no metalness texture gets its `g_flMetalness` as the factor, but
+OFAST wrote B = 0 into that texture (`*_rough.png`) from the first whole-map export on, so the product was 0: 281
+metals on de_nuke, de_dust2, de_mirage and de_inferno (de_nuke's corrugated ceilings `hr_metal_corrugated_002`, its
+stair gratings and trims) rendered as white or light grey paint. B is now 255 there, so the factor sets the
+metalness.
 
 Decoded CS2 normals follow glTF's convention, +Y up in the texture (checked on three de_inferno textures: the normal's
 Y correlates with the height map's slope down the image rows, r ≈ +0.2 to +0.35, and X against the slope along
@@ -453,6 +470,47 @@ masters, whose instances can be translucent through `set_alpha_overrides`, have 
 [decision 010](../decisions/010-translucent-decals-and-per-pixel-lighting.md): in the sun the SWAT lettering and the
 container sign were at 0.81 and 0.70 of their per-pixel luminance before; against CS2 their contrast with the
 surface around them went from 0.70 and 0.68 of CS2's to 0.87 and 0.91.
+
+## Glass (`csgo_glass`)
+
+CS2's windows, lamp glass and plastic wrap (15 materials on de_nuke, de_mirage, de_inferno, de_anubis and de_vertigo)
+have none of the usual parameters: no `g_tColor`, no `F_TRANSLUCENT`. Until 2026-11-03 OFAST exported them with no
+colour texture and no blend mode, so every pane was opaque white (de_nuke's frosted observation window a white wall
+where CS2 shows the reactor room through it). Their textures (`csgo_glass.slang` decompiled, SteamDatabase's
+GameTracking-CS2; Source 2 Viewer's `csgo/csgo_glass.frag.slang`):
+
+| Texture | Channels |
+|---|---|
+| `g_tGlassDust` | RGB the dust's colour (sRGB); A its coverage, remapped to opacity by `g_flTranslucencyRemap` (x at 0, y at 1). |
+| `g_tGlassTintColor` | RGB the colour of the light let through (sRGB), times the model tint (`lerp(1, rendercolor, g_flModelTintAmount)`); A how much light from behind passes through the dust. |
+| `g_tNormal` | hemi-octahedral normal in RG, roughness in B, as the other `csgo_*` shaders. |
+
+CS2 adds the lit dust (and the light the dust scatters from what passes through: transmission × opacity × albedo ×
+tint^1.6) to the scene behind, multiplied by one blend factor, the luma of the transmission (tint × (1 − opacity),
+less what the front reflects): a coloured tint dims the scene without colouring it. The export bakes that into one
+RGBA colour texture for glTF's `BLEND` (`gltf.rs`, `bake_glass`): A = 1 − luma(transmission) seen head-on, RGB the
+dust's light divided by it. Clear glass comes out at A 0.04 (its Fresnel reflectance), a fully dusty pane as its
+dust. Unreal lights it per pixel like the other translucent surfaces (above).
+
+**What glass holds back of the light.** CS2's glass casts shadows unless the material has `F_DO_NOT_CAST_SHADOWS`,
+and its light bake takes the dust's alpha as opacity (`LightSim_Opacity_A g_tGlassDust` in the decompiled shader): a
+pane holds back the light its dust covers. Unreal's translucent surfaces hold back nothing, in shadows or in Lumen,
+which does not see them. de_inferno's lanterns (`lamp_02_glass`, dust over three quarters of the pane) let all of
+their lamps' light into Lumen once see-through: the church 2.02 → 2.81 of CS2's brightness (2.02 again with only the
+glass reverted). The export writes each pane's mean dust opacity (`extras.ofast.glass_opacity`), and `import_map.py`
+(`add_glass_occluders`) gives the meshes of a pane that casts shadows and holds back at least half of the light an
+occluder: an invisible copy that casts shadows for every light and absorbs light in Lumen, as the shadow proxies do.
+The church then reads 1.34. Only the lanterns are such panes on the maps checked (0.74); the shadow-casting windows
+hold back 0.13 – 0.21 and let the light through. Tried first and dropped: *Cast Dynamic Shadow as Masked* on the
+glass, also without Nanite (which draws no translucent material into its shadow maps): no view moved, since the
+light reaches the room through Lumen.
+
+`g_flTranslucencyRemap` defaults to (0, 1), Source 2 Viewer's default, although the decompiled shader declares
+`Default(0)`: 8 of the 15 materials do not set it, de_nuke's frosted window among them, and CS2 draws that window's
+dust (a half-white band across its lower part) where (0, 0) would leave the pane clear. Left out: the angles (CS2's
+glancing views reflect more and tint deeper), the light from behind through the dust, and the fog over what is behind.
+Measured on the four maps ([checks](../checks.md#glass-and-steel-2026-11-03)): de_nuke's observation room 1.67 → 0.93,
+its decontamination room 1.41 → 0.97 (with the metals above), de_mirage's shop 0.77 → 0.99.
 
 ## Static overlay blend modes and Mod2x
 

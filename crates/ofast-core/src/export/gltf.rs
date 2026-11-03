@@ -642,6 +642,36 @@ const SHEEN_SCALE_DEFAULT: f64 = 0.667;
 /// be converted ([`GltfWriter::has_cloth_mask`]): the fabrics have about 0.5, the gloves and lenses 0.
 const CLOTH_MASK_MIN: f64 = 0.05;
 
+/// The shader of CS2's glass panes, lamp glass and plastic wrap ([`GlassJob`]).
+const GLASS_SHADER: &str = "csgo_glass.vfx";
+
+/// A `csgo_glass` pane's colour and opacity, baked into one texture for alpha blending ([`bake_glass`]).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct GlassJob {
+    /// `g_tGlassDust`: the dust's colour (sRGB) and its coverage (A).
+    dust: String,
+    /// `g_tGlassTintColor`: the colour of the light the pane lets through (sRGB; none: white).
+    tint: Option<String>,
+    /// `g_flTranslucencyRemap`: the dust's opacity at coverage 0 and 1, as `f32` bits.
+    remap: [u32; 2],
+    /// The model tint (linear RGB, which colours the light let through) and the placement's alpha (which thins the
+    /// dust), as `f32` bits.
+    placement: [u32; 4],
+}
+
+/// `g_flTranslucencyRemap` when a glass material does not set it: Source 2 Viewer's default (0, 1). Valve's
+/// decompiled shader declares `Default(0)`, but CS2 draws the dust of materials without one (de_nuke's frosted
+/// window `hr_glass_frosted_004`: a half-white band across its lower part, in CS2's screenshot of the
+/// decontamination room), which (0, 0) would remove.
+const GLASS_REMAP_DEFAULT: [f32; 2] = [0.0, 1.0];
+
+/// The light a glass pane reflects at normal incidence (F0 = 0.04, `ResolveDiffuseSpecular(mat, vec3(0.04))` in
+/// Source 2 Viewer's `csgo_glass.frag.slang`), which does not pass through it.
+const GLASS_F0: f32 = 0.04;
+
+/// CS2's luma weights (BT.709), with which its glass shader turns the light let through into its one blend factor.
+const LUMA: [f32; 3] = [0.2125, 0.7154, 0.0721];
+
 /// A texture to decode and write when the export finishes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum TextureJob {
@@ -672,6 +702,8 @@ enum TextureJob {
     Stickered(Box<TextureJob>, stickers::StickerJob),
     /// The name tag plate's colour (its texture) with a weapon's name drawn on it ([`nametags::bake_color`]).
     NameTag(String, String),
+    /// A `csgo_glass` pane's colour and opacity ([`bake_glass`]).
+    Glass(GlassJob),
 }
 
 impl TextureJob {
@@ -689,6 +721,7 @@ impl TextureJob {
                 | TextureJob::PaintSurface(_)
                 | TextureJob::Stickered(..)
                 | TextureJob::NameTag(..)
+                | TextureJob::Glass(_)
         )
     }
 }
@@ -1833,7 +1866,11 @@ impl<'c> GltfWriter<'c> {
             self.fill_environment(material, info, rgb, translucent || alpha_test);
             return;
         }
-        self.fill_model_tint(material, info, tint, translucent || alpha_test);
+        if info.shader == GLASS_SHADER {
+            self.fill_glass(material, info, tint);
+        } else {
+            self.fill_model_tint(material, info, tint, translucent || alpha_test);
+        }
         if UNLIT_SHADERS.contains(&info.shader.as_str()) {
             material["extensions"] = json!({ "KHR_materials_unlit": {} });
             if info.shader == "csgo_black_unlit.vfx" {
@@ -1847,7 +1884,8 @@ impl<'c> GltfWriter<'c> {
         // whose R is the roughness for weapons only (see ValveResourceFormat's complex shader). Materials with
         // anisotropic roughness (94 `csgo_character` ones, the SAS body among them) compile their normal map to two
         // channels and keep roughness in g_tAnisoGloss.RG instead (`examples/material_channels.rs`); reading the
-        // normal's missing blue channel made those bodies mirror-smooth. Otherwise a uniform g_flMetalness.
+        // normal's missing blue channel made those bodies mirror-smooth. Otherwise a uniform g_flMetalness, except on
+        // csgo_complex (below).
         let csgo = info.shader.starts_with("csgo_");
         let normal = info.first_texture(NORMAL_PARAMS).map(|(_, p)| p.to_owned());
         if let Some(path) = &normal {
@@ -1862,7 +1900,20 @@ impl<'c> GltfWriter<'c> {
             (_, _, Some(n)) if csgo => Some((n.clone(), 2)),
             _ => None,
         };
-        let metalness = metal.map(|m| (m, 1));
+        // An opaque csgo_complex material with a metalness texture (F_METALNESS_TEXTURE) keeps it in its colour's
+        // alpha; alpha-tested and translucent ones, whose alpha is their opacity, have g_tMetalness (Source 2
+        // Viewer's csgo_complex.frag.slang). 215 materials on six maps, de_nuke's stainless sink among them: as a
+        // non-metal its bright steel colour came out white.
+        let metalness = match metal {
+            Some(m) => Some((m, 1)),
+            None if info.shader == "csgo_complex.vfx"
+                && info.flag("F_METALNESS_TEXTURE")
+                && !(translucent || alpha_test) =>
+            {
+                info.textures.get("g_tColor").map(|c| (c.clone(), 3))
+            }
+            None => None,
+        };
         if info.shader == "csgo_weapon.vfx" {
             // CS2's weapon shader reflects 2 % at normal incidence off its non-metals, not glTF's 4 %
             // (ValveResourceFormat's complex shader: `F0 = 0.02` for csgo_weapon): half the specular.
@@ -1937,7 +1988,7 @@ impl<'c> GltfWriter<'c> {
             let pbr = &mut material["pbrMetallicRoughness"];
             pbr["metallicRoughnessTexture"] = json!({ "index": id });
             if !has_metal_texture {
-                // The texture's B (metalness) is 0; the factor carries the uniform value instead.
+                // The texture's B (metalness) is 1; the factor carries the uniform value (assemble_orm).
                 pbr["metallicFactor"] =
                     json!(info.floats.get("g_flMetalness").copied().unwrap_or(0.0));
             }
@@ -2093,6 +2144,48 @@ impl<'c> GltfWriter<'c> {
         let factor = [rgb[0], rgb[1], rgb[2], f32::from(tint[3]) / 255.0];
         if factor.iter().any(|c| (c - 1.0).abs() > 1e-5) {
             material["pbrMetallicRoughness"]["baseColorFactor"] = json!(factor.to_vec());
+        }
+    }
+
+    /// A `csgo_glass` material (windows, lamp glass, plastic wrap): its dust, tint and model tint baked into one
+    /// colour texture, alpha-blended ([`bake_glass`]). The model tint colours the light the pane lets through, not
+    /// the dust, so it is not a `baseColorFactor`. Without this the panes had no colour texture and no blend mode:
+    /// opaque white, de_nuke's frosted observation window a white wall where CS2 shows the reactor room through it.
+    ///
+    /// `extras.ofast.glass_opacity` is the dust's mean opacity over the pane: how much of the light CS2's light bake
+    /// holds back there (its light simulation takes the dust's alpha as opacity, `LightSim_Opacity_A`). Unreal's
+    /// translucent surfaces hold back none, in shadows or in Lumen; `import_map.py` (`add_glass_occluders`) gives
+    /// the mostly dusty panes that cast shadows an occluder.
+    fn fill_glass(&mut self, material: &mut Json, info: &MaterialInfo, placement: [u8; 4]) {
+        let Some(dust) = info.textures.get("g_tGlassDust").cloned() else {
+            return;
+        };
+        let model_tint =
+            tint::ModelTint::read(info, [placement[0], placement[1], placement[2]]).color;
+        let remap = info
+            .vectors
+            .get("g_flTranslucencyRemap")
+            .map_or(GLASS_REMAP_DEFAULT, |v| [v[0] as f32, v[1] as f32]);
+        let job = GlassJob {
+            dust: dust.clone(),
+            tint: info.textures.get("g_tGlassTintColor").cloned(),
+            remap: remap.map(f32::to_bits),
+            placement: [
+                model_tint[0],
+                model_tint[1],
+                model_tint[2],
+                f32::from(placement[3]) / 255.0,
+            ]
+            .map(f32::to_bits),
+        };
+        let id = self.register(TextureJob::Glass(job), format!("{}_glass", stem(&dust)));
+        material["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": id });
+        material["alphaMode"] = json!("BLEND");
+        if let Ok((_, image)) = decode_raw(self.content, &dust) {
+            let alpha = f32::from(placement[3]) / 255.0;
+            let opacity = glass_opacity(&image, remap, alpha);
+            material["extras"]["ofast"]["glass_opacity"] =
+                json!((f64::from(opacity) * 1000.0).round() / 1000.0);
         }
     }
 
@@ -2769,6 +2862,7 @@ fn bake_job(
         TextureJob::PaintSurface(job) => paint::bake_surface(content, job),
         TextureJob::ClothSpecular(metalness) => assemble_cloth_specular(content, metalness),
         TextureJob::NameTag(base, text) => nametags::bake_color(content, base, text),
+        TextureJob::Glass(job) => bake_glass(content, job),
         TextureJob::Stickered(base, job) => {
             let mut image = bake_job(content, base, places, warn)?;
             let none = stickers::Places::default();
@@ -2859,8 +2953,88 @@ fn multiply_textures(a: &Image, b: &Image, keep_alpha: bool) -> Image {
     Image::new(width, height, rgba)
 }
 
+/// `csgo_glass`'s pane as one colour texture for an ordinary alpha blend (colour × A + scene × (1 − A)), from
+/// Valve's decompiled pixel shader (`game/csgo/shaders_vulkan_dir/shaders/vfx/csgo_glass.slang` in SteamDatabase's
+/// GameTracking-CS2) and Source 2 Viewer's reading of it (`csgo_glass.frag.slang`, MIT). Per texel:
+///
+/// ```text
+/// opacity       o = lerp(remap.x, remap.y, saturate(dust.a × placement alpha))
+/// tint          t = tint.rgb × model tint
+/// transmission  T = (1 − F0) × t × (1 − o)              (the pane seen head-on)
+/// CS2:   out = dust.rgb × o × (1 + T × t^1.6) × light + scene × luma(T)
+/// glTF:  A = 1 − luma(T),   RGB = dust.rgb × o × (1 + T × t^1.6) / A   (clamped to 1)
+/// ```
+///
+/// CS2 adds the lit dust (and the light it scatters from what passes through) to the scene behind multiplied by one
+/// factor, the transmission's luma: a coloured tint dims the scene without colouring it. The blend here gives the
+/// same sum for the dust's diffuse light. Left out: the angles (CS2's glancing views see more reflection and a
+/// deeper tint), light from behind the pane through the dust (`g_tGlassTintColor` A) and the fog.
+fn bake_glass(content: &Content, job: &GlassJob) -> Result<Image, ExportError> {
+    let dust = decode_raw(content, &job.dust)?.1;
+    let tint = match &job.tint {
+        Some(path) => Some(decode_raw(content, path)?.1),
+        None => None,
+    };
+    Ok(glass_texture(
+        &dust,
+        tint.as_ref(),
+        job.remap.map(f32::from_bits),
+        job.placement.map(f32::from_bits),
+    ))
+}
+
+/// The mean opacity of a `csgo_glass` pane's dust (`g_tGlassDust` A × the placement's alpha, remapped by
+/// `g_flTranslucencyRemap`), as [`glass_texture`] computes it texel by texel.
+fn glass_opacity(dust: &Image, [low, high]: [f32; 2], alpha: f32) -> f32 {
+    let texels = dust.rgba.as_chunks::<4>().0;
+    let sum: f32 = texels
+        .iter()
+        .map(|p| low + (high - low) * (f32::from(p[3]) / 255.0 * alpha).clamp(0.0, 1.0))
+        .sum();
+    sum / texels.len().max(1) as f32
+}
+
+/// The texels of [`bake_glass`] (`placement`: model tint RGB, alpha), at the larger texture's size (nearest sample
+/// of the smaller).
+fn glass_texture(
+    dust: &Image,
+    tint_texture: Option<&Image>,
+    [low, high]: [f32; 2],
+    placement: [f32; 4],
+) -> Image {
+    let (width, height) = match tint_texture {
+        Some(t) if t.width * t.height > dust.width * dust.height => (t.width, t.height),
+        _ => (dust.width, dust.height),
+    };
+    let linear = |byte: u8| environment::SRGB_TO_LINEAR[usize::from(byte)];
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let texel = |image: &Image, c| environment::sample(image, x, y, width, height, c);
+            let coverage = (f32::from(texel(dust, 3)) / 255.0 * placement[3]).clamp(0.0, 1.0);
+            let opacity = low + (high - low) * coverage;
+            let tint: [f32; 3] = std::array::from_fn(|c| {
+                tint_texture.map_or(1.0, |t| linear(texel(t, c))) * placement[c]
+            });
+            let transmission = tint.map(|t| (1.0 - GLASS_F0) * t * (1.0 - opacity));
+            let luma: f32 = (0..3).map(|c| transmission[c] * LUMA[c]).sum();
+            let blend = (1.0 - luma).max(1.0 / 255.0);
+            for c in 0..3 {
+                let lit =
+                    linear(texel(dust, c)) * opacity * (1.0 + transmission[c] * tint[c].powf(1.6));
+                rgba.push(environment::linear_to_srgb(lit / blend));
+            }
+            rgba.push((blend * 255.0).round() as u8);
+        }
+    }
+    Image::new(width, height, rgba)
+}
+
 /// Builds a glTF metallic-roughness image (R 255, G roughness, B metalness, A 255) from channels of CS2 textures,
-/// sampling the smaller source at the larger one's size.
+/// sampling the smaller source at the larger one's size. Without a metalness source B is 255: glTF's metalness is
+/// `metallicFactor` × B, so the factor then carries the material's uniform `g_flMetalness`. Until 2026-11-03 it was
+/// 0, which made every such metal a non-metal in Unreal (281 materials on de_nuke, de_dust2, de_mirage and
+/// de_inferno: corrugated ceilings, gratings, trims rendered white).
 fn assemble_orm(content: &Content, source: &OrmSource) -> Result<Image, ExportError> {
     let load = |s: &Option<(String, usize)>| -> Result<Option<(Image, usize)>, ExportError> {
         match s {
@@ -2868,21 +3042,27 @@ fn assemble_orm(content: &Content, source: &OrmSource) -> Result<Image, ExportEr
             None => Ok(None),
         }
     };
-    let roughness = load(&source.roughness)?;
-    let metalness = load(&source.metalness)?;
-    let (width, height) = largest(&[&roughness, &metalness]);
+    Ok(orm_image(
+        &load(&source.roughness)?,
+        &load(&source.metalness)?,
+    ))
+}
+
+/// The texels of [`assemble_orm`] from its decoded sources (image and channel).
+fn orm_image(roughness: &Option<(Image, usize)>, metalness: &Option<(Image, usize)>) -> Image {
+    let (width, height) = largest(&[roughness, metalness]);
     let mut rgba = Vec::with_capacity(width * height * 4);
     for y in 0..height {
         for x in 0..width {
             rgba.extend_from_slice(&[
                 255,
-                channel_at(&roughness, x, y, (width, height), 255),
-                channel_at(&metalness, x, y, (width, height), 0),
+                channel_at(roughness, x, y, (width, height), 255),
+                channel_at(metalness, x, y, (width, height), 255),
                 255,
             ]);
         }
     }
-    Ok(Image::new(width, height, rgba))
+    Image::new(width, height, rgba)
 }
 
 /// The size of the largest of `sources` (1 × 1 without any).
@@ -4095,6 +4275,149 @@ mod tests {
         assert_eq!(job, None);
         assert!(material.get("emissiveFactor").is_none());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opaque_complex_metalness_is_colour_alpha() {
+        let sink = |ints: &[(&str, i64)]| MaterialInfo {
+            shader: "csgo_complex.vfx".into(),
+            textures: [
+                ("g_tColor", "materials/sink_color.vtex"),
+                ("g_tNormal", "materials/sink_normal.vtex"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .into(),
+            ints: ints.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect(),
+            ..Default::default()
+        };
+        let content = Content::new();
+        let dir = temp_folder("colour-alpha-metal");
+        let mut writer = GltfWriter::new(&content, &dir, ExportOptions::default()).expect("writer");
+        let mut surface = |info: &MaterialInfo| {
+            let mut material = json!({});
+            writer.fill_material(&mut material, info, [255; 4]);
+            let index = material["pbrMetallicRoughness"]["metallicRoughnessTexture"]["index"]
+                .as_u64()
+                .expect("a metallic-roughness texture");
+            let factor = material["pbrMetallicRoughness"]["metallicFactor"].clone();
+            match &writer.texture_jobs[index as usize].job {
+                TextureJob::Orm(source) => (source.metalness.clone(), factor),
+                other => panic!("{other:?}"),
+            }
+        };
+        let (metalness, factor) = surface(&sink(&[("F_METALNESS_TEXTURE", 1)]));
+        assert_eq!(metalness, Some(("materials/sink_color.vtex".into(), 3)));
+        assert_eq!(factor, json!(1.0));
+        // Alpha-tested: the alpha is the cut-out; without g_tMetalness there is no metalness texture.
+        let (metalness, factor) =
+            surface(&sink(&[("F_METALNESS_TEXTURE", 1), ("F_ALPHA_TEST", 1)]));
+        assert_eq!(metalness, None);
+        assert_eq!(factor, json!(0.0));
+        let (metalness, _) = surface(&sink(&[]));
+        assert_eq!(metalness, None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn roughness_only_surface_lets_the_factor_set_metalness() {
+        // glTF's metalness is metallicFactor × B: a texture without a metalness source must not zero it.
+        let normal = Image::new(2, 1, vec![0, 0, 40, 255, 0, 0, 200, 255]);
+        let image = orm_image(&Some((normal.clone(), 2)), &None);
+        assert_eq!(image.rgba, vec![255, 40, 255, 255, 255, 200, 255, 255]);
+        let colour = Image::new(1, 1, vec![180, 180, 180, 0]);
+        let image = orm_image(&Some((normal, 2)), &Some((colour, 3)));
+        assert_eq!(image.rgba, vec![255, 40, 0, 255, 255, 200, 0, 255]);
+    }
+
+    #[test]
+    fn glass_is_one_blended_texture() {
+        let pane = |remap: Option<[f64; 4]>| MaterialInfo {
+            shader: GLASS_SHADER.into(),
+            textures: [
+                ("g_tGlassDust", "materials/glass_dust.vtex"),
+                ("g_tGlassTintColor", "materials/glass_tint.vtex"),
+                ("g_tNormal", "materials/glass_normal.vtex"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .into(),
+            floats: [("g_flModelTintAmount".to_owned(), 0.5)].into(),
+            vectors: remap
+                .map(|r| ("g_flTranslucencyRemap".to_owned(), r))
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        let content = Content::new();
+        let dir = temp_folder("glass");
+        let mut writer = GltfWriter::new(&content, &dir, ExportOptions::default()).expect("writer");
+        let mut material = json!({});
+        writer.fill_material(&mut material, &pane(None), [0, 0, 0, 255]);
+        assert_eq!(material["alphaMode"], json!("BLEND"));
+        assert!(
+            material["pbrMetallicRoughness"]
+                .get("baseColorFactor")
+                .is_none()
+        );
+        let index = material["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+            .as_u64()
+            .expect("a colour texture");
+        let TextureJob::Glass(job) = &writer.texture_jobs[index as usize].job else {
+            panic!("not a glass job");
+        };
+        assert_eq!(job.remap.map(f32::from_bits), GLASS_REMAP_DEFAULT);
+        // A black placement tint at amount ½ halves the light let through (sRGB 0 → linear 0, lerp(1, 0, ½)).
+        let placement = job.placement.map(f32::from_bits);
+        assert!(
+            placement
+                .iter()
+                .zip([0.5, 0.5, 0.5, 1.0])
+                .all(|(a, b)| (a - b).abs() < 1e-5),
+            "{placement:?}"
+        );
+        assert!(material["normalTexture"].is_object());
+        let mut material = json!({});
+        writer.fill_material(&mut material, &pane(Some([0.3, 1.0, 0.0, 0.0])), [255; 4]);
+        let index = material["pbrMetallicRoughness"]["baseColorTexture"]["index"].as_u64();
+        let job = &writer.texture_jobs[index.expect("a colour texture") as usize].job;
+        assert!(matches!(job, TextureJob::Glass(g) if g.remap.map(f32::from_bits) == [0.3, 1.0]));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn glass_texels_blend_as_cs2() {
+        let one = |rgba: [u8; 4]| Image::new(1, 1, rgba.to_vec());
+        let texel = |dust: [u8; 4], tint: Option<[u8; 4]>, remap, placement| {
+            let image = glass_texture(&one(dust), tint.map(one).as_ref(), remap, placement);
+            [image.rgba[0], image.rgba[1], image.rgba[2], image.rgba[3]]
+        };
+        let white = [1.0; 4];
+        // Clear glass lets through all but the 4 % its front reflects.
+        assert_eq!(texel([255, 255, 255, 0], None, [0.0, 1.0], white)[3], 10);
+        // Fully dusty glass is its dust.
+        assert_eq!(
+            texel([200, 100, 50, 255], None, [0.0, 1.0], white),
+            [200, 100, 50, 255]
+        );
+        // A remap's floor keeps dust on bare glass; the placement's alpha thins the dust.
+        let floor = texel([128, 128, 128, 0], None, [0.3, 1.0], white);
+        assert_eq!(floor[3], ((1.0 - 0.96 * 0.7) * 255.0f32).round() as u8);
+        assert_eq!(
+            texel([255, 255, 255, 255], None, [0.0, 1.0], [1.0, 1.0, 1.0, 0.0])[3],
+            10
+        );
+        // A tint dims the scene behind by its luma: a dark blue pane lets little through.
+        let blue = texel([0, 0, 0, 0], Some([0, 0, 255, 255]), [0.0, 1.0], white);
+        assert_eq!(blue[3], ((1.0 - 0.96 * 0.0721) * 255.0f32).round() as u8);
+        assert_eq!(&blue[..3], &[0, 0, 0]);
+        // Half-dusty white frost: the dust adds the light it scatters from what passes through, here past white.
+        let frost = texel([255, 255, 255, 128], None, [0.0, 1.0], white);
+        assert_eq!(&frost[..3], &[255, 255, 255]);
+        let let_through: f32 = 0.96 * (1.0 - 128.0 / 255.0);
+        assert_eq!(frost[3], ((1.0 - let_through) * 255.0f32).round() as u8);
+        // The mean opacity the occluders are chosen by: bare and fully dusty texels under a remap's floor of 0.3.
+        let pane = Image::new(2, 1, vec![0, 0, 0, 0, 0, 0, 0, 255]);
+        assert!((glass_opacity(&pane, [0.3, 1.0], 1.0) - 0.65).abs() < 1e-6);
+        assert!((glass_opacity(&pane, [0.0, 1.0], 0.5) - 0.25).abs() < 1e-3);
     }
 
     #[test]

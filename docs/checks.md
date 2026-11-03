@@ -578,6 +578,59 @@ sky light into enclosed rooms and lose the bounce through openings (items 9, 11)
   bounce gains were fitted for software Lumen. Worth a second look only with the gains refitted for it, and it would
   ask every user for a ray-tracing GPU (Lumen falls back to software tracing without one).
 
+## Glass and steel (2026-11-03)
+
+Item 14 below: de_nuke's frosted observation window and stainless sink rendered white. Three export faults behind it,
+each on more than de_nuke ([material.md](formats/material.md)):
+
+- **Glass had no colour and no blend mode.** `csgo_glass` keeps its colour in `g_tGlassDust` and its transmission in
+  `g_tGlassTintColor`, none of the usual parameters, so all 15 glass materials of the maps were opaque white. Now one
+  baked RGBA texture, alpha-blended as CS2 blends its glass
+  ([Glass](formats/material.md#glass-csgo_glass)).
+- **Metalness in the colour's alpha.** Opaque `csgo_complex` with `F_METALNESS_TEXTURE` keeps metalness in `g_tColor`
+  A (215 materials, the sink among them); OFAST made them non-metals.
+- **A uniform metalness came out 0.** The roughness-only surface texture had B = 0, which glTF multiplies the
+  `metallicFactor` by: 281 metals (de_nuke's corrugated ceilings, stair gratings, trims) were paint.
+
+And one import change for the glass: panes that hold back most of the light in CS2's bake (de_inferno's lanterns)
+get an invisible occluder, since Unreal's translucent glass holds back nothing.
+
+Every reference view shot again with `shoot_views.py` on levels imported from the new exports
+(`test-data/shots/glass_final`, `metal_fix`; local only), against the shots of 2026-11-02 (`shade_after`; de_mirage
+`shade_before`, which it has not changed since):
+
+| Map | View | 2026-11-02 | Now |
+|---|---|---|---|
+| de_nuke | observation | 1.67 | **0.93** |
+| de_nuke | decon / decondoor | 1.41 / 1.17 | **0.97 / 0.87** |
+| de_nuke | secret / ramproom | 1.18 / 1.16 | **0.94 / 0.91** |
+| de_nuke | tunnels | 1.80 | 1.67 |
+| de_nuke | bsite / bsite2 | 0.85 / 0.55 | 0.60 / 0.47 |
+| de_nuke | lobby / outside / garage / asite | 0.69 / 0.91 / 1.22 / 0.21 | 0.66 / 0.88 / 1.18 / 0.22 |
+| de_inferno | ruins (church) | 2.02 | **1.34** |
+| de_inferno | apartments | 0.89 | 1.00 (it moves 0.83 – 1.07 between runs) |
+| de_inferno | the 10 other views | | within 0.01 |
+| de_mirage | shop | 0.77 | **0.99** |
+| de_mirage | the 11 other views | | within 0.01 |
+| de_dust2 | uppertunnel | 0.94 | 0.92 |
+| de_dust2 | the 11 other views | | unchanged |
+
+Sum of |log| errors per map: de_nuke 4.90 → 4.40, de_inferno 4.13 → 3.61, de_mirage 1.62 → 1.38, de_dust2 0.71 →
+0.73.
+
+- **de_nuke's decontamination room** reads as CS2's: the steel sink, the reactor room seen through the frosted window
+  and its half-white band, the steel grating under the door (white with only the first two fixes: a uniform metal).
+- **de_nuke's B site** was right for the wrong reason: its metal floor plates and corrugated ceiling rendered as white
+  paint. As metals they reflect Unreal's interior, darker than CS2's reflection probes see (the roadmap's metals): the
+  ceiling cell 0.28, the plates 0.38. The room's walls were already at 0.7 – 0.9.
+- **de_inferno's church**: its lanterns' glass, see-through now as in CS2, first let all of the lamps' light into
+  Lumen (2.81; with only the glass reverted, 2.02). Making the glass cast a masked shadow changed nothing, with or
+  without Nanite; the occluders bring it to 1.34, closer to CS2 than before. The floor is still about twice CS2's.
+- **de_mirage's shop** has glass between it and the street: see-through now, its daylight comes in.
+
+`map_raycast` now prints the texture coordinate of each hit, which told the grating's slats
+(`hr_metal_grating_001_stair`) from the door they lie under (`metal_door_001`).
+
 ## What was wrong
 
 ### Fixed
@@ -663,4 +716,6 @@ sky light into enclosed rooms and lose the bounce through openings (items 9, 11)
 14. **White glass and steel on de_nuke** (seen 2026-11-02, already in the earlier levels): in the decontamination
     room the frosted observation window (`hr_glass_frosted_004`) renders as an opaque white glare where CS2 shows the
     reactor room through it, and the stainless sink (`nuke_sink_color`) and floor grate render white where CS2's are
-    grey steel. They make most of that view's excess.
+    grey steel. They make most of that view's excess. Fixed 2026-11-03: glass exported as CS2 blends it, metalness
+    from the colour's alpha and uniform metalness no longer zeroed (decontamination room 1.41 → 0.97;
+    [above](#glass-and-steel-2026-11-03)).
