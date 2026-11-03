@@ -63,7 +63,8 @@ The first page checks four things, each with a green or red dot:
 ## Finding a moment
 
 Below the checks are your demos: CS2 keeps the ones you download (Watch tab → a match → download) in its
-`replays` folder. **Other folder…** lists another folder, for example where you keep tournament demos.
+`replays` folder. **Other folder…** lists another folder, for example where you keep tournament demos. Demos you
+download or copy there while the Studio is open show up by themselves within a few seconds.
 
 Click a demo to open it. The first time, the Studio reads the whole match (a few seconds); it remembers it after
 that. You then see:

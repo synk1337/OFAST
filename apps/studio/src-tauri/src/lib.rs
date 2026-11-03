@@ -2,7 +2,8 @@
 //!
 //! A Tauri 2 window whose web UI (`apps/studio/src`, React) calls the commands below; every file is read through
 //! `ofast-core`, as the CLI does. What it does so far: finds CS2, Unreal Engine 5.8 and OFAST's Unreal project
-//! ([`commands::environment`]), lists the demos in CS2's replays folder ([`commands::list_demos`]) and sums a demo
+//! ([`commands::environment`]), lists the demos in CS2's replays folder ([`commands::list_demos`], again when they
+//! change: [`commands::demos_stamp`]) and sums a demo
 //! up — rounds, scores, kill feed, highlights ([`commands::summarize_demo`]).
 
 pub mod commands;
@@ -22,6 +23,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::environment,
             commands::list_demos,
+            commands::demos_stamp,
             commands::summarize_demo,
             commands::radar_round,
             commands::radar_image,

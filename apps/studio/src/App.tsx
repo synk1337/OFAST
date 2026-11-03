@@ -11,6 +11,7 @@ import {
   RenderPreset,
   RoundSummary,
   VersionCheck,
+  demosStamp,
   environment,
   listDemos,
   renderRound,
@@ -21,6 +22,9 @@ import { DemoPage } from "./DemoPage";
 import { Logo } from "./Logo";
 import { SendBar, SendJob } from "./SendBar";
 import { UpdateBar } from "./UpdateBar";
+
+/** How often the demo folder is checked for new or changed demos, ms. */
+const DEMO_CHECK_MS = 3000;
 
 export function App() {
   // The Studio's own version (tauri.conf.json's, built into it), shown in the header.
@@ -86,22 +90,42 @@ export function App() {
     );
   }, []);
 
+  // The folder's demos, listed again whenever they change (downloaded from CS2's Watch tab or copied there while the
+  // Studio is open): its stamp is checked every few seconds, and the list stays on screen while it is read again.
   useEffect(() => {
     setError(null);
     setDemos(null);
     if (!folder) return;
     // A slow folder's answer arriving after the user picked another one is dropped.
     let current = true;
-    listDemos(folder).then(
-      (d) => current && setDemos(d),
-      (e) => {
-        if (!current) return;
-        setDemos([]);
-        setError(String(e));
-      },
-    );
+    let stamp: string | null = null;
+    // Only the latest listing is shown, should an earlier one answer after it.
+    let listing = 0;
+    const failed = (e: unknown) => {
+      if (!current) return;
+      // Listed again once the folder reads.
+      stamp = null;
+      setDemos([]);
+      setError(String(e));
+    };
+    const refresh = () =>
+      demosStamp(folder).then((s) => {
+        if (!current || s === stamp) return;
+        stamp = s;
+        const n = ++listing;
+        listDemos(folder).then((d) => {
+          if (!current || n !== listing) return;
+          setDemos(d);
+          setError(null);
+        }, failed);
+      }, failed);
+    refresh();
+    const timer = window.setInterval(() => {
+      if (!document.hidden) refresh();
+    }, DEMO_CHECK_MS);
     return () => {
       current = false;
+      window.clearInterval(timer);
     };
   }, [folder]);
 

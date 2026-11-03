@@ -118,6 +118,8 @@ export interface DemoSummary {
 
 export const environment = () => invoke<Environment>("environment");
 export const listDemos = (folder: string) => invoke<DemoEntry[]>("list_demos", { folder });
+/** A fingerprint of the folder's demos (names, sizes, times): it changes when a demo is added, removed or written. */
+export const demosStamp = (folder: string) => invoke<string>("demos_stamp", { folder });
 export const summarizeDemo = (path: string) => invoke<DemoSummary>("summarize_demo", { path });
 
 // A round for the 2D replay (`radar_round` in commands.rs).

@@ -262,23 +262,15 @@ pub struct DemoEntry {
 #[tauri::command]
 pub async fn list_demos(folder: String) -> Result<Vec<DemoEntry>, String> {
     blocking(move || {
-        let entries = std::fs::read_dir(&folder).map_err(|e| format!("{folder}: {e}"))?;
-        let mut demos: Vec<DemoEntry> = entries
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dem")))
-            .filter_map(|path| {
-                let meta = std::fs::metadata(&path).ok().filter(|m| m.is_file())?;
+        let mut demos: Vec<DemoEntry> = demo_files(&folder)?
+            .into_iter()
+            .filter_map(|(path, meta)| {
                 let (map, server) = header(&path).unwrap_or_default();
                 Some(DemoEntry {
                     name: path.file_stem()?.to_str()?.to_owned(),
                     path: path.to_str()?.to_owned(),
                     size: meta.len(),
-                    modified: meta
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                        .map_or(0, |d| d.as_secs()),
+                    modified: modified(&meta),
                     map,
                     server,
                 })
@@ -288,6 +280,49 @@ pub async fn list_demos(folder: String) -> Result<Vec<DemoEntry>, String> {
         Ok(demos)
     })
     .await?
+}
+
+/// A fingerprint of the demos in `folder` (their names, sizes and times): the UI asks for it every few seconds while
+/// the demo list shows and lists the demos again when it changes, so demos downloaded or copied there while the
+/// Studio is open show up by themselves.
+#[tauri::command]
+pub async fn demos_stamp(folder: String) -> Result<String, String> {
+    blocking(move || folder_stamp(&folder)).await?
+}
+
+/// The names, sizes and times of the demos in `folder`, hashed (no file is opened: cheap enough to ask often). A hex
+/// string: a JavaScript number cannot hold 64 bits.
+fn folder_stamp(folder: &str) -> Result<String, String> {
+    let mut files: Vec<(PathBuf, u64, u64)> = demo_files(folder)?
+        .into_iter()
+        .map(|(path, meta)| (path, meta.len(), modified(&meta)))
+        .collect();
+    files.sort();
+    let mut hasher = std::hash::DefaultHasher::new();
+    files.hash(&mut hasher);
+    Ok(format!("{:016x}", hasher.finish()))
+}
+
+/// The demo files (`.dem`) in `folder`, with their metadata.
+fn demo_files(folder: &str) -> Result<Vec<(PathBuf, std::fs::Metadata)>, String> {
+    let entries = std::fs::read_dir(folder).map_err(|e| format!("{folder}: {e}"))?;
+    Ok(entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dem")))
+        .filter_map(|path| {
+            let meta = std::fs::metadata(&path).ok().filter(|m| m.is_file())?;
+            Some((path, meta))
+        })
+        .collect())
+}
+
+/// When the file of `meta` was last written, seconds since 1970 (0 if unknown).
+fn modified(meta: &std::fs::Metadata) -> u64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs())
 }
 
 /// A demo's map and server name, from its first [`HEADER_BYTES`] bytes.
@@ -313,12 +348,7 @@ type Stamp = (u64, u64);
 /// The stamp of the file at `path`.
 fn stamp(path: &str) -> Result<Stamp, String> {
     let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-    let modified = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_secs());
-    Ok((meta.len(), modified))
+    Ok((meta.len(), modified(&meta)))
 }
 
 /// A demo's summary once read, with the file's stamp when it was.
@@ -667,4 +697,32 @@ pub async fn radar_image(
     })
     .await??;
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_demo_added_changes_the_folder_stamp() {
+        let folder = std::env::temp_dir().join(format!("ofast-demo-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let name = folder.to_str().unwrap();
+        let empty = folder_stamp(name).unwrap();
+        std::fs::write(folder.join("a.dem"), "demo").unwrap();
+        let one = folder_stamp(name).unwrap();
+        assert_ne!(one, empty);
+        assert_eq!(folder_stamp(name).unwrap(), one);
+        // Only demos count.
+        std::fs::write(folder.join("a.dem.info"), "").unwrap();
+        assert_eq!(folder_stamp(name).unwrap(), one);
+        // A demo still being written grows.
+        std::fs::write(folder.join("a.dem"), "demo, longer").unwrap();
+        let grown = folder_stamp(name).unwrap();
+        assert_ne!(grown, one);
+        std::fs::write(folder.join("b.DEM"), "").unwrap();
+        assert_ne!(folder_stamp(name).unwrap(), grown);
+        let _ = std::fs::remove_dir_all(&folder);
+    }
 }
