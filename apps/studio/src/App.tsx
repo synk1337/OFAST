@@ -18,6 +18,7 @@ import {
   updateCameras,
 } from "./api";
 import { DemoPage } from "./DemoPage";
+import { Logo } from "./Logo";
 import { SendBar, SendJob } from "./SendBar";
 import { UpdateBar } from "./UpdateBar";
 
@@ -112,7 +113,7 @@ export function App() {
   return (
     <div className="app">
       <header className="top">
-        <span className="logo">OFAST</span>
+        <Logo />
         <span className="subtitle">Studio</span>
         {studio && <span className="app-version">{studio}</span>}
       </header>

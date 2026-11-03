@@ -41,10 +41,9 @@ body {
   background: var(--panel);
 }
 
+/* An SVG's baseline is its bottom edge, where the letters stand: the logo sits on the same line as "Studio". */
 .logo {
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--accent);
+  flex: none;
 }
 
 .subtitle {
