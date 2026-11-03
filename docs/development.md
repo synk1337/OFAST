@@ -303,8 +303,12 @@ to the whole picture as shown ^ (gamma / 2.2): references taken at 2.013 show CS
    `apps/studio/package.json` and the top of `apps/studio/package-lock.json`; the Studio's project template is set up
    again for users when it changes.
 2. Write the notes as `docs/releases/<version>.md` (what changed, the CS2 build it was checked on), each paragraph
-   and bullet on one line: GitHub's release page keeps line breaks.
-3. Run the checks above, commit, then `git tag v<version>` and `git push origin v<version>`.
+   and bullet on one line: GitHub's release page keeps line breaks. The updater shows them without the paragraph
+   that starts with `**Download**`: keep anything else users must know out of it.
+3. If the release changes how maps look in Unreal (the map export or `import_map.py`), count up `MAP_VERSION`
+   (`apps/studio/src-tauri/src/unreal.rs`): the Studio imports a map only once per version, so without it maps already
+   sent keep their old look. Say in the notes that the first round sent on each map imports it again.
+4. Run the checks above, commit, then `git tag v<version>` and `git push origin v<version>`.
 
 The release workflow (`.github/workflows/release.yml`) checks that the tag, the versions and the notes agree, builds
 the Studio's setup program and the tools' zip on Windows, and publishes them as the GitHub release `v<version>`,
