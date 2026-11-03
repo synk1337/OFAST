@@ -104,10 +104,12 @@ Each of that player's kills has a camera to its right (with *Each kill's killer*
 is their eyes; for any kill you can pick instead, for its last 4 seconds:
 
 - **Victim's eyes**: what the victim saw coming;
-- **Behind the killer**: over his right shoulder, looking where he looks;
+- **Behind the killer**: over his right shoulder, looking where he looks; in tight places (a stairwell, his back
+  to a wall) it rises over his head instead of pressing against it;
 - **Around the killer**: circling him slowly at chest height;
-- **Fixed camera**: a spot that sees both players at the kill, turning to follow them (when no spot sees both, a
-  kill through a wall, it is the camera behind the killer instead);
+- **Fixed camera**: a spot that sees both players at the kill, turning to follow them, and that neither player
+  walks right past during the shot (when no spot sees both, a kill through a wall, it is the camera behind the
+  killer instead);
 - **From above**: high over the killer, looking down.
 
 These cameras keep out of walls: one that would end up behind a wall comes in front of it.

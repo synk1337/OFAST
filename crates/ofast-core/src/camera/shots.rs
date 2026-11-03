@@ -12,9 +12,11 @@
 //!
 //! Every camera keeps out of walls with the map's collision (`physics::ragdoll::WorldCollision`, the shapes that stop
 //! a body: glass and grates too): a camera on the far side of a wall is pulled in front of it at once, and eases back
-//! out slowly, so a wall passing behind the killer does not make the camera jump back and forth. Without the
-//! collision the cameras are placed as if the map were open. Moves are smoothed ([`super::smooth`]): the cameras
-//! follow a player's movement and view, not their mouse's jitter.
+//! out slowly, so a wall passing behind the killer does not make the camera jump back and forth. Where a wall leaves
+//! no room at the killer's shoulder (a stairwell, his back to a wall), the camera behind rises over his head instead,
+//! in time and gradually (`OVERHEAD`); a fixed camera keeps a player's height from both players over its shot
+//! (`TRIPOD_NEAREST`). Without the collision the cameras are placed as if the map were open. Moves are smoothed
+//! ([`super::smooth`]): the cameras follow a player's movement and view, not their mouse's jitter.
 
 use std::collections::HashMap;
 
@@ -96,6 +98,25 @@ const CHEST: f64 = 40.0;
 /// Behind: how far back, right and up from the killer's eyes (units), and the field of view.
 const BEHIND: [f64; 3] = [64.0, 16.0, 6.0];
 const BEHIND_FOV: f64 = 80.0;
+
+/// Behind, in tight places (a stairwell, a back to the wall): the camera rises over the killer's head instead of
+/// pressing against it, along the way from [`BEHIND`] to here (back, right, up from the eyes), in [`RISE_STEPS`].
+const OVERHEAD: [f64; 3] = [24.0, 0.0, 34.0];
+const RISE_STEPS: u32 = 4;
+
+/// The share of its distance a place behind may lose to a wall before the camera rises instead.
+const ROOM: f64 = 0.85;
+
+/// How long the camera behind takes to rise all the way (it starts early enough), and to come back down (seconds).
+const RISE_S: f64 = 0.5;
+const SETTLE_S: f64 = 1.5;
+
+/// How far the aim behind drops for each unit the camera rises: the killer's head stays at the picture's bottom.
+const RISE_TILT: f64 = 4.0;
+
+/// The nearest a fixed camera comes to either player over its shot (units, a player's height): nearer, a player
+/// walking past it fills the picture with his back. Places that near are taken only when no other sees both.
+const TRIPOD_NEAREST: f64 = 72.0;
 
 /// Orbit: radius from the chest, height above it (units), turn (degrees a second), field of view.
 const ORBIT_RADIUS: f64 = 100.0;
@@ -298,6 +319,19 @@ impl World<'_> {
         })
     }
 
+    /// How far a camera wanted at `anchor + offset` can be from `anchor` towards it: all the way when nothing is
+    /// within the margin past it, else the margin before the wall (at least [`MIN_REACH`]).
+    fn free(&self, anchor: Vec3, offset: Vec3) -> f64 {
+        let distance = length(offset);
+        let past = add(anchor, scale(unit(offset), distance + WALL_MARGIN));
+        let reach = self.reach(anchor, past);
+        if reach >= distance + WALL_MARGIN - 1e-6 {
+            distance
+        } else {
+            (reach - WALL_MARGIN).max(MIN_REACH.min(distance))
+        }
+    }
+
     /// Cameras held at `wanted` from `anchors` (same length), pulled in front of walls at once and eased back out
     /// ([`EASE_OUT`]).
     fn hold_out(&self, anchors: &[Vec3], wanted: &[Vec3]) -> Vec<Vec3> {
@@ -308,21 +342,52 @@ impl World<'_> {
             .zip(wanted)
             .map(|(&anchor, &want)| {
                 let offset = sub(want, anchor);
-                let distance = length(offset);
-                // Free when nothing is within the margin past the wanted point; else the margin before the wall.
-                let past = add(want, scale(unit(offset), WALL_MARGIN));
-                let reach = self.reach(anchor, past);
-                let free = if reach >= distance + WALL_MARGIN - 1e-6 {
-                    distance
-                } else {
-                    (reach - WALL_MARGIN).max(MIN_REACH.min(distance))
-                };
-                let reach = free.min(reach_before + step).min(distance);
+                let reach = self
+                    .free(anchor, offset)
+                    .min(reach_before + step)
+                    .min(length(offset));
                 reach_before = reach;
                 add(anchor, scale(unit(offset), reach))
             })
             .collect()
     }
+
+    /// How far a camera behind the eyes at `eyes` must rise (0 at the shoulder, 1 over the head; `place` gives its
+    /// offset): the lowest step whose place keeps [`ROOM`] of its distance clear of walls, else the roomiest one.
+    fn rise_needed(&self, eyes: Vec3, place: impl Fn(f64) -> Vec3) -> f64 {
+        let mut roomiest = (0.0, f64::NEG_INFINITY);
+        for step in 0..=RISE_STEPS {
+            let rise = f64::from(step) / f64::from(RISE_STEPS);
+            let offset = place(rise);
+            let free = self.free(eyes, offset);
+            if free >= ROOM * length(offset) {
+                return rise;
+            }
+            if free > roomiest.1 {
+                roomiest = (rise, free);
+            }
+        }
+        roomiest.0
+    }
+}
+
+/// `needed` (each 0 to 1) made gradual: every need is reached in time, rising at most `up` a tick before it, and
+/// left at most `down` a tick after it.
+fn ramp(needed: &[f64], up: f64, down: f64) -> Vec<f64> {
+    let mut out = needed.to_vec();
+    for i in (1..out.len()).rev() {
+        out[i - 1] = out[i - 1].max(out[i] - up);
+    }
+    for i in 1..out.len() {
+        out[i] = out[i].max(out[i - 1] - down);
+    }
+    out
+}
+
+/// Where `a` turns into `b` at `t` (0 to 1), eased in and out.
+fn ease(a: Vec3, b: Vec3, t: f64) -> Vec3 {
+    let t = t * t * (3.0 - 2.0 * t);
+    add(a, scale(sub(b, a), t))
 }
 
 /// Each axis of `points` smoothed with `lambda`.
@@ -390,21 +455,43 @@ fn behind(subject: &[Pose], world: &World) -> Vec<CameraKey> {
         &subject.iter().map(|p| p.eyes).collect::<Vec<_>>(),
         lambda(0.4),
     );
-    let [back, right, up] = BEHIND;
+    // Back, right and up from the eyes, risen `rise` of the way over the head, for a view yawing `yaw`.
+    let place = |rise: f64, yaw: f64| {
+        let [back, right, up] = ease(BEHIND, OVERHEAD, rise);
+        add(
+            add(scale(forward(0.0, yaw), -back), scale(right_of(yaw), right)),
+            [0.0, 0.0, up],
+        )
+    };
+    let needed: Vec<f64> = eyes
+        .iter()
+        .zip(&view)
+        .map(|(&e, v)| world.rise_needed(e, |rise| place(rise, v[1])))
+        .collect();
+    let rise = ramp(
+        &needed,
+        world.tick_interval / RISE_S,
+        world.tick_interval / SETTLE_S,
+    );
     let wanted: Vec<Vec3> = eyes
         .iter()
         .zip(&view)
-        .map(|(&e, v)| {
-            let b = scale(forward(0.0, v[1]), -back);
-            add(add(add(e, b), scale(right_of(v[1]), right)), [0.0, 0.0, up])
-        })
+        .zip(&rise)
+        .map(|((&e, v), &r)| add(e, place(r, v[1])))
         .collect();
     let positions = world.hold_out(&eyes, &wanted);
-    // Looking at where the killer looks, 400 units out.
+    // Looking at where the killer looks, 400 units out; lower as the camera rises, over his head.
     let targets: Vec<Vec3> = eyes
         .iter()
         .zip(&view)
-        .map(|(&e, v)| add(e, scale(forward(v[0] * 0.7, v[1]), 400.0)))
+        .zip(&rise)
+        .map(|((&e, v), &r)| {
+            let risen = ease(BEHIND, OVERHEAD, r)[2] - BEHIND[2];
+            add(
+                add(e, scale(forward(v[0] * 0.7, v[1]), 400.0)),
+                [0.0, 0.0, -RISE_TILT * risen],
+            )
+        })
         .collect();
     looking(subject, &positions, &targets, 0.3, BEHIND_FOV)
 }
@@ -514,6 +601,8 @@ fn tripod(
             }
         }
     }
+    // The best place no player comes near over the shot, and the best of all (taken only without the first).
+    let mut best_clear: Option<(f64, Vec3)> = None;
     let mut best: Option<(f64, Vec3)> = None;
     for (camera, away) in candidates {
         if world.blocked(camera) || !world.sees(camera, killer) || !world.sees(camera, head) {
@@ -535,8 +624,13 @@ fn tripod(
         if best.is_none_or(|(b, _)| score > b) {
             best = Some((score, camera));
         }
+        if nearest(camera, subject, other) >= TRIPOD_NEAREST
+            && best_clear.is_none_or(|(b, _)| score > b)
+        {
+            best_clear = Some((score, camera));
+        }
     }
-    let camera = best?.1;
+    let camera = best_clear.or(best)?.1;
     let spread = angle_between(sub(killer, camera), sub(target, camera));
     let fov = (spread + 30.0).clamp(45.0, 85.0);
     let positions = vec![camera; subject.len()];
@@ -569,6 +663,20 @@ fn above(subject: &[Pose], other: Option<&[Pose]>, focus: usize, world: &World) 
         .map(|&f| add(add(f, scale(forward(0.0, yaw), 40.0)), [0.0, 0.0, 30.0]))
         .collect();
     looking(subject, &positions, &targets, 0.5, ABOVE_FOV)
+}
+
+/// The nearest `camera` comes to the subject's head or chest over the shot, or to the other player's while alive.
+fn nearest(camera: Vec3, subject: &[Pose], other: Option<&[Pose]>) -> f64 {
+    let near = |p: &Pose| length(sub(p.eyes, camera)).min(length(sub(p.chest(), camera)));
+    let mut out = subject.iter().map(near).fold(f64::INFINITY, f64::min);
+    if let Some(other) = other {
+        out = other
+            .iter()
+            .filter(|p| p.alive)
+            .map(near)
+            .fold(out, f64::min);
+    }
+    out
 }
 
 /// The angle between two directions, degrees.
@@ -669,6 +777,91 @@ mod tests {
         let wanted = vec![[-20.0, 0.0, 64.0], [-64.0, 0.0, 64.0]];
         let held = open.hold_out(&anchors, &wanted);
         assert!((held[1][0] - (-20.0 - EASE_OUT * DT)).abs() < 1e-9);
+    }
+
+    /// A killer at x = `x(t)` looking along +x at eye height 64.
+    fn walking(ticks: u32, x: impl Fn(u32) -> f64) -> Vec<Pose> {
+        (0..ticks)
+            .map(|t| Pose {
+                tick: 1000 + t,
+                feet: [x(t), 0.0, 0.0],
+                eyes: [x(t), 0.0, 64.0],
+                view: [0.0, 0.0],
+                alive: true,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn behind_rises_over_a_back_to_the_wall() {
+        // A wall 30 units behind a killer standing still (a stairwell's): no room at his shoulder.
+        let mut collision = WorldCollision::default();
+        collision.add_box([-1000.0, -1000.0, -1000.0], [-30.0, 1000.0, 1000.0]);
+        let world = World {
+            collision: Some(&collision),
+            tick_interval: DT,
+        };
+        let killer = walking(64, |_| 0.0);
+        let keys = behind(&killer, &world);
+        for k in &keys {
+            let eyes = [0.0, 0.0, 64.0];
+            assert!(
+                length(sub(k.position, eyes)) > 32.0,
+                "pressed against him: {k:?}"
+            );
+            assert!(k.position[2] > eyes[2] + 25.0, "over his head: {k:?}");
+            // Out of the wall (the margin is kept along the way from his eyes, slanted here).
+            assert!(k.position[0] > -30.0 + 2.0, "in the wall: {k:?}");
+            // Looking ahead and a little down, past his head.
+            let f = forward(k.angles[0], k.angles[1]);
+            assert!(f[0] > 0.8 && f[2] < 0.0, "{f:?}");
+        }
+    }
+
+    #[test]
+    fn behind_rises_in_time_and_smoothly() {
+        // Walking backwards towards a wall at x = −160, stopping 30 units from it.
+        let mut collision = WorldCollision::default();
+        collision.add_box([-1000.0, -1000.0, -1000.0], [-160.0, 1000.0, 1000.0]);
+        let world = World {
+            collision: Some(&collision),
+            tick_interval: DT,
+        };
+        let killer = walking(200, |t| -(f64::from(t) * 1.0).min(130.0));
+        let keys = behind(&killer, &world);
+        for (k, p) in keys.iter().zip(&killer) {
+            assert!(length(sub(k.position, p.eyes)) > 32.0, "{k:?} {p:?}");
+        }
+        // No jump: at most the killer's step and a gradual rise a tick.
+        let largest = keys
+            .windows(2)
+            .map(|w| length(sub(w[1].position, w[0].position)))
+            .fold(0.0, f64::max);
+        assert!(largest < 5.0, "{largest}");
+        // At the shoulder while the wall is far, over the head once against it.
+        assert!(keys[0].position[2] < 64.0 + 10.0, "{:?}", keys[0]);
+        assert!(keys[199].position[2] > 64.0 + 25.0, "{:?}", keys[199]);
+    }
+
+    #[test]
+    fn behind_in_the_open_stays_at_the_shoulder() {
+        let (killer, _) = poses(64);
+        for k in behind(&killer, &open()) {
+            let p = killer.iter().find(|p| f64::from(p.tick) == k.tick).unwrap();
+            assert!(
+                (k.position[2] - (p.eyes[2] + BEHIND[2])).abs() < 2.0,
+                "{k:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tripod_keeps_off_a_killer_walking_past() {
+        // The killer walks 400 units to his kill: a place behind him at the kill is on his way there.
+        let (killer, victim) = poses(256);
+        let keys = tripod(&killer, Some(&victim), 200, &open()).unwrap();
+        let near = nearest(keys[0].position, &killer, Some(&victim));
+        assert!(near >= TRIPOD_NEAREST, "{near} from {:?}", keys[0].position);
     }
 
     #[test]

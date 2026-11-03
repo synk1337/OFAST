@@ -76,12 +76,26 @@ back out at 60 units a second, so a wall passing behind a player does not make i
 
 | Kind | Where | Looks at | FOV |
 |---|---|---|---|
-| `behind` | 64 units behind the killer's eyes along his (smoothed) view, 16 to his right, 6 up | where he looks, 400 units out | 80 |
+| `behind` | 64 units behind the killer's eyes along his (smoothed) view, 16 to his right, 6 up; in tight places (a stairwell, his back to a wall) risen over his head, up to 24 behind, 0 right, 34 up: of 5 places eased from one to the other, the lowest that a wall leaves 85 % of its distance (`ROOM`), reached in time and at most all the way in 0.5 s, left over 1.5 s | where he looks, 400 units out; 4 units lower for each unit risen, so his head stays at the picture's bottom | 80 |
 | `orbit` | 100 units from his chest, 22 above it, turning 12° a second; at the kill behind him relative to the victim, or the clearest of 16 starts (sides, front, both directions) | his chest | 70 |
-| `tripod` | a fixed point that sees both the killer's eyes and the victim's head at the kill (a headshot over cover shows no more of him), within 75° of each other: 120 candidates — 36 across the line between them (both sides, 0.7 – 1.4 × their distance away, at least 150 units, 24 or 72 units above the higher one), and 42 around each of them, turned 90 – 180° from the line to the other, 80 – 220 units away (behind the killer looking past him at the victim, behind the victim looking back at the killer: what a narrow corridor leaves) —, scored by how often it sees them in the last 2 s, nearer better | between the two (0.65 killer, 0.35 victim), smoothed | the angle between them + 30, 45 – 85 |
+| `tripod` | a fixed point that sees both the killer's eyes and the victim's head at the kill (a headshot over cover shows no more of him), within 75° of each other: 120 candidates — 36 across the line between them (both sides, 0.7 – 1.4 × their distance away, at least 150 units, 24 or 72 units above the higher one), and 42 around each of them, turned 90 – 180° from the line to the other, 80 – 220 units away (behind the killer looking past him at the victim, behind the victim looking back at the killer: what a narrow corridor leaves) —, scored by how often it sees them in the last 2 s, nearer better; a point either of them comes within 72 units of over the shot (a killer walking past it to his kill) is taken only when no other sees both | between the two (0.65 killer, 0.35 victim), smoothed | the angle between them + 30, 45 – 85 |
 | `above` | 300 units above his feet, 90 behind relative to the victim | in front of his feet | 75 |
 
 A tripod no point of which sees both (a kill through a wall) becomes a `behind` camera, with a warning.
+
+Measured with `examples/shot_clearance.rs` (2026-11-03): every kill of a match shot from behind and from a fixed
+point, with the map's collision, counting the ticks the camera is within 32 units of the killer's eyes with his head
+less than 30° from the middle of the picture (the back of his head filling it), and the ticks it moves more than 12
+units (a jump). Before the rise and the fixed camera's distance, against after:
+
+| Match | Behind: shots with his head filling it (ticks) | Fixed | Behind: jumps |
+|---|---|---|---|
+| FURIA vs Falcons, de_inferno, 134 kills | 60 (5374) → 4 (269) | 16 (436) → 1 (4) | |
+| Aurora vs FURIA, de_nuke, 111 kills | 66 (6628) → 13 (235) | 9 (1301) → 1 (4) | 58 → 5 |
+| Aurora vs FURIA, de_dust2, 137 kills | 55 (5157) → 3 (174) | 8 (434) → 0 | |
+
+What is left is not checked yet; likely places a low ceiling also closes, so that rising has no room either. Those
+shots are still much better than before (yuurih's on de_inferno at tick 170060: 276 of 321 ticks → 133).
 
 ## HLAE's files
 

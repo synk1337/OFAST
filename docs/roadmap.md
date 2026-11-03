@@ -390,8 +390,11 @@ player and round.
   of the round, a smooth camera cut in between their first and last; keep a player in frame, follow one, focus on
   them; kept per round in a file and made again after a round is sent again, its cameras changed, or before a render.
   Not yet: ease in and out, slow motion inside Unreal, cinematics back to HLAE.
-- [ ] Shots in tight places: a camera behind the killer pulled in by close walls (a stairwell: 20 – 30 units) should
-  rise over his head instead; a fixed camera can frame its killer's back up close early in its shot.
+- [x] Shots in tight places (2026-11-03): the camera behind the killer pulled in by close walls (a stairwell: 20 – 30
+  units) rises over his head instead, in time and gradually; a fixed camera keeps 72 units from both players over its
+  shot (it could frame its killer's back up close early in the shot). Shots with the killer's head filling the
+  picture, de_inferno / de_nuke / de_dust2: behind 60 / 66 / 55 → 4 / 13 / 3, fixed 16 / 9 / 8 → 1 / 1 / 0
+  ([cameras](formats/cameras.md#shot-cameras)). Not seen in Unreal yet.
 
 ## M8 progress
 
