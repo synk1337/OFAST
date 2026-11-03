@@ -239,6 +239,28 @@ render-only bias).
 Without a sky or sun in the manifest, `import_map.py` falls back to Unreal's physical sky, a default sun and auto
 exposure, and says so in its log: the picture is then not calibrated.
 
+## Reflections: CS2's cube maps, and Lumen
+
+CS2 draws its reflections from cube maps baked with the map (Source 2 Viewer's `common/envmap.slang`,
+`SceneEnvironment/SceneEnvMap.cs`):
+
+- Each `env_combined_light_probe_volume` (and `env_cubemap_box`) is a box, `box_mins` .. `box_maxs` around its
+  `origin`, turned by its `angles`, with its cube at `array_index` of its `cubemaptexture`
+  (`maps/<map>/cubemaps/env_cubemap_array.vtex`: BC6H, 256 × 256 faces, 7 mips, the faces in the sky's convention, +Z
+  up). de_nuke has 93 cubes (its 92 volumes and one box, one of them the whole map), de_dust2 43, de_mirage 58,
+  de_inferno 116. `examples/cubemap_array.rs` lists a map's cubes, their brightness face by face, and their boxes.
+- The cube is rendered at the origin with all of the map's lighting in it, and sampled in the box's own axes, projected
+  onto the box (parallax correction), less so as the surface gets rougher; each axis fades over its
+  `edge_fade_dists` from the box's sides, and overlapping boxes fill a pixel in turn, smaller first, the sky the rest.
+- The reflection is scaled by the light at the surface against the light the cube was captured with
+  (`GetEnvMapNormalization`: darkening unbounded, brightening capped, more for rough surfaces).
+
+A metal shows nothing else: de_nuke's corrugated ceilings and pipes are black in CS2's albedo view. OFAST does not use
+these cubes. Lumen reflects its own lighting cache, which is dimmer (de_nuke's B-site ceiling at 0.10 of CS2's
+brightness, its walls at 0.79), and Unreal ignores reflection captures while Lumen lights the scene: the captures,
+given CS2's cubes, changed nothing ([checks](../checks.md#dark-metals-2026-11-03-lumens-reflections-shelved)). Making
+metals reflect as in CS2 would mean sampling CS2's cubes in OFAST's own materials, out of Lumen's light; shelved.
+
 ## 3D skybox — `skybox_reference` + `sky_camera`
 
 See [map.md](map.md#3d-skybox). CS2 draws the 3D skybox first and the world over it, so skybox geometry never hides
@@ -900,7 +922,8 @@ a power law).
 
 ## Not used yet
 
-- Light probes (`env_combined_light_probe_volume`), lightmaps, `env_cubemap` reflections: baked data Lumen replaces.
+- Light probes (`env_combined_light_probe_volume`), lightmaps: baked data Lumen replaces. The cube map reflections
+  are not used either ([above](#reflections-cs2s-cube-maps-and-lumen)), and Lumen does not replace them well.
 - Bloom and fog: no measurable effect in CS2 on de_mirage (bloom: 0.7 % on de_inferno), so not applied (their
   settings are in the manifest).
 

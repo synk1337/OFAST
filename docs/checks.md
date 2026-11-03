@@ -631,6 +631,43 @@ Sum of |log| errors per map: de_nuke 4.90 → 4.40, de_inferno 4.13 → 3.61, de
 `map_raycast` now prints the texture coordinate of each hit, which told the grating's slats
 (`hr_metal_grating_001_stair`) from the door they lie under (`metal_door_001`).
 
+## Dark metals (2026-11-03): Lumen's reflections, shelved
+
+With every metal exported as metal, de_nuke's B site read 0.60 of CS2 (0.85 when its metals were white paint).
+Measured by region on its reference view (Unreal / CS2): the corrugated ceiling **0.10**, the pipes **0.09**, the metal
+floor plates 0.32, the yellow beams 0.42, the walls 0.79, the floor 0.53. The ceiling and pipes are bare metal: black
+in CS2's albedo view (`mat_fullbright`), bright in its picture, so CS2 shows nothing on them but reflections. Not fixed,
+low priority (the user, 2026-11-03); what was found
+([lighting.md](formats/lighting.md#reflections-cs2s-cube-maps-and-lumen)):
+
+- **CS2's reflections are its baked cube maps**: one per box (`env_combined_light_probe_volume`, de_nuke's 92 and one
+  `env_cubemap_box`), rendered with all of the map's lighting in them, projected onto the box. Lumen reflects its own
+  lighting cache instead.
+- **Unreal ignores reflection captures while Lumen lights the scene.** CS2's 93 cubes exported and placed as box
+  reflection captures (Specified Cubemap, re-projected to each box's centre), the post volume's reflection method None:
+  no pixel moved, not even with the captures 20× as bright. The renderer composites specular inside Lumen's pass and,
+  without Lumen reflections or screen-space ones, uses "Lumen Rough Reflections only" (`IndirectLightRendering.cpp`).
+- **Lumen's reflection settings change nothing** (B site 0.60): tracing every roughness 0.61, the radiance cache alone
+  0.56, screen-space reflections 0.58. Specular is a quarter of the picture (0.45 without it). Tripling the lamps'
+  bounce doubles the ceiling (0.10 → 0.21): the reflections come from Lumen's cache, which lamps light × their bounce.
+- **Lumen's cache misses OFAST's merged world meshes.** CS2 merges one material's pieces across the map into an
+  aggregate (de_nuke: 151 meshes over 50 m wide, up to 321 m), and a mesh gets a handful of cache cards: Lumen's scene
+  view shows B site's ceiling, pipes and beams as "missing surface cache coverage". Split per 13 m cell (2043 meshes
+  for 455), the walls get their cache and the interiors their bounce (de_nuke's lobby 0.66 → 0.82, A site 0.22 → 0.34
+  with Lumen's reflections off, garage 1.18 → 1.82), but the metals barely (ceiling 0.16), and with the bounce gains
+  refitted on the four maps the total |log| error is unchanged (10.10 against 10.12). Not kept; the imports' scene step
+  took about twice as long.
+- **Hardware ray-traced reflections with hit lighting** (`r.Lumen.HardwareRayTracing.LightingMode 1`, for one run):
+  the pipes 0.10 → 0.26, the ceiling still 0.16, and the lighting moves everywhere (lobby 0.82 → 0.36, garage 1.82 →
+  1.22), as the ray-traced global illumination did before.
+- Lumen's cache keeps a metal as a rough diffuse surface (`EnvBRDFApproxFullyRough` in `LumenCardBasePass.ush`), so
+  metal seen in a reflection is dim, where CS2's cubes, baked in passes, show metal reflecting metal.
+
+What would fix it: CS2's own cubes sampled in OFAST's materials, box by box, kept out of Lumen's light (a GI Replace
+node), CS2's prefiltered mips for roughness and its normalization by the local light; it would give the first-person
+guns CS2's reflections too. A multi-day change to every master. Tools for it: `examples/cubemap_array.rs` (a map's
+cube array and its boxes), `examples/aggregate_extents.rs` (aggregate and fragment sizes).
+
 ## What was wrong
 
 ### Fixed

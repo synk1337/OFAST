@@ -580,7 +580,10 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   2.02 → 1.34, de_mirage's shop 0.77 → 0.99. Left: de_mirage's rooms lit by bounce from the street (too dark and
   blue) or open to the sky (too bright), software Lumen's limit (hardware ray tracing tried: mixed, not kept);
   de_nuke's A site; woxic's passage; metals, darker than CS2's now that all of them are metal (de_nuke's B site 0.85
-  → 0.60: its floor plates and corrugated ceiling were white paint).
+  → 0.60: its floor plates and corrugated ceiling were white paint). The metals are Lumen's reflections, dimmer than
+  CS2's baked cube maps, which Unreal will not use as reflection captures under Lumen: the fix is CS2's cubes sampled
+  in OFAST's materials, multi-day, **low priority** (the user, 2026-11-03;
+  [checks](checks.md#dark-metals-2026-11-03-lumens-reflections-shelved)).
 - [ ] **Bodies against CS2's**: Wicadia's (round 17, dead at tick 154410) lies on the AK he dropped in Unreal; CS2
   shows the AK alone there at tick 155002. The AK itself rests tilted a little differently.
 - [ ] **Skins' finer shading**: glitter and iridescence in OFAST's weapon master (`pearlescence.py`'s copy of
