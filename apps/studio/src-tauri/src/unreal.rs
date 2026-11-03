@@ -13,7 +13,9 @@
 //! with Movie Render Queue (`tools/unreal/render_round.py`, decision 023) into the user's Videos folder.
 //!
 //! The Unreal steps run `UnrealEditor-Cmd` without a window; its `OFAST:` log lines come to the UI as progress
-//! ([`PROGRESS_EVENT`]), and a step counts as done only once its script logged its last line. Imports draw nothing,
+//! ([`PROGRESS_EVENT`]), and a step counts as done only once its script logged its last line. Each line carries where
+//! the job's progress bar is: each step takes a share of it as long as it usually takes ([`Progress`]), and the map's
+//! export and Unreal's scripts (their `progress` lines) move it within their step. Imports draw nothing,
 //! so the editor runs without a renderer (`-nullrhi`): it takes no GPU memory; renders need one. Exports go to the
 //! app's data folder (`exports/demos`, `exports/maps/<map>`) and are deleted once imported: they are made from the
 //! user's CS2 files and are big (a map: gigabytes).
@@ -27,7 +29,7 @@ use ofast_core::content::Content;
 use ofast_core::demo::players::track_round_at;
 use ofast_core::export::ExportOptions;
 use ofast_core::export::cameras::{CameraPlan, export_cameras};
-use ofast_core::export::map::export_installed_map;
+use ofast_core::export::map::export_installed_map_reporting;
 use ofast_core::export::players::export_players;
 use ofast_core::export::replay::write_replay;
 use ofast_core::game::Cs2Install;
@@ -71,7 +73,7 @@ const SCRIPT_VARIABLES: [&str; 19] = [
 ];
 
 /// Where a sending is.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Step {
     /// Exporting the round and its players.
@@ -97,6 +99,193 @@ pub struct Progress {
     pub message: String,
     /// A warning the UI keeps showing (the later progress lines replace the others).
     pub warning: bool,
+    /// How much of the job is done, 0 to 1, for the UI's progress bar (each step takes a share of it as long as it
+    /// usually takes).
+    pub done: f64,
+    /// Where the bar will be once what runs now is done (at least `done`): the UI moves the bar slowly towards it
+    /// while it waits for the next line.
+    pub next: f64,
+    /// About how long until the bar is at `next` (seconds, as long as the steps usually take): the UI's bar creeps
+    /// over that time.
+    pub wait_s: f64,
+}
+
+/// A job's progress bar: its steps in order, each with about how long it takes (seconds), which is its share of the
+/// bar.
+#[derive(Debug, Clone)]
+struct Bar(Vec<(Step, f64)>);
+
+impl Bar {
+    /// About how long the whole job takes, seconds.
+    fn seconds(&self) -> f64 {
+        self.0.iter().map(|(_, seconds)| seconds).sum()
+    }
+
+    /// The bar's share done at `within` (0 to 1) of `step`; the whole bar for a step not in it.
+    fn at(&self, step: Step, within: f64) -> f64 {
+        let total = self.seconds();
+        let mut before = 0.0;
+        for (s, seconds) in &self.0 {
+            if *s == step {
+                return (before + seconds * within.clamp(0.0, 1.0)) / total;
+            }
+            before += seconds;
+        }
+        1.0
+    }
+}
+
+/// About how long the steps take (seconds), for their shares of the bar, timed on the PC OFAST is made on (24
+/// threads; Unreal's in its logs and a sending from the Studio, 2026-11-03). The round's export (de_dust2's round 1,
+/// 10 players: 156 s): reading it (2 s), its players' agents and weapons (most of it), its cameras (a few seconds).
+const ROUND_S: f64 = 150.0;
+/// A map's export: de_dust2 17 to 18 s, de_inferno 29 s.
+const MAP_EXPORT_S: f64 = 30.0;
+/// A map's import into Unreal again (de_dust2: 70 to 100 s of `import_map.py`, after Unreal's start).
+const MAP_IMPORT_AGAIN_S: f64 = UNREAL_START_S + 100.0;
+/// A map's first import, a guess: Interchange imports its textures and Unreal compiles its shaders.
+const MAP_IMPORT_FIRST_S: f64 = UNREAL_START_S + 600.0;
+/// A round's import (de_dust2's round 1: 125 to 390 s of `import_demo.py`, most of it the players' files).
+const ROUND_IMPORT_S: f64 = UNREAL_START_S + 250.0;
+/// How long Unreal takes to start, before its script runs (10 to 55 s): the first part of an Unreal step.
+const UNREAL_START_S: f64 = 40.0;
+/// "Update cameras": the cameras made (a few seconds), then Unreal's start and `import_cameras.py`.
+const CAMERAS_S: f64 = 90.0;
+/// The share of "Update cameras" before Unreal starts.
+const CAMERAS_MADE: f64 = 0.1;
+/// A render, for the bar's creep (its frames make it longer or shorter: `render_round.py` says how far they are).
+const RENDER_S: f64 = 600.0;
+
+/// Unreal events closer than this on the bar (its share) are not sent: the map's export moves it once per texture.
+const SMALLEST_MOVE: f64 = 0.005;
+
+/// Tells the UI where a job is ([`PROGRESS_EVENT`]): what it does, and where its bar is ([`Bar`]). Shared with the
+/// threads of the map's export.
+struct Reporter<'a> {
+    app: &'a AppHandle,
+    place: Mutex<Place>,
+}
+
+/// Where a job is.
+struct Place {
+    bar: Bar,
+    step: Step,
+    message: String,
+    /// The bar's share done, and where it goes once the part running is done ([`Progress`]).
+    done: f64,
+    next: f64,
+    /// `done` as the last event sent it.
+    sent: f64,
+}
+
+impl<'a> Reporter<'a> {
+    fn new(app: &'a AppHandle, bar: Bar) -> Self {
+        let step = bar.0.first().map_or(Step::Round, |(step, _)| *step);
+        Reporter {
+            app,
+            place: Mutex::new(Place {
+                bar,
+                step,
+                message: String::new(),
+                done: 0.0,
+                next: 0.0,
+                sent: 0.0,
+            }),
+        }
+    }
+
+    fn place(&self) -> std::sync::MutexGuard<'_, Place> {
+        self.place
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The job's steps once they are known (a sending's, once the round says which map it needs). The bar never goes
+    /// back: a plan is set before any of its steps moved it.
+    fn plan(&self, bar: Bar) {
+        self.place().bar = bar;
+    }
+
+    /// A part of `step` begins, from `from` to `to` of it (0 to 1): `message` says what it does.
+    fn part(&self, step: Step, from: f64, to: f64, message: impl Into<String>) {
+        self.go(step, from, to, Some(message.into()));
+    }
+
+    /// The same, saying nothing new (Unreal's progress lines, the map export's textures): sent only once the bar
+    /// moved by [`SMALLEST_MOVE`].
+    fn stage(&self, step: Step, from: f64, to: f64) {
+        self.go(step, from, to, None);
+    }
+
+    fn go(&self, step: Step, from: f64, to: f64, message: Option<String>) {
+        let mut place = self.place();
+        let done = place.bar.at(step, from).max(place.done);
+        place.next = place.bar.at(step, to).max(done);
+        place.done = done;
+        place.step = step;
+        let moved = done - place.sent >= SMALLEST_MOVE;
+        if let Some(message) = message {
+            place.message = message;
+        } else if !moved {
+            return;
+        }
+        self.send(&mut place, None);
+    }
+
+    /// A line of what runs (Unreal's): the bar stays where it is.
+    fn line(&self, message: String) {
+        let mut place = self.place();
+        place.message = message;
+        self.send(&mut place, None);
+    }
+
+    /// A warning the UI keeps showing.
+    fn warn(&self, message: String) {
+        let mut place = self.place();
+        self.send(&mut place, Some(message));
+    }
+
+    /// Nobody may hear it: the UI may have gone to another page.
+    fn send(&self, place: &mut Place, warning: Option<String>) {
+        place.sent = place.done;
+        let _ = self.app.emit(
+            PROGRESS_EVENT,
+            Progress {
+                step: place.step,
+                warning: warning.is_some(),
+                message: warning.unwrap_or_else(|| place.message.clone()),
+                done: place.done,
+                next: place.next,
+                wait_s: (place.next - place.done) * place.bar.seconds(),
+            },
+        );
+    }
+}
+
+/// Where an Unreal script's run is on the bar: in `step`, from `from` (its share) to the step's end, Unreal's start
+/// taking the first `start` of that.
+#[derive(Debug, Clone, Copy)]
+struct Run {
+    step: Step,
+    from: f64,
+    start: f64,
+}
+
+impl Run {
+    /// A run filling `step`, which takes about `seconds`.
+    fn whole(step: Step, seconds: f64) -> Self {
+        Run {
+            step,
+            from: 0.0,
+            start: (UNREAL_START_S / seconds).min(1.0),
+        }
+    }
+
+    /// The step's share at `script` (0 to 1) of the script's own work.
+    fn at(&self, script: f64) -> f64 {
+        let started = self.from + (1.0 - self.from) * self.start;
+        started + (1.0 - started) * script.clamp(0.0, 1.0)
+    }
 }
 
 /// What a sending made: where to look in Unreal.
@@ -264,7 +453,7 @@ fn render(
     fps: Option<u32>,
     motion_blur: bool,
 ) -> Result<String, String> {
-    let report = |message: String, warning: bool| emit(app, Step::Render, message, warning);
+    let report = Reporter::new(app, Bar(vec![(Step::Render, RENDER_S)]));
     if !PRESETS.contains(&preset) {
         return Err(format!("There is no render preset \"{preset}\"."));
     }
@@ -290,10 +479,9 @@ fn render(
         return Err("This round is not in Unreal yet: send it first.".into());
     }
     if running("cs2.exe") {
-        report(
+        report.warn(
             "CS2 is open: rendering needs the graphics card's memory, close CS2 if Unreal fails."
                 .into(),
-            true,
         );
     }
     let out = renders_dir(app)?;
@@ -302,9 +490,12 @@ fn render(
     let range = ticks
         .map(|[start, end]| format!("{start},{end}"))
         .unwrap_or_default();
-    report(
-        "Starting Unreal (it loads the map first: a minute or two)…".into(),
-        false,
+    let run = Run::whole(Step::Render, RENDER_S);
+    report.part(
+        Step::Render,
+        0.0,
+        run.at(0.0),
+        "Starting Unreal (it loads the map first: a minute or two)…",
     );
     let mut folder = None;
     run_script(
@@ -313,6 +504,8 @@ fn render(
         "render_round.py",
         // Movie Render Queue renders in Play In Editor, which needs a renderer.
         true,
+        &report,
+        run,
         &[
             ("OFAST_SEQUENCE", sequence.as_ref()),
             ("OFAST_PRESET", preset.as_ref()),
@@ -330,7 +523,7 @@ fn render(
             {
                 folder = Some(done.to_owned());
             }
-            report(line, false);
+            report.line(line);
         },
     )?;
     folder.ok_or_else(|| "Unreal did not say where it put the frames.".into())
@@ -374,18 +567,6 @@ fn stem(path: &str) -> &str {
         .unwrap_or("demo")
 }
 
-/// Tells the UI where a sending is (nobody may hear it: the UI may have gone to another page).
-fn emit(app: &AppHandle, step: Step, message: String, warning: bool) {
-    let _ = app.emit(
-        PROGRESS_EVENT,
-        Progress {
-            step,
-            message,
-            warning,
-        },
-    );
-}
-
 /// The CS2 content a round's export reads: the game's archives and the map's, for its collision (the dead fall on
 /// it, shot cameras keep out of its walls); the game's alone if the map's is missing.
 fn round_content(install: &Cs2Install, map: &str) -> Result<Content, String> {
@@ -400,12 +581,13 @@ fn cameras(
     start_tick: u32,
     plan: &CameraPlan,
 ) -> Result<Sent, String> {
-    let report = |message: String, warning: bool| emit(app, Step::Cameras, message, warning);
+    let report = Reporter::new(app, Bar(vec![(Step::Cameras, CAMERAS_S)]));
+    let step = Step::Cameras;
     let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
     let side = unreal_side().ok_or("OFAST's Unreal project was not found.")?;
     unreal_closed()?;
     let install = Cs2Install::locate().ok_or("CS2 was not found.")?;
-    report("Reading the round…".into(), false);
+    report.part(step, 0.0, CAMERAS_MADE / 2.0, "Reading the round…");
     let data = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let name = asset_name(stem(path));
     let track = track_round_at(&data, start_tick)
@@ -421,7 +603,12 @@ fn cameras(
     {
         return Err("This round is not in Unreal yet: send it first.".into());
     }
-    report("Making the cameras…".into(), false);
+    report.part(
+        step,
+        CAMERAS_MADE / 2.0,
+        CAMERAS_MADE,
+        "Making the cameras…",
+    );
     let content = round_content(&install, &track.map_name)?;
     let demos = app
         .path()
@@ -432,18 +619,30 @@ fn cameras(
     let made =
         export_cameras(Some(&content), &track, plan, &name, &demos).map_err(|e| e.to_string())?;
     for warning in made.warnings {
-        report(warning, true);
+        report.warn(warning);
     }
-    report("Updating the cameras in Unreal…".into(), false);
+    let run = Run {
+        step,
+        from: CAMERAS_MADE,
+        start: UNREAL_START_S / (CAMERAS_S * (1.0 - CAMERAS_MADE)),
+    };
+    report.part(
+        step,
+        CAMERAS_MADE,
+        run.at(0.0),
+        "Updating the cameras in Unreal…",
+    );
     unreal_closed()?;
     let result = run_script(
         &engine,
         &side,
         "import_cameras.py",
         false,
+        &report,
+        run,
         &[("OFAST_CAMERAS", made.path.as_os_str())],
         "cameras updated ",
-        |line| report(line, false),
+        |line| report.line(line),
     );
     let _ = std::fs::remove_file(&made.path);
     result?;
@@ -471,7 +670,14 @@ fn send(
     plan: &CameraPlan,
     look: &str,
 ) -> Result<Sent, String> {
-    let report = |step: Step, message: String| emit(app, step, message, false);
+    // Without the map's steps until the round says which map it needs.
+    let report = Reporter::new(
+        app,
+        Bar(vec![
+            (Step::Round, ROUND_S),
+            (Step::RoundImport, ROUND_IMPORT_S),
+        ]),
+    );
     let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
     let side = unreal_side().ok_or("OFAST's Unreal project was not found.")?;
     unreal_closed()?;
@@ -482,63 +688,86 @@ fn send(
         .map_err(|e| e.to_string())?
         .join("exports");
     if running("cs2.exe") {
-        emit(
-            app,
-            Step::Round,
+        report.warn(
             "CS2 is open: Unreal needs a lot of memory, close CS2 if the import fails.".into(),
-            true,
         );
     }
 
-    report(Step::Round, "Reading the round…".into());
+    // The round's parts (`ROUND_S`): reading it, its players (agents and weapons), its cameras.
+    const READ: f64 = 0.02;
+    const PLAYERS: f64 = 0.97;
+    report.part(Step::Round, 0.0, READ, "Reading the round…");
     let data = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     let name = asset_name(stem(path));
     let track = track_round_at(&data, start_tick)
         .map_err(|e| format!("{path}: {e}"))?
         .without_freeze();
-    let demos = exports.join("demos");
-    let replay = write_replay(&track, &name, &demos).map_err(|e| e.to_string())?;
-    report(
-        Step::Round,
-        format!(
-            "Animating {} players with CS2's agents and weapons…",
-            replay.players
-        ),
-    );
-    let content = round_content(&install, &track.map_name)?;
-    export_players(&content, &track, &name, &demos).map_err(|e| e.to_string())?;
-    drop(data);
-    report(Step::Round, "Making the cameras…".into());
-    let cameras =
-        export_cameras(Some(&content), &track, plan, &name, &demos).map_err(|e| e.to_string())?;
-    for warning in cameras.warnings {
-        emit(app, Step::Round, warning, true);
-    }
-
     let map = track.map_name.as_str();
     // The map's level in the look picked: each look is imported once per map version (`MAP_VERSION`), the realistic
     // one into a level of its own (sharing the map's meshes and materials, which its import brings up to date).
     let level_name = level_name(map, look);
     let level = format!("/Game/OFAST/Maps/{level_name}");
     let project = side.dir();
-    if !level_imported(project, map, &level_name) {
-        // A level already there was imported by an older Studio, or its import did not finish.
-        let again = project.join(level_file(&level_name)).is_file();
-        report(
+    let imported = level_imported(project, map, &level_name);
+    // A level already there that needs importing was imported by an older Studio, or its import did not finish.
+    let again = project.join(level_file(&level_name)).is_file();
+    let map_import_s = if again {
+        MAP_IMPORT_AGAIN_S
+    } else {
+        MAP_IMPORT_FIRST_S
+    };
+    if !imported {
+        report.plan(Bar(vec![
+            (Step::Round, ROUND_S),
+            (Step::MapExport, MAP_EXPORT_S),
+            (Step::MapImport, map_import_s),
+            (Step::RoundImport, ROUND_IMPORT_S),
+        ]));
+    }
+    let demos = exports.join("demos");
+    let replay = write_replay(&track, &name, &demos).map_err(|e| e.to_string())?;
+    report.part(
+        Step::Round,
+        READ,
+        PLAYERS,
+        format!(
+            "Animating {} players with CS2's agents and weapons…",
+            replay.players
+        ),
+    );
+    let content = round_content(&install, map)?;
+    export_players(&content, &track, &name, &demos).map_err(|e| e.to_string())?;
+    drop(data);
+    report.part(Step::Round, PLAYERS, 1.0, "Making the cameras…");
+    let cameras =
+        export_cameras(Some(&content), &track, plan, &name, &demos).map_err(|e| e.to_string())?;
+    for warning in cameras.warnings {
+        report.warn(warning);
+    }
+
+    if !imported {
+        report.part(
             Step::MapExport,
+            0.0,
+            1.0,
             if again {
-                format!("Exporting {map} from CS2's files again (a few minutes)…")
+                format!("Exporting {map} from CS2's files again…")
             } else {
-                format!("Exporting {map} from CS2's files (the first time only: a few minutes)…")
+                format!("Exporting {map} from CS2's files (the first time only)…")
             },
         );
         let out = exports.join("maps").join(map);
-        export_installed_map(&install, map, &out, ExportOptions::default())
-            .map_err(|e| format!("{map} could not be exported from CS2's files: {e}"))?;
-        report(
+        export_installed_map_reporting(&install, map, &out, ExportOptions::default(), &|done| {
+            report.stage(Step::MapExport, done, done)
+        })
+        .map_err(|e| format!("{map} could not be exported from CS2's files: {e}"))?;
+        let run = Run::whole(Step::MapImport, map_import_s);
+        report.part(
             Step::MapImport,
+            0.0,
+            run.at(0.0),
             if again {
-                format!("Importing {map} into Unreal again (it can take long)…")
+                format!("Importing {map} into Unreal again (a few minutes)…")
             } else {
                 format!(
                     "Importing {map} into Unreal (the first time only: Unreal compiles its shaders, it can take long)…"
@@ -559,22 +788,27 @@ fn send(
             &side,
             "import_map.py",
             false,
+            &report,
+            run,
             &[
                 ("OFAST_GLTF", gltf.as_os_str()),
                 ("OFAST_NAME", map.as_ref()),
                 ("OFAST_STYLE", look.as_ref()),
             ],
             "imported ",
-            |line| report(Step::MapImport, line),
+            |line| report.line(line),
         )?;
         std::fs::write(&version, MAP_VERSION).map_err(|e| e.to_string())?;
         // Imported: Unreal keeps what it needs, the export can go.
         let _ = std::fs::remove_dir_all(&out);
     }
 
-    report(
+    let run = Run::whole(Step::RoundImport, ROUND_IMPORT_S);
+    report.part(
         Step::RoundImport,
-        "Building the round's sequence in Unreal…".into(),
+        0.0,
+        run.at(0.0),
+        "Building the round's sequence in Unreal…",
     );
     unreal_closed()?;
     run_script(
@@ -582,12 +816,14 @@ fn send(
         &side,
         "import_demo.py",
         false,
+        &report,
+        run,
         &[
             ("OFAST_REPLAY", replay.path.as_os_str()),
             ("OFAST_STYLE", look.as_ref()),
         ],
         "built ",
-        |line| report(Step::RoundImport, line),
+        |line| report.line(line),
     )?;
     // Imported: the round's export files (replay, agents, weapons) can go.
     let prefix = format!("{name}_r{}", track.round);
@@ -631,13 +867,18 @@ fn unreal_closed() -> Result<(), String> {
 }
 
 /// Runs one of OFAST's Unreal scripts (`tools/unreal/<script>`) in `UnrealEditor-Cmd` on the project, with
-/// `variables` set (the others empty), handing each `OFAST:` log line to `line`. Done once the script logged a line
-/// starting with `last`; an error when it says `FAILED` or stops before. Without `draws`, the editor has no renderer.
+/// `variables` set (the others empty), handing each `OFAST:` log line to `line` but its progress lines
+/// (`progress <start> <end>`: where its next stage starts and ends, 0 to 1 of its work), which move the bar where
+/// `run` says. Done once the script logged a line starting with `last`; an error when it says `FAILED` or stops
+/// before. Without `draws`, the editor has no renderer.
+#[allow(clippy::too_many_arguments)] // Each is the run's own.
 fn run_script(
     engine: &Path,
     side: &UnrealSide,
     script: &str,
     draws: bool,
+    report: &Reporter,
+    run: Run,
     variables: &[(&str, &std::ffi::OsStr)],
     last: &str,
     mut line: impl FnMut(String),
@@ -684,6 +925,11 @@ fn run_script(
         let text = String::from_utf8_lossy(&bytes);
         if let Some((_, message)) = text.split_once("OFAST: ") {
             let message = message.trim_end().to_owned();
+            if let Some([start, end]) = progress_line(&message) {
+                report.stage(run.step, run.at(start), run.at(end));
+                bytes.clear();
+                continue;
+            }
             if let Some(why) = message.strip_prefix("FAILED: ") {
                 failure = Some(why.to_owned());
             }
@@ -708,6 +954,12 @@ fn run_script(
         )),
         None => Ok(()),
     }
+}
+
+/// The stage an Unreal script's progress line (`progress 0.350 0.720`) says it starts: its start and end.
+fn progress_line(message: &str) -> Option<[f64; 2]> {
+    let (start, end) = message.strip_prefix("progress ")?.split_once(' ')?;
+    Some([start.parse().ok()?, end.parse().ok()?])
 }
 
 /// Opens Unreal (with its window) on the project, at a round's level and sequence ([`Sent`]). The script runs as a
@@ -810,6 +1062,47 @@ mod tests {
         assert_eq!(asset_name("my clutch.v2"), "my_clutch_v2");
         assert_eq!(asset_name("match730_0038"), "match730_0038");
         assert_eq!(asset_name(""), "demo");
+    }
+
+    #[test]
+    fn steps_share_the_bar_as_long_as_they_take() {
+        let bar = Bar(vec![
+            (Step::Round, 30.0),
+            (Step::MapExport, 30.0),
+            (Step::RoundImport, 60.0),
+        ]);
+        assert_eq!(bar.at(Step::Round, 0.0), 0.0);
+        assert_eq!(bar.at(Step::MapExport, 0.5), 0.375);
+        assert_eq!(bar.at(Step::RoundImport, 1.0), 1.0);
+        assert_eq!(
+            bar.at(Step::RoundImport, 2.0),
+            1.0,
+            "a step's end is its end"
+        );
+        assert_eq!(bar.at(Step::Render, 0.0), 1.0, "not in the plan");
+        assert_eq!(bar.seconds(), 120.0);
+    }
+
+    #[test]
+    fn a_script_runs_after_unreal_started() {
+        let run = Run::whole(Step::RoundImport, 4.0 * UNREAL_START_S);
+        assert_eq!(run.at(0.0), 0.25);
+        assert_eq!(run.at(1.0), 1.0);
+        // After the cameras were made (the first half), Unreal's start takes 10% of the rest.
+        let run = Run {
+            step: Step::Cameras,
+            from: 0.5,
+            start: 0.1,
+        };
+        assert!((run.at(0.0) - 0.55).abs() < 1e-9);
+        assert!((run.at(0.5) - 0.775).abs() < 1e-9);
+    }
+
+    #[test]
+    fn progress_lines_are_read() {
+        assert_eq!(progress_line("progress 0.350 0.720"), Some([0.35, 0.72]));
+        assert_eq!(progress_line("progress 0.35"), None);
+        assert_eq!(progress_line("imported de_dust2"), None);
     }
 
     #[test]

@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ofast_cameras  # noqa: E402
 import ofast_look  # noqa: E402
 import replay_cameras  # noqa: E402
-from replay_cameras import CAMERA_TAG, log  # noqa: E402
+from replay_cameras import CAMERA_TAG, log, progress  # noqa: E402
 
 CAMERAS_PATH = os.environ["OFAST_CAMERAS"]
 
@@ -130,6 +130,8 @@ def update(cameras):
 
 
 def main():
+    # One stage: the Studio's bar moves on from Unreal's start.
+    progress(0.0, 1.0)
     cameras = replay_cameras.load(CAMERAS_PATH)
     update(cameras)
 

@@ -616,6 +616,11 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   respawn; and a round sent to Unreal keeps only the last 3 s of its freeze time ([demo.md](formats/demo.md)).
 - [x] **Renders at any frame rate** (2026-10-31): the Studio's fps box, 10 to 1000 (250 for slow motion made in
   Vegas or Premiere); every frame a picture of its own moment ([render.md](formats/render.md)).
+- [x] **A sending's progress bar and end sound** (the user's ask, 2026-11-03): the Studio's send bar shows how much is
+  done (also on its taskbar button), each step a share as long as it usually takes, moved on within the step by the
+  map's export (its objects, then its textures) and by Unreal's scripts (their `progress` lines); the user's sound
+  (`apps/studio/src/sounds/done.mp3`) plays when a sending, a camera update or a render ends, and the taskbar button
+  flashes if the window is behind others.
 
 ## Hard problems we know about
 

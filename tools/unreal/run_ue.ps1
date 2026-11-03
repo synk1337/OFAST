@@ -93,4 +93,4 @@ if ($Shot) {
 
 $extra = @(if ($NullRhi) { "-nullrhi" })
 & $editor $project "-ExecutePythonScript=$(& $resolve $Script)" -unattended -nosplash -stdout -FullStdOutLogOutput -NoSound @extra 2>&1 |
-    Where-Object { $_ -match "OFAST:" }
+    Where-Object { $_ -match "OFAST:" -and $_ -notmatch "OFAST: progress " }

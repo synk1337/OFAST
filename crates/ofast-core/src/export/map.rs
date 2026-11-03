@@ -132,6 +132,18 @@ pub fn export_installed_map(
     out_dir: &Path,
     options: ExportOptions,
 ) -> Result<(ExportReport, SkyboxExport), ExportError> {
+    export_installed_map_reporting(install, name, out_dir, options, &|_| {})
+}
+
+/// [`export_installed_map`], telling `progress` how much of the export is done (0 to 1) as it goes: see
+/// [`export_map_reporting`].
+pub fn export_installed_map_reporting(
+    install: &Cs2Install,
+    name: &str,
+    out_dir: &Path,
+    options: ExportOptions,
+    progress: &(dyn Fn(f64) + Sync),
+) -> Result<(ExportReport, SkyboxExport), ExportError> {
     let mut content = Content::for_map(install, name)?;
     let loaded = Map::load(&content, name)?;
     let mut note = SkyboxExport::None;
@@ -168,7 +180,14 @@ pub fn export_installed_map(
         map,
         transform: *transform,
     });
-    let report = export_map(&content, &loaded, skybox.as_ref(), out_dir, options)?;
+    let report = export_map_reporting(
+        &content,
+        &loaded,
+        skybox.as_ref(),
+        out_dir,
+        options,
+        progress,
+    )?;
     Ok((report, note))
 }
 
@@ -181,9 +200,41 @@ pub fn export_map(
     out_dir: &Path,
     options: ExportOptions,
 ) -> Result<ExportReport, ExportError> {
+    export_map_reporting(content, map, skybox, out_dir, options, &|_| {})
+}
+
+/// The share of a map's export that placing its objects takes (decoding their models and meshes), for a progress
+/// bar. Measured on 24 threads: de_dust2 1 s of 17 (textures 10 s, then the files 5 s), de_inferno 3 s of 29
+/// (textures 21 s, the files 5 s).
+const PLACING: f64 = 0.1;
+
+/// Where a map's export is once its textures are written: the `.bin` and `.gltf` files follow ([`PLACING`]).
+const WRITTEN: f64 = 0.8;
+
+/// [`export_map`], telling `progress` how much of the export is done, 0 to 1: the objects placed (each world node's
+/// as it starts: a tenth of the whole), then the textures written (until 0.8), then 1 once all is written. `progress`
+/// is called from the threads writing the textures, once per texture: hundreds to thousands of times.
+pub fn export_map_reporting(
+    content: &Content,
+    map: &Map,
+    skybox: Option<&Skybox<'_>>,
+    out_dir: &Path,
+    options: ExportOptions,
+    progress: &(dyn Fn(f64) + Sync),
+) -> Result<ExportReport, ExportError> {
+    let objects = |map: &Map| {
+        map.nodes
+            .iter()
+            .map(|n| n.scene_objects.len() + n.aggregates.len())
+            .sum::<usize>()
+            + map.entities.len()
+    };
     let mut exporter = MapExporter {
         writer: GltfWriter::new(content, out_dir, options)?,
         content,
+        progress,
+        objects: objects(map) + skybox.map_or(0, |s| objects(s.map)),
+        placed: 0,
         models: BTreeMap::new(),
         model_meshes: BTreeMap::new(),
         draw_meshes: BTreeMap::new(),
@@ -324,13 +375,23 @@ pub fn export_map(
         serde_json::to_string_pretty(&manifest).expect("JSON serializes"),
     )?;
     let MapExporter { writer, roots, .. } = exporter;
-    writer.finish(&map.name, roots)
+    let report = writer.finish_reporting(&map.name, roots, &|done, all| {
+        progress(PLACING + (WRITTEN - PLACING) * done as f64 / all.max(1) as f64);
+    })?;
+    progress(1.0);
+    Ok(report)
 }
 
 /// Keeps track of models and meshes already written so each is stored once and placed many times.
 struct MapExporter<'c> {
     writer: GltfWriter<'c>,
     content: &'c Content,
+    /// The caller's progress ([`export_map_reporting`]).
+    progress: &'c (dyn Fn(f64) + Sync),
+    /// The objects to place (world nodes' scene objects and aggregates, entities; with the skybox's), and how many
+    /// are placed, for `progress`.
+    objects: usize,
+    placed: usize,
     /// Decoded models by path (`None` when the model could not be read). `Rc` so a model can be used while the
     /// writer is borrowed mutably, without copying its buffers.
     models: BTreeMap<String, Option<Rc<Model>>>,
@@ -379,6 +440,7 @@ impl MapExporter<'_> {
             }
         };
         for node in &map.nodes {
+            self.placed(node.scene_objects.len() + node.aggregates.len());
             for object in &node.scene_objects {
                 let offset = if object.flags & object_flags::OVERLAY != 0 {
                     OVERLAY_OFFSET
@@ -419,7 +481,15 @@ impl MapExporter<'_> {
                 self.placing_world_geometry = false;
             }
         }
+        self.placed(map.entities.len());
         Ok(())
+    }
+
+    /// Counts `objects` more of the map's objects as placed (told before a node's are: its share comes as it
+    /// starts) and tells the caller's progress.
+    fn placed(&mut self, objects: usize) {
+        self.placed += objects;
+        (self.progress)(PLACING * self.placed as f64 / self.objects.max(1) as f64);
     }
 
     fn model(&mut self, path: &str) -> Option<Rc<Model>> {

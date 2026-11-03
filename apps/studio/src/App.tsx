@@ -20,6 +20,7 @@ import {
 } from "./api";
 import { DemoPage } from "./DemoPage";
 import { Logo } from "./Logo";
+import { jobEnded } from "./notify";
 import { SendBar, SendJob } from "./SendBar";
 import { UpdateBar } from "./UpdateBar";
 
@@ -48,8 +49,12 @@ export function App() {
       (done) => {
         setJob({ id, heading, title, ...done });
         setVersion((v) => v + 1);
+        jobEnded();
       },
-      (e) => setJob({ id, heading, title, error: String(e) }),
+      (e) => {
+        setJob({ id, heading, title, error: String(e) });
+        jobEnded();
+      },
     );
   };
   const send = (demo: DemoEntry, round: RoundSummary, plan: CameraPlan, look: Look) =>

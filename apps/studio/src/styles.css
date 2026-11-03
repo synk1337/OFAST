@@ -524,12 +524,66 @@ button:disabled {
 
 /* "Send to Unreal" at the bottom of the window. */
 .send-bar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 16px;
+  padding: 8px 16px 11px;
   border-top: 1px solid var(--line);
   background: var(--panel);
+}
+
+/* The job's progress: a line along the bar's bottom edge, with a sheen running over it while the job runs. */
+.send-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--line);
+}
+
+.send-progress-fill {
+  height: 100%;
+  background-color: var(--accent);
+  transition: width 0.25s linear;
+}
+
+.send-bar.running .send-progress-fill {
+  background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  background-size: 120px 100%;
+  background-repeat: no-repeat;
+  animation: send-sheen 1.8s linear infinite;
+}
+
+@keyframes send-sheen {
+  from {
+    background-position: -120px 0;
+  }
+  to {
+    background-position: calc(100% + 120px) 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .send-bar.running .send-progress-fill {
+    animation: none;
+    background-image: none;
+  }
+}
+
+.send-bar.done .send-progress-fill {
+  background-color: var(--ok);
+}
+
+.send-bar.failed .send-progress-fill {
+  background-color: var(--bad);
+}
+
+.send-percent {
+  display: inline-block;
+  min-width: 3.2em;
+  font-variant-numeric: tabular-nums;
 }
 
 .send-bar.running {

@@ -83,6 +83,13 @@ def log(message):
     unreal.log("OFAST: " + message)
 
 
+def progress(start, end):
+    """Tells the Studio where the import is: its next stage goes from `start` to `end` of the import (0 to 1), as
+    main() times them (a re-import of de_dust2: 70 s). The Studio's progress bar follows these lines and does not
+    show them (unreal.rs, run_script)."""
+    unreal.log("OFAST: progress %.3f %.3f" % (start, end))
+
+
 levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
 actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
 
@@ -2850,9 +2857,13 @@ def main():
     unreal.EditorPythonScripting.set_keep_python_script_alive(True)
     with open(MANIFEST) as f:
         manifest = json.load(f)
+    # The stages' shares of the import, from a re-import of de_dust2 (70 s; the deletions take longer once after a
+    # re-export, the scene import far longer the first time).
+    progress(0.0, 0.07)
     # Deletions happen before the level is opened: with its objects in memory each deleted asset costs far more
     # (de_nuke: 602 instances in 272 s with the level open; de_inferno: 3746 assets in 190 s before it).
     evict_stale_interchange_assets()
+    progress(0.07, 0.13)
     # Materials glTF cannot describe (two-layer blends, model tints, tint masks): their instances are set up before
     # the scene import, while no mesh in the level uses them yet, then put on the imported meshes.
     blends = layer_blend_instances()
@@ -2865,9 +2876,12 @@ def main():
     # meshes' placements, not the meshes: the 3D skybox keeps the translucent material).
     overlays = overlay_instances()
     delete_unused_ofast_assets(BLEND_FOLDER)
+    progress(0.13, 0.35)
     prepare_level()
     unreal.EditorAssetLibrary.save_directory("/Game/OFAST", only_if_is_dirty=True, recursive=True)
+    progress(0.35, 0.72)
     imported = import_scene()
+    progress(0.72, 0.93)
     if blends:
         log("OFAST materials: %d mesh slots swapped" % swap_material_slots(imported, blends))
         unreal.EditorAssetLibrary.save_directory("/Game/OFAST/" + NAME, only_if_is_dirty=True, recursive=True)
@@ -2892,6 +2906,7 @@ def main():
     occluders, glass = add_glass_occluders(imported)
     if glass:
         log("glass occluders: %d for %d dusty glass materials" % (occluders, glass))
+    progress(0.93, 1.0)
     # The 3D skybox stays behind the world and out of its lighting, as in CS2.
     setup_skybox(imported)
     delete_unused_ofast_assets(SKYBOX_FOLDER)

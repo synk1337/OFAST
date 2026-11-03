@@ -201,6 +201,12 @@ export interface SendProgress {
   message: string;
   /** A warning the bar keeps showing (later lines replace the others). */
   warning: boolean;
+  /** How much of the job is done, 0 to 1 (each step takes a share as long as it usually takes). */
+  done: number;
+  /** Where the progress bar will be once what runs now is done: it creeps towards it meanwhile… */
+  next: number;
+  /** …over about this many seconds (as long as the steps usually take). */
+  wait_s: number;
 }
 
 /** Where to look in Unreal once a round is sent. */

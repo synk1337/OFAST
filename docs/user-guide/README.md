@@ -132,8 +132,12 @@ body and shows only their arms and gun, so a camera outside the players always s
 
 ## Sending a round to Unreal
 
-**Send to Unreal** builds the round in OFAST's Unreal project. A bar at the bottom of the window follows it, and
-you can keep browsing meanwhile. It:
+**Send to Unreal** builds the round in OFAST's Unreal project. A bar at the bottom of the window follows it, with a
+progress bar and how much is done (also on the Studio's button in the taskbar), and you can keep browsing meanwhile,
+or do something else: when it is done (or failed), the Studio plays a sound, and its taskbar button flashes if its
+window is behind others. The progress is an estimate: each step takes a share of the bar as long as it usually takes,
+and the bar moves on as the step says it goes (Unreal's start, the players' files, the map's textures); a map's first
+import can take much longer than its share. It:
 
 1. exports the round: every player's movement and animation (CS2's own poses), their agent and weapons with
    their skins (the paint, its pattern and wear, as the demo records them: Fire Serpent, Asiimov, Dopplers, Fades,
@@ -284,7 +288,8 @@ and how much of the round: **around the kills** (from 4 seconds before the first
 opened the round from a highlight in the finder, only that highlight's kills) or **the whole round**. The length is
 shown beside it. Close Unreal first (the render needs OFAST's project to itself), and if you can, close CS2: the
 render needs the graphics card's memory. Unreal loads the map without a window (a minute or two), then opens one
-that shows the frames as they render (closing it stops the render); the bar counts the percent done. Final takes
+that shows the frames as they render (closing it stops the render); the bar counts the percent done, and the sound
+plays at the end, as for a sending. Final takes
 about 2 seconds a frame on a recent graphics card, at 60 frames a second (a 20-second highlight: 1200 frames, about
 40 minutes).
 

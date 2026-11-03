@@ -98,8 +98,8 @@ import shot_effects  # noqa: E402
 import smoke_volumes  # noqa: E402
 import source_files  # noqa: E402
 from replay_cameras import (  # noqa: E402
-    ANGLE_TOLERANCE_DEG, POSITION_TOLERANCE_CM, TAG, UNITS_TO_CM, channels_by_name, key_visibility, reduce_keys,
-    spawn_tagged, to_unreal, unwrap)
+    ANGLE_TOLERANCE_DEG, POSITION_TOLERANCE_CM, TAG, UNITS_TO_CM, channels_by_name, key_visibility, progress,
+    reduce_keys, spawn_tagged, to_unreal, unwrap)
 
 REPLAY_PATH = os.environ["OFAST_REPLAY"]
 SHOT_DIR = os.environ.get("OFAST_SHOT", "")
@@ -869,6 +869,7 @@ def import_agents(replay):
     pipelines = character_pipelines(manifest.get("fps", 30))
     agents = {}
     for entry in manifest["agents"]:
+        look_file_starts()
         path = os.path.join(folder, entry["file"])
         look = entry["file"][len(base) + 1:-len(".gltf")]  # <agent>_<mesh groups>[_<gloves>]
         meshes, animations = import_player_file(replay, path, look, pipelines, entry["players"])
@@ -920,6 +921,7 @@ def import_viewmodels(replay):
     pipelines = character_pipelines(manifest.get("fps", 30))
     viewmodels = {}
     for entry in manifest.get("viewmodels", []):
+        look_file_starts()
         path = os.path.join(folder, entry["file"])
         look = entry["file"][len(base) + 1:-len(".gltf")]  # viewmodel_<agent>[_<gloves>]
         meshes, animations = import_player_file(replay, path, look, pipelines, entry["players"])
@@ -1063,6 +1065,23 @@ def apply_owners(cameras, hidden_in_own_view, own_view_only):
     log("owner visibility: %d actors on %d POV cameras" % (owned, len(cameras)))
 
 
+# The run's stages, for the Studio's progress bar (progress lines), from de_dust2's round 1 (126 and 390 s): the
+# agents' and viewmodels' files take LOOKS_SHARE of the run (80 and 89 %), a share each (LOOK_FILES counts them); the
+# round's dropped weapons and cases until ROUND_LOOKS_SHARE; then the map's level loads (LEVEL_SHARE: 8 and 3 %) and
+# the sequence is built (12 and 5 %).
+LOOKS_SHARE = 0.8
+ROUND_LOOKS_SHARE = 0.84
+LEVEL_SHARE = 0.91
+LOOK_FILES = {"all": 0, "done": 0}
+
+
+def look_file_starts():
+    """Tells the Studio the import of an agents' or viewmodels' file starts (a progress line)."""
+    done, files = LOOK_FILES["done"], max(LOOK_FILES["all"], 1)
+    progress(LOOKS_SHARE * done / files, LOOKS_SHARE * min(done + 1, files) / files)
+    LOOK_FILES["done"] += 1
+
+
 def import_looks(replay):
     """Imports every file of the players export (agents, viewmodels, dropped weapons, cases), before the map's level
     is loaded: sharing an import's textures deletes its own copies (share_textures), and a deletion searches every
@@ -1075,8 +1094,13 @@ def import_looks(replay):
     budget); without them, 0.15 GB."""
     shadows = unreal.SystemLibrary.get_console_variable_int_value("r.Shadow.Virtual.Enable")
     unreal.SystemLibrary.execute_console_command(None, "r.Shadow.Virtual.Enable 0")
+    loaded = agents_manifest(replay)
+    LOOK_FILES["all"] = len(loaded[2]["agents"]) + len(loaded[2].get("viewmodels", [])) if loaded else 0
     try:
-        looks = {"agents": import_agents(replay), "viewmodels": import_viewmodels(replay),
+        agents = import_agents(replay)
+        viewmodels = import_viewmodels(replay)
+        progress(LOOKS_SHARE, ROUND_LOOKS_SHARE)
+        looks = {"agents": agents, "viewmodels": viewmodels,
                  "world_models": import_dropped_weapons(replay), "cases": import_cases(replay)}
     finally:
         unreal.SystemLibrary.execute_console_command(None, "r.Shadow.Virtual.Enable %d" % shadows)
@@ -1415,8 +1439,10 @@ def main():
     if replay.get("format") != "ofast-replay" or replay.get("version") != 1:
         raise RuntimeError("%s is not an OFAST replay (version 1)" % REPLAY_PATH)
     looks = import_looks(replay)
+    progress(ROUND_LOOKS_SHARE, LEVEL_SHARE)
     clean_level(replay["map"])
     set_look(map_level(replay["map"]))
+    progress(LEVEL_SHARE, 1.0)
     sequence, cameras, shot_actors = build(replay, looks)
     # The round's cinematics, if it was sent before and the Cameras panel made some (ofast_cameras.py: from their
     # file, cut in).

@@ -49,6 +49,12 @@ def log(message):
     unreal.log("OFAST: " + message)
 
 
+def progress(start, end):
+    """Tells the Studio where the run is: its next stage goes from `start` to `end` of the run's work (0 to 1). The
+    Studio's progress bar follows these lines and does not show them (unreal.rs, run_script)."""
+    unreal.log("OFAST: progress %.3f %.3f" % (start, end))
+
+
 def to_unreal(position):
     x, y, z = position
     return (x * UNITS_TO_CM, -y * UNITS_TO_CM, z * UNITS_TO_CM)

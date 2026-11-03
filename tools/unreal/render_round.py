@@ -54,7 +54,11 @@ import ofast_cameras  # noqa: E402
 import ofast_look  # noqa: E402
 import ofast_viewmodel  # noqa: E402
 import smoke_volumes  # noqa: E402
-from replay_cameras import TAG, log  # noqa: E402
+from replay_cameras import TAG, log, progress  # noqa: E402
+
+# For the Studio's progress bar: the run's share before Movie Render Queue renders (the level loading, the job set
+# up, LEVEL_TICKS); its frames take the rest.
+SETUP_SHARE = 0.15
 
 # Also listed in the Studio: apps/studio/src-tauri/src/unreal.rs (PRESETS) and apps/studio/src/names.ts.
 PRESETS = {
@@ -188,6 +192,7 @@ def main():
     folder = ("%s_%s" % (path.rsplit("/", 1)[-1], name) + ("_%dfps" % fps if fps != OUTPUT_FPS else "")
               + ("" if blur else "_sharp") + ("_%d-%d" % tuple(ticks) if frames else ""))
     folder = os.path.join(os.environ["OFAST_SHOT"], folder)
+    progress(0.0, SETUP_SHARE)
     levels.load_level(level)
     # The Look panel's settings (ofast_look.py), even if the level was not saved after they were changed; the Cameras
     # panel's cinematics, from their file, likewise (ofast_cameras.py).
@@ -200,7 +205,7 @@ def main():
     log("render %s, preset %s, %d frames a second, %s, frames %s, %d player actors in layer %r, into %s"
         % (path, name, fps, "motion blur" if blur else "sharp", frames or "all", players, PLAYERS_LAYER, folder))
     queue_subsystem = unreal.get_editor_subsystem(unreal.MoviePipelineQueueSubsystem)
-    state = {"ticks": 0, "done": False, "percent": 0}
+    state = {"ticks": 0, "done": False, "percent": 0, "bar": 0}
 
     def tick(_delta):
         state["ticks"] += 1
@@ -209,10 +214,16 @@ def main():
             if not queue_subsystem.is_rendering():
                 finished(None, None)
                 return
-            percent = int(state["job"].get_status_progress() * 100) // 10 * 10
+            done = state["job"].get_status_progress()
+            percent = int(done * 100) // 10 * 10
             if percent > state["percent"]:
                 state["percent"] = percent
                 log("%d %% done" % percent)
+            # The bar, by the percent: from there to the next.
+            if int(done * 100) > state["bar"]:
+                state["bar"] = int(done * 100)
+                share = (1.0 - SETUP_SHARE) / 100
+                progress(SETUP_SHARE + share * state["bar"], SETUP_SHARE + share * min(state["bar"] + 1, 100))
             return
         if state["ticks"] < LEVEL_TICKS:
             return

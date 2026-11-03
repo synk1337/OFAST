@@ -21,7 +21,8 @@ What it does so far:
 - Picks each kill's camera (the killer's or the victim's eyes, behind, around or above the killer, a fixed camera),
   first-person smoothing and HLAE camera files for a round (`docs/formats/cameras.md`)
 - Sends a round to OFAST's Unreal project ("Send to Unreal": the round exported with its players and cameras, the
-  map exported and imported the first time, the round built as a Level Sequence in the map's level, with progress),
+  map exported and imported the first time, the round built as a Level Sequence in the map's level, with a progress
+  bar, also on the taskbar button, and a sound at the end: `src/sounds/done.mp3`),
   changes the cameras of a round already there ("Update cameras"), then opens it ("Open in Unreal": the level, and
   the sequence in Sequencer)
 - Renders a round already there ("Render": Movie Render Queue, a preset, at a frame rate, with motion blur or sharp,

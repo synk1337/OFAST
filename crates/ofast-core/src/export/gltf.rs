@@ -2433,7 +2433,9 @@ impl<'c> GltfWriter<'c> {
     /// Threads finish in any order, so the first thread to produce an image writes it to a temporary
     /// `<index>.part`; once all are done the file is renamed after the first texture, in registration order, that
     /// has those pixels — the names never depend on thread timing.
-    fn write_textures(&mut self) -> Vec<String> {
+    fn write_textures(&mut self, written: &(dyn Fn(usize, usize) + Sync)) -> Vec<String> {
+        let count = std::sync::atomic::AtomicUsize::new(0);
+        let total = self.texture_jobs.len();
         let warnings = Mutex::new(Vec::new());
         let textures_dir = self.out_dir.join("textures");
         let part = |index: usize| textures_dir.join(format!("{index}.part"));
@@ -2468,6 +2470,10 @@ impl<'c> GltfWriter<'c> {
                 if first && let Err(e) = write_png(&part(index), &image) {
                     warn(&e);
                 }
+                written(
+                    count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1,
+                    total,
+                );
                 hash
             })
             .collect();
@@ -2512,12 +2518,19 @@ impl<'c> GltfWriter<'c> {
 
     /// Writes every registered texture, then the `.bin` and `.gltf` files, then removes texture files no glTF in the
     /// folder uses any more (see "Texture files" in the module docs).
-    pub(crate) fn finish(
+    pub(crate) fn finish(self, name: &str, roots: Vec<usize>) -> Result<ExportReport, ExportError> {
+        self.finish_reporting(name, roots, &|_, _| {})
+    }
+
+    /// [`finish`](Self::finish), telling `written` how many of the textures are written (and how many there are) as
+    /// each one is: the longest part of a map's export. It is called from the threads writing them.
+    pub(crate) fn finish_reporting(
         mut self,
         name: &str,
         roots: Vec<usize>,
+        written: &(dyn Fn(usize, usize) + Sync),
     ) -> Result<ExportReport, ExportError> {
-        let files = self.write_textures();
+        let files = self.write_textures(written);
         // One glTF image and texture per file, in order of first use; materials are pointed at them.
         let mut images: Vec<Json> = Vec::new();
         let mut textures: Vec<Json> = Vec::new();
