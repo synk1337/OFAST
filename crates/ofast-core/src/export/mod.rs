@@ -27,6 +27,7 @@ pub mod effects;
 mod environment;
 mod gloves;
 pub mod gltf;
+pub mod ground;
 pub mod keychains;
 mod light_cookie;
 pub mod loadout;

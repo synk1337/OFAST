@@ -31,6 +31,7 @@
 //! | [`recipe`] | CS2's pose recipe played back: each demo's clip table |
 //! | [`viewmodel`] | each player's first-person arms and weapon over a round, from the demo's weapon states |
 //! | [`constraints`] | the model's procedural bones (twist bones, shoulder blades) from its `BoneConstraintList` |
+//! | [`feet`] | CS2's foot IK rebuilt: the feet on stairs and slopes, from the map's collision |
 //!
 //! Knowledge from ValveResourceFormat (MIT; `ModelAnimation2/AnimationClip.cs`, `SkeletonRetargeter.cs`, the
 //! AnimGraph runtime and `Gameplay/AimCS.cs`), checked on local CS2 files; independent implementation. Details:
@@ -41,6 +42,7 @@ pub mod bake;
 mod clip;
 pub mod constraints;
 pub mod eval;
+pub mod feet;
 pub mod graph;
 pub mod layers;
 pub mod locomotion;

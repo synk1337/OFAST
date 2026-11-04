@@ -59,6 +59,7 @@ use crate::anim::bake::{
     ActionGraph, GraphRig, LocomotionSets, PlayerExtras, UpperBody, WeaponAnimation, WeaponSet,
     bake_player, frame_samples,
 };
+use crate::anim::feet::{FeetReport, Legs, Stance, plant_feet};
 use crate::anim::graph::Graph;
 use crate::anim::layers::BoneMask;
 use crate::anim::recipe::{ClipTable, RecipePlayer, clips_by_path, learn_clip_table};
@@ -174,6 +175,12 @@ struct Round<'a> {
     world: Option<PhysicsData>,
     /// Its solid collision, for the bodies of the dead.
     collision: Option<WorldCollision>,
+    /// The drawn ground near where the players went, for their feet ([`super::ground`]; `None` with `OFAST_FEET=0`
+    /// or when the map cannot be read).
+    ground: Option<WorldCollision>,
+    /// What stops the players walking (the solid world and the player clips), which the drawn ground under a foot
+    /// may not rise above (`None` with `OFAST_FEET=0` or without the world's physics).
+    walked: Option<WorldCollision>,
     /// Each player's aim punch (pitch, yaw) by tick, which their body's aim follows ([`super::punch`]).
     aim_punch: BTreeMap<u32, HashMap<u32, [f32; 2]>>,
     /// The skeleton's bone masks in its order, for the pose recipes.
@@ -314,6 +321,14 @@ pub fn export_players(
         })
         .ok();
     let collision = world.as_ref().map(WorldCollision::from_physics);
+    let ground = crate::anim::feet::enabled()
+        .then(|| super::ground::round_ground(content, track))
+        .flatten()
+        .map(|(ground, _)| ground);
+    let walked = world
+        .as_ref()
+        .filter(|_| ground.is_some())
+        .map(|w| WorldCollision::from_physics_where(w, CollisionAttribute::stops_players));
     let shot_data = ShotData::load(content, items_text.as_deref(), &mut warnings);
     let recoil = recoil_by_tick(track, &shot_data);
     let aim_punch = recoil
@@ -332,6 +347,8 @@ pub fn export_players(
         frames: frame_samples(track, animation_fps(track)),
         world,
         collision,
+        ground,
+        walked,
         aim_punch,
         masks,
         paints: Paints::new(items_text.as_deref()),
@@ -434,6 +451,7 @@ pub fn export_players(
     let mut bodies: Vec<Body> = Vec::new();
     let mut recipe_ticks = (0usize, 0usize);
     let mut charm_turns = Vec::new();
+    let mut feet = FeetReport::default();
     for (look, players) in &groups {
         let mut name = format!(
             "{demo_name}_r{}_{}_{}",
@@ -458,6 +476,7 @@ pub fn export_players(
             &name,
             &mut recipe_ticks,
             &mut charm_turns,
+            &mut feet,
         )?;
         muzzles.extend(look_muzzles);
         bodies.extend(look_bodies);
@@ -525,6 +544,13 @@ pub fn export_players(
         report
             .checks
             .push(charm_check("in third person", charm_turns));
+    }
+    if feet.standing > 0 {
+        report.checks.push(format!(
+            "feet on the ground: {} standing player-frames, a foot moved more than an inch on {}, out of reach on {}, \
+             over a ledge on {}; the pelvis down at most {:.1} in",
+            feet.standing, feet.moved, feet.short, feet.hanging, feet.pelvis_drop
+        ));
     }
     let dropped = export_dropped(&round, demo_name, out_dir, &mut report);
     let (viewmodels, view_muzzles) =
@@ -966,6 +992,15 @@ const HITBOX_SET: &str = "cstrike";
 /// there (349 re-decided since the shot clip restarts with each bullet), 34 of 40 ways out within 3 inches.
 const HIT_POSE_TICKS: f32 = 3.0;
 
+/// How far a drawn surface under a foot may rise above what the players walk on and still be the foot's ground
+/// (inches): a floor's drawn tiles a little over its collision. A drawn prop higher than that, with no collision of its
+/// own (de_anubis's stone block at (1060, 2328): 16 inches over the floor the players walk through it on), is not.
+const WALKED_TOLERANCE: f32 = 2.0;
+
+/// How near a player's upright axis a hit is to be on them (inches), for their feet ([`crate::anim::feet::Stance::hit`]):
+/// a body's half-width with the arms and the gun.
+const VICTIM_REACH: f32 = 24.0;
+
 /// A player's hitboxes in the world on frame `world` (the agent's posed bones, model space) with the player's
 /// actor transform `actor`: each of `hitboxes` (bone index, shape) on its bone.
 fn posed_hitboxes(
@@ -1039,7 +1074,8 @@ fn muzzle_at(
 
 /// Writes one look's glTF ([`LookExport`]); `recipe_ticks` counts its players' living ticks and those played from the
 /// pose recipes (with [`Round::clip_table`]); `charm_turns` gathers its charms' turns in the world from frame to
-/// frame ([`keychains::Chain::world_turns`]).
+/// frame ([`keychains::Chain::world_turns`]); `feet` adds what placing its players' feet did ([`plant_feet`]).
+#[allow(clippy::too_many_arguments)] // Each is one of the round's tallies.
 fn export_look(
     round: &Round<'_>,
     look: &Look,
@@ -1048,6 +1084,7 @@ fn export_look(
     file_name: &str,
     recipe_ticks: &mut (usize, usize),
     charm_turns: &mut Vec<f32>,
+    feet: &mut FeetReport,
 ) -> Result<LookExport, ExportError> {
     let content = round.content;
     let track = round.track;
@@ -1059,6 +1096,8 @@ fn export_look(
     // The agent's twist bones and shoulder blades, placed after each pose as CS2 does. Its glove skin, merged by
     // bone name, follows them.
     let constraints = BoneConstraints::of(&agent);
+    // Its legs, for the feet on the ground (with the map's collision, unless `OFAST_FEET=0`).
+    let legs = Legs::of(&agent.skeleton).filter(|_| crate::anim::feet::enabled());
     let mut warnings: Vec<String> = constraints
         .skipped
         .iter()
@@ -1358,14 +1397,54 @@ fn export_look(
         .zip(&stattrak_counts)
     {
         let poses = hold_gaps(poses, &round.clip_skeleton.reference);
-        let mut worlds: Vec<Vec<Affine>> = poses
-            .iter()
-            .map(|pose| {
-                let mut world = retargeter.world(pose);
-                constraints.apply(&mut world);
-                world
-            })
-            .collect();
+        let mut worlds: Vec<Vec<Affine>> = poses.iter().map(|p| retargeter.world(p)).collect();
+        // The feet on the ground under them (stairs, slopes), before the twist bones follow the legs: the drawn
+        // ground or the solid physics, whichever a ray down meets first (a box whose top the drawn ground lacks). A
+        // drawn surface counts only where the players walk on it or above it (the steps under a clip ramp), not
+        // above what they walk on (props without collision, which they walk through).
+        if let (Some(legs), Some(drawn)) = (&legs, round.ground.as_ref()) {
+            let mut stances: Vec<Option<Stance>> = round
+                .frames
+                .iter()
+                .map(|&(_, index)| {
+                    let p = track.samples[index]
+                        .players
+                        .iter()
+                        .find(|p| p.controller == controller && p.alive)?;
+                    Some(Stance {
+                        actor: super::deaths::actor(p),
+                        standing: p.rig.on_ground && !p.rig.on_ladder,
+                        hit: false,
+                    })
+                })
+                .collect();
+            // The frames the server posed the player's hitboxes for a hit on them: the body kept up there.
+            for &(_, k, ref points) in &hits {
+                if let Some(stance) = stances.get_mut(k).and_then(Option::as_mut) {
+                    let [x, y, z] = [0, 1, 2].map(|i| stance.actor[i][3]);
+                    stance.hit |= points.iter().any(|p| {
+                        (p[0] - x).hypot(p[1] - y) < VICTIM_REACH
+                            && (z - 8.0..z + 80.0).contains(&p[2])
+                    });
+                }
+            }
+            let ground = |from: [f32; 3], reach: f32| {
+                let down = [0.0, 0.0, -1.0];
+                let hit = |c: Option<&WorldCollision>| c.and_then(|c| c.ray_hit(from, down, reach));
+                let walked = hit(round.walked.as_ref());
+                let drawn = hit(Some(drawn))
+                    .filter(|d| walked.is_none_or(|w| d.distance >= w.distance - WALKED_TOLERANCE));
+                [drawn, hit(round.collision.as_ref())]
+                    .into_iter()
+                    .flatten()
+                    .min_by(|a, b| a.distance.total_cmp(&b.distance))
+                    .map(|hit| (hit.distance, hit.normal))
+            };
+            feet.add(plant_feet(&mut worlds, &stances, legs, &ground, round.fps));
+        }
+        for world in &mut worlds {
+            constraints.apply(world);
+        }
         // Each death: the body falls as the agent's ragdoll and stays.
         if let Some(ragdoll) = &ragdoll {
             let deaths = bake_deaths(

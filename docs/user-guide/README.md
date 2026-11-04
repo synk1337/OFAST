@@ -139,7 +139,8 @@ window is behind others. The progress is an estimate: each step takes a share of
 and the bar moves on as the step says it goes (Unreal's start, the players' files, the map's textures); a map's first
 import can take much longer than its share. It:
 
-1. exports the round: every player's movement and animation (CS2's own poses), their agent and weapons with
+1. exports the round: every player's movement and animation (CS2's own poses, their feet on the steps and slopes
+   under them), their agent and weapons with
    their skins (the paint, its pattern and wear, as the demo records them: Fire Serpent, Asiimov, Dopplers, Fades,
    Crimson Web, Gungnir, Royal Guard, case-hardened skins…, the glove skins, 2025's too, the stickers, keychains
    (swinging as the weapon moves), name tags and StatTrak counters, which count up on the round's kills),

@@ -49,7 +49,7 @@ use crate::texture::Image;
 use crate::vpk::Vpk;
 
 /// Entity classes whose `model` is drawn.
-const MODEL_ENTITY_CLASSES: &[&str] = &[
+pub(crate) const MODEL_ENTITY_CLASSES: &[&str] = &[
     "prop_dynamic",
     "prop_dynamic_override",
     "prop_physics",

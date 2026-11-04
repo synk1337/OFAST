@@ -181,7 +181,7 @@ The root of the main graph is a stack (`crates/ofast-core/src/anim/{graph,layers
 Snap Weapon                          wpn onto hand_R (rebuilt in anim::aim::snap_weapon)
 └ Layer Blend (model space)          + flashed (not rebuilt)
   └ Aim IK (CNmAimCSNode)            procedural aim, rebuilt in anim::aim
-    └ Foot IK                        (not rebuilt)
+    └ Foot IK                        the feet on the ground, rebuilt in anim::feet ("Feet on the ground")
       └ Layer Blend
           base: SM0 → Locomotion = Layer Blend(locomotion set, + Idle Poses (additive, UpperBody))
           + Weapons        (model space, UpperBody): the weapon's own graph — draw, reload, silencer, knife attacks
@@ -342,6 +342,56 @@ moved along the replay's positions and turned along its body yaw ([replay.md](re
 Until 2026-10-22 the animations were keyed at 30 fps (a rate Unreal's glTF import guesses by itself): a weapon
 switch then fell between keys and the weapon vanished for 66 ms around it — a skinned knife held up to the tick of a
 switch was already gone in the frame compared with CS2.
+
+## Feet on the ground (`anim::feet`, `export::ground`)
+
+CS2's main graph has a foot IK under the aim (`CNmFootIKNode` "Foot IK": effectors `ankle_L` / `ankle_R`, targets the
+control parameters `ik_left_foot` / `ik_right_foot`, in character space, which the game's code sets from the ground).
+Demos carry neither the targets nor the ground, and the clips are made for flat ground, so before 2026-11-04 the feet
+floated over the lower steps of stairs and over the downhill side of slopes, and sank into the uphill side. OFAST
+places them itself, after the pose and before the twist bones follow the legs:
+
+- **The ground** under each foot is a ray down under its ankle, the middle of the foot and its ball, the middle
+  height of the three (a foot over a step's edge stands on the step only when most of it is over it), smoothed over
+  7 frames (median: a foot swaying over an edge flickered between two heights). The rays meet the map's **drawn**
+  surfaces that face up near where the round's players went (`export::ground`: 88 000 triangles for de_anubis's round
+  14, built in 0.9 s), or its solid physics, the nearer. The physics alone is not the ground one sees: many stairs
+  are a smooth ramp tagged `playerclip` over steps that have no collision (de_anubis's out of T spawn: under the
+  ramp the physics has only the floor at the stairs' foot). A drawn surface counts only where it is not above what
+  the players walk on (the physics with the player clips): de_anubis has a 16-inch stone block at (1060, 2328) with no
+  collision, which the players walk through.
+- **A foot down** (its ankle within 2 inches of its height at bind pose) takes the ground under it. A foot in the air
+  between two steps goes from the ground it left to the ground it lands on (smoothstep over the swing, at most
+  0.8 s), so it rises onto a stair as it swings rather than when it passes over the edge.
+- **A ledge**: a foot over ground more than 14 inches below the other foot's keeps its pose, hanging, as in CS2, when
+  the ground drops that far in one go between the feet (rays every 6 inches along the line from one to the other): on
+  stairs the ground between two feet a stride apart drops step by step, 8 to 18 inches each, and both stand. Decided
+  over 7 frames (the majority), so a foot does not flicker between hanging and standing.
+- **The body** comes down only as far as the feet that carry it (those down) cannot reach their ground by
+  straightening their legs (to 98 % of their length), at most 14 inches, smoothed over 0.08 s. A player's origin
+  rests on the highest ground under its 32-inch box, or on a clip ramp (de_anubis's start up to 18 inches over the
+  floor, 30 inches before the first step), so on stairs the body comes down to the lower foot; on gentle slopes the
+  legs reach and the body stays. A foot in the air goes no lower than the body brings it: on a steep clip ramp the
+  origin climbs 25 inches while the clip keeps one foot planted, and that foot lifts with the body rather than
+  stretching back down to the step it left. Around a hit on a player (0.3 s before and after) the body eases back up
+  to where CS2's server posed it: the server's graph has the foot IK but nothing that lowers the body, and with the
+  pelvis lowered a headshot's blood showed 4 inches above the head (de_anubis round 14, tick 138704, the player on a
+  clip 2 inches over the drawn floor). The legs still reach their ground as far as they go.
+- **The legs** reach their targets with a two-bone IK (thigh and shin turned in the plane of the knee's bend, their
+  lengths kept); each foot keeps its animated orientation, tilted to the ground's slope while down (at most 25°). Each
+  foot's height in the world is smoothed over 0.03 s where it takes or loses its ground. It eases in over 0.15 s after
+  a landing and out before a jump or a ladder.
+
+**Checked** (2026-11-04) on de_anubis round 14 (faze-vs-falcons-m2, 49 362 standing player-frames) and de_dust2 round
+17 (aurora-vs-furia-m1, 31 627): the feet move on 41 % and 50 % of the frames, a foot is out of its leg's reach on 1
+frame each, over a ledge on 59 and 4, the pelvis and ankles move as smoothly as the animation does frame to frame
+(mean second difference of their heights within 3 %; one frame with 2 inches/frame² more than the animation's own).
+The demo's hits fit the posed bodies as well as without (de_anubis: 49 of 49 on a posed body, 45 within an inch of a
+hitbox's surface, their way in within an inch 28, each hit within 0.01 inch of where it was): the server's poses keep
+the body up on slopes, which lowering it only for what the legs cannot reach respects (lowering it to the lower foot
+every time gave 40 of 49 within an inch). Side views drawn from the bones (`OFAST_FEET=0` turns the feet off to
+compare; `OFAST_FEET_DUMP` writes the bones for `tools/compare/feet_views.py`): kyousuke up the stairs out of T spawn
+(ticks 133210 – 133260), a player beside the stone block.
 
 ## Weapons in hand and holstered (`export::loadout`)
 
@@ -682,9 +732,9 @@ shotguns (`reload_stage`, `CNmCurrentSyncEventIDNode`); weapon skins.
 - **Sync tracks** are not read (the locomotion blends share one phase instead); of the clip events only
   `WPN_IK_ACTION_ENDING` and `KnifeSwingBack` are used (not `MS_AIR_FINISHING`, the reload's `WPN_RELOAD_OUTRO`, nor
   the states' timed events such as `WPN_DISABLE_HAND_IK` in a deploy's first 0.3 s).
-- **The rest of the graphs**: foot IK (needs the ground under each foot); bone masks inside layer blends (the
-  layers OFAST evaluates take the masks of the main graph's layers instead). The aim's weapon drop and tilt and
-  roll off to the side.
+- **The rest of the graphs**: bone masks inside layer blends (the layers OFAST evaluates take the masks of the main
+  graph's layers instead). The aim's weapon drop and tilt and roll off to the side. The foot IK is OFAST's own (CS2's
+  targets are the game's code): its feet are not checked against CS2's on stairs yet.
 - **Estimates**: the ladder's direction (from the approach: demos have no ladder normal), the ladder cycle height,
   the flash fading (CS:GO's overlay curve), the fire flinch's end.
 - **Not checked against CS2 yet**: the thresholds of `anim::states` (starts, plants and turns, turns on the spot),

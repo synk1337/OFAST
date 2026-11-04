@@ -176,6 +176,12 @@ impl CollisionAttribute {
 }
 
 impl CollisionAttribute {
+    /// Stops a player walking: what stops a falling body ([`CollisionAttribute::stops_bodies`]) and the player clips
+    /// (`playerclip`: the smooth ramps some maps lay over their stairs, invisible walls).
+    pub fn stops_players(&self) -> bool {
+        self.stops_bodies() || self.interact_as.iter().any(|tag| tag == "playerclip")
+    }
+
     /// Stops a bullet: what stops a falling body ([`CollisionAttribute::stops_bodies`]) except the shapes tagged
     /// `passbullets` (grates and floor panels bullets go through) and glass (`window`: a bullet breaks it and goes
     /// on, the demo then sends the breaking glass on its own).

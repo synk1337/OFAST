@@ -171,10 +171,12 @@ player and round.
   `m_flFlashDuration` (tournament demos have no `player_blind`); spectators (a major demo's observer) left out.
   [animation.md](formats/animation.md#evaluating-the-graphs-animeval-animstates).
 - [ ] M4.4e Foot IK on slopes and stairs; checks against CS2 of the ladder legs, flinches and the start / turn
-  thresholds. Done so far: the model's procedural bones (`BoneConstraintList` in `m_keyValueText`, read with a new
-  KV3 text reader: tilt-twist, point and aim constraints on every exported frame; the bind pose kept on all 91
-  agent and glove models, the hand's roll shared by the forearm's twist bones —
-  [animation.md](formats/animation.md#procedural-bones-animconstraints)); a major's demo (Aurora vs FURIA,
+  thresholds. Done so far: the feet on the ground (2026-11-04, `anim::feet`, `export::ground`: the map's drawn steps
+  under its clip ramps, the body down only for what the legs cannot reach and kept up around hits, smooth frame to
+  frame; the demo's hits fit the bodies as well as without — [animation.md](formats/animation.md#feet-on-the-ground));
+  the model's procedural bones (`BoneConstraintList` in `m_keyValueText`, read with a new KV3 text reader:
+  tilt-twist, point and aim constraints on every exported frame; the bind pose kept on all 91 agent and glove models,
+  the hand's roll shared by the forearm's twist bones — [animation.md](formats/animation.md#procedural-bones-animconstraints)); a major's demo (Aurora vs FURIA,
   de_nuke) checked: glove skins merged as CS2 draws them, flashed poses, knife inspect and sprays matching from
   CS2's own Chase Cam positions ([animation.md](formats/animation.md#verified)).
 - [x] **M4.5 Weapons and each player's look**: models named by resource id (`m_hModel` = MurmurHash64B of the path,
