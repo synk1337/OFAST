@@ -14,13 +14,23 @@
 //! `worldmodel_gun.vnmgraph+ak47.vnmgraph`, plays only while that weapon is in hand, a locomotion graph only with its
 //! set), their own graph's first, ranked by how well their length fits. Last, the matches the blends' structure
 //! dropped (and what the index has now) and the share of sample tasks the table names.
+//!
+//! Why an index goes unmatched (how recipe version 3's dead pawns, silent reloads and plants were found):
+//!
+//! - `OFAST_INDEX=598,257`: per index, its player-ticks (alive and dead), the weapons and gameplay states
+//!   (`m_iWeaponGameplayAnimState`) in hand, the clips OFAST bakes on its ticks with their Jaccard index against it,
+//!   the blends it feeds, and how its starts (its time going back) lie against the player's shots;
+//!   `OFAST_STARTS=n` adds its first n starts with the body-relative velocity (forward, left) 8 ticks before, at and
+//!   8 after, and what OFAST bakes then; `OFAST_DEAD=1` prints some recipes of dead players.
+//! - `OFAST_TIMELINE=name,from,to`: one player's ticks: the body-relative velocity, CS2's samples (`index@time`,
+//!   `=clip` where the table names it) and the clips OFAST bakes.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use ofast_core::anim::Clip;
 use ofast_core::anim::bake::WeaponSet;
 use ofast_core::anim::graph::Graph;
-use ofast_core::anim::recipe::learn_clip_table;
+use ofast_core::anim::recipe::{baked_clips, learn_clip_table};
 use ofast_core::content::Content;
 use ofast_core::demo::players::track_round;
 use ofast_core::demo::recipe::{self, Task};
@@ -117,6 +127,9 @@ fn main() {
     // Per index, from the round's recipes; each player's last tick's samples by position, for the time steps.
     let mut seen: BTreeMap<u16, Seen> = BTreeMap::new();
     let mut last: BTreeMap<u32, (u32, Vec<Task>)> = BTreeMap::new();
+    // Recipes on consecutive ticks of a player, and how many of them repeat the previous server tick (not sent anew).
+    let mut repeats = (0usize, 0usize);
+    let mut server: BTreeMap<u32, (u32, u32)> = BTreeMap::new();
     for sample in &track.samples {
         for p in &sample.players {
             let Some(decoded) = p
@@ -127,6 +140,13 @@ fn main() {
             else {
                 continue;
             };
+            if let Some(&(tick, then)) = server.get(&p.controller)
+                && tick + 1 == sample.tick
+            {
+                repeats.0 += 1;
+                repeats.1 += usize::from(then == decoded.tick);
+            }
+            server.insert(p.controller, (sample.tick, decoded.tick));
             let item = p.rig.weapon.as_ref().map(|w| w.item);
             let animation = rig
                 .upper
@@ -261,5 +281,306 @@ fn main() {
         table.samples.1,
         table.samples.0,
         table.samples.1 as f64 * 100.0 / table.samples.0.max(1) as f64
+    );
+    println!(
+        "recipes on a player's consecutive ticks: {}, {} of them repeating the previous server tick",
+        repeats.0, repeats.1
+    );
+    // `OFAST_TIMELINE=name,from,to`: one player's ticks: body-relative velocity, CS2's samples (index@time, the
+    // table's clip if any) and the clips OFAST bakes.
+    if let Ok(spec) = std::env::var("OFAST_TIMELINE") {
+        let parts: Vec<&str> = spec.split(',').collect();
+        let (name, from, to) = (
+            parts[0],
+            parts[1].parse::<u32>().expect("from"),
+            parts[2].parse::<u32>().expect("to"),
+        );
+        let baked = baked_clips(&track, &rig.sets, rig.upper.as_ref(), rig.graphs.as_ref());
+        let stem = |c: &str| {
+            c.rsplit('/')
+                .next()
+                .unwrap_or(c)
+                .trim_end_matches(".vnmclip")
+                .to_owned()
+        };
+        for sample in track
+            .samples
+            .iter()
+            .filter(|s| (from..=to).contains(&s.tick))
+        {
+            let Some(p) = sample.players.iter().find(|p| p.name == name) else {
+                continue;
+            };
+            let (sin, cos) = p.rig.body_yaw.to_radians().sin_cos();
+            let v = p.rig.velocity;
+            let tasks = p
+                .rig
+                .pose_recipe
+                .as_ref()
+                .and_then(|r| recipe::decode(r).ok())
+                .map(|d| d.tasks)
+                .unwrap_or_default();
+            let cs2: Vec<String> = tasks
+                .iter()
+                .filter_map(|t| match t {
+                    Task::Sample { resource, time } => Some(format!(
+                        "{resource}@{time:.2}{}",
+                        table
+                            .path(*resource)
+                            .map_or(String::new(), |p| format!("={}", stem(p)))
+                    )),
+                    _ => None,
+                })
+                .collect();
+            let ours: Vec<String> = baked
+                .get(&(sample.tick, p.controller))
+                .map(|c| c.iter().map(|c| stem(c)).collect())
+                .unwrap_or_default();
+            println!(
+                "{} ({:4.0},{:4.0}) | CS2 {} | OFAST {}",
+                sample.tick,
+                v[0] * cos + v[1] * sin,
+                -v[0] * sin + v[1] * cos,
+                cs2.join(" "),
+                ours.join(" ")
+            );
+        }
+    }
+    if let Ok(list) = std::env::var("OFAST_INDEX") {
+        let indices: Vec<u16> = list
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        let baked = baked_clips(&track, &rig.sets, rig.upper.as_ref(), rig.graphs.as_ref());
+        for index in indices {
+            explain(&track, &baked, &rig, index);
+        }
+    }
+}
+
+/// `OFAST_INDEX`: what goes with one index on its player-ticks: the weapons in hand, the clips OFAST bakes (with
+/// their Jaccard index against it), how its time restarts against the player's shots, and the blends it feeds.
+fn explain(
+    track: &ofast_core::demo::players::RoundTrack,
+    baked: &std::collections::HashMap<(u32, u32), BTreeSet<&str>>,
+    rig: &ofast_core::export::players::PlayerRig,
+    index: u16,
+) {
+    let mut ticks = 0usize;
+    let mut weapons: BTreeMap<String, usize> = BTreeMap::new();
+    // The weapon's gameplay state (`m_iWeaponGameplayAnimState`) and reload flag on its ticks.
+    let mut states: BTreeMap<(i64, bool), usize> = BTreeMap::new();
+    let mut with: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut clip_ticks: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut feeds: BTreeMap<String, usize> = BTreeMap::new();
+    let mut alive = (0usize, 0usize);
+    // Restarts (its time going back, or it starting) and how far each is from the player's nearest shot.
+    let mut restarts: Vec<Option<i64>> = Vec::new();
+    let mut last: BTreeMap<u32, (u32, f32)> = BTreeMap::new();
+    for sample in &track.samples {
+        for p in &sample.players {
+            if let Some(clips) = baked.get(&(sample.tick, p.controller)) {
+                for &c in clips {
+                    *clip_ticks.entry(c).or_default() += 1;
+                }
+            }
+            let Some(decoded) = p
+                .rig
+                .pose_recipe
+                .as_ref()
+                .and_then(|r| recipe::decode(r).ok())
+            else {
+                continue;
+            };
+            let at: Vec<usize> = decoded
+                .tasks
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| matches!(t, Task::Sample { resource, .. } if *resource == index))
+                .map(|(k, _)| k)
+                .collect();
+            let Some(&first) = at.first() else {
+                continue;
+            };
+            ticks += 1;
+            if p.alive {
+                alive.0 += 1;
+            } else {
+                alive.1 += 1;
+                if std::env::var_os("OFAST_DEAD").is_some() && alive.1 % 200 == 1 {
+                    println!(
+                        "  dead: {} tick {} recipe tick {} pos {:?} tasks {:?}",
+                        p.name, sample.tick, decoded.tick, p.position, decoded.tasks
+                    );
+                }
+            }
+            let item = p.rig.weapon.as_ref().map(|w| w.item);
+            let name = rig
+                .upper
+                .as_ref()
+                .and_then(|u| u.weapons.get(&item.unwrap_or(0)))
+                .map_or_else(
+                    || format!("item {}", item.map_or(-1, i64::from)),
+                    |w| w.weapon.trim_start_matches("weapon_").to_owned(),
+                );
+            *weapons.entry(name).or_default() += 1;
+            if let Some(w) = &p.rig.weapon {
+                *states.entry((w.anim_state, w.reloading)).or_default() += 1;
+            }
+            if let Some(clips) = baked.get(&(sample.tick, p.controller)) {
+                for &c in clips {
+                    *with.entry(c).or_default() += 1;
+                }
+            }
+            // The task that uses it: its kind, which input, weight and mask.
+            for (k, node) in decoded.topology.iter().enumerate() {
+                if let Some(slot) = node.inputs.iter().position(|&i| usize::from(i) == first) {
+                    let what = match decoded.tasks.get(k) {
+                        Some(Task::Blend { kind, mask, .. }) => {
+                            format!(
+                                "blend {kind} input {slot}{}",
+                                if mask.is_empty() { "" } else { " masked" }
+                            )
+                        }
+                        _ => format!("type {} input {slot}", node.kind),
+                    };
+                    *feeds.entry(what).or_default() += 1;
+                }
+            }
+            let Task::Sample { time, .. } = decoded.tasks[first] else {
+                continue;
+            };
+            let previous = last
+                .get(&p.controller)
+                .filter(|(t, _)| *t + 1 == sample.tick);
+            if previous.is_none_or(|&(_, then)| time < then) {
+                let shot = track
+                    .shots
+                    .iter()
+                    .filter(|(c, _)| *c == p.controller)
+                    .map(|(_, s)| i64::from(s.tick) - i64::from(sample.tick))
+                    .min_by_key(|d| d.abs());
+                restarts.push(shot);
+                // `OFAST_STARTS=n`: the first n starts, with the body-relative velocity (forward, left) 8 ticks
+                // before, at the start and 8 after, and what OFAST bakes then.
+                let shown = std::env::var("OFAST_STARTS")
+                    .ok()
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .unwrap_or(0);
+                if restarts.len() <= shown {
+                    let at = |t: u32| {
+                        let s = track.samples.iter().find(|s| s.tick == t)?;
+                        let q = s.players.iter().find(|q| q.controller == p.controller)?;
+                        let (sin, cos) = q.rig.body_yaw.to_radians().sin_cos();
+                        let v = q.rig.velocity;
+                        Some((
+                            v[0] * cos + v[1] * sin,
+                            -v[0] * sin + v[1] * cos,
+                            q.rig.walking,
+                            q.rig.duck_amount,
+                        ))
+                    };
+                    let show = |t: u32| {
+                        at(t).map_or("-".to_owned(), |(f, l, w, d)| {
+                            format!(
+                                "({f:4.0},{l:4.0}{}{})",
+                                if w { " walk" } else { "" },
+                                if d > 0.0 {
+                                    format!(" duck {d:.1}")
+                                } else {
+                                    String::new()
+                                }
+                            )
+                        })
+                    };
+                    let stems = |t: u32| -> String {
+                        baked
+                            .get(&(t, p.controller))
+                            .map(|c| {
+                                c.iter()
+                                    .filter(|c| !c.contains("idle_") && !c.contains("breathing"))
+                                    .map(|c| {
+                                        c.rsplit('/')
+                                            .next()
+                                            .unwrap_or(c)
+                                            .trim_end_matches(".vnmclip")
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            })
+                            .unwrap_or_default()
+                    };
+                    println!(
+                        "  start {} tick {}: {} → {} → {}; baked {} | +4: {} | +12: {}",
+                        p.name,
+                        sample.tick,
+                        show(sample.tick.saturating_sub(8)),
+                        show(sample.tick),
+                        show(sample.tick + 8),
+                        stems(sample.tick),
+                        stems(sample.tick + 4),
+                        stems(sample.tick + 12)
+                    );
+                }
+            }
+            last.insert(p.controller, (sample.tick, time));
+        }
+    }
+    println!(
+        "\nindex {index}: {ticks} player-ticks ({} alive, {} dead)",
+        alive.0, alive.1
+    );
+    let mut weapons: Vec<_> = weapons.into_iter().collect();
+    weapons.sort_by_key(|w| std::cmp::Reverse(w.1));
+    let top: Vec<String> = weapons
+        .iter()
+        .take(8)
+        .map(|(w, n)| format!("{w} {n}"))
+        .collect();
+    println!("  in hand: {}", top.join(", "));
+    let mut states: Vec<_> = states.into_iter().collect();
+    states.sort_by_key(|s| std::cmp::Reverse(s.1));
+    let top: Vec<String> = states
+        .iter()
+        .take(6)
+        .map(|((s, r), n)| format!("{s}{} {n}", if *r { " reloading" } else { "" }))
+        .collect();
+    println!("  weapon states: {}", top.join(", "));
+    let mut with: Vec<(&str, usize)> = with.into_iter().collect();
+    with.sort_by_key(|w| std::cmp::Reverse(w.1));
+    for (clip, n) in with.iter().take(10) {
+        let either = ticks + clip_ticks[clip] - n;
+        println!(
+            "  baked with it: {:44} on {n:5} of its ticks ({:3.0} %), Jaccard {:.2}",
+            clip.rsplit('/').next().unwrap_or(clip),
+            *n as f64 * 100.0 / ticks.max(1) as f64,
+            *n as f64 / either.max(1) as f64
+        );
+    }
+    let mut feeds: Vec<_> = feeds.into_iter().collect();
+    feeds.sort_by_key(|f| std::cmp::Reverse(f.1));
+    let top: Vec<String> = feeds
+        .iter()
+        .take(5)
+        .map(|(w, n)| format!("{w} ({n})"))
+        .collect();
+    println!("  feeds: {}", top.join(", "));
+    let near = |d: i64| {
+        restarts
+            .iter()
+            .filter(|s| s.is_some_and(|s| s.abs() <= d))
+            .count()
+    };
+    let mut offsets: BTreeMap<i64, usize> = BTreeMap::new();
+    for s in restarts.iter().flatten().filter(|s| s.abs() <= 4) {
+        *offsets.entry(*s).or_default() += 1;
+    }
+    println!(
+        "  starts {}: a shot of the player's within 0 ticks {}, 2 ticks {}, 8 ticks {}; by offset (shot tick − start) {:?}",
+        restarts.len(),
+        near(0),
+        near(2),
+        near(8),
+        offsets
     );
 }

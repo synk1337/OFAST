@@ -84,8 +84,9 @@ impl RecipePaths {
     }
 }
 
-/// A pawn's recipe as it stands: `None` without one (a dead player's data is empty; data of 4 bytes or less holds
-/// no task), when its length passes [`MAX_RECIPE_BYTES`], or without the active slot's topology.
+/// A pawn's recipe as it stands: `None` without one (version 2 empties a dead player's data; data of 4 bytes or less
+/// holds no task), when its length passes [`MAX_RECIPE_BYTES`], or without the active slot's topology. Version 3 keeps
+/// a dead pawn's last living recipe, frozen: [`super::players`] drops it.
 pub fn read(pawn: &Entity, paths: &RecipePaths) -> Option<PoseRecipe> {
     let length = pawn.get(&paths.dynamic)?.as_u64()?;
     if length <= 4 || length > MAX_RECIPE_BYTES {

@@ -47,7 +47,7 @@ use super::states::{
     BURN_GAP, GroundAction, GroundInputs, LADDER_CYCLE_HEIGHT, MIN_AIR_TICKS, Movement,
     PLANT_STATE, REVERSAL_SPEED, REVERSAL_WINDOW, SMALL_TURN_MAX, SMALL_TURN_MIN, STANDING_SPEED,
     air_runs, direction4, flashed_amount, flinch_types, ground_action, is_fire, ladder_angles,
-    ladder_bearings, passive_action, reversal, turn_extent, weapon_action,
+    ladder_bearings, passive_action, reload_outro, reversal, turn_extent, weapon_action,
 };
 use super::{AnimError, Clip, Locomotion, Transform};
 use crate::demo::events::GameEvent;
@@ -906,14 +906,14 @@ impl Baker<'_> {
             match wanted {
                 Some((w, name, attack)) => {
                     // The same action goes on while its state and timestamp stay (a second swing restarts the
-                    // same state value with a new timestamp); a reload's outro (801) goes on with the reload.
+                    // same state value with a new timestamp); a reload's outro (801, 803) goes on with the reload.
                     let same = action.is_some_and(|a| {
                         a.end.is_none()
                             && a.item == w.item
                             && a.action == name
                             && a.attack == attack
                             && ((a.state == w.anim_state && a.stamp == w.state_tick)
-                                || (a.state == 800 && w.anim_state == 801))
+                                || reload_outro(a.state, w.anim_state))
                     });
                     if !same {
                         // The state's own start when it is recent, else this tick.

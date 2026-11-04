@@ -521,9 +521,10 @@ renames one, it reads as its default and positions keep working.
 
 **Weapon animation states** seen in round 5 of the match demo, by the weapons holding them: 11 = draw (after every
 switch, every weapon), 50 = idle, 100 = shooting (rifles and pistols), 200 / 202 = grenade (pin, throw), 300 = C4
-planting, 500 / 501 / 503 = knife attacks, 800 / 801 = reloading (with `m_bInReload`), 1000 / 1001 = after a draw
-on every weapon, mostly knives (7,162 of 9,945 samples): very likely the inspect animation and its end (not yet
-checked in the game). On the Aurora vs FURIA de_nuke demo (round 5) 1000 comes 1 – 28 ticks after a draw (the
+planting, 500 / 501 / 503 = knife attacks, 800 / 801 = reloading (with `m_bInReload`; in the demos of CS2 build
+10955 on also 802 / 803, a silent reload while walking: [Version 3](#pose-recipe-cs2s-own-animation)), 1000 / 1001 =
+after a draw on every weapon, mostly knives (7,162 of 9,945 samples): very likely the inspect animation and its end
+(not yet checked in the game). On the Aurora vs FURIA de_nuke demo (round 5) 1000 comes 1 – 28 ticks after a draw (the
 inspect key pressed during the draw, which CS2's viewmodel graphs turn into an inspect from the draw: see
 [First-person view](#first-person-view)), 1001 follows 3.4 s later on a knife and lasts until idle (50) 1.3 s
 later: the inspect and its last part. 1 and 10 show on weapons as they are switched away. Every new shot restarts
@@ -628,12 +629,45 @@ aligned; version 3 uses IDs all over 0 – 63 where version 2 used a few) and th
 the 14 and the 5 together run 550 – 1150 bits on 400 ticks of anubis round 14 (to the data's last set bit), against
 60 – 670 on 400 ticks of de_nuke round 5, the duck amount still 48 bits into the 14; the aim and the last task carry
 more than before, which may be what the new version is for. The other two faze-vs-falcons demos (de_ancient,
-de_mirage) decode alike: no error in 90,000 recipes each, every clip and blend in 97.3 % and 99.1 %. Played, anubis
-round 14 gets CS2's pose on 36,526 of its 51,853 living player-ticks (70 %; 0 before), four version-3 rounds 53 – 70
-% (79 – 86 % on version-2 rounds): the new graph runs about half as many sample tasks again, and the table names
-47 – 76 % of them, where it names 89 – 94 % on version 2 (unmatched: mostly shot clips and the 0.53 s planted turns).
-On those four rounds the demo's hits fit the recipes' poses a little worse than the re-decided ones (149 of 235
-within an inch against 155), where on version 2 they fit them better (decision 020).
+de_mirage) decode alike: no error in 90,000 recipes each, every clip and blend in 97.3 % and 99.1 %. Played at first,
+anubis round 14 got CS2's pose on 36,526 of its 51,853 living player-ticks (70 %; 0 before), four version-3 rounds
+53 – 70 % (79 – 86 % on version-2 rounds), their tables naming 47 – 76 % of 285,000 – 464,000 sample tasks a round
+(89 – 94 % on version 2), and the demo's hits fit those poses a little worse than the re-decided ones (149 of 235
+within an inch against 155). Two things kept the table weak, found with `examples/recipe_table.rs` (`OFAST_INDEX`:
+per index, its dead and living ticks, the weapons and gameplay states in hand, the clips OFAST bakes with it and their
+Jaccard index, the blends it feeds; `OFAST_TIMELINE`: one player's ticks, CS2's samples beside OFAST's clips):
+
+- **The dead's recipes.** Version 3 keeps a dead pawn's last living recipe, frozen (its server tick stops: frozen's,
+  read at demo ticks 137331 – 138933 of anubis round 14, is the one of server tick 183995), where version 2 empties
+  it. The table counted those ticks, on which OFAST bakes nothing: 598 (`walk_e_rifle`) had 4,727 of its 9,597
+  player-ticks dead, 631 3,129 of its 3,473, and the indices taken for shot clips by their length (257, 514, 747,
+  409) were runs and crouched walks the dead ticks held under 0.3 (now 257 `run_e_rifle` 0.61, 514 `run_w_rifle`
+  0.54, 747 `crouch_e_rifle` 0.72); the dead also made up 20 – 43 % of the sample tasks counted. `demo::players`
+  drops the recipe of a pawn that is not alive (version 2's dead have none anyway). No living recipe repeats
+  its server tick on the next tick (62,723 consecutive pairs on anubis round 14).
+- **Silent reloads.** Build 10955's weapons reload through gameplay states 802 and 803 (with `m_bInReload`) while the
+  player walks, where OFAST knew 800 and 801 only, so the bake played no reload there. The gun graphs take them as
+  `action_reload_silent`: `SM/Reload/SM/Reload0` goes on to `ReloadSilent0` (`reload_<w>_silent`) on the condition
+  `action in [action_reload_silent]`, which CS2 takes on the state's first update (`anim::eval` now takes such a
+  transition on ID parameters as the state is entered). 993 is now `reload_ak_silent` (Jaccard 0.96), 574
+  `reload_galilar_silent` (1.00), 70 `reload_ak` (0.94), 41 `reload_galilar` (0.96).
+
+Now the four rounds' tables name 86.5 – 90.9 % of their sample tasks (the export's `check:` line; 228,000 – 311,000
+living ones), the recipes give CS2's pose on 69 – 78 % of the living player-ticks (anubis round 14: 37,904 of
+51,853), and the demo's hits fit them better than the re-decided poses within an inch, 158 of 235 against 156
+(149 before), though 220 lie on a posed body against 222: the two are one hit at tick 124280 of ancient round 16,
+counted twice, 4.0 inches from the recipe's body (just past `BODY_MATCH`) and 2.7 from the re-decided one, while
+frozen starts off from a standstill with a 0.53 s clip the table does not know, so the recipe's legs stand idle.
+The 10 version-2 rounds and round 5 of the de_nuke pro demo do not move (373 and 38 within an inch).
+
+What stays unmatched is mostly the 0.53 s plants: the starts from a standstill and the plant-and-turns of
+counter-strafes. CS2 starts a plant-and-turn on the tick the speed first drops (NiKo jiggling on anubis round 14,
+ticks 133792 – 133900, 110 – 130 units/s sideways: 629 begins at 133802 with the speed at 107, 99, 74), switches its
+direction inside it (the graph's `E2W` ↔ `W2E`, 0.1 s, on a new `ground_action_direction_id`) and leaves it for
+`Move` at the clip's `PLANT_AND_TURN_COMPLETE` event, 41 % in. OFAST plants once the velocity points the other way
+(about 5 ticks later), plays the whole clip and passes over reversals meanwhile, so through a jiggle it catches every
+other one, always the same way (`planted_slow_e2w_rifle` throughout), and CS2's plants of both directions come with
+that one clip under 0.3 (629 at 0.28, 978 0.18, 611 0.16). The recipes give CS2's plant ticks to re-decide them by.
 
 The resource index is not the graph's own resource order. The main graph and its 66 child graphs refer to 909 clips
 (`examples/recipe_table.rs` counts them); their indices follow no rule tried by hand (their order in the graphs, their
@@ -648,8 +682,8 @@ has another (`walk_n_pistol` is 847 there): the table has to be found for each b
 
 **Finding the table from the demo** (`anim::recipe::learn_clip_table`; `examples/recipe_table.rs` prints it): OFAST
 bakes every player at the tick rate with a trace of the clips it samples (`anim::trace_start`), and each index is
-matched to the baked clip that comes with it most exclusively on the same player's same ticks (Jaccard: ticks
-together over ticks either is played), strongest matches first, each index and each clip taken once (the context
+matched to the baked clip that comes with it most exclusively on the same player's same ticks, while alive (Jaccard:
+ticks together over ticks either is played), strongest matches first, each index and each clip taken once (the context
 lists each clip once), none under 0.3. The bake re-decides CS2's states its own way, so the match is statistical,
 but CS2's clips and OFAST's follow the same inputs: on round 5, 588 is `breathing` (Jaccard 0.88; its time runs at
 6.32 s a cycle, the clip lasts 6.33 s), 463 `idle_ak` (0.92, sampled at time 0 while 95 % of its ticks have an AK in

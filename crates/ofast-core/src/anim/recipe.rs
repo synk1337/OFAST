@@ -47,40 +47,41 @@ impl ClipTable {
 }
 
 /// Every clip a bake can sample, by address: the graphs' library, the locomotion sets, the weapons' idles and shots.
-fn clip_paths(
-    sets: &LocomotionSets,
-    upper: Option<&UpperBody>,
-    graphs: Option<&GraphRig>,
-) -> HashMap<usize, String> {
+fn clip_paths<'a>(
+    sets: &'a LocomotionSets,
+    upper: Option<&'a UpperBody>,
+    graphs: Option<&'a GraphRig>,
+) -> HashMap<usize, &'a str> {
+    // Not `clips_by_path`: a path loaded twice (the library's and a set's) is two clips, each sampled by address.
     let mut out = HashMap::new();
     if let Some(graphs) = graphs {
         for (path, clip) in graphs.library.clips() {
-            out.insert(std::ptr::from_ref(clip) as usize, path.to_owned());
+            out.insert(std::ptr::from_ref(clip) as usize, path);
         }
     }
     for set in WeaponSet::ALL {
         for (path, clip) in &sets.get(set).clips {
-            out.insert(std::ptr::from_ref(clip) as usize, path.clone());
+            out.insert(std::ptr::from_ref(clip) as usize, path.as_str());
         }
     }
     for w in upper.into_iter().flat_map(|u| u.weapons.values()) {
         let clips = w.idle.iter().flatten().chain(w.shoot.as_ref());
         for (clip, path) in clips.zip(&w.paths) {
-            out.insert(std::ptr::from_ref(clip) as usize, path.clone());
+            out.insert(std::ptr::from_ref(clip) as usize, path.as_str());
         }
     }
     out
 }
 
-/// Learns the round's clip table (module docs): every player of `track` baked at the tick rate under a trace, the
-/// samples of their recipes ([`crate::demo::players::RigInputs::pose_recipe`]) matched to the clips baked on the same
-/// ticks.
-pub fn learn_clip_table(
+/// The clips OFAST's bake samples before its aim ([`super::trace_start`]), by (tick, controller): every player of
+/// `track` baked at the tick rate under a trace. A player who does not bake (an error the export would report anyway)
+/// has none.
+pub fn baked_clips<'a>(
     track: &RoundTrack,
-    sets: &LocomotionSets,
-    upper: Option<&UpperBody>,
-    graphs: Option<&GraphRig>,
-) -> ClipTable {
+    sets: &'a LocomotionSets,
+    upper: Option<&'a UpperBody>,
+    graphs: Option<&'a GraphRig>,
+) -> HashMap<(u32, u32), BTreeSet<&'a str>> {
     let paths = clip_paths(sets, upper, graphs);
     let fps = 1.0 / track.tick_interval;
     let frames = frame_samples(track, fps);
@@ -92,8 +93,7 @@ pub fn learn_clip_table(
         .collect();
     players.sort_unstable();
     players.dedup();
-    // (tick, controller) → clips baked, and → indices sampled.
-    let mut baked: HashMap<(u32, u32), BTreeSet<&str>> = HashMap::new();
+    let mut baked = HashMap::new();
     for &controller in &players {
         trace_start();
         let result = bake_player(
@@ -106,18 +106,30 @@ pub fn learn_clip_table(
             Default::default(),
         );
         let traced = trace_end();
-        // A player who does not bake (an error the export would report anyway) adds nothing.
         if result.is_err() {
             continue;
         }
         for (&(tick, _), addresses) in frames.iter().zip(&traced) {
             let clips = addresses
                 .iter()
-                .filter_map(|a| paths.get(a).map(String::as_str))
+                .filter_map(|a| paths.get(a).copied())
                 .collect();
             baked.insert((tick.round() as u32, controller), clips);
         }
     }
+    baked
+}
+
+/// Learns the round's clip table (module docs): every player of `track` baked at the tick rate under a trace, the
+/// samples of their recipes ([`crate::demo::players::RigInputs::pose_recipe`]) matched to the clips baked on the same
+/// ticks.
+pub fn learn_clip_table(
+    track: &RoundTrack,
+    sets: &LocomotionSets,
+    upper: Option<&UpperBody>,
+    graphs: Option<&GraphRig>,
+) -> ClipTable {
+    let baked = baked_clips(track, sets, upper, graphs);
     let mut together: HashMap<(u16, &str), usize> = HashMap::new();
     let mut index_ticks: HashMap<u16, usize> = HashMap::new();
     let mut clip_ticks: HashMap<&str, usize> = HashMap::new();

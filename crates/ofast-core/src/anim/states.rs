@@ -43,6 +43,7 @@ pub const LADDER_CYCLE_HEIGHT: f32 = 40.0;
 /// |---|---|---|
 /// | 11 | all | `action_deploy` |
 /// | 800, 801 | guns | `action_reload` |
+/// | 802, 803 | guns | `action_reload_silent` (demos of CS2 build 10955 on: a reload while walking, its `reload_silent` clips) |
 /// | 600, 601 | guns | `action_silencer_attach`, `_detach` |
 /// | 200, 201, 202 | grenades | `action_attack` + `attack_grenade_charge`, `_ready`, `_throw` |
 /// | 500 – 505 | knives | `action_attack` + `attack_knife_lighthit`, `_lightmiss`, `_heavyhit`, `_heavymiss`, `_lightbackstab`, `_heavybackstab` |
@@ -55,6 +56,7 @@ pub fn weapon_action(state: i64, category: &str) -> Option<(&'static str, &'stat
     Some(match state {
         11 => ("action_deploy", ""),
         800 | 801 if !knife && !grenade => ("action_reload", ""),
+        802 | 803 if !knife && !grenade => ("action_reload_silent", ""),
         600 => ("action_silencer_attach", ""),
         601 => ("action_silencer_detach", ""),
         200 if grenade => ("action_attack", "attack_grenade_charge"),
@@ -69,6 +71,12 @@ pub fn weapon_action(state: i64, category: &str) -> Option<(&'static str, &'stat
         400 => ("action_healthshot_inject", ""),
         _ => return None,
     })
+}
+
+/// Whether gameplay state `now` is the outro of the reload `before` (801 after 800, 803 after 802), which goes on
+/// with it rather than starting anew.
+pub fn reload_outro(before: i64, now: i64) -> bool {
+    matches!((before, now), (800, 801) | (802, 803))
 }
 
 /// The `(action, attack_type)` IDs of a gameplay state that starts no weapons-layer action ([`weapon_action`] gives
@@ -506,6 +514,10 @@ mod tests {
         assert_eq!(
             weapon_action(800, "weapon_category_rifle"),
             Some(("action_reload", ""))
+        );
+        assert_eq!(
+            weapon_action(803, "weapon_category_pistol"),
+            Some(("action_reload_silent", ""))
         );
         // Gun shots and inspects leave the weapons layer off.
         assert_eq!(weapon_action(100, "weapon_category_rifle"), None);

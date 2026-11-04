@@ -84,11 +84,46 @@ and four version-3 rounds, recipes on against `OFAST_RECIPE=0`:
   53 – 70 % of the living player-ticks (79 – 86 % on the 10 rounds), and 149 of 235 hit points within an inch against
   155 without, one or two fewer on each round.
 
-The version-3 recipes decode as cleanly as version 2's, but their clip table is weaker: the new graph runs 405,000 –
+The version-3 recipes decode as cleanly as version 2's, but their clip table is weaker: the export counts 285,000 –
 464,000 sample tasks a round where the version-2 rounds run 230,000 – 290,000, and the table names 47 – 76 % of them
 (89 – 94 % on version 2). The indices left unmatched with the most samples look like clips OFAST's bake does not
 play the same way on this graph: the shot clips (0.76 – 0.89 s, matching well on version 2) and the 0.53 s planted
 turns. The recipes stay the default for both versions; the version-3 table is the next step there.
+
+## Update 2026-11-04 (later): the version-3 table
+
+The weak table had two causes besides the graph (`examples/recipe_table.rs`, `OFAST_INDEX` and `OFAST_TIMELINE`, show
+per index what OFAST bakes on its ticks and who holds it; details in
+[demo.md](../formats/demo.md#pose-recipe-cs2s-own-animation)):
+
+- **Version 3 keeps a dead pawn's last living recipe, frozen**, where version 2 empties it. The table counted those
+  ticks, on which OFAST bakes nothing, so every index CS2 sampled at a death lost Jaccard (598, `walk_e_rifle`: 4,727
+  of its 9,597 player-ticks dead), and 20 – 43 % of the sample tasks counted were the dead's. The "shot clips" were
+  runs and crouched walks held under 0.3 this way. `demo::players` now drops a dead pawn's recipe.
+- **Silent reloads**: build 10955's guns reload through gameplay states 802 and 803 while the player walks, which
+  OFAST did not know, so the bake played no reload there. They are `action_reload_silent` now (with 803 the outro of
+  802, as 801 is of 800), and `anim::eval` takes a transition on ID parameters that holds as a state is entered (the
+  gun graphs' `Reload0` → `ReloadSilent0`, the only one it fires for on the rounds checked), so the bake plays the
+  `reload_<w>_silent` clips CS2 plays (993 `reload_ak_silent`, Jaccard 0.96). The first-person view maps the states
+  the same way.
+
+On today's install (build 2000940), recipes on against `OFAST_RECIPE=0`:
+
+- The four version-3 rounds: the table names 86.5 – 90.9 % of their sample tasks (47 – 76 % before), CS2's pose on
+  69 – 78 % of their living player-ticks (53 – 70 %), and 158 of 235 hit points within an inch against 156 for the
+  re-decided poses (149 against 155 before; the silent reloads moved the re-decided count by one). 220 hits lie on a
+  posed body against 222: one hit, counted twice, 4.0 inches from the recipe's body and 2.7 from the re-decided one,
+  in a 0.53 s start the table does not know.
+- The 10 version-2 rounds (373 of 505 against 347, 470 on a posed body against 462) and round 5 of the de_nuke pro
+  demo (38 of 50 against 34, 50 posed) do not move.
+
+What the table still misses is mostly the 0.53 s plants: starts from a standstill and the plant-and-turns of
+counter-strafes. CS2 starts a plant-and-turn on the tick the speed first drops, switches direction inside it
+(`E2W` ↔ `W2E` in 0.1 s) and leaves it at the clip's `PLANT_AND_TURN_COMPLETE` event, 41 % in; OFAST's bake plants
+about 5 ticks later, plays the whole clip and passes over the reversals meanwhile (`anim::states::ground_action`), so
+through an A-D jiggle it plays one direction throughout and CS2's plants of both directions come with that one clip
+under 0.3. The thresholds of `anim::states` were never checked against CS2; the recipes now give CS2's plant ticks to
+re-decide plants by, the next step for both the table and the re-decided poses.
 
 ## Alternatives considered
 

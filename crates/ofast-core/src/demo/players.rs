@@ -290,7 +290,8 @@ pub struct RigInputs {
     /// before any. It decays from then on ([`super::recoil::view_punch_at`]).
     pub view_punch: Option<super::recoil::ViewPunch>,
     /// The AnimGraph2 tasks the server's graph ran for the pawn this tick, as sent ([`super::recipe`]): `None` while
-    /// dead or in a demo without them.
+    /// dead (version 2 empties a dead pawn's recipe; version 3 keeps its last living one, frozen, which is dropped)
+    /// or in a demo without them.
     pub pose_recipe: Option<super::recipe::PoseRecipe>,
 }
 
@@ -1348,7 +1349,15 @@ fn read_players(parser: &DemoParser<'_>, paths: &Paths) -> Vec<PlayerSample> {
             pitch: angles[0],
             yaw: angles[1],
             alive,
-            rig: read_rig(parser, &paths.rig, pawn),
+            rig: {
+                let mut rig = read_rig(parser, &paths.rig, pawn);
+                // Recipe version 3 keeps a dead pawn's last living recipe, frozen, where version 2 empties it: no
+                // pose of the dead (`docs/formats/demo.md`, "Pose recipe").
+                if !alive {
+                    rig.pose_recipe = None;
+                }
+                rig
+            },
             appearance: read_appearance(&paths.appearance, pawn),
             weapons: read_weapons(parser, paths, pawn),
             death: (!alive).then(|| read_death(&paths.death, pawn)),

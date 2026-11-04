@@ -21,10 +21,11 @@
 //! Like the body's weapons layer ([`super::bake`]), from the weapon in hand and its gameplay state
 //! (`m_iWeaponGameplayAnimState` and its timestamp): every change of state is a **segment** — an `action` and
 //! `attack_type` ([`weapon_action`], [`passive_action`]: idle 50, drawing 11, shooting 100 / 101 with a new
-//! timestamp per shot, reloading 800 then its outro 801, inspecting 1000 then 1001, knife swings, grenade throws),
-//! from the tick the state began. A segment's pose is the weapon graph evaluated by [`super::eval`] that long after
-//! it began, for the arms and, through [`Evaluator::secondary`], for the weapon's bones; it blends in from the
-//! segment before over CS2's transition time between their states ([`Evaluator::transition_time`]), or the twin
+//! timestamp per shot, reloading 800 then its outro 801 (802 and 803 for a silent one), inspecting 1000 then 1001,
+//! knife swings, grenade throws), from the tick the state began. A segment's pose is the weapon graph evaluated by
+//! [`super::eval`] that long after it began, for the arms and, through [`Evaluator::secondary`], for the weapon's
+//! bones; it blends in from the segment before over CS2's transition time between their states
+//! ([`Evaluator::transition_time`]), or the twin
 //! states' when an action starts over (a shot after a shot: [`Evaluator::restart_time`]). The events on in the old
 //! segment's clip when the new one begins go with it (an inspect begun during a draw starts from the draw's
 //! version: `WPN_INSPECT_USE_DRAW_VERSION`). A new weapon in hand starts afresh: CS2 swaps the viewmodel's weapon.
@@ -38,7 +39,7 @@ use std::collections::{HashMap, HashSet};
 use super::aim::reach_bone;
 use super::bake::{DEFAULT_BLEND, STATE_TIMESTAMP_SLACK, frame_samples, mix, variation};
 use super::eval::{Evaluator, Library, Params};
-use super::states::{passive_action, weapon_action};
+use super::states::{passive_action, reload_outro, weapon_action};
 use super::{AnimError, NmSkeleton, Transform};
 use crate::demo::players::{ActiveWeapon, PlayerSample, RoundTrack};
 
@@ -151,10 +152,10 @@ struct Segment {
     blend: f32,
 }
 
-/// Whether gameplay state `now` goes on with `before` rather than starting anew: a reload's outro (801) or an
-/// inspect's second part (1001) continue what they follow.
+/// Whether gameplay state `now` goes on with `before` rather than starting anew: a reload's outro (801, 803:
+/// [`reload_outro`]) or an inspect's second part (1001) continue what they follow.
 fn continues(before: i64, now: i64) -> bool {
-    matches!((before, now), (800, 801) | (1000, 1001))
+    reload_outro(before, now) || (before, now) == (1000, 1001)
 }
 
 /// Whether a category is a gun's (the viewmodel graph's `weapon_is_gun`: not a knife, grenade or equipment).

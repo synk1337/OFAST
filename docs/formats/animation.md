@@ -249,7 +249,10 @@ pose (`anim::eval`, unit-tested on synthetic graphs, and on CS2's own in `tests/
   way), referenced graphs from their root (`m_nRootNodeIdx`);
 - a state machine picks the first state whose entry condition holds, else `m_nDefaultStateIndex`, and follows
   "state completed" transitions once a state's length has passed — the jump into the landing blend, a defuse's
-  enter into its loop;
+  enter into its loop; a transition whose condition reads ID parameters only (ID comparisons, their Ands and Ors)
+  and holds as the state is entered is taken at once, as CS2 takes it on its first update: the gun graphs' reload
+  machine enters `Reload0` and goes on to `ReloadSilent0` for `action_reload_silent` (on anubis round 14 of the
+  faze-vs-falcons demo it fires for nothing else; on round 5 of the de_nuke pro demo never);
 - conditions on IDs, floats, ranges, bools and events given as present; float maths, constant and switched IDs;
   springs and eases pass their input through; a state's current sync event ID has no value (no running state);
 - the same tree for a secondary skeleton (`Evaluator::secondary`): each clip's `m_secondaryAnimations` entry on that
@@ -259,7 +262,7 @@ The bake (`anim::states`) decides each tick what the graph's inputs would be, fr
 
 | Graph parameter | From the demo |
 |---|---|
-| `action`, `attack_type` | the weapon's gameplay state: 11 → `action_deploy`; 800 / 801 → `action_reload` (one action: the outro goes on with it); 600 / 601 → silencer; 200 / 201 / 202 (grenades) → `action_attack` + `attack_grenade_charge` / `_ready` / `_throw`; 500 – 505 (knives) → `attack_knife_lighthit`, `_lightmiss`, `_heavyhit`, `_heavymiss`, `_lightbackstab`, `_heavybackstab`; 400 → `action_healthshot_inject`; gun shots and inspects leave the layer off (CS2's gun graphs play nothing for them in third person) |
+| `action`, `attack_type` | the weapon's gameplay state: 11 → `action_deploy`; 800 / 801 → `action_reload` (one action: the outro goes on with it); 802 / 803 → `action_reload_silent` (likewise; demos of CS2 build 10955 on, a reload while walking: the gun graphs' `ReloadSilent` states and `reload_<w>_silent` clips); 600 / 601 → silencer; 200 / 201 / 202 (grenades) → `action_attack` + `attack_grenade_charge` / `_ready` / `_throw`; 500 – 505 (knives) → `attack_knife_lighthit`, `_lightmiss`, `_heavyhit`, `_heavymiss`, `_lightbackstab`, `_heavybackstab`; 400 → `action_healthshot_inject`; gun shots and inspects leave the layer off (CS2's gun graphs play nothing for them in third person) |
 | restarts | `m_flWeaponGameplayAnimStateTimestamp`: two right-click misses in a row are state 503 twice, with two timestamps |
 | `KnifeSwingBack` (event) | a knife attack that starts while the previous swing's clip is in its `KnifeSwingBack` event (`frontswing_knife`: 10 – 63 %) plays the `_b` swing |
 | `attack_throw_strength` | the grenade's `m_flThrowStrength` (≤ 0.33: underhand) |

@@ -20,7 +20,7 @@
 //! | `CNmDurationScaleNode` | the child stretched to `m_flDefaultInputValue` (or its input) seconds |
 //! | `CNmSpeedScaleNode` | the child played `m_flDefaultInputValue` (or its input) times faster |
 //! | `CNmStateNode` | its child; an off state (no child) gives nothing |
-//! | `CNmStateMachineNode` | the first state whose entry condition holds, else `m_nDefaultStateIndex`; past the state's length, a transition whose condition is "state completed" moves on to its target (a jump into the landing blend, a defuse's enter into its loop); no other transitions |
+//! | `CNmStateMachineNode` | the first state whose entry condition holds, else `m_nDefaultStateIndex`; past the state's length, a transition whose condition is "state completed" moves on to its target (a jump into the landing blend, a defuse's enter into its loop); a transition on ID parameters alone that holds as the state is entered is taken at once (the reload machine's `Reload0` → `ReloadSilent0` for `action_reload_silent`); no other transitions |
 //! | `CNmLayerBlendNode` | the base, then each layer that gives a pose: additive layers added, overlay layers blended over it, by the layer's weight and bone mask — or, for a state machine layer, its current state's (`m_nLayerWeightNodeIdx`, `m_nLayerBoneMaskNodeIdx`); masks come from [`Library::insert_mask`], a layer whose mask the library lacks covers every bone |
 //! | `CNmReferencedGraphNode` | the referenced graph's root (`m_nRootNodeIdx`), in the same [`Library`] |
 //! | `CNmZeroPoseNode` | nothing (an additive layer at rest) |
@@ -975,6 +975,17 @@ impl<'l> Evaluator<'l> {
             .iter()
             .position(|&(_, entry)| entry.is_some_and(|c| self.condition(path, c, params)))
             .unwrap_or_else(|| graph.default_state(machine).min(states.len() - 1));
+        // A transition on the ID parameters alone that holds as the state is entered is taken at once: the reload
+        // machine enters `Reload0` and goes on to `ReloadSilent0` for `action_reload_silent`.
+        if let Some(next) = graph.transitions(machine, index).into_iter().find(|tr| {
+            tr.target < states.len()
+                && tr.target != index
+                && tr.condition.is_some_and(|c| {
+                    self.on_ids_only(path, c, 0) && self.condition(path, c, params)
+                })
+        }) {
+            index = next.target;
+        }
         let mut t = time;
         // Completed states move on ("state completed" transitions), as long as time remains.
         for _ in 0..states.len() {
@@ -992,6 +1003,27 @@ impl<'l> Evaluator<'l> {
             index = next.target;
         }
         Ok(Some((states[index].0, t)))
+    }
+
+    /// Whether a condition reads nothing but ID control parameters: ID comparisons of them, and Ands and Ors of those
+    /// (no time, event or sync condition, which OFAST does not track through a state).
+    fn on_ids_only(&self, path: &str, node: usize, depth: usize) -> bool {
+        let Ok((_, graph)) = self.graph(path) else {
+            return false;
+        };
+        if depth > MAX_DEPTH {
+            return false;
+        }
+        match graph.class(node) {
+            "CNmIDComparisonNode" => graph
+                .child(node, "m_nInputValueNodeIdx")
+                .is_some_and(|n| graph.class(n) == "CNmControlParameterIDNode"),
+            "CNmAndNode" | "CNmOrNode" => {
+                let parts = graph.children(node, "m_conditionNodeIndices");
+                !parts.is_empty() && parts.iter().all(|&c| self.on_ids_only(path, c, depth + 1))
+            }
+            _ => false,
+        }
     }
 
     /// Whether a transition condition is "the state completed" (alone, or with other conditions that hold).
@@ -1884,6 +1916,51 @@ mod tests {
         // Float maths: `ammo Mod 2` is 0 for an even count.
         assert!(eval.condition("v", 27, &firing.clone().float("ammo", 4.0)));
         assert!(!eval.condition("v", 27, &firing));
+    }
+
+    #[test]
+    fn a_transition_on_ids_that_holds_on_entry_is_taken_at_once() {
+        // Like the reload machine: `Loud` (default, clip a) goes on to `Silent` (clip b) when `action` is
+        // `action_reload_silent`, or when it is `action_x` and `flag` is set (a bool: not followed).
+        let graph = serde_json::json!({
+            "m_nRootNodeIdx": 1,
+            "m_controlParameterIDs": ["action", "flag"],
+            "m_nodePaths": ["action", "SM", "SM/Loud", "SM/Silent", "silent", "a", "b", "flag", "x", "x_and_flag"],
+            "m_resources": ["a.vnmclip", "b.vnmclip"],
+            "m_nodes": [
+                { "_class": "CNmControlParameterIDNode::CDefinition" },
+                { "_class": "CNmStateMachineNode::CDefinition", "m_nDefaultStateIndex": 0, "m_stateDefinitions": [
+                    { "m_nStateNodeIdx": 2, "m_nEntryConditionNodeIdx": -1, "m_transitionDefinitions": [
+                        { "m_nTargetStateIdx": 1, "m_nConditionNodeIdx": 4, "m_nTransitionNodeIdx": -1 },
+                        { "m_nTargetStateIdx": 1, "m_nConditionNodeIdx": 9, "m_nTransitionNodeIdx": -1 } ] },
+                    { "m_nStateNodeIdx": 3, "m_nEntryConditionNodeIdx": -1 } ] },
+                { "_class": "CNmStateNode::CDefinition", "m_nChildNodeIdx": 5 },
+                { "_class": "CNmStateNode::CDefinition", "m_nChildNodeIdx": 6 },
+                { "_class": "CNmIDComparisonNode::CDefinition", "m_nInputValueNodeIdx": 0,
+                  "m_comparison": "Matches", "m_comparisionIDs": ["action_reload_silent"] },
+                { "_class": "CNmClipNode::CDefinition", "m_nDataSlotIdx": 0, "m_flSpeedMultiplier": 1.0 },
+                { "_class": "CNmClipNode::CDefinition", "m_nDataSlotIdx": 1, "m_flSpeedMultiplier": 1.0 },
+                { "_class": "CNmControlParameterBoolNode::CDefinition" },
+                { "_class": "CNmIDComparisonNode::CDefinition", "m_nInputValueNodeIdx": 0,
+                  "m_comparison": "Matches", "m_comparisionIDs": ["action_x"] },
+                { "_class": "CNmAndNode::CDefinition", "m_conditionNodeIndices": [8, 7] }
+            ]
+        });
+        let mut library = Library::new();
+        library.insert_graph("r", Graph::parse(&kv3(graph)).expect("graph"));
+        library.insert_clip("a.vnmclip", moving_clip(0.0, 1.0, 1.0));
+        library.insert_clip("b.vnmclip", moving_clip(2.0, 4.0, 2.0));
+        let eval = Evaluator::new(&library);
+        let at = |params: &Params| x(eval.pose("r", 1, params, 0.5).unwrap());
+        let reload = Params::default().id("action", "action_reload");
+        assert!((at(&reload) - 0.5).abs() < 1e-4);
+        // Clip b from the start, 0.5 s in.
+        let silent = Params::default().id("action", "action_reload_silent");
+        assert!((at(&silent) - 2.5).abs() < 1e-4);
+        let flagged = Params::default()
+            .id("action", "action_x")
+            .flag("flag", true);
+        assert!((at(&flagged) - 0.5).abs() < 1e-4);
     }
 
     #[test]
