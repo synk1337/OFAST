@@ -119,8 +119,9 @@ def update(cameras):
     # The round's cinematics (the Cameras panel's), cut in again; the lights keyed again for them.
     cinematics = ofast_cameras.restore(sequence)
 
-    # The level's Look panel settings (ofast_look.py: the depth of field just keyed again).
-    ofast_look.apply_level_look()
+    # The level's Look panel settings (ofast_look.py: the depth of field just keyed again; with Blur with distance the
+    # POV cameras' new focus tracks switched off).
+    ofast_look.apply_level_look(sequence=sequence)
     assets.save_loaded_asset(sequence)
     levels.save_current_level()
     log("cameras of %s: %d eyes (%d keys), %d shot cameras (%d removed), %d cuts, %d muzzle lights, %d cinematics"

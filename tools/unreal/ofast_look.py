@@ -15,8 +15,9 @@ Unreal). Docs: docs/user-guide/README.md, "The Look panel"; docs/formats/lightin
 - What the sliders drive: the level's sun (DirectionalLight: its angle, intensity, colour temperature, how much it
   lights the haze), sky light, haze (ExponentialHeightFog), post-process volume (OFAST_PostProcess: exposure, motion
   blur; in the realistic look Unreal's colour grading, vignette, grain, bloom and lens flare), the round's POV
-  cameras' depth of field, and in CS2's look the grading of OFAST's tone mapper (tonemapper.py: Unreal's own does
-  nothing after a replacing tone mapper).
+  cameras' depth of field (a lens focused where the player looks, or a blur growing with distance: their focus
+  tracks in the round's sequence switched off meanwhile), and in CS2's look the grading of OFAST's tone mapper
+  (tonemapper.py: Unreal's own does nothing after a replacing tone mapper).
 - Live: a Slate tick callback (register) watches the open look and applies it to the level when a value changes, and
   writes its file once the sliders rest. Rendering, shooting, importing a round or its cameras apply the level's look
   too (apply_level_look), so what Unreal renders is what the panel shows, even if the level was not saved.
@@ -39,6 +40,25 @@ POV_PREFIX = "POV "
 POST_VOLUME = "OFAST_PostProcess"
 # Depth of field 1 is f/1, 0.8 about f/1.9 (the realistic look's f/1.8), 0.5 f/4.7: f = DOF_RANGE ** (1 - amount).
 DOF_RANGE = 22.0
+# "Blur with distance" (the user's choice, 2026-11-04): the POV cameras' depth of field as a fragmovie's depth pass
+# blurred in After Effects, sharp at the player and blurring more the further away, instead of a lens focused where
+# the player looks. Unreal's depth blur: a blur of DEPTH_BLUR_WIDTH × the depth of field amount far away (a radius, in
+# fractions of the picture's width), half that at the panel's Blur distance. Unreal adds it only to what lies behind a
+# lens's focus (in front, it is the foreground, which the foreground limit keeps sharp for the gun): so the lens
+# focuses 1 m away, at f/32 on a full-frame sensor, too small an opening to blur anything itself (0.01 % of the
+# width far away), and the POV camera's own focus track (where the player looks, replay_cameras.key_focus) is
+# switched off in the round's sequence meanwhile.
+DEPTH_BLUR_WIDTH = 0.008
+DEPTH_FOCUS_CM = 100.0
+DEPTH_FSTOP = 32.0
+DEPTH_SENSOR_MM = 36.0
+BLUR_DISTANCE_M = 20.0
+# Unreal's depth blur radius is "pixels of a 1920-wide picture", doubled when used (DiaphragmDOFUtils.cpp).
+DEPTH_BLUR_PIXELS = 1920.0 / 2.0
+# The POV cameras' own focus track (replay_cameras.key_focus).
+FOCUS_PATH = "PostProcessSettings.DepthOfFieldFocalDistance"
+# Their focus where they have no focus track (replay_cameras.key_focus without rows), cm.
+NO_TRACK_FOCUS_CM = 1000.0
 # The sun's colour: warmth 1 takes it 2500 K warmer (a lower temperature), −1 as much cooler; from 6500 K (white)
 # when the look gives it no temperature of its own.
 SUN_WARMTH_KELVIN = 2500.0
@@ -87,9 +107,21 @@ class OfastLook(unreal.PrimaryDataAsset):
                     "The whole picture warmer (+, orange) or cooler (−, blue). 0 is the look's own.")
     motion_blur = slider(float, "Camera", "Motion blur", 0.0, 1.0,
                          "How much moving things and fast turns smear. 0: none; 0.5 is Unreal's usual.")
+    blur_distance = unreal.uproperty(float, meta={
+        "Category": "Camera", "DisplayName": "Blur distance", "UIMin": "2.0", "UIMax": "60.0", "ClampMin": "0.5",
+        "ClampMax": "500.0", "EditCondition": "depth_blur",
+        "ToolTip": "With Blur with distance: how far away, in metres, the map is blurred half as much as the most "
+                   "it gets (Depth of field). Nearer: more of the map blurred."})
+    depth_blur = unreal.uproperty(bool, meta={
+        "Category": "Camera", "DisplayName": "Blur with distance",
+        "ToolTip": "Depth of field through the players' eyes as a depth pass blurred in After Effects: the gun and "
+                   "what is near sharp, the map blurring more the further away it is, whatever the player looks at "
+                   "(off: sharp where the player looks, blurred behind it). Depth of field sets how strong. Not "
+                   "with focus keys (OFAST > Cameras, Depth of field), which focus as they say."})
     depth_of_field = slider(float, "Camera", "Depth of field", 0.0, 1.0,
                             "Blur away from what the player looks at, through their eyes. 0: everything sharp; "
-                            "0.8 about f/1.9, a strong cinematic blur; 1 stronger still. A round with focus keys "
+                            "0.8 about f/1.9, a strong cinematic blur; 1 stronger still. With Blur with distance, "
+                            "how blurred the far map gets (1: 0.8 % of the picture's width). A round with focus keys "
                             "(OFAST > Cameras, Depth of field) takes them instead.")
     brightness = slider(float, "Camera", "Brightness", -3.0, 3.0,
                         "Brighter (+) or darker (−) in camera stops: +1 is twice as bright. 0 is the look's own.",
@@ -115,12 +147,12 @@ class OfastLook(unreal.PrimaryDataAsset):
 
 # The panel's fields, in their order on screen.
 FIELDS = ["sun_height", "sun_direction", "sun_strength", "sun_warmth", "ambient", "haze", "light_beams", "brightness",
-          "depth_of_field", "motion_blur", "warmth", "saturation", "contrast", "vignette", "film_grain", "bloom",
-          "lens_flare", "reset"]
+          "depth_of_field", "depth_blur", "blur_distance", "motion_blur", "warmth", "saturation", "contrast",
+          "vignette", "film_grain", "bloom", "lens_flare", "reset"]
 # Their values for the map's own look; those not here start at what the level has (start_values).
 NEUTRAL = {"sun_height": 0.0, "sun_direction": 0.0, "sun_strength": 1.0, "sun_warmth": 0.0, "ambient": 1.0,
-           "haze": 1.0, "light_beams": 1.0, "brightness": 0.0, "warmth": 0.0, "saturation": 1.0, "contrast": 1.0,
-           "reset": False}
+           "haze": 1.0, "light_beams": 1.0, "brightness": 0.0, "depth_blur": False, "blur_distance": BLUR_DISTANCE_M,
+           "warmth": 0.0, "saturation": 1.0, "contrast": 1.0, "reset": False}
 
 
 def editor_world():
@@ -219,6 +251,9 @@ def pov_depth_of_field():
         settings = camera.camera_component.get_editor_property("post_process_settings")
         if not settings.get_editor_property("override_depth_of_field_focal_distance"):
             return 0.0
+        if settings.get_editor_property("override_depth_of_field_depth_blur_radius"):
+            radius = settings.get_editor_property("depth_of_field_depth_blur_radius")
+            return round(min(radius / DEPTH_BLUR_PIXELS / DEPTH_BLUR_WIDTH, 1.0), 2)
         fstop = max(settings.get_editor_property("depth_of_field_fstop"), 1.0)
         return round(1.0 - math.log(fstop) / math.log(DOF_RANGE), 2)
     return 0.0
@@ -291,8 +326,9 @@ def values_of(look):
     return {field: look.get_editor_property(field) for field in FIELDS}
 
 
-def apply(look, level):
-    """Sets the open level as `look` says, from its map's own look."""
+def apply(look, level, sequence=None):
+    """Sets the open level as `look` says, from its map's own look; the POV cameras' focus tracks in `sequence` (the
+    round, by default the one open in Sequencer: pov_lens)."""
     base = get_base(look)
     v = values_of(look)
     real = realistic(level)
@@ -353,34 +389,96 @@ def apply(look, level):
                 mel.set_material_instance_scalar_parameter_value(instance, param, value)
             mel.update_material_instance(instance)
 
-    # The round open with focus keys (the Cameras panel's depth of field) keeps its lens as they key it.
+    pov_lens(v, sequence or unreal.LevelSequenceEditorBlueprintLibrary.get_current_level_sequence())
+
+
+def own_focus_sections(sequence):
+    """The POV cameras' own focus sections in `sequence` (row 0 of their focus track, replay_cameras.key_focus; the
+    Cameras panel's focus keys are on rows of their own), by camera label."""
     import ofast_cameras
 
-    for camera in [] if ofast_cameras.focus_keyed() else pov_cameras():
+    out = {}
+    if sequence is None:
+        return out
+    cameras = {c.get_actor_label(): c for c in pov_cameras()}
+    for binding in sequence.get_bindings():
+        camera = cameras.get(str(binding.get_display_name()))
+        if camera is None:
+            continue
+        for child in binding.get_child_possessables():
+            if str(child.get_display_name()) != camera.camera_component.get_name():
+                continue
+            for track in child.find_tracks_by_type(unreal.MovieSceneFloatTrack):
+                if str(track.get_property_path()) == FOCUS_PATH:
+                    out.setdefault(camera.get_actor_label(), []).extend(
+                        s for s in track.get_sections() if s.get_row_index() < ofast_cameras.FOCUS_ROW)
+    return out
+
+
+def depth_blur_radius(amount):
+    """Unreal's depth blur radius for a depth of field amount (DEPTH_BLUR_WIDTH far away at 1)."""
+    return DEPTH_BLUR_WIDTH * amount * DEPTH_BLUR_PIXELS
+
+
+def pov_lens(v, sequence):
+    """The POV cameras' depth of field as the panel's values `v` say: a lens focused where the player looks (their own
+    focus track), or with Blur with distance Unreal's depth blur (DEPTH_BLUR_WIDTH), their focus track switched off in
+    `sequence` (the round; None: their tracks left as they are). The round with focus keys (the Cameras panel's depth
+    of field) keeps its lens as they key it, without depth blur."""
+    import ofast_cameras
+
+    keyed = ofast_cameras.focus_keyed(sequence)
+    on = v["depth_of_field"] > 0.0
+    depth = on and v["depth_blur"] and not keyed
+    sections = own_focus_sections(sequence)
+    changed = 0
+    for camera in pov_cameras():
         component = camera.camera_component
         settings = component.get_editor_property("post_process_settings")
-        on = v["depth_of_field"] > 0.0
+        settings.set_editor_property("override_depth_of_field_depth_blur_amount", depth)
+        settings.set_editor_property("override_depth_of_field_depth_blur_radius", depth)
+        if keyed:
+            component.set_editor_property("post_process_settings", settings)
+            continue
         settings.set_editor_property("override_depth_of_field_focal_distance", on)
         settings.set_editor_property("override_depth_of_field_fstop", on)
         settings.set_editor_property("override_depth_of_field_sensor_width", on)
-        if on:
+        if depth:
+            settings.set_editor_property("depth_of_field_focal_distance", DEPTH_FOCUS_CM)
+            settings.set_editor_property("depth_of_field_fstop", DEPTH_FSTOP)
+            settings.set_editor_property("depth_of_field_sensor_width", DEPTH_SENSOR_MM)
+            settings.set_editor_property("depth_of_field_depth_blur_amount", v["blur_distance"] / 1000.0)
+            settings.set_editor_property("depth_of_field_depth_blur_radius", depth_blur_radius(v["depth_of_field"]))
+        elif on:
             settings.set_editor_property("depth_of_field_fstop",
                                          max(DOF_RANGE ** (1.0 - v["depth_of_field"]), 1.0))
             # The lens the world blurs with (replay_cameras.FOCUS_SENSOR_MM), set again: a round sent before
             # 2026-11-03 has a full frame's, which blurred only the gun.
             settings.set_editor_property("depth_of_field_sensor_width", replay_cameras.FOCUS_SENSOR_MM)
+            if sequence is not None and camera.get_actor_label() not in sections:
+                # No focus track: the focus a round without one has, not Blur with distance's.
+                settings.set_editor_property("depth_of_field_focal_distance", NO_TRACK_FOCUS_CM)
         component.set_editor_property("post_process_settings", settings)
+        for section in sections.get(camera.get_actor_label(), []):
+            if section.is_active() == depth:
+                section.set_is_active(not depth)
+                changed += 1
+    if changed:
+        log("look: %d POV focus sections of %s %s" % (changed, sequence.get_name(),
+                                                       "off (blur with distance)" if depth else "on again"))
+        if sequence == unreal.LevelSequenceEditorBlueprintLibrary.get_current_level_sequence():
+            unreal.LevelSequenceEditorBlueprintLibrary.refresh_current_level_sequence()
 
 
-def apply_level_look(create=False):
-    """Applies the open level's look, if it has a look file (or makes one, `create`); returns its panel object or
-    None."""
+def apply_level_look(create=False, sequence=None):
+    """Applies the open level's look, if it has a look file (or makes one, `create`), the POV cameras' focus tracks in
+    `sequence` (the round; by default the one open in Sequencer); returns its panel object or None."""
     level = level_path()
     if not level.startswith("/Game/OFAST/Maps/"):
         return None
     look = look_for(level, create)
     if look is not None:
-        apply(look, level)
+        apply(look, level, sequence)
         log("look: applied %s" % look.get_name())
     return look
 

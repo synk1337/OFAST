@@ -186,6 +186,11 @@ in Unreal's window. It is in the menu bar too: **OFAST → Look**. Drag a slider
 - **Camera**: brightness (in camera stops: +1 is twice as bright), depth of field (blur away from what the player
   looks at, through their eyes: 0 is everything sharp, 0.8 a strong cinematic blur of the map behind what they look
   at; the gun stays sharp), motion blur. How wide their view is: **View field of view** in the Viewmodel panel.
+  Tick **Blur with distance** for the blur of a depth pass in After Effects instead: the gun and what is near stay
+  sharp, and the map blurs more the further away it is, whatever the player looks at (what they aim at far away
+  blurs too). **Depth of field** then sets how blurred the far map gets, and **Blur distance** how far away it is half
+  that (20 m at first; nearer blurs more of the map). It is for the players' eyes when the round has no focus keys
+  (below, *Depth of field over the round*).
 - **Colour and film**: warm or cool, saturation (0 is black and white), contrast, vignette, film grain; in the
   realistic look also bloom and lens flare.
 - **Reset everything** puts every slider back to the map's own look. Each slider's own reset arrow puts it back to
@@ -265,7 +270,8 @@ Between two keys the focus glides from one to the other (a focus pull from one p
 the street behind) and the blur strength with it; before the first key and after the last, that key holds. With the
 playhead on a key, its settings show in the panel and changing them changes it. **Earlier focus key** and **Later
 focus key** jump between them; **Remove focus key here** takes one out. Without any key, each camera keeps its own
-depth of field (the Look panel's slider, a cinematic's **Focus on them**).
+depth of field (the Look panel's slider and its **Blur with distance**, a cinematic's **Focus on them**); with keys,
+the players' eyes focus as the keys say, never blurred by distance.
 
 Two limits apply to the whole round: **Foreground blur limit**, how blurred things in front of the focus can get (0.05
 keeps the gun sharp in first person; raise it to blur the gun, or what passes close to a cinematic camera), and

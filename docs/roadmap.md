@@ -641,6 +641,12 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   (the tone mapper hands Movie Render Queue a linear picture: [lighting](formats/lighting.md#in-unreal))
   ([replay](formats/replay.md#smoke-volumes), [lighting](formats/lighting.md#the-look-panel),
   [viewmodel](formats/viewmodel.md)).
+- [x] **Blur with distance** (the user's choice, 2026-11-04, between that depth of field and a depth pass's): a Look
+  panel switch for the players' eyes, the depth of field of a fragmovie's depth pass blurred in After Effects (the
+  gun and what is near sharp, the map blurring more the further away, whatever the player looks at), with a **Blur
+  distance** for where it is half its strongest. Unreal's depth blur behind a lens focused 1 m away and too stopped
+  down to blur by itself, the POV cameras' own focus tracks switched off meanwhile
+  ([lighting](formats/lighting.md#the-look-panel)).
 
 ## Hard problems we know about
 

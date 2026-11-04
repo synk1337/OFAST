@@ -1449,8 +1449,10 @@ def main():
     # file, cut in).
     if ofast_cameras.restore(sequence):
         assets.save_loaded_asset(sequence)
-    # The level's Look panel settings (ofast_look.py) on the new round's cameras too, if the level has a look.
-    ofast_look.apply_level_look()
+    # The level's Look panel settings (ofast_look.py) on the new round's cameras too, if the level has a look (with
+    # Blur with distance the POV cameras' focus tracks switched off: the sequence saved again).
+    ofast_look.apply_level_look(sequence=sequence)
+    assets.save_loaded_asset(sequence)
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world().get_path_name()
     if not world.startswith("/Game/"):
         raise RuntimeError("refusing to save " + world)

@@ -201,7 +201,7 @@ def main():
     levels.load_level(level)
     # The Look panel's settings (ofast_look.py), even if the level was not saved after they were changed; the Cameras
     # panel's cinematics, from their file, likewise (ofast_cameras.py).
-    ofast_look.apply_level_look()
+    ofast_look.apply_level_look(sequence=sequence)
     # CS2's look's tone mapper hands Movie Render Queue a linear picture, which it encodes for the files (else the
     # frames came out washed out: tonemapper.py, OUTPUT). Not saved: the editor quits after the render.
     tonemapper.movie_render(True)

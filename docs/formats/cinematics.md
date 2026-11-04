@@ -84,7 +84,9 @@ With focus keys, every camera with a cut in the round gets its lens keyed at eac
   aims at, a cinematic's to its player), else far (1 km).
 - These keys sit on row 1 of the lens tracks. The camera's own focus keys (row 0: the POV's, a cinematic's) stay as
   they were, switched off while the round has focus keys and on again when the last one is removed; so does the
-  Look panel's depth of field (it leaves the POV cameras' lens alone meanwhile).
+  Look panel's depth of field (it leaves the POV cameras' lens alone meanwhile, and takes its Blur with distance's
+  depth blur away). Once the POV cameras' own keys are on again, the level's look is applied again
+  (`apply_level_look(sequence=…)`): with Blur with distance it switches them off once more.
 - The blur limits are console variables, set when the round is opened in the panel and before a render.
 
 ## Cuts

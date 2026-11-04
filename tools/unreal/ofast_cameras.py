@@ -615,6 +615,7 @@ def apply_focus(sequence, record):
     by_label = {a.get_actor_label(): a for a in actors.get_all_level_actors()}
     paths = {}
     pov_restored = False
+    pov_own = False
     keyed = 0
     for name, binding in bindings_by_name(sequence).items():
         actor = by_label.get(name)
@@ -643,17 +644,23 @@ def apply_focus(sequence, record):
         had = key_lens(lens_binding, lens, rows, end)
         lens_on(actor, rows is not None, own is not None)
         pov_restored = pov_restored or (had and rows is None and not cine)
+        pov_own = pov_own or (rows is None and not cine and own is not None)
     if pov_restored:
-        restore_pov_lens()
+        restore_pov_lens(sequence)
+    elif pov_own:
+        # Their own focus switched on again (key_lens): off again if the Look panel blurs with distance.
+        import ofast_look
+
+        ofast_look.apply_level_look(sequence=sequence)
     return keyed
 
 
-def restore_pov_lens():
+def restore_pov_lens(sequence):
     """The POV cameras' lens as the Look panel has it again (its depth of field slider), or without Look settings for
     the level as the round was built (replay_cameras.key_focus): on in the realistic look, off in CS2's."""
     import ofast_look
 
-    if ofast_look.apply_level_look() is not None:
+    if ofast_look.apply_level_look(sequence=sequence) is not None:
         return
     on = ofast_look.realistic(ofast_look.level_path())
     for camera in ofast_look.pov_cameras():

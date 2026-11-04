@@ -98,8 +98,9 @@ def main():
     level = (assets.get_metadata_tag(sequence, "OFAST_level")
              or "/Game/OFAST/Maps/" + assets.get_metadata_tag(sequence, "OFAST_map"))
     levels.load_level(level)
-    # The Look panel's settings (ofast_look.py), even if the level was not saved after they were changed.
-    ofast_look.apply_level_look()
+    # The Look panel's settings (ofast_look.py), even if the level was not saved after they were changed (the round's
+    # POV focus tracks too: Blur with distance).
+    ofast_look.apply_level_look(sequence=sequence)
     by_label = {a.get_actor_label(): a for a in actors.get_all_level_actors()}
     name = path.rsplit("/", 1)[-1]
     shots = []
