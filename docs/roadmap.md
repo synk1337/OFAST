@@ -623,6 +623,24 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   map's export (its objects, then its textures) and by Unreal's scripts (their `progress` lines); the user's sound
   (`apps/studio/src/sounds/done.mp3`) plays when a sending, a camera update or a render ends, and the taskbar button
   flashes if the window is behind others.
+- [x] **Smokes, depth of field, field of view, molotovs** (the user's list after watching round 14 of FaZe vs Falcons
+  on de_anubis in Unreal, 2026-11-03; checked against CS2 playing the same demo through m0NESY's and Twistzz's eyes):
+  smokes no longer see-through (drawn from 1 % of full, opaque 4 % above, the noise scaling the density instead of
+  eating holes into the thin reaches: CS2 fills the doorway smoke 454 lies in; and the map's glass drawn under the
+  smokes, where Unreal laid it over them: `MAP_VERSION` 2, maps import again once); drawn against the walls they lie on
+  (`Simulation::render_grid`: no more gap beside a smoke in a passage); grown out of the grenade over their first
+  seconds (nothing on the tick it goes off, as in CS2, where OFAST's whole cloud showed at once); depth of field that
+  blurs the map behind the focus, not the gun (the POV lens on a sensor 40 full frames wide, the foreground limit
+  0.05 %: Unreal cannot leave the gun out of its depth of field, so what lies in front of the focus stays sharp
+  with it); a **View field of view** for the POV shots in the Viewmodel panel (the gun's is now **Gun field of
+  view**); molotovs dying down over their last second instead of switching off, their light with them. Then checked
+  frame by frame against CS2 (2026-11-04): the smokes drawn at full resolution and lit on a finer grid (crisp puffs,
+  shaded creases, where Unreal blurred them, and no grain in renders), in CS2's colours and brightness (grey CT,
+  tan-brown T, under any sun), growing as CS2's do (first puff at 0.5 – 0.6 s, a passage filled at 0.8 s); a dying
+  molotov's last flames bright and orange to the end, not purple wisps; and CS2's look's renders no longer washed out
+  (the tone mapper hands Movie Render Queue a linear picture: [lighting](formats/lighting.md#in-unreal))
+  ([replay](formats/replay.md#smoke-volumes), [lighting](formats/lighting.md#the-look-panel),
+  [viewmodel](formats/viewmodel.md)).
 
 ## Hard problems we know about
 

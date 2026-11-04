@@ -184,7 +184,8 @@ in Unreal's window. It is in the menu bar too: **OFAST → Look**. Drag a slider
   direction round the map, its strength, its colour (warmer or cooler), and how bright the shade is.
 - **Atmosphere** (realistic look): how thick the haze is, and how strongly the sun's beams show in it.
 - **Camera**: brightness (in camera stops: +1 is twice as bright), depth of field (blur away from what the player
-  looks at, through their eyes: 0 is everything sharp, 0.8 a strong cinematic blur), motion blur.
+  looks at, through their eyes: 0 is everything sharp, 0.8 a strong cinematic blur of the map behind what they look
+  at; the gun stays sharp), motion blur. How wide their view is: **View field of view** in the Viewmodel panel.
 - **Colour and film**: warm or cool, saturation (0 is black and white), contrast, vignette, film grain; in the
   realistic look also bloom and lens flare.
 - **Reset everything** puts every slider back to the map's own look. Each slider's own reset arrow puts it back to
@@ -201,12 +202,14 @@ several players' views looks like one game. **Open in Unreal** also opens the **
 Viewmodel**) to change it, for every round of the project; the viewport changes a moment after you let go of a
 slider:
 
+- **View field of view**: how wide the view through the players' eyes is (the POV shots), in CS2's degrees: 90 is
+  CS2's, more shows more of the map, less zooms in. The gun keeps its own (**Gun field of view**, below).
 - **Viewmodel**: **Same for everyone** (the settings below) or **Each player's own** (what each player had set:
   their gun as they saw it while playing).
 
 The gun is drawn as CS2 draws it in a game. CS2's demo playback (and so HLAE) shows guns a little smaller and further
 away than that, whatever the settings.
-- **Field of view**: smaller makes the gun bigger (CS2's `viewmodel_fov`: 54 to 68).
+- **Gun field of view**: smaller makes the gun bigger (CS2's `viewmodel_fov`: 54 to 68); the view stays as it is.
 - **Offset X (right)**, **Offset Y (forward)**, **Offset Z (up)**: where the gun sits (CS2's `viewmodel_offset_x`,
   `_y`, `_z`).
 - **Hand**: **As played** (some players play left-handed), or **Right** or **Left** for everyone.
@@ -264,10 +267,10 @@ playhead on a key, its settings show in the panel and changing them changes it. 
 focus key** jump between them; **Remove focus key here** takes one out. Without any key, each camera keeps its own
 depth of field (the Look panel's slider, a cinematic's **Focus on them**).
 
-Two limits apply to the whole round: **Foreground blur limit**, how blurred things in front of the focus can get (0.3
-keeps the gun sharp in first person; raise it to blur what passes close to a cinematic camera), and **Background blur
-limit**, how blurred things behind it can get (2.5 is Unreal's usual; 0 keeps the background sharp). Both are in % of
-the picture's width.
+Two limits apply to the whole round: **Foreground blur limit**, how blurred things in front of the focus can get (0.05
+keeps the gun sharp in first person; raise it to blur the gun, or what passes close to a cinematic camera), and
+**Background blur limit**, how blurred things behind it can get (2.5 is Unreal's usual; 0 keeps the background sharp:
+no depth of field on the map at all). Both are in % of the picture's width.
 
 The points and focus keys are kept in a file for each round (`Saved/OFAST/Cinematics` in the Unreal project), so they
 come back if you send the round to Unreal again or change its cameras, and the render uses them even if you closed

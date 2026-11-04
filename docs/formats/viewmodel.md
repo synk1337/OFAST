@@ -16,14 +16,16 @@ viewmodel for everyone (a new install's `viewmodel_presetpos 1`).
  "fov": 68.0,
  "offset": [2.5, 0.0, -1.5],
  "hand": "As played",
- "motion": 1.0
+ "motion": 1.0,
+ "view_fov": 90.0
 }
 ```
 
 | Field | What |
 |---|---|
+| `view_fov` | the view's field of view through every player's eyes (the `POV <name>` cameras' `field_of_view`, set from it as CS2's `fov`: horizontal at 4:3, degrees; 90 is CS2's, and a file without it reads 90). Since 2026-11-03: the user's "the field of view should affect the POV shot as well", where `fov` moves only the gun, as CS2's `viewmodel_fov` does |
 | `whose` | `Same for everyone`: `fov` and `offset` for every player; `Each player's own`: the settings each player had in the demo (`m_flViewmodelFOV`, `m_flViewmodelOffsetX/Y/Z`; [demo.md](demo.md#first-person-view)) |
-| `fov` | CS2's `viewmodel_fov`: horizontal at 4:3, degrees (CS2 allows 54 – 68) |
+| `fov` | the gun's: CS2's `viewmodel_fov`, horizontal at 4:3, degrees (CS2 allows 54 – 68); the panel's **Gun field of view** |
 | `offset` | CS2's `viewmodel_offset_x`, `_y`, `_z`: inches right, forward, up (CS2 allows −2.5 – 2.5, −2 – 2 for z) |
 | `hand` | `As played` (each player's `m_bLeftHanded`, tick by tick), `Right` or `Left` for everyone |
 | `motion` | the gun's motion with the player (the agents manifest's `sway`, [animation.md](animation.md#first-person-view-animviewmodel-exportviewmodel)) times this: 0 a still gun, 1 CS2's |

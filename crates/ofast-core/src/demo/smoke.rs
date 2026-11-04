@@ -324,6 +324,8 @@ pub struct Simulation {
     neighbours: Vec<[u16; 6]>,
     /// Per voxel: in a brick sent so far, and not solid.
     open: Vec<bool>,
+    /// Per brick: sent so far (its voxels' solid bits are known).
+    known: Vec<bool>,
     /// The emitters' voxels (Morton codes).
     emitters: Vec<u16>,
     /// Per brick: the first step OFAST's simulation needed it.
@@ -360,6 +362,7 @@ impl Simulation {
             density: vec![0.0; voxels],
             neighbours,
             open: vec![false; voxels],
+            known: vec![false; BRICKS * BRICKS * BRICKS],
             emitters: Vec::new(),
             needed: vec![None; BRICKS * BRICKS * BRICKS],
             steps: 0,
@@ -374,6 +377,9 @@ impl Simulation {
             let first = brick.index as usize * 64;
             for (bit, open) in self.open.iter_mut().skip(first).take(64).enumerate() {
                 *open = brick.solid >> bit & 1 == 0;
+            }
+            if let Some(known) = self.known.get_mut(brick.index as usize) {
+                *known = true;
             }
         }
         for e in &frame.emitters {
@@ -460,23 +466,53 @@ impl Simulation {
         out
     }
 
-    /// [`Simulation::grid`] for drawing: a closed voxel (solid, or in a brick not sent) under an open one takes its
-    /// density. A solid voxel is one that touches a surface, so without this the cloud would float a voxel above the
-    /// floor (up to 20 units: CS2 draws its smoke down to the floor); the floor hides what lies under its surface.
-    /// Only downwards: a wall, door or catwalk thinner than a voxel sits inside one solid voxel, and smoke spread into
-    /// it sideways (or up) would show on its far side. A thin floor seen from below still shows the voxel's lower
-    /// part.
+    /// [`Simulation::grid`] for drawing: the cloud reaches the surfaces it lies against. A solid voxel is one a surface
+    /// passes through, so the open voxels' smoke alone stops up to a voxel (20 units) short of a floor or a wall: the
+    /// cloud floated above the floor, and a player saw past a smoke lying against a wall or filling a doorway where
+    /// CS2 draws it to the wall (the user's report, 2026-11-03; de_anubis, round 14 of FaZe vs Falcons: CS2 fills the
+    /// doorway smoke 262 lies behind from side to side, OFAST's left a gap on either side). So a closed voxel takes
+    /// the densest of:
+    ///
+    /// - the open voxel above it (a floor under the cloud: the floor hides what lies under its surface);
+    /// - in a brick the server has sent (its voxel is solid, not air CS2's cloud has not reached yet), an open
+    ///   neighbour beside it (x, y) or below it whose opposite neighbour along that axis is closed too or outside the
+    ///   grid: a wall (or a ceiling) at least a voxel thick, whose far side the smoke cannot show on;
+    /// - there too, where both neighbours along an axis are open, the lesser of their two densities: a wall, door or
+    ///   catwalk thinner than a voxel sits inside it, and smoke on one side only would show on its far side, while
+    ///   smoke on both sides fills it.
+    ///
+    /// A thin floor seen from below still shows the voxel's lower part.
     pub fn render_grid(&self) -> Vec<f32> {
         let mut out = vec![0.0; self.density.len()];
-        for code in 0..self.density.len() {
-            // Neighbours are x − 1, x + 1, y − 1, y + 1, z − 1, z + 1: the one above is the last.
-            let above = self.neighbours[code][5];
-            let d = if self.open[code] {
-                self.density[code]
-            } else if above != NONE && self.open[above as usize] {
-                self.density[above as usize]
+        let open = |n: u16| n != NONE && self.open[n as usize];
+        let density = |n: u16| {
+            if open(n) {
+                self.density[n as usize]
             } else {
                 0.0
+            }
+        };
+        for code in 0..self.density.len() {
+            // Neighbours are x − 1, x + 1, y − 1, y + 1, z − 1, z + 1: the one above is the last.
+            let n = self.neighbours[code];
+            let d = if self.open[code] {
+                self.density[code]
+            } else {
+                let mut d = density(n[5]);
+                if self.known[code >> 6] {
+                    // Along x, y and z: a neighbour's smoke when the other side is closed, the lesser of the two's
+                    // when both are open (from above, the first line already took it whole).
+                    for axis in 0..3 {
+                        let (a, b) = (n[2 * axis], n[2 * axis + 1]);
+                        d = d.max(match (open(a), open(b)) {
+                            (true, true) => density(a).min(density(b)),
+                            (true, false) => density(a),
+                            (false, true) if axis < 2 => density(b),
+                            _ => 0.0,
+                        });
+                    }
+                }
+                d
             };
             let [x, y, z] = demorton(code as u32, 5);
             out[x + GRID * (y + GRID * z)] = d;
@@ -618,14 +654,60 @@ mod tests {
         assert_eq!(at(&grid, [16, 16, 15]), 0.0);
         assert!(at(&grid, [16, 16, 16]) > 0.0);
         assert_eq!(at(&render, [16, 16, 15]), at(&grid, [16, 16, 16]));
-        // Not sideways: the wall stub's lower voxel, next to the emitter's dense voxel with the stub's upper voxel
-        // (solid too) above it, stays empty.
-        assert!(at(&grid, [16, 16, 16]) > 0.0);
-        assert_eq!(at(&render, [17, 16, 16]), 0.0);
+        // The wall stub's lower voxel holds none either; drawn, it is filled no more than its thinner side's smoke
+        // (smoke lies on both sides of it).
+        assert_eq!(at(&grid, [17, 16, 16]), 0.0);
+        let thinner = at(&grid, [16, 16, 16]).min(at(&grid, [18, 16, 16]));
+        assert!(at(&render, [17, 16, 16]) <= at(&grid, [16, 16, 16]));
+        assert!(at(&render, [17, 16, 16]) >= thinner);
         // Open voxels are drawn as they are.
         assert_eq!(at(&render, [16, 16, 17]), at(&grid, [16, 16, 17]));
         // No smoke flowed through the floor: the voxel under it is empty.
         assert_eq!(at(&grid, [16, 16, 14]), 0.0);
+    }
+
+    #[test]
+    fn drawn_smoke_reaches_walls_but_not_through_thin_ones() {
+        // Every brick sent and open, but for the solid voxels set below; densities set by hand.
+        let mut sim = Simulation::new(SmokeSettings::default());
+        sim.open.fill(true);
+        sim.known.fill(true);
+        let solid = |sim: &mut Simulation, v: [usize; 3]| sim.open[morton(v) as usize] = false;
+        let set = |sim: &mut Simulation, v: [usize; 3], d: f32| sim.density[morton(v) as usize] = d;
+        // A wall two voxels thick (x 10 and 11) with smoke on its −x side.
+        solid(&mut sim, [10, 5, 5]);
+        solid(&mut sim, [11, 5, 5]);
+        set(&mut sim, [9, 5, 5], 100.0);
+        // A wall one voxel thin (x 20) with smoke on its −x side only.
+        solid(&mut sim, [20, 5, 5]);
+        set(&mut sim, [19, 5, 5], 100.0);
+        // One as thin with smoke on both sides.
+        solid(&mut sim, [20, 9, 5]);
+        set(&mut sim, [19, 9, 5], 100.0);
+        set(&mut sim, [21, 9, 5], 40.0);
+        // A floor voxel under smoke, and a thin ceiling voxel over it with air above.
+        solid(&mut sim, [5, 20, 4]);
+        set(&mut sim, [5, 20, 5], 70.0);
+        solid(&mut sim, [5, 20, 9]);
+        set(&mut sim, [5, 20, 8], 50.0);
+        // A voxel of a brick not sent, beside smoke: it may be air CS2's cloud has not reached.
+        let unsent = [26, 26, 26];
+        sim.open[morton(unsent) as usize] = false;
+        sim.known[morton(unsent) as usize >> 6] = false;
+        set(&mut sim, [25, 26, 26], 100.0);
+
+        let render = sim.render_grid();
+        let at = |[x, y, z]: [usize; 3]| render[x + GRID * (y + GRID * z)];
+        // The thick wall's first voxel is drawn with the smoke against it, its second (air beyond) is not.
+        assert_eq!(at([10, 5, 5]), 100.0);
+        assert_eq!(at([11, 5, 5]), 0.0);
+        // The thin wall: nothing with smoke on one side, the thinner side's with smoke on both.
+        assert_eq!(at([20, 5, 5]), 0.0);
+        assert_eq!(at([20, 9, 5]), 40.0);
+        // The floor takes the smoke above it; the thin ceiling not the smoke under it.
+        assert_eq!(at([5, 20, 4]), 70.0);
+        assert_eq!(at([5, 20, 9]), 0.0);
+        assert_eq!(at(unsent), 0.0);
     }
 
     #[test]

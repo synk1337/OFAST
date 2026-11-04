@@ -942,8 +942,9 @@ def import_viewmodels(replay):
 # wall at full size). The closest a wall gets is 16 units, the player's half-width; an AWP's muzzle about 45 units
 # ahead comes to 9. Shrunk this much, the parts nearest the eye need the project's near clip plane at 2 cm
 # (DefaultEngine.ini; at 10 cm the hands and the back of the gun were cut away from a scale of 0.3 down), and the
-# realistic look's depth of field its foreground blur capped (r.DOF.Kernel.MaxForegroundRadius 0.003): the gun, a
-# fifth as far from the lens, would blur five times as much.
+# realistic look's depth of field its foreground blur capped (r.DOF.Kernel.MaxForegroundRadius 0.0005 since
+# 2026-11-03, when the lens grew to blur the world: replay_cameras.FOCUS_SENSOR_MM): the gun, a fifth as far from the
+# lens, would blur five times as much.
 FIRST_PERSON_SCALE = 0.2
 
 

@@ -464,6 +464,15 @@ tone mapper. The curve's parameters come from the manifest's `post.tonemap`. Bef
 own tone mapper with its curve off, and Hable maps `M_OFAST_TonemapHable_v2` (H(2.5 x) / H(1.25 W), no table); from
 2026-10-16 night to 10-17 the same material drew H(3.4 x) / H(6 W).
 
+**Movie Render Queue** takes a replacing tone mapper's output as linear and encodes it for its files, where the
+editor shows it as it is: from v4 (2026-10-31) to 2026-11-04 CS2's look rendered washed out, every pixel sRGB of the
+editor's (round 14 of FaZe vs Falcons on de_anubis: the black level 95 where the editor's screenshot of the same frame
+has 37). Since `M_OFAST_Tonemap_v5` the curve has a `MovieRender` switch (`tonemapper.py`, `OUTPUT`): on, it decodes
+its picture back to linear, and Movie Render Queue's encoding gives the editor's picture again (black level 42 against
+39, the rest within its anti-aliasing). `render_round.py` turns it on for its renders (not saved: the editor quits
+after), and the OFAST render configurations' start and end console commands turn it on and off for a render started
+in Unreal's own Movie Render Queue window. The realistic look (Unreal's own tone mapper) needs none of it.
+
 ## Calibration against CS2 (de_mirage, 2026-10-16)
 
 Same viewpoints in CS2 (`-insecure`, `setpos`/`setang`, HUD off, interiors at `mat_tonemap_force_scale 0.8` like
@@ -852,7 +861,9 @@ OFAST now handles translucent surfaces in two ways ([material.md](material.md#tr
   de_inferno's plaster patches, de_nuke's drain covers and van lettering).
 - **Every other translucent surface is lit with Surface ForwardShading** (glass, fence and foliage cards, signs):
   `import_map.py` re-parents Interchange's instances to an OFAST copy of its master with that mode
-  (`M_OFAST_glTFDefault_v1`), and sets it on OFAST's own masters whose instances can be translucent. Static overlays
+  (`M_OFAST_glTFDefault_v1`), and sets it on OFAST's own masters whose instances can be translucent, drawn before
+  the depth of field so the smokes cover them ([material.md](material.md#other-translucent-surfaces-lit-per-pixel)).
+  Static overlays
   in their other blend modes have their own handling (Mod2x: an unlit Modulate material,
   [decision 011](../decisions/011-static-overlay-blend-modes.md); per pixel, a Mod2x scuff got brighter in the sun
   and darker in the shade), and the unlit `csgo_unlitgeneric` cards keep Interchange's mode for now.
@@ -902,9 +913,9 @@ own look; depth of field, motion blur, vignette, grain, bloom and lens flare are
 | Shadow brightness | the Sky Light's intensity × |
 | Haze, light beams | the height fog's density ×, the sun's volumetric scattering intensity × (realistic: the standard look has no fog) |
 | Brightness | the post-process exposure compensation + (stops) |
-| Depth of field | the POV cameras' f-stop: 22^(1 − amount) (0.8 ≈ f/1.9, the realistic look's f/1.8); 0 turns the focus off. The focus distance is keyed in both looks (`import_demo.py`), on only in the realistic one |
+| Depth of field | the POV cameras' f-stop: 22^(1 − amount) (0.8 ≈ f/1.9, the realistic look's f/1.8); 0 turns the focus off. The focus distance is keyed in both looks (`import_demo.py`), on only in the realistic one. The lens's sensor is 40 full frames wide (`replay_cameras.FOCUS_SENSOR_MM`, 1440 mm, set again by the panel: since 2026-11-03): Unreal takes a camera's focal length from its sensor and field of view, and at CS2's 106° across a full frame's 13.5 mm lens kept the whole map sharp, blurring only the gun; on the big sensor it is 540 mm, and with the focus 15 m away (players mostly look 10 – 35 m ahead) what lies far behind blurs about 0.4 % of the width (7 pixels of a 1080p picture) at f/1.8, a focus a few metres away up to the background limit (2.5 %). In front of the focus everything, the gun too, blurs at most the foreground limit (0.05 %, `r.DOF.Kernel.MaxForegroundRadius` in `DefaultEngine.ini`: sharp): Unreal's depth of field cannot leave the first-person gun out, so one limit holds for it and for a wall in front of the focus; the Cameras panel's Foreground blur limit raises it for both |
 | Motion blur | the post-process motion blur amount |
-| Warm / cool, saturation, contrast, vignette, grain | realistic: Unreal's white balance (6500 K + 2500 K × warmth), colour saturation and contrast, vignette and grain; CS2's look: OFAST's tone mapper (`tonemapper.py`, `M_OFAST_Tonemap_v4`), since Unreal applies nothing after a replacing tone mapper (its instance is moved onto v4 the first time; at neutral v4 draws v3's picture) |
+| Warm / cool, saturation, contrast, vignette, grain | realistic: Unreal's white balance (6500 K + 2500 K × warmth), colour saturation and contrast, vignette and grain; CS2's look: OFAST's tone mapper (`tonemapper.py`, `M_OFAST_Tonemap_v5`), since Unreal applies nothing after a replacing tone mapper (its instance is moved onto the newest version the first time; at neutral v4 and v5 draw v3's picture; v5 can hand Movie Render Queue a linear picture, [above](#in-unreal)) |
 | Bloom, lens flare | the post-process's (realistic only) |
 
 `render_round.py`, `shoot_sequence.py`, `import_demo.py` and `import_cameras.py` apply the level's look after loading

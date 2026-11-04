@@ -140,8 +140,10 @@ from when it is started (its first frame then), so the times only need to be rig
 
 `replay_cameras.py`:
 
-- **Eyes**: each player's `POV <name>` camera (a CameraActor, 106.26° at 16:9) keyed linearly on `eyes`, after
-  dropping keys a straight line gives (0.2 cm, 0.1°).
+- **Eyes**: each player's `POV <name>` camera (a CameraActor, 106.26° at 16:9: CS2's 90; the Viewmodel panel's
+  **View field of view** sets another for every POV camera, [viewmodel.md](viewmodel.md)) keyed linearly on `eyes`,
+  after dropping keys a straight line gives (0.2 cm, 0.1°). Its depth of field is a post-process lens on a sensor 40
+  full frames wide, so that the map blurs ([lighting.md](lighting.md#the-look-panel)).
 - **Shot and HLAE cameras**: a CineCameraActor each (label = `name`, tags `OFAST_replay`, `OFAST_camera`), keyed on
   every key with cubic keys (auto tangents: smooth between ticks in slow motion; sub-frame keys for HLAE frames), its
   focal length keyed from the field of view on a 16:9 sensor (36 × 20.25 mm: `focal = 18 / tan(hfov / 2)`), depth of

@@ -19,6 +19,7 @@ a tick of its -PovShots). With such a view, the sequence plays the other views t
 constant (a constant extinction: does the Heterogeneous Volume draw?), grid (extinction where the smoke material's
 grid formula puts the point inside the grid: are Origin and Size right?), ball (an opaque 3 m ball on the grid's
 centre: does it draw opaque?), anywhere (the smoke at extinction 50, threshold 0: where is any density?).
+`-Only smokes` rebuilds the smokes alone, not the effects' and shots' layers (minutes on a busy round).
 """
 
 import json
@@ -39,6 +40,11 @@ VIEWS = [item.split(":") for item in os.environ["OFAST_NAME"].split(",") if item
 ONLY = os.environ.get("OFAST_ONLY", "")
 UNITS_TO_CM = 2.54
 WARM_UP_TICKS = 200
+# Console variables whose values the probe logs (how Unreal draws the volumes).
+PROBE_CVARS = ["r.HeterogeneousVolumes.DownsampleFactor", "r.HeterogeneousVolumes.Upsample",
+               "r.HeterogeneousVolumes.Filter", "r.HeterogeneousVolumes.CLOD", "r.HeterogeneousVolumes.CLOD.Bias",
+               "r.HeterogeneousVolumes.StepSize", "r.HeterogeneousVolumes.Jitter",
+               "r.HeterogeneousVolumes.LightingCache", "r.HeterogeneousVolumes.Preshading"]
 # CS2's default field of view, 90 degrees at 4:3, horizontally at 16:9.
 HFOV_16_9 = math.degrees(2 * math.atan(math.tan(math.radians(45)) * (16 / 9) / (4 / 3)))
 GRID_HLSL = r"""
@@ -167,13 +173,15 @@ def main():
         mel.set_material_instance_texture_parameter_value(instance, "Atlas", texture)
         mel.update_material_instance(instance)
         component.set_material(0, instance)
+        smoke_volumes.configure_component(component)
         volumes[grenade["entity"]] = (component, instance)
     log("smoke material rebuilt; %d smoke instances updated" % len(volumes))
     # The fires' material and layers too, from grenade_effects.py and the agents manifest's flipbooks.
     manifest_path = os.path.join(os.path.dirname(REPLAY_PATH), "%s_r%d.agents.json" % (replay["demo"],
                                                                                       replay["round"]))
     agents = {}
-    if os.path.exists(manifest_path):
+    # `-Only smokes`: the smokes alone (rebuilding every layer takes minutes).
+    if os.path.exists(manifest_path) and ONLY != "smokes":
         with open(manifest_path, encoding="utf-8") as f:
             agents = json.load(f)
         effects = agents.get("effects", [])
@@ -217,7 +225,10 @@ def main():
         if os.path.exists(path):
             os.remove(path)
     unreal.SystemLibrary.execute_console_command(None, "r.HighResScreenshotDelay 16")
+    before = {cvar: unreal.SystemLibrary.get_console_variable_float_value(cvar) for cvar in PROBE_CVARS}
     smoke_volumes.apply_cvars()
+    for cvar in PROBE_CVARS:
+        log("%s = %s (default %s)" % (cvar, unreal.SystemLibrary.get_console_variable_float_value(cvar), before[cvar]))
     # The screenshot call can return no task while a capture is pending (seen 2026-10-23), so each shot waits for its
     # file instead: set the tick (and test material), let it settle, request the shot, wait until the PNG exists.
     state = {"ticks": 0, "index": -1, "requested_at": None, "set_at": 0}
@@ -257,9 +268,10 @@ def main():
             if light is not None:
                 component = light.get_editor_property("light_component")
                 component.set_light_color(unreal.LinearColor(*grenade_effects.LIGHT_COLOR, 1.0))
-                burning = fire["start_tick"] <= at <= fire["end_tick"]
+                rate = grenade_effects.tick_rate_of(replay)
+                burning = fire["start_tick"] <= at < grenade_effects.light_out_tick(fire, rate)
                 component.set_editor_property("intensity", grenade_effects.light_intensity(
-                    fire, at, grenade_effects.tick_rate_of(replay)) if burning else 0.0)
+                    fire, at, rate) if burning else 0.0)
         for grenade in grenade_effects.bursts_of(replay):
             light = lights.get(grenade_effects.burst_light_label(grenade))
             if light is not None:

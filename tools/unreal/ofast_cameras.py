@@ -495,9 +495,10 @@ FOCUS_ROW = 1
 # much.
 FAR_CM = 100000.0
 # The blur limits, % of the picture's width: the project's own (DefaultEngine.ini: the POV gun kept sharp, decision
-# 016) and Unreal's.
+# 016; 0.3 until 2026-11-03, when the POV cameras' lens grew to blur the world, replay_cameras.FOCUS_SENSOR_MM, and the
+# gun at 0.3 % looked soft) and Unreal's.
 LIMIT_CVARS = {"foreground": "r.DOF.Kernel.MaxForegroundRadius", "background": "r.DOF.Kernel.MaxBackgroundRadius"}
-DEFAULT_LIMITS = {"foreground": 0.3, "background": 2.5}
+DEFAULT_LIMITS = {"foreground": 0.05, "background": 2.5}
 # The lens properties a focus key sets: a POV camera's post-process lens (a CameraActor, replay_cameras.key_focus),
 # a CineCamera's own (shot cameras, cinematics). Each (property, path, key tolerance).
 POV_LENS = (("DepthOfFieldFocalDistance", "PostProcessSettings.DepthOfFieldFocalDistance", 1.0),
@@ -713,14 +714,14 @@ class OfastCameras(unreal.PrimaryDataAsset):
     background_blur = unreal.uproperty(float, meta={
         "Category": "Depth of field", "DisplayName": "Background blur limit", "UIMin": "0.0", "UIMax": "5.0",
         "ClampMin": "0.0", "ClampMax": "10.0",
-        **tip("How blurred things behind the focus can get, in % of the picture's width: 0 keeps them sharp, 2.5 is "
-              "Unreal's usual. One value for the whole round.")})
+        **tip("How blurred things behind the focus can get, in % of the picture's width: 0 keeps them sharp (no "
+              "depth of field on the map), 2.5 is Unreal's usual. One value for the whole round.")})
     foreground_blur = unreal.uproperty(float, meta={
         "Category": "Depth of field", "DisplayName": "Foreground blur limit", "UIMin": "0.0", "UIMax": "5.0",
         "ClampMin": "0.0", "ClampMax": "10.0",
-        **tip("How blurred things in front of the focus can get, in % of the picture's width: 0.3 (OFAST's usual) "
-              "keeps the gun sharp in first person; raise it to blur what passes close to a cinematic camera. One "
-              "value for the whole round.")})
+        **tip("How blurred things in front of the focus can get, in % of the picture's width: 0.05 (OFAST's usual) "
+              "keeps the gun sharp in first person; raise it to blur the gun, or what passes close to a cinematic "
+              "camera. One value for the whole round.")})
     blur = unreal.uproperty(float, meta={
         "Category": "Depth of field", "DisplayName": "Blur strength", "UIMin": "0.0", "UIMax": "1.0",
         "ClampMin": "0.0", "ClampMax": "1.0",
@@ -754,7 +755,7 @@ class OfastCameras(unreal.PrimaryDataAsset):
         "Category": "Points", "DisplayName": "Field of view", "UIMin": "20.0", "UIMax": "120.0",
         "ClampMin": str(FOV_RANGE[0]), "ClampMax": str(FOV_RANGE[1]),
         **tip("How wide the camera sees at the next point you add, degrees across: less zooms in. 90 is the "
-              "viewport's own.")})
+              "viewport's own. (The view through the players' eyes: OFAST > Viewmodel, View field of view.)")})
     points = unreal.uproperty(str, meta={
         "Category": "Points", "DisplayName": "Points", "MultiLine": "true", "EditCondition": "false",
         **tip("The cinematic's points (times from the round's start), its cut, where the playhead is.")})

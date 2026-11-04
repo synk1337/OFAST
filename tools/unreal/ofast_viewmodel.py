@@ -2,17 +2,19 @@
 2026-11-01: a default viewmodel, changed in Unreal with its place). Docs: docs/user-guide/README.md, "The gun in first
 person"; docs/formats/viewmodel.md.
 
-- The settings, one for the project (<project>/Saved/OFAST/Viewmodel.json): whose viewmodel ("Same for everyone",
-  the default, or "Each player's own", as they played), the field of view and the offsets for everyone (CS2's
+- The settings, one for the project (<project>/Saved/OFAST/Viewmodel.json): the view's field of view through the
+  players' eyes (CS2's `fov`, 90 at 4:3, for every POV camera: the user's ask, 2026-11-03, "the field of view should
+  affect the POV shot as well", where the gun's only moved the gun), whose viewmodel ("Same for everyone", the
+  default, or "Each player's own", as they played), the gun's field of view and the offsets for everyone (CS2's
   viewmodel_fov and viewmodel_offset_x / _y / _z, in CS2's numbers; CS2's own default to start with), the hand (as
   played, right, left), the gun's motion with the player (0 still, 1 CS2's: export::sway).
 - Each round's own data (<project>/Saved/OFAST/Viewmodels/<demo>_r<round>.json, written by import_demo.py): its
   sample frames, and per player the viewmodel settings they played with, the frames they switched hands, the recoil
   on their viewmodel (export::punch) and the gun's motion (export::sway).
 - key(sequence): each "VM <name>" viewmodel's transform on its camera keyed again from both (the offsets, the hand
-  mirroring it, the recoil plus the motion), and each "POV <name>" camera's first-person field of view; by
-  import_demo.py, before a render (render_round.py), when the panel opens a round keyed with other settings, and at
-  each change in the panel.
+  mirroring it, the recoil plus the motion), and each "POV <name>" camera's field of view and first-person (the
+  gun's) field of view; by import_demo.py, before a render (render_round.py), when the panel opens a round keyed with
+  other settings, and at each change in the panel.
 
 The panel is an object of OfastViewmodel, a class made here in Python, opened in an editor tab of its own as the Look
 and Cameras panels are; a Slate tick callback watches its fields and keys the open round once they are left alone.
@@ -25,7 +27,7 @@ import time
 
 import unreal
 
-from replay_cameras import UNITS_TO_CM, channels_by_name, log
+from replay_cameras import UNITS_TO_CM, channels_by_name, hfov_16_9, log
 
 SETTINGS_FORMAT = "ofast-viewmodel"
 ROUND_FORMAT = "ofast-viewmodels"
@@ -35,12 +37,15 @@ OWN = "Each player's own"
 AS_PLAYED = "As played"
 RIGHT = "Right"
 LEFT = "Left"
-# CS2's own default viewmodel (viewmodel_presetpos 1, "Desktop"): what a new install shows.
-CS2_DEFAULT = {"fov": 68.0, "offset": [2.5, 0.0, -1.5]}
+# CS2's own default viewmodel (viewmodel_presetpos 1, "Desktop"): what a new install shows; and its view's field of
+# view (`fov`, horizontal at 4:3, which every player has: CS2 lets no one change it).
+CS2_DEFAULT = {"fov": 68.0, "offset": [2.5, 0.0, -1.5], "view_fov": 90.0}
 DEFAULTS = {"whose": SAME, "fov": CS2_DEFAULT["fov"], "offset": list(CS2_DEFAULT["offset"]), "hand": AS_PLAYED,
-            "motion": 1.0}
+            "motion": 1.0, "view_fov": CS2_DEFAULT["view_fov"]}
 # CS2's limits for viewmodel_fov and the offsets.
 FOV_RANGE = (54.0, 68.0)
+# The view's field of view: the slider's range (degrees at 4:3; 90 is CS2's; typed values from 20 to 150).
+VIEW_FOV_RANGE = (60.0, 120.0)
 OFFSET_RANGE = (-2.5, 2.5)
 OFFSET_Z_RANGE = (-2.0, 2.0)
 # Where the round's settings were last keyed (to key it again when they change): the sequence's metadata tag.
@@ -208,6 +213,12 @@ def key(sequence, settings=None):
     bindings = bindings_by_name(sequence)
     cameras = {a.get_actor_label(): a for a in actors.get_all_level_actors() if isinstance(a, unreal.CameraActor)}
     frames, end_frame = data["frames"], data["end_frame"]
+    # The view through every player's eyes (POV cameras are CameraActors: their field of view is horizontal, of the
+    # 16:9 picture).
+    for player in data["players"]:
+        camera = cameras.get("POV %s" % player["name"])
+        if camera is not None:
+            camera.camera_component.set_editor_property("field_of_view", hfov_16_9(settings["view_fov"]))
     count = 0
     for player in data["players"]:
         binding = bindings.get("VM %s" % player["name"])
@@ -258,12 +269,16 @@ class OfastViewmodel(unreal.PrimaryDataAsset):
                       "(+) or closer (−). CS2's default 0.", (-10.0, 10.0))
     offset_x = slider("Offset X (right)", OFFSET_RANGE[0], OFFSET_RANGE[1], "viewmodel_offset_x: the gun more to the "
                       "side (+) or toward the middle (−). CS2's default 2.5.", (-10.0, 10.0))
-    fov = slider("Field of view", FOV_RANGE[0], FOV_RANGE[1], "viewmodel_fov: smaller makes the gun bigger. CS2's "
-                 "default 68 (CS2 allows 54 to 68).", (30.0, 120.0))
+    fov = slider("Gun field of view", FOV_RANGE[0], FOV_RANGE[1], "viewmodel_fov: smaller makes the gun bigger, "
+                 "the view stays as it is (that is View field of view, above). CS2's default 68 (CS2 allows 54 to "
+                 "68).", (30.0, 120.0))
     whose = unreal.uproperty(str, meta={
         "Category": "Viewmodel", "DisplayName": "Viewmodel", "GetOptions": "whose_options",
-        **tip("Same for everyone: the field of view and offsets below, for every player. Each player's own: the "
-              "settings each player had in the demo (the offsets and field of view below are then not used).")})
+        **tip("Same for everyone: the gun's field of view and offsets below, for every player. Each player's own: the "
+              "settings each player had in the demo (the offsets and gun field of view below are then not used).")})
+    view_fov = slider("View field of view", VIEW_FOV_RANGE[0], VIEW_FOV_RANGE[1], "How wide the view through the "
+                      "players' eyes is (the POV shots), in CS2's degrees: more sees more of the map, less zooms in. "
+                      "90 is CS2's. The gun keeps its own (Gun field of view).", (20.0, 150.0))
 
     @unreal.ufunction(ret=unreal.Array(str))
     def whose_options(self):
@@ -274,14 +289,14 @@ class OfastViewmodel(unreal.PrimaryDataAsset):
         return [AS_PLAYED, RIGHT, LEFT]
 
     @unreal.ufunction(meta={"CallInEditor": "true", "Category": "Viewmodel", "DisplayName": "CS2's default",
-                            **tip("Back to CS2's own default viewmodel: field of view 68, offsets 2.5, 0, -1.5, "
-                                  "the hand as played, CS2's gun motion.")})
+                            **tip("Back to CS2's own default: view field of view 90, gun field of view 68, offsets "
+                                  "2.5, 0, -1.5, the hand as played, CS2's gun motion.")})
     def reset(self):
         load_fields(DEFAULTS)
 
 
-FIELDS = {"whose": "whose", "fov": "fov", "offset_x": 0, "offset_y": 1, "offset_z": 2, "hand": "hand",
-          "motion": "motion"}
+FIELDS = {"view_fov": "view_fov", "whose": "whose", "fov": "fov", "offset_x": 0, "offset_y": 1, "offset_z": 2,
+          "hand": "hand", "motion": "motion"}
 # Keyed once the fields are left alone this long (a slider dragged keys the round once).
 SETTLE = 0.4
 _state = {"handle": None, "panel": None, "sequence": None, "last": None, "pending": None}
@@ -305,7 +320,8 @@ def fields_settings():
     p = panel()
     return {"whose": p.get_editor_property("whose") or SAME, "fov": p.get_editor_property("fov"),
             "offset": [p.get_editor_property(n) for n in ("offset_x", "offset_y", "offset_z")],
-            "hand": p.get_editor_property("hand") or AS_PLAYED, "motion": p.get_editor_property("motion")}
+            "hand": p.get_editor_property("hand") or AS_PLAYED, "motion": p.get_editor_property("motion"),
+            "view_fov": p.get_editor_property("view_fov")}
 
 
 def say(message):
@@ -366,7 +382,8 @@ def register():
     if menu:
         entry = unreal.ToolMenuEntry(name="OFASTViewmodel", type=unreal.MultiBlockType.MENU_ENTRY)
         entry.set_label("Viewmodel…")
-        entry.set_tool_tip("The gun in first person: field of view, offsets, hand, its motion. For every round.")
+        entry.set_tool_tip("First person: the view's field of view; the gun's field of view, offsets, hand, its "
+                           "motion. For every round.")
         entry.set_string_command(unreal.ToolMenuStringCommandType.PYTHON, "",
                                  "import ofast_viewmodel; ofast_viewmodel.open_panel()")
         menu.add_menu_entry("Viewmodel", entry)

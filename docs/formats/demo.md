@@ -939,7 +939,10 @@ Morton order, as CS2's are reported to: smoke reaches further towards +x, +y and
 notes when its simulation first needs each brick and compares with the frame the server sent it. Fitted on round 5
 (`examples/smoke_fit.rs`), it needs 39 – 46 % of the bricks sent after frame 0 within 2 frames of CS2 and misses
 7 – 14 % (the cloud's thinnest reaches) on the four demos. Its steady cloud has about 766 voxels above 5 % of full
-in the open, a hemisphere of 143 units' radius: CS:GO's smoke radius was 144.
+in the open, a hemisphere of 143 units' radius: CS:GO's smoke radius was 144. Its burst spreads quickly: on the
+detonation's own step about 360 voxels are above 5 %, where CS2 draws nothing yet and lets the cloud grow over
+seconds; how it is drawn in Unreal (from 1 % of full, against the walls, growing out of the grenade) is in
+[replay.md](replay.md#smoke-volumes).
 
 An HE grenade going off in or near a smoke blows a hole in it (`Simulation::carve`, `export::smoke::Blast`): after
 every step from the blast on, the smoke within 240 units of the detonation is taken out (all of it inside 200, less

@@ -70,10 +70,22 @@ UNITS_TO_CM = 2.54
 # seconds of it, `max_length` units at most), `sequence` (first sheet sequence, how many), `floor` (it dies at the
 # ground under a blast, as CS2's particles die on touching the world), `hot` (r, g, b, share: born that colour,
 # cooling to the tint over that share of its life) and `end_fade` (seconds: its particles die out that fast after
-# their slot's last tick, whatever their age).
-# A flame's particles go out within this of its last burning tick: at a fire's end CS2's flames are gone (the
-# system stops), where a particle living out its 1.2 s showed flames half a second after (de_nuke, 2026-10-24).
-FLAME_END_FADE = 0.15
+# their slot's last tick, whatever their age; from `end_taper` seconds before that tick, fading and shrinking to
+# `end_shrink` of their size, still born until they are out: a fire dying down, FLAME_END).
+# How a fire goes out: its flames die down from FLAME_END_TAPER s before their last burning tick to FLAME_END_FADE s
+# after it, fading and shrinking to FLAME_END_SHRINK of their size, new ones still born until they are out, and its
+# light dims with them. CS2's fire dies down too: round 14 of FaZe vs Falcons on de_anubis, the molotov at B through
+# Twistzz's eyes played at a quarter speed (2026-11-03), its flames lower and sparser over its last half second, a few
+# embers left 0.1 s after its end, none 0.3 s after. Gone within 0.15 s of the last tick (2026-10-24: a particle
+# living out its 1.2 s showed flames half a second after CS2's were gone), at full height to the end, the molotovs
+# went out too suddenly (the user's report, 2026-11-03): the fade is made longer and smoother than CS2's, the user's
+# choice. The flames keep their opacity and colour over the first half of it, shrinking, then fade (CS2's last flames
+# are small bright tongues, 2026-11-04: fading all the way, Unreal's were faint wisps over a purple edge).
+FLAME_END_TAPER = 1.0
+FLAME_END_FADE = 0.4
+FLAME_END_SHRINK = 0.35
+# The layer keys of a fire's flames (LAYER_DEFAULTS: `end_fade`, `end_taper`, `end_shrink`).
+FLAME_END = {"end_fade": FLAME_END_FADE, "end_taper": FLAME_END_TAPER, "end_shrink": FLAME_END_SHRINK}
 # CS2's colour gradients (a renderer's 1D colour lookup, read from the particle files 2026-10-30): (position, sRGB
 # colour 0 - 255) stops, which a layer's `gradient` names. CS2 colours its fires with them, the sheets' own colours
 # only half showing (`gradient_blend` 0.5): low values deep red, most of the range orange to peach, the brightest
@@ -127,19 +139,19 @@ FIRE_LAYERS = [
     {"name": "fire_fill", "role": "fire_fill", "slots": 10, "life": (0.6, 1.2), "radius": (35.0, 55.0),
      "scale": (0.6, 1.2), "alpha": (0.39, 0.59), "roll": 75.0, "roll_base": 15.0, "spread": 45.0, "rise": 0.0,
      "bright": 8.0, "tint": (1.0, 0.9, 0.8), "gravity": -35.0, "fade_in": 0.12, "fade_out": 0.5, "gradient": "fire",
-     "gradient_blend": 0.5, "end_fade": FLAME_END_FADE},
+     "gradient_blend": 0.5, **FLAME_END},
     # molotov_groundfire_main_fancy: taller flames among them (fire_small_sim_b, grown from half, rising faster:
     # gravity +75), overbright 2.
     {"name": "fire_fancy", "role": "fire", "slots": 3, "life": (0.6, 1.2), "radius": (30.0, 50.0),
      "scale": (0.5, 1.0), "alpha": (0.5, 0.7), "roll": 75.0, "roll_base": 15.0, "spread": 45.0, "rise": 0.0,
      "bright": 4.0, "gravity": -75.0, "drag": 0.05, "sequence": (0, 2), "gradient": "fire",
-     "gradient_blend": 0.5, "end_fade": FLAME_END_FADE},
+     "gradient_blend": 0.5, **FLAME_END},
     # molotov_groundfire_snapshot_child_base: flames lying flat on the ground (fire_onsurface, aligned to the ground's
     # normal, radius x 0.85, self-illuminated 3 x, overbright 2).
     {"name": "fire_surface", "role": "fire_surface", "slots": 4, "life": (1.0, 2.0), "radius": (45.0, 65.0),
      "scale": (0.85, 0.85), "alpha": (0.5, 0.8), "roll": 180.0, "spread": 40.0, "rise": 0.0, "bright": 8.0,
      "size": 1.0, "lift": 0.0, "along": (1.0, 1.0), "flat": True, "fade_in": 0.2, "fade_out": 0.4,
-     "gradient": "fire_surface", "end_fade": FLAME_END_FADE},
+     "gradient": "fire_surface", **FLAME_END},
 ]
 # The heart (CENTRE_LAYERS), slot sets where the fire lit (its burst's place, else its first flame): molotov_fire01's
 # flames, born in a sphere round the fire's origin that grows from 8 units across to 50 between 3 and 7 s (5 to 50
@@ -152,12 +164,12 @@ CENTRE_WIDE_S = 3.0
 # overbright 6 and CS2's radius as a quarter of the sprite's size, Unreal's was a small glow).
 HEART = {"role": "fire", "slots": 14, "life": (0.65, 1.2), "radius": (30.0, 50.0), "scale": (1.5, 0.75),
          "alpha": (0.47, 0.59), "roll": 24.0, "rise": 40.0, "bright": 12.0, "size": 1.0, "tint": (0.9, 0.7, 0.45),
-         "gradient": "fire", "gradient_blend": 0.5, "end_fade": FLAME_END_FADE}
+         "gradient": "fire", "gradient_blend": 0.5, **FLAME_END}
 # molotov_child_flame03a: 10 a second slowing to 2, tongues of burning gas among them (in their sheet's colours, pale:
 # 244 237 208 - 231 215 202, overbright 3).
 HEART_GAS = {"role": "gas", "slots": 6, "life": (0.75, 1.35), "radius": (24.0, 55.0), "scale": (0.8, 1.25),
              "alpha": (0.78, 0.98), "roll": 45.0, "rise": 25.0, "bright": 3.0, "size": 0.8, "tint": (0.88, 0.8, 0.7),
-             "end_fade": FLAME_END_FADE}
+             **FLAME_END}
 CENTRE_LAYERS = [dict(HEART, name="fire_heart", spread=8.0), dict(HEART_GAS, name="gas_heart", spread=8.0)]
 WIDE_CENTRE_LAYERS = [dict(HEART, name="fire_heart_wide", spread=50.0),
                       dict(HEART_GAS, name="gas_heart_wide", spread=50.0)]
@@ -176,7 +188,7 @@ EDGE_LAYERS = [
      "scale": (0.5, 1.0), "alpha": (1.5, 2.0), "roll": 25.0, "spread": 5.0, "rise": 0.0, "bright": 4.0, "size": 1.0,
      "lift": 0.3, "up": (40.0, 50.0), "gravity": -20.0, "from_birth": True, "fade_in": 0.08, "fade_out": 0.85,
      "sequence": (0, 3), "gradient": "fire_edge", "gradient_fade": 0.4, "near_side": True,
-     "end_fade": FLAME_END_FADE},
+     **FLAME_END},
 ]
 # particles/inferno_fx/molotov_groundfire_climbingoutline: flames shooting up a wall where a fire meets it (CS2's client
 # finds those places by tracing from the fire's outline; the export traces from its flames: the agents manifest's
@@ -188,7 +200,7 @@ WALL_LAYERS = [
     {"name": "fire_wall", "role": "fire_edge", "slots": 2, "life": (0.45, 1.0), "radius": (5.0, 15.0),
      "scale": (0.5, 1.5), "alpha": (0.8, 1.0), "roll": 0.0, "spread": 2.0, "rise": 0.0, "bright": 2.0, "size": 1.0,
      "lift": 0.0, "up": (40.0, 100.0), "drag": 0.01, "stretch": 0.35, "max_length": 100.0, "sequence": (0, 3),
-     "gradient": "fire_edge", "gradient_fade": 0.4, "end_fade": FLAME_END_FADE},
+     "gradient": "fire_edge", "gradient_fade": 0.4, **FLAME_END},
 ]
 # The burst a fire lights with (the replay's fire `burst`: CS2's server dispatches it, thrown along `direction`, the
 # layers' axis), as CS2 draws a molotov's (particles/inferno_fx/molotov_explosion; round 17's molotov at the top of
@@ -401,6 +413,7 @@ SPRITE_SIZE = 0.5
 LAYER_DEFAULTS = {"size": SPRITE_SIZE, "lift": 0.6, "speed": (0.0, 0.0), "up": (0.0, 0.0), "gravity": 0.0,
                   "drag": 0.0, "stretch": 0.0, "max_length": 0.0, "sequence": None, "floor": False,
                   "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False, "lit": False, "end_fade": 0.0,
+                  "end_taper": 0.0, "end_shrink": 1.0,
                   "fade_in": 0.1, "fade_out": 0.33, "along": (0.0, 0.0), "min_width": 0.0, "local": False,
                   "roll_base": 0.0, "min_distance": 0.0, "age": (0.0, 0.0), "from_birth": False, "tail_drop": 0.0,
                   "sort": 0, "link": None, "gradient": None, "gradient_blend": 1.0, "gradient_fade": 0.0,
@@ -528,11 +541,14 @@ float head = Reach > 0.0 ? min(axial, Reach) : axial;
 float trail = min(abs(upward) * Stretch, MaxLength) * (Reach > 0.0 ? saturate(age / max(Stretch, 0.001)) : 1.0);
 float tail = max(axial - trail, along);
 bool reached = Reach > 0.0 && (Stretch > 0.0 ? tail >= Reach : axial > Reach);
-// A layer with EndFade (s) dies out that fast after the slot's last tick, whatever its age: a fire's flames go out
-// with the fire, CS2's system being stopped then; without, a particle lives out its life.
-float ending = (LastTick + EndFade * TicksPerSecond - Tick) / max(EndFade * TicksPerSecond, 0.001);
+// A layer with EndFade (s) dies down with its slot: from EndTaper s before the slot's last tick to EndFade s after it
+// its particles fade out (end_fade, 1 to 0) and shrink (to EndShrink of their size, SPRITE_WPO), whatever their age,
+// and new ones are born until then: a fire's flames die down as the fire goes out. Without, a particle lives out its
+// life and none is born after the last tick.
+float ending = (LastTick + EndFade * TicksPerSecond - Tick) / max((EndFade + EndTaper) * TicksPerSecond, 0.001);
 float end_fade = EndFade > 0.0 ? saturate(ending) : 1.0;
-bool alive = Tick >= FirstTick && born >= FirstTick - 0.5 && born <= LastTick + 0.5 && norm <= 1.0
+float last_birth = LastTick + max(EndFade, 0.0) * TicksPerSecond;
+bool alive = Tick >= FirstTick && born >= FirstTick - 0.5 && born <= last_birth + 0.5 && norm <= 1.0
     && place.z >= FloorZ && end_fade > 0.0 && !reached;
 """
 # Vertex shader: the world position offset putting the quad's corner where the particle's camera-facing sprite has it.
@@ -543,6 +559,8 @@ corner = float2(corner.x * cos(roll) - corner.y * sin(roll), corner.x * sin(roll
 // Shown only with the camera at least MinDistance units from its centre (0: always).
 bool too_near = MinDistance > 0.0 && length(CameraPos - origin) < MinDistance * 2.54;
 float radius = alive && !too_near ? lerp(RadiusMin, RadiusMax, h2) * lerp(ScaleStart, ScaleEnd, norm) * 2.54 : 0.0;
+// Shrinking as its slot dies down (EndFade; end_fade is 1 before).
+radius *= lerp(EndShrink, 1.0, end_fade);
 // Lifted by Lift of its size (most of it for flames: the frames' flames sit low in their cells, so the sprite stands
 // on the ground rather than half in it), rising as it ages.
 float3 centre = place + float3(0.0, 0.0, 1.0) * (Rise * norm * 2.54 + radius * Lift);
@@ -624,7 +642,13 @@ float column = cell - row * Columns;
 float4 texel = Tex.Sample(TexSampler, (float2(column, row) + UV) / float2(Columns, Rows));
 float fade_in = FadeIn > 0.0 ? saturate(norm / FadeIn) : 1.0;
 float fade_out = FadeOut > 0.0 ? saturate((1.0 - norm) / FadeOut) : 1.0;
-float alpha = lerp(AlphaMin, AlphaMax, h2) * fade_in * fade_out * texel.a * end_fade;
+// A dying fire's flames keep their opacity over the first half of its dying down and fade over the second, shrinking
+// all the way (SPRITE_WPO): CS2's last flames are small bright tongues to the end, where fading all the way left faint
+// wisps (molotov 180 of round 14 on de_anubis, 2026-11-04). The edge's flames (GradientFade: their faint ends blue and
+// purple) fade sooner, as the square: CS2's magenta fringe is gone before its last flames, where Unreal's showed as
+// purple patches on the ground once the orange over them died down.
+float dying = GradientFade > 0.0 ? end_fade * end_fade : saturate(2.0 * end_fade);
+float alpha = lerp(AlphaMin, AlphaMax, h2) * fade_in * fade_out * texel.a * dying;
 if (NearSide > 0.5)
 {
     // Only on the side of its fire the camera sees (its axis points into the fire): CS2 kills the outline's flames
@@ -641,8 +665,10 @@ if (Gradient > 0.5)
     // GradientBlend (CS2's m_flTextureBlend).
     float v = pow(saturate(dot(texel.rgb, float3(0.299, 0.587, 0.114))), 1.0 / 2.2);
     // With GradientFade, the particle's fading takes the lookup down the gradient too: a fading edge flame turns
-    // red, purple and blue before it goes (CS2's fire edge, its magenta fringe).
-    v *= lerp(1.0, fade_in * fade_out * end_fade, GradientFade);
+    // red, purple and blue before it goes (CS2's fire edge, its magenta fringe). Its own life's fading only, not the
+    // fire's dying down (end_fade): with it, the whole edge turned purple over a dying fire's last 1.4 s, where CS2's
+    // last flames burn orange to the end (round 14 of FaZe vs Falcons on de_anubis, molotov 180, 2026-11-04).
+    v *= lerp(1.0, fade_in * fade_out, GradientFade);
     float4 stops[GRADIENT_STOPS];
 GRADIENT_TABLE
     float3 shade = stops[0].yzw;
@@ -667,13 +693,13 @@ SPRITE_SCALARS = ["TicksPerSecond", "LifeMin", "LifeMax", "RadiusMin", "RadiusMa
                   "Columns", "Rows", "Lift", "SpeedMin", "SpeedMax", "UpMin", "UpMax", "Gravity", "Drag", "Stretch",
                   "MaxLength", "EndFade", "FadeIn", "FadeOut", "AlongMin", "AlongMax", "MinWidth", "Local", "RollBase",
                   "MinDistance", "AgeMin", "AgeMax", "FromBirth", "TailDrop", "Gradient", "GradientBlend",
-                  "GradientFade", "Flat", "NearSide", "CameraBias"]
+                  "GradientFade", "Flat", "NearSide", "CameraBias", "EndTaper", "EndShrink"]
 # A scalar's value in the material itself, where not 1 (what an instance that does not set it reads): a layer is placed
 # in the world, its roll centred on 0, shown from any distance, born new, in its sheet's colours and facing the
 # camera from any side, unless its instance says otherwise.
 SCALAR_DEFAULTS = {"Local": 0.0, "RollBase": 0.0, "MinDistance": 0.0, "AgeMin": 0.0, "AgeMax": 0.0, "FromBirth": 0.0,
                    "TailDrop": 0.0, "Gradient": 0.0, "GradientFade": 0.0, "Flat": 0.0, "NearSide": 0.0,
-                   "CameraBias": 0.0}
+                   "CameraBias": 0.0, "EndTaper": 0.0}
 
 
 def gradient_table():
@@ -926,7 +952,8 @@ def layer_instance(layer, effect, texture, material, tick_rate):
         "Gravity": option(layer, "gravity"),
         "Drag": -DRAG_STEPS_PER_SECOND * math.log(1.0 - drag) if drag > 0.0 else 0.0,
         "Stretch": option(layer, "stretch"), "MaxLength": option(layer, "max_length"),
-        "EndFade": option(layer, "end_fade"),
+        "EndFade": option(layer, "end_fade"), "EndTaper": option(layer, "end_taper"),
+        "EndShrink": option(layer, "end_shrink"),
         "FadeIn": option(layer, "fade_in"), "FadeOut": option(layer, "fade_out"),
         "AlongMin": option(layer, "along")[0], "AlongMax": option(layer, "along")[1],
         "MinWidth": option(layer, "min_width"),
@@ -1088,8 +1115,18 @@ def add_key(channel, frame, value):
                     unreal.MovieSceneKeyInterpolation.LINEAR)
 
 
-def burning_flames(fire, tick):
-    return sum(1 for f in fire["flames"] if f["first_tick"] <= tick <= f["last_tick"])
+def flame_share(flame, tick, tick_rate):
+    """How much of a flame burns at a tick: 0 before it lit, 1 while it burns, dying down as its sprites do (FLAME_END:
+    from FLAME_END_TAPER s before its last tick to 0 FLAME_END_FADE s after it)."""
+    if tick < flame["first_tick"]:
+        return 0.0
+    out = flame["last_tick"] + FLAME_END_FADE * tick_rate
+    return min(max((out - tick) / ((FLAME_END_FADE + FLAME_END_TAPER) * tick_rate), 0.0), 1.0)
+
+
+def burning_flames(fire, tick, tick_rate):
+    """The fire's flames burning at a tick, those dying down counted in part (flame_share)."""
+    return sum(flame_share(f, tick, tick_rate) for f in fire["flames"])
 
 
 def light_intensity(fire, tick, tick_rate, rng=None):
@@ -1100,7 +1137,12 @@ def light_intensity(fire, tick, tick_rate, rng=None):
     flicker = 0.75 + 0.15 * math.sin(seconds * 23.0) + 0.1 * math.sin(seconds * 37.0 + 1.3)
     if rng is not None:
         flicker += 0.1 * (rng.random() - 0.5)
-    return LIGHT_INTENSITY * burning_flames(fire, tick) / max(LIGHT_FLAMES, len(fire["flames"])) * flicker
+    return LIGHT_INTENSITY * burning_flames(fire, tick, tick_rate) / max(LIGHT_FLAMES, len(fire["flames"])) * flicker
+
+
+def light_out_tick(fire, tick_rate):
+    """The tick a fire's light is out: its last flame's FLAME_END_FADE after its last tick."""
+    return max(f["last_tick"] for f in fire["flames"]) + math.ceil(FLAME_END_FADE * tick_rate)
 
 
 def light_label(fire):
@@ -1269,11 +1311,12 @@ def place_fires(sequence, replay, end_frame, instances, mesh, walls, spawn):
         light = spawn_light(spawn, light_label(fire), (x, y, z + 30.0), LIGHT_COLOR, LIGHT_RADIUS)
         channel = intensity_channel(sequence, light, end_frame)
         flicker = random.Random(fire["entity"] * 7919 + fire["start_tick"])
-        start, end = fire["start_tick"], fire["end_tick"]
+        # Keyed while it burns and dies down (light_intensity), out once its flames are.
+        start, end = fire["start_tick"], light_out_tick(fire, tick_rate)
         add_key(channel, max(start - tick0 - 1, 0), 0.0)
-        for tick in range(start, end + 1, FLICKER_TICKS):
+        for tick in range(start, end, FLICKER_TICKS):
             add_key(channel, tick - tick0, light_intensity(fire, tick, tick_rate, flicker))
-        add_key(channel, min(end - tick0 + FLICKER_TICKS, end_frame), 0.0)
+        add_key(channel, min(end - tick0, end_frame), 0.0)
     log("fires: %d (%d with their burst), %d sprite layers, %d wall points" % (
         len(fires), bursts, len(flame_layers + centre_layers + wide_layers + edge_layers + wall_layers + smoke_layers
                                 + wall_smoke_layers), placed_walls))

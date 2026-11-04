@@ -135,6 +135,35 @@ from scriptable pieces, not with converted CS2 particle systems:
   opaque 15 % above the 5 % threshold, a fractal noise breaks the surface into puffs, the closed voxel under the
   smoke is drawn with it (the floor voxel touches the floor, so the cloud would float 20 units up), and the smokes
   get indirect light from Lumen (a console variable).
+- Revised 2026-11-03 after the user watched round 14 of FaZe vs Falcons on de_anubis in Unreal ("the smoke is
+  see-through", "it appears way too suddenly, it should grow from 0 to 100 %", "on some smokes we still see around
+  it"), checked against CS2 playing the same demo through m0NESY's and Twistzz's eyes: the threshold is 1 %, opaque
+  4 % above it, and the noise scales the density (0.4 – 1.6 times) instead of moving the threshold by ±0.125 (OFAST's
+  cloud was 1 – 12 % dense in a doorway CS2 fills, the noise ate holes into it, and the windows behind showed
+  through); the closed voxels beside the cloud are drawn with it too, where that cannot leak through a wall thinner
+  than a voxel (CS2's smoke reaches the walls of a passage, OFAST's stopped short of them); and the cloud grows out of
+  the grenade over its first two seconds, inside a dome that grows from 0.45 s on (CS2 draws nothing on the tick it
+  goes off nor 0.4 s later, a first puff at 0.5 – 0.6 s, a cloud filling a passage at 0.8 s, 170 units across and
+  140 high at 1.45 s, on the demo bar's ticks: the recordings' own clock runs 10 – 17 ticks behind them, and fitted to
+  it the dome grew from 0.2 s, a tenth of a second ahead of CS2's cloud and smaller than it at 1 s; OFAST's simulation
+  had already spread over 180 units on its first step). The simulation itself is unchanged: its fit to
+  the bricks holds. Part of "see-through" was Unreal's: it lays translucency drawn after the depth of field (the
+  default pass) over the smoke volumes, so the map's window glass showed through a smoke; the map's translucent
+  masters now draw before the depth of field, under the smokes ([material.md](../formats/material.md)). The effects'
+  sprites keep the default pass (a fire in front of a smoke stays bright; one behind it still shows through).
+- Revised 2026-11-04, frame by frame against the same CS2 recordings (the user: "make sure smokes and molotovs are
+  perfect"): Unreal's smokes were soft tan mounds beside CS2's crisp grey billows, and grainy in renders. Unreal draws
+  Heterogeneous Volumes at half resolution and coarser with distance by default (now full, `DownsampleFactor 1`,
+  `CLOD 0`), in a render samples their lighting at random places that its accumulation is meant to smooth (now off,
+  `StochasticFiltering 0`), and lit them on a grid coarser than the puffs (now twice as fine as the volume's); their
+  albedo now takes out part of the map's sun colour (CS2's smokes keep their grey under de_anubis's orange sun) and
+  shows the team colour more (30 %: CS2's T smoke is tan-brown, its CT smoke grey), darker (× 0.65: Unreal's were
+  brighter and flatter, CS2's median luminance 157 and darkest tenth 128 against Unreal's 190 and 168; now 163 and
+  131), with bigger, rounder billows; and the cloud grows as CS2's does (from 0.45 s, faster, its front lumpy). A
+  dying molotov's edge flames no longer turn purple as the fire goes out (the longer fade of 2026-11-03 had taken the whole edge down CS2's colour gradient for
+  1.4 s) and fade sooner than the rest (their purple ends showed on the ground once the orange over them died down:
+  5 000 purple pixels at the fire's end through Twistzz's eyes, 100 now), and its flames keep their opacity over the
+  first half of the fade: CS2's last flames are small bright tongues, not faint wisps.
 - Heterogeneous Volumes are off at Effects quality below High and cast no shadows on the scene by default: the replay
   sets the cvars it needs, and renders use Movie Render Queue's settings for them.
 - CS2's particle textures are read from the user's install like every other asset; nothing is shipped.

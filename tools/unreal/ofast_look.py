@@ -30,6 +30,7 @@ import os
 
 import unreal
 
+import replay_cameras
 import tonemapper
 
 # The level's tag import_map.py stamps when it builds the level.
@@ -365,6 +366,9 @@ def apply(look, level):
         if on:
             settings.set_editor_property("depth_of_field_fstop",
                                          max(DOF_RANGE ** (1.0 - v["depth_of_field"]), 1.0))
+            # The lens the world blurs with (replay_cameras.FOCUS_SENSOR_MM), set again: a round sent before
+            # 2026-11-03 has a full frame's, which blurred only the gun.
+            settings.set_editor_property("depth_of_field_sensor_width", replay_cameras.FOCUS_SENSOR_MM)
         component.set_editor_property("post_process_settings", settings)
 
 

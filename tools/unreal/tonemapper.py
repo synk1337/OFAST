@@ -11,8 +11,8 @@ import os
 
 import unreal
 
-# Versioned like import_map.py's BLEND_MASTER: v3 had no grading.
-TONEMAPPER = "/Game/OFAST/Materials/M_OFAST_Tonemap_v4"
+# Versioned like import_map.py's BLEND_MASTER: v3 had no grading, v4 no MovieRender.
+TONEMAPPER = "/Game/OFAST/Materials/M_OFAST_Tonemap_v5"
 # The identity colour table's folder (import_map.py's default textures).
 TEXTURE_FOLDER = "/Game/OFAST/Materials/Defaults"
 # Hable maps: shown = LUT(srgb(H(INPUT x) / H(WHITE W))), x = exposure x scene (what Unreal shows linearly with the
@@ -41,6 +41,12 @@ TONEMAP_SWITCHES = {"Hable": 1.0, "UseLut": 0.0, "LutSize": 32.0}
 # The Look panel's grading and their neutral values: Warmth (−1 cool … 1 warm), Saturation and Contrast (times),
 # Vignette (0 – 1: how dark the corners get), Grain (0 – 1).
 GRADING = {"Warmth": 0.0, "Saturation": 1.0, "Contrast": 1.0, "Vignette": 0.0, "Grain": 0.0}
+# 1 while Movie Render Queue renders (movie_render): the curve hands it the picture linear, not encoded. The editor
+# shows a replacing tone mapper's output as it is, so the curve encodes it (sRGB); Movie Render Queue takes it as
+# linear and encodes it again for its files: CS2's look rendered washed out, every pixel sRGB(the editor's), median
+# error 0.005 (round 14 of FaZe vs Falcons on de_anubis, 2026-11-04: the black level 95 where the editor's screenshot
+# of the same frame has 37), since this tone mapper (v4, 2026-10-31).
+OUTPUT = {"MovieRender": 0.0}
 TONEMAP_HLSL = """
 float3 x = max(Color * Exposure, 0.0);
 float3 c;
@@ -84,7 +90,11 @@ if (UseLut > 0.5)
 // Film grain on the encoded picture: a fresh noise every frame, strongest in the mid-tones.
 float noise = frac(sin(dot(floor(UV * 2048.0) + frac(Time * 61.0) * 113.0, float2(12.9898, 78.233))) * 43758.5453);
 s += (noise - 0.5) * Grain * 0.12 * (1.0 - abs(s * 2.0 - 1.0));
-return saturate(s);
+s = saturate(s);
+// For Movie Render Queue, which encodes what it gets: the encoded picture decoded back to linear (OUTPUT).
+if (MovieRender > 0.5)
+    s = lerp(pow((s + 0.055) / 1.055, 2.4), s / 12.92, step(s, 0.04045));
+return s;
 """
 LUT_TEXTURE_SETTINGS = {
     # Uncompressed RGBA8, no sRGB decoding, no mips, bilinear, clamped: the table's bytes as they are.
@@ -164,7 +174,7 @@ def ensure_tonemapper():
     curve.set_editor_property("description", "CS2 tone curve, colour table and the Look panel's grading")
     curve.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT3)
     curve.set_editor_property("code", TONEMAP_HLSL)
-    scalars = list(TONEMAP_SCALES) + list(HABLE_PARAMETERS) + list(TONEMAP_SWITCHES) + list(GRADING)
+    scalars = list(TONEMAP_SCALES) + list(HABLE_PARAMETERS) + list(TONEMAP_SWITCHES) + list(GRADING) + list(OUTPUT)
     inputs = []
     for input_name in ["Color", "Exposure", "Lut", "UV", "Time"] + scalars:
         custom_input = unreal.CustomInput()
@@ -178,7 +188,7 @@ def ensure_tonemapper():
                  and mel.connect_material_expressions(time, "", curve, "Time"))
     if not connected:
         raise RuntimeError("tone mapper: could not connect its inputs")
-    defaults = {**TONEMAP_SCALES, **TONEMAP_SWITCHES, **GRADING}
+    defaults = {**TONEMAP_SCALES, **TONEMAP_SWITCHES, **GRADING, **OUTPUT}
     for index, param in enumerate(scalars):
         scalar = mel.create_material_expression(material, unreal.MaterialExpressionScalarParameter, -900,
                                                 500 + index * 110)
@@ -190,3 +200,19 @@ def ensure_tonemapper():
     unreal.EditorAssetLibrary.save_asset(TONEMAPPER)
     log("created " + TONEMAPPER)
     return material
+
+
+def movie_render(on):
+    """The open level's CS2's-look tone mapper hands Movie Render Queue a linear picture (`on`) or the editor its
+    encoded one (OUTPUT); nothing in the realistic look (Unreal's own tone mapper). Set in memory, not saved: by
+    render_round.py for its renders, and by the OFAST render configurations' start and end commands for a render
+    started in Unreal's Movie Render Queue window."""
+    import ofast_look
+
+    instance = ofast_look.tone_instance()
+    if instance is None:
+        return
+    unreal.MaterialEditingLibrary.set_material_instance_scalar_parameter_value(
+        instance, "MovieRender", 1.0 if on else 0.0)
+    log("tone mapper: %s for %s" % ("linear for Movie Render Queue" if on else "encoded for the editor",
+                                    instance.get_name()))

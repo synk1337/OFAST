@@ -832,18 +832,32 @@ def set_model_tint(instance, environment, layers):
 # (decision 010). Overlays and csgo_complex decals, which lie on another surface, are mesh decals instead (decisions
 # 009 and 010): lit per pixel they still got the coarse indirect light, darker than their wall in the shade.
 TRANSLUCENCY_LIGHTING = unreal.TranslucencyLightingMode.TLM_SURFACE_PER_PIXEL_LIGHTING
+# ... and drawn before the depth of field: Unreal composites the smokes (Heterogeneous Volumes) over the scene after
+# that pass but before the one after the depth of field, the default for translucent materials, which is laid over
+# everything at the end. Drawn there, window glass showed through a smoke in front of it (the user's "the smoke is
+# see-through", 2026-11-03: de_anubis's windows through smoke 454 of round 14). In this pass a pane in front of a
+# smoke is dimmed by the smoke behind it instead, which nearly clear glass hardly shows. (Unreal's "Composite with
+# Translucency" project setting, which sorts them properly, still showed those windows at 300 units and tinted the
+# whole realistic picture blue.)
+TRANSLUCENCY_PASS = unreal.MaterialTranslucencyPass.MTP_BEFORE_DOF
 
 
 def ensure_translucency_lighting(material, path):
-    """Sets TRANSLUCENCY_LIGHTING on an OFAST master whose instances may be translucent (set_alpha_overrides) and
-    saves it, if it is not set yet. Masters an older OFAST made are changed in place, without a new version: the
-    mode is a property of the material, not of its graph, and opaque and masked instances look the same with any.
-    Returns the material."""
+    """Sets TRANSLUCENCY_LIGHTING and TRANSLUCENCY_PASS on an OFAST master whose instances may be translucent
+    (set_alpha_overrides) and saves it, if they are not set yet. Masters an older OFAST made are changed in place,
+    without a new version: they are properties of the material, not of its graph, and opaque and masked instances look
+    the same with any. Returns the material."""
+    changed = []
     if material.get_editor_property("translucency_lighting_mode") != TRANSLUCENCY_LIGHTING:
         material.set_editor_property("translucency_lighting_mode", TRANSLUCENCY_LIGHTING)
+        changed.append("lit per pixel")
+    if material.get_editor_property("translucency_pass") != TRANSLUCENCY_PASS:
+        material.set_editor_property("translucency_pass", TRANSLUCENCY_PASS)
+        changed.append("drawn before the depth of field (under the smokes)")
+    if changed:
         unreal.MaterialEditingLibrary.recompile_material(material)
         unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
-        log("%s: translucent instances lit per pixel" % path)
+        log("%s: translucent instances %s" % (path, ", ".join(changed)))
     return material
 
 
@@ -876,6 +890,7 @@ def ensure_environment_master(defaults):
         name, folder, unreal.Material, unreal.MaterialFactoryNew()
     )
     material.set_editor_property("translucency_lighting_mode", TRANSLUCENCY_LIGHTING)
+    material.set_editor_property("translucency_pass", TRANSLUCENCY_PASS)
     mel = unreal.MaterialEditingLibrary
     prop = unreal.MaterialProperty
     textures = {}
@@ -997,6 +1012,7 @@ def ensure_tint_mask_master(defaults):
         name, folder, unreal.Material, unreal.MaterialFactoryNew()
     )
     material.set_editor_property("translucency_lighting_mode", TRANSLUCENCY_LIGHTING)
+    material.set_editor_property("translucency_pass", TRANSLUCENCY_PASS)
     mel = unreal.MaterialEditingLibrary
     prop = unreal.MaterialProperty
 
@@ -1761,10 +1777,10 @@ def ensure_gltf_blend_parents():
     Returns Interchange's instance (object path) -> OFAST's copy."""
     master, made = duplicate_once(INTERCHANGE_MASTER, GLTF_MASTER)
     if made:
-        master.set_editor_property("translucency_lighting_mode", TRANSLUCENCY_LIGHTING)
-        unreal.MaterialEditingLibrary.recompile_material(master)
-        unreal.EditorAssetLibrary.save_asset(GLTF_MASTER, only_if_is_dirty=False)
-        log("created %s (copy of %s, translucency lit per pixel)" % (GLTF_MASTER, INTERCHANGE_MASTER))
+        log("created %s (copy of %s)" % (GLTF_MASTER, INTERCHANGE_MASTER))
+    # Its translucency lit per pixel and drawn under the smokes, made so once (a copy made before 2026-11-03 gets the
+    # pass now).
+    ensure_translucency_lighting(master, GLTF_MASTER)
     parents = {}
     for source, path in GLTF_BLEND_PARENTS.items():
         instance, made = duplicate_once(source, path)

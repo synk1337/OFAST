@@ -30,7 +30,7 @@ name).
       {"tick": 153180, "on": "Where the player looks", "distance": 10.0, "strength": 0.0},
       {"tick": 153240, "on": "CT molodoy", "distance": 10.0, "strength": 0.8}
     ],
-    "foreground": 0.3,
+    "foreground": 0.05,
     "background": 2.5
   }
 }
@@ -53,7 +53,7 @@ for every camera.
 | `focus.keys[].on` | what is sharp: `Where the player looks`, `A distance`, or a player's body label |
 | `focus.keys[].distance` | with `A distance`, metres from the camera |
 | `focus.keys[].strength` | blur strength, 0 to 1, as `depth_of_field` (f-stop = 22 ^ (1 − strength)) |
-| `focus.foreground`, `focus.background` | the most a thing in front of the focus (behind it) is blurred, % of the picture's width: `r.DOF.Kernel.MaxForegroundRadius` (`MaxBackgroundRadius`) × 100; 0.3 and 2.5 by default (the project's, which keeps the POV gun sharp, and Unreal's) |
+| `focus.foreground`, `focus.background` | the most a thing in front of the focus (behind it) is blurred, % of the picture's width: `r.DOF.Kernel.MaxForegroundRadius` (`MaxBackgroundRadius`) × 100; 0.05 and 2.5 by default (the project's, which keeps the POV gun sharp, and Unreal's; 0.3 until 2026-11-03, when the POV lens grew to blur the map and the gun at 0.3 looked soft). A round's file keeps the limits it was given: a background of 0 keeps everything behind the focus sharp |
 
 ## The camera made from it
 
@@ -74,7 +74,8 @@ for every camera.
 With focus keys, every camera with a cut in the round gets its lens keyed at each tick of its cuts:
 
 - A POV camera (a `CameraActor`): `PostProcessSettings.DepthOfFieldFocalDistance` and `DepthOfFieldFstop`, their
-  overrides on, a 36 mm sensor (as the realistic look's). A shot camera or a cinematic (a `CineCameraActor`):
+  overrides on, the realistic look's sensor (`replay_cameras.FOCUS_SENSOR_MM`: 1440 mm, 36 mm until 2026-11-03,
+  [lighting.md](lighting.md#the-look-panel)). A shot camera or a cinematic (a `CineCameraActor`):
   `FocusSettings.ManualFocusDistance` and `CurrentAperture`, its focus method manual.
 - Between two keys, eased (smoothstep): the two keys' focus distances at that tick blended as their inverses (a
   focus pull passes evenly through near and far) and the strength straight; before the first key and after the last,

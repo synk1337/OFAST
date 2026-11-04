@@ -466,7 +466,13 @@ Interchange instance of every `BLEND` material `lit_per_pixel` names from `MI_De
 parameters are the same, so the instance keeps its textures and factors. Left out: the decal overlays above, the
 static overlays in their other blend modes (Mod2x, alpha test …; "Static overlay blend modes and Mod2x" below) and the
 unlit cards ("Unlit materials" below). OFAST's environment and tint-mask
-masters, whose instances can be translucent through `set_alpha_overrides`, have the per-pixel mode too. Measured in
+masters, whose instances can be translucent through `set_alpha_overrides`, have the per-pixel mode too. All three
+draw their translucency before the depth of field (`TRANSLUCENCY_PASS`, since 2026-11-03): Unreal composites the
+smokes (Heterogeneous Volumes) over the scene after that pass and before the after-depth-of-field one, the default,
+which it lays over everything at the end, so window glass showed through a smoke in front of it (de_anubis, round 14,
+smoke 454: the user's "the smoke is see-through"). A pane in front of a smoke is dimmed by the smoke behind it
+instead, which nearly clear glass hardly shows; Unreal's "Composite with Translucency" project setting, which sorts
+them by depth, still showed the windows 300 units away and tinted the realistic picture blue. Measured in
 [decision 010](../decisions/010-translucent-decals-and-per-pixel-lighting.md): in the sun the SWAT lettering and the
 container sign were at 0.81 and 0.70 of their per-pixel luminance before; against CS2 their contrast with the
 surface around them went from 0.70 and 0.68 of CS2's to 0.87 and 0.91.

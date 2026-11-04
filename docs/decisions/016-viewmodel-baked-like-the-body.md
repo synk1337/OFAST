@@ -85,7 +85,9 @@ The viewmodel is baked in OFAST's core per player and tick, like the body (decis
   (`import_demo.py`, `FIRST_PERSON_SCALE`), the project's near clip plane at 2 cm (at 10 cm the hands and the back of
   the gun were cut from a scale of 0.3 down) and, for the realistic look's depth of field, its foreground blur capped
   at 0.3 % of the width (`r.DOF.Kernel.MaxForegroundRadius`; a gun a fifth as far from the lens blurred into a
-  smear). The guns now show whole in front of the wall, and look the same as before everywhere else.
+  smear). The guns now show whole in front of the wall, and look the same as before everywhere else. Since
+  2026-11-03 the cap is 0.05 %: the POV lens grew to blur the map (`replay_cameras.FOCUS_SENSOR_MM`), and the gun at
+  0.3 % looked soft while the world stayed sharp (the user's report).
 - Older demos may carry a viewmodel FOV CS2 did not apply to spectators before 2026-05-07; OFAST uses the
   recorded value.
 

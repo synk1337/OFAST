@@ -349,7 +349,8 @@ fn level_name(map: &str, look: &str) -> String {
 /// How OFAST exports and imports maps. A release that changes what a map looks like in Unreal (its materials, lights,
 /// shading) counts it up: a level imported by an older Studio is then imported again, once, the next time a round is
 /// sent on it. "1": OFAST 1.0.7 (map lamps, barn lights, glass and steel); the Studios before it wrote no version.
-const MAP_VERSION: &str = "1";
+/// "2": the map's translucent surfaces (glass, cards) drawn under the smokes (`import_map.py`, `TRANSLUCENCY_PASS`).
+const MAP_VERSION: &str = "2";
 
 /// Where each level's map version is kept once its import finished (a file named after the level, in the project).
 const IMPORTED: &str = r"Saved\OFAST\imported";

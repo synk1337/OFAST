@@ -207,11 +207,19 @@ def key_eyes(binding, rows, tick0, end_frame):
     return count
 
 
-# The realistic look's lens on a player's eyes (depth of field): a full-frame sensor at f/1.8. At CS2's field of view
-# (about 13.5 mm on it) everything from about 2.5 m on is sharp when it focuses far, and a player in front blurs the
-# street behind them: what a camera would show, without blurring the game away.
+# The realistic look's lens on a player's eyes (depth of field): f/1.8 on a sensor 40 times a full frame's width.
+# Unreal takes a camera's focal length from its sensor and its field of view: at CS2's (106° across 16:9) a full-frame
+# sensor's lens is 13.5 mm, which keeps everything from 2 m on sharp even at f/1, so only the gun, a few centimetres
+# from the lens, ever blurred (the user's report, 2026-11-03: "depth of field only affects the weapon, not the
+# world"). On the bigger sensor the same picture's lens is 540 mm. Where the players look is mostly 10 – 35 m away
+# (m0NESY's whole round 14 on de_anubis): focused 15 m away, what lies far behind blurs about 0.4 % of the picture's
+# width (7 pixels of a 1080p picture) at f/1.8, twice that at the Look panel's strongest (f/1), and a focus a few
+# metres away blurs the street behind up to the background limit (2.5 %); 12 times a full frame (2026-11-03, first
+# try) blurred 15 m behind by 2 pixels, which looked sharp. In front of the focus at most the foreground limit
+# (ofast_cameras.DEFAULT_LIMITS: 0.05 %), so the gun stays sharp: Unreal's depth of field cannot leave the
+# first-person gun out, and one limit holds for it and for a wall in front of the focus alike.
 FOCUS_FSTOP = 1.8
-FOCUS_SENSOR_MM = 36.0
+FOCUS_SENSOR_MM = 36.0 * 40.0
 
 
 def key_focus(sequence, camera, rows, tick0, end_frame, blur=True):

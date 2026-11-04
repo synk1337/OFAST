@@ -54,6 +54,7 @@ import ofast_cameras  # noqa: E402
 import ofast_look  # noqa: E402
 import ofast_viewmodel  # noqa: E402
 import smoke_volumes  # noqa: E402
+import tonemapper  # noqa: E402
 from replay_cameras import TAG, log, progress  # noqa: E402
 
 # For the Studio's progress bar: the run's share before Movie Render Queue renders (the level loading, the job set
@@ -139,6 +140,10 @@ def make_config(name, preset):
     for command in smoke_volumes.SMOKE_CVARS:
         cvar, value = command.split()
         cvars.add_or_update_console_variable(cvar, float(value))
+    # Picked in Unreal's own Movie Render Queue window, the configuration switches CS2's look's tone mapper to a
+    # linear picture for the render and back after it, as render_round does (tonemapper.movie_render).
+    cvars.set_editor_property("start_console_commands", ["py import tonemapper; tonemapper.movie_render(True)"])
+    cvars.set_editor_property("end_console_commands", ["py import tonemapper; tonemapper.movie_render(False)"])
     config.find_or_add_setting_by_class(unreal.MoviePipelineGameOverrideSetting)
     assets.save_loaded_asset(config)
     return config
@@ -197,6 +202,9 @@ def main():
     # The Look panel's settings (ofast_look.py), even if the level was not saved after they were changed; the Cameras
     # panel's cinematics, from their file, likewise (ofast_cameras.py).
     ofast_look.apply_level_look()
+    # CS2's look's tone mapper hands Movie Render Queue a linear picture, which it encodes for the files (else the
+    # frames came out washed out: tonemapper.py, OUTPUT). Not saved: the editor quits after the render.
+    tonemapper.movie_render(True)
     ofast_cameras.restore(sequence)
     # The Viewmodel panel's settings (ofast_viewmodel.py), whichever round they were last changed on.
     ofast_viewmodel.key(sequence)
