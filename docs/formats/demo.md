@@ -561,8 +561,8 @@ The fields sit on the pawn's `CBodyComponent` → `m_animationController`:
 | `m_hGraphDefinitionAG2` | `uint64` | the graph's resource id: `animation/graphs/worldmodel/worldmodel.vnmgraph` for every player |
 | `m_SerializePoseRecipeAG2Slots` | `CUtlVectorEmbeddedNetworkVar<AnimGraph2SerializedPoseRecipeSlot_t>`, 32 slots | each slot's `m_topology`, a byte blob: a task list the player has used lately (below) |
 | `m_nSerializePoseRecipeAG2ActiveSlot` | `uint32` | which slot this tick's tasks follow; changes when the graph's task list changes |
-| `m_SerializePoseRecipeAG2Dynamic` | `CNetworkUtlVectorBase<uint8>`: a length, then one element per byte (32, 64 or 96) | this tick's task data: the server tick (`u32`), then each task's payload in the slot's order |
-| `m_nSerializePoseRecipeVersionAG2` | `int32` | 2 |
+| `m_SerializePoseRecipeAG2Dynamic` | `CNetworkUtlVectorBase<uint8>`: a length, then one element per byte (32, 64 or 96 in version 2; 32, 128 or 160 in version 3) | this tick's task data: the server tick (`u32`), then each task's payload in the slot's order |
+| `m_nSerializePoseRecipeVersionAG2` | `int32` | the format: 2 in the demos of CS2 builds 10772 and 10847, 3 in those of build 10955 (below, "Version 3") |
 
 A **topology** is a 4-bit width `D` (at most 8), a `D`-bit task count, then per task a 5-bit type and its inputs
 (`D` bits each: indices of earlier tasks). How many inputs each type takes is not written: with the counts below
@@ -582,7 +582,7 @@ the recipes that stop at a 14 have 32768 there about as often whatever types com
 
 | Type | Inputs | Payload | What |
 |---|---|---|---|
-| 1 | 0 | resource index (10 bits in these demos, enough for the 909 clips and 67 graphs the graph refers to), normalized time (16 bits) | sample a clip |
+| 1 | 0 | resource index (10 bits in version 2, enough for the 909 clips and 67 graphs the graph refers to; 11 bits in version 3), normalized time (16 bits) | sample a clip |
 | 7 | 2 | normalized weight (8 bits), a flag, and when set a bone mask list | blend the second input over the first |
 | 8 | 2 | the same | blend; the masked layers (weight 1, bone mask 0, over the upper body) |
 | 10 | 2 | the same (the recipes with one: 41 % with the 32768 mark on round 5, 54 % on the local match, as the others) | another blend kind (in 371 of the 618 topologies), often before the weapon layer |
@@ -606,6 +606,34 @@ AK fire, restarting at each shot), the aim, the last step. The locomotion times 
 length` (0.026 a tick on a 0.6 s run cycle) and the weights ease as the player turns: this is the pose CS2 drew.
 Every clip and blend decodes in 98.4 % of round 5's recipes and 99.6 % of the local match's (decoding stops at a
 14, 15 or 5 with no clip or blend after it); the rest have a clip after a 14 or a 15.
+
+**Version 3** (the demos of CS2 build 10955: the faze-vs-falcons matches; `demo::recipe` reads it since 2026-11-04,
+before which their exports played OFAST's re-decided poses on every tick). The topologies did not change: read as in
+version 2, all 546 of anubis round 14 fit the input counts. The data did: read as version 2, nearly every recipe fails
+in a blend's bone mask list. Found by comparing one player's data over consecutive ticks (`examples/pose_recipe.rs`
+with `OFAST_HEX=1`, which also prints the bytes of recipes that do not decode): the bits that change from one tick to
+the next are the clips' times and the blends' weights. Neityu's recipe at demo tick 134000 (`1 1 7(0,1) 1 7(2,3) 1
+8(4,5) 14(6) 5(7)`) has its three locomotion times' lowest bits at data bits 43, 70 and 106: a time 11 bits after
+its sample's start, the next sample 27 bits on (after an 11-bit index and a 16-bit time), the third 36 bits on (a
+9-bit unmasked blend between), the three times equal and stepping 1024 a tick (a 1 s cycle, wrapping from 0.999 to
+0.015). With 11-bit indices every one of the round's 69,945 recipes decodes without an error, 99.3 % with every clip
+and blend; the masked layer after the triangle reads `w1.00[mask0]` as in version 2, and where decoding stops at a 14
+its first value is the aim's 32768 as often as in version 2 (50 – 96 % by the types decoded before it, 41 – 75 % on
+round 5 of the de_nuke pro demo). The resource count explains the width: indices up to 1038 occur, and today's main
+graph reaches 975 clips, which with its graphs pass 1024; Esoterica sizes the index to the count, so a build past
+2048 resources would widen it again, perhaps without a new version (`OFAST_CHECK=1` would show the errors). Nothing
+else decoded changed: blends (an 8-bit weight, the flag, mask lists of the same shapes, `[mask0]`, `[mask3]`,
+`[mask0 mask0 blend0,1,w]`), cached poses (6 bits: an ID a player keeps over many ticks, the samples after it
+aligned; version 3 uses IDs all over 0 – 63 where version 2 used a few) and the empty pose. The undecoded tail did:
+the 14 and the 5 together run 550 – 1150 bits on 400 ticks of anubis round 14 (to the data's last set bit), against
+60 – 670 on 400 ticks of de_nuke round 5, the duck amount still 48 bits into the 14; the aim and the last task carry
+more than before, which may be what the new version is for. The other two faze-vs-falcons demos (de_ancient,
+de_mirage) decode alike: no error in 90,000 recipes each, every clip and blend in 97.3 % and 99.1 %. Played, anubis
+round 14 gets CS2's pose on 36,526 of its 51,853 living player-ticks (70 %; 0 before), four version-3 rounds 53 – 70
+% (79 – 86 % on version-2 rounds): the new graph runs about half as many sample tasks again, and the table names
+47 – 76 % of them, where it names 89 – 94 % on version 2 (unmatched: mostly shot clips and the 0.53 s planted turns).
+On those four rounds the demo's hits fit the recipes' poses a little worse than the re-decided ones (149 of 235
+within an inch against 155), where on version 2 they fit them better (decision 020).
 
 The resource index is not the graph's own resource order. The main graph and its 66 child graphs refer to 909 clips
 (`examples/recipe_table.rs` counts them); their indices follow no rule tried by hand (their order in the graphs, their

@@ -223,8 +223,10 @@ player and round.
   (`OFAST_RECIPE=0` for the re-decided poses only): the demo's hits sit closer to the hitboxes posed from them (371
   of 505 within an inch, 349 with the re-decided poses), and side views rendered from CS2's free-camera positions
   where the two bakes differ most match CS2's at least as well (the table also showed the bake played a gun's shot
-  clip once per spray, not per bullet) ([demo.md](formats/demo.md#pose-recipe-cs2s-own-animation)). To do: the
-  table for the rest (or its rule), the remaining task payloads (the aim, then CS2's aim weights over OFAST's).
+  clip once per spray, not per bullet) ([demo.md](formats/demo.md#pose-recipe-cs2s-own-animation)); recipe version
+  3 (CS2 build 10955's demos: 11-bit resource indices) read since 2026-11-04. To do: the table for the rest (or its
+  rule; version-3 demos sample many clips the bake does not play, the table naming 47 – 76 % of their sample tasks),
+  the remaining task payloads (the aim, then CS2's aim weights over OFAST's).
 
 ## M5 progress
 

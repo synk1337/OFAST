@@ -9,7 +9,9 @@
 //! `type(inputs):payload` (`1:#321@0.259` samples resource 321 at 0.259 of its length, `7(0,1):w0.13` blends tasks 0
 //! and 1 by 0.13, `8(4,5):w1.00[mask0]` with bone mask 0, `0(2):write22` / `6:read22` cached poses, `13:empty`),
 //! `?` from the first task whose payload is not known, then the data bit where decoding stopped and the next two
-//! 16-bit values. `OFAST_HEX=1` adds the topology and data bytes.
+//! 16-bit values. `OFAST_HEX=1` adds the topology and data bytes, also for recipes that do not decode (with their
+//! topology's tasks): comparing a player's data over consecutive ticks shows where the payloads lie, the bits that
+//! change being the clips' times and the blends' weights (how recipe version 3's wider resource index was found).
 //!
 //! `OFAST_CHECK=1` prints only a summary instead: recipes read, errors by kind, the task types decoding stops at, how
 //! many recipes have every clip and blend decoded (only a 14, 15 or 5 left after the stop), the distinct topologies
@@ -138,6 +140,20 @@ fn main() {
                     *errors.entry(error.to_string()).or_default() += 1;
                     if !check {
                         println!("{tick} {name} slot {}: {error}", recipe.slot);
+                        if show_hex {
+                            let kinds: Vec<String> = recipe::parse_topology(&recipe.topology)
+                                .unwrap_or_default()
+                                .iter()
+                                .map(|t| {
+                                    let list: Vec<String> =
+                                        t.inputs.iter().map(u8::to_string).collect();
+                                    format!("{}({})", t.kind, list.join(","))
+                                })
+                                .collect();
+                            println!("    tasks {}", kinds.join(" "));
+                            println!("    topology {}", hex(&recipe.topology));
+                            println!("    data {}", hex(&recipe.data));
+                        }
                     }
                     previous.insert(e.index, recipe);
                     continue;

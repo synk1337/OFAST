@@ -70,6 +70,7 @@ use crate::anim::{
 };
 use crate::content::Content;
 use crate::demo::players::{COUNTER_TERRORISTS, PlayerSample, RoundTrack};
+use crate::demo::recipe::{RECIPE_VERSIONS, resource_bits};
 use crate::items::{item_names, item_values};
 use crate::model::{Affine, HitboxShape, Model, compose, invert_rigid};
 use crate::physics::ragdoll::WorldCollision;
@@ -363,6 +364,21 @@ pub fn export_players(
         .samples
         .iter()
         .any(|s| s.players.iter().any(|p| p.rig.pose_recipe.is_some()));
+    // A recipe format OFAST does not read (a CS2 update brings one now and then: build 10955 brought version 3) leaves
+    // every pose re-decided, which the check line only shows as a count of 0.
+    if let Some(version) = track
+        .samples
+        .iter()
+        .flat_map(|s| &s.players)
+        .filter_map(|p| p.rig.pose_recipe.as_ref())
+        .map(|r| r.version)
+        .find(|&v| resource_bits(v).is_none())
+    {
+        warnings.push(format!(
+            "pose recipes of version {version}, which OFAST does not read (it reads {RECIPE_VERSIONS:?}): their ticks \
+             get OFAST's own poses"
+        ));
+    }
     if has_recipes && std::env::var("OFAST_RECIPE").as_deref().map(str::trim) != Ok("0") {
         let table = learn_clip_table(
             track,

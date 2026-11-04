@@ -58,6 +58,38 @@ Next steps, in order:
    CS2's free camera where the two differ most match CS2 at least as well; the default since 2026-10-26,
    `OFAST_RECIPE=0` keeping the re-decided poses only).
 
+## Update 2026-11-04: recipe version 3
+
+The demos of CS2 build 10955 (the faze-vs-falcons matches) send `m_nSerializePoseRecipeVersionAG2` 3. `demo::recipe`
+refused any version but 2, and the export said nothing about it: anubis round 14 played CS2's poses on 0 of its 51,853
+living player-ticks. Found by laying one player's data over consecutive ticks bit by bit (`examples/pose_recipe.rs`,
+`OFAST_HEX=1`): the bits that change are the clips' times, and each sits a bit later than version 2 would put it.
+A sample's resource index is 11 bits instead of 10, as Esoterica's width rule gives for a context of more than 1024
+resources (indices up to 1038 occur); the topologies, the blends, the bone mask lists, the cached poses and the empty
+pose are read as before, and so are all version-2 demos. The undecoded aim and last task (types 14 and 5) grew from
+60 – 670 bits to 550 – 1150, which may be what the version is for. Details:
+[demo.md](../formats/demo.md#pose-recipe-cs2s-own-animation).
+
+`demo::recipe::resource_bits` keeps the width per version (2: 10 bits, 3: 11); a version OFAST does not know is
+still refused, and the export now warns about it.
+
+Checked on today's CS2 install (build 2000940) with the hitbox fit's 10 rounds (all version 2, so decoded as before)
+and four version-3 rounds, recipes on against `OFAST_RECIPE=0`:
+
+- The 10 rounds: 373 of 505 hit points within an inch with the recipes, 347 without (371 and 349 when the recipes
+  became the default); 470 against 462 on a posed body. Round 5 of the de_nuke pro demo keeps 50 of 50 on a posed
+  body (38 within an inch against 34).
+- Anubis round 14: CS2's pose on 36,526 of 51,853 living player-ticks (70 %; 0 before), 49 of 49 hits on a posed
+  body, 44 within an inch (45 without). With anubis round 3, ancient round 16 and mirage round 14: CS2's pose on
+  53 – 70 % of the living player-ticks (79 – 86 % on the 10 rounds), and 149 of 235 hit points within an inch against
+  155 without, one or two fewer on each round.
+
+The version-3 recipes decode as cleanly as version 2's, but their clip table is weaker: the new graph runs 405,000 –
+464,000 sample tasks a round where the version-2 rounds run 230,000 – 290,000, and the table names 47 – 76 % of them
+(89 – 94 % on version 2). The indices left unmatched with the most samples look like clips OFAST's bake does not
+play the same way on this graph: the shot clips (0.76 – 0.89 s, matching well on version 2) and the 0.53 s planted
+turns. The recipes stay the default for both versions; the version-3 table is the next step there.
+
 ## Alternatives considered
 
 - **Keep re-deciding the graph** (decision 013): works, but every state has to be found again and timed by guess;

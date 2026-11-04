@@ -13,10 +13,11 @@
 //!   is fixed per type ([`inputs_of`], checked by [`check_topology`]).
 //! - The data ([`decode`]): the server tick (`u32`), then each task's payload in the topology's order.
 //!
-//! Known payloads: samples (type 1: a resource index and a 16-bit normalized time), blends (types 7, 8, 9 and 10: an
-//! 8-bit normalized weight, a flag and a bone mask list), cached poses (types 0 and 6: a 6-bit ID) and the empty pose
-//! (type 13: nothing). Not known: types 14 (the aim, probably), 15 and 5 (always last). Payloads follow each other with
-//! nothing to mark where one ends, so decoding stops at the first task of another type ([`Decoded::end_bit`]).
+//! Known payloads: samples (type 1: a resource index, 10 bits in recipe version 2 and 11 in version 3
+//! ([`resource_bits`]), and a 16-bit normalized time), blends (types 7, 8, 9 and 10: an 8-bit normalized weight, a
+//! flag and a bone mask list), cached poses (types 0 and 6: a 6-bit ID) and the empty pose (type 13: nothing). Not
+//! known: types 14 (the aim, probably), 15 and 5 (always last). Payloads follow each other with nothing to mark where
+//! one ends, so decoding stops at the first task of another type ([`Decoded::end_bit`]).
 
 use std::fmt;
 
@@ -25,8 +26,10 @@ use super::entity::Entity;
 use super::fieldpath::FieldPath;
 use super::serializer::Serializers;
 
-/// The recipe format this decoder reads (`m_nSerializePoseRecipeVersionAG2`).
-pub const RECIPE_VERSION: i64 = 2;
+/// The recipe formats this decoder reads (`m_nSerializePoseRecipeVersionAG2`): 2 (demos of CS2 builds 10772 and
+/// 10847) and 3 (build 10955), which differ, among the payloads decoded, only in the width of a sample's resource
+/// index ([`resource_bits`]).
+pub const RECIPE_VERSIONS: [i64; 2] = [2, 3];
 
 /// Longest recipe data read (bytes); the demos send 32 – 96. A longer length is refused, not allocated.
 pub const MAX_RECIPE_BYTES: u64 = 4096;
@@ -34,7 +37,7 @@ pub const MAX_RECIPE_BYTES: u64 = 4096;
 /// One player's recipe on one tick: the active slot's topology and the tick's task data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoseRecipe {
-    /// The format version ([`RECIPE_VERSION`]).
+    /// The format version ([`RECIPE_VERSIONS`]).
     pub version: i64,
     /// The active slot (0 – 31).
     pub slot: u32,
@@ -196,7 +199,7 @@ pub enum RecipeError {
         /// The input it names.
         input: u32,
     },
-    /// A recipe format other than [`RECIPE_VERSION`].
+    /// A recipe format not in [`RECIPE_VERSIONS`].
     Version(i64),
     /// A bone mask entry of a kind that does not exist (5 – 7).
     MaskKind(u32),
@@ -218,7 +221,7 @@ impl fmt::Display for RecipeError {
             Self::BadInput { task, input } => {
                 write!(f, "task {task} takes task {input}, not an earlier one")
             }
-            Self::Version(v) => write!(f, "recipe version {v}, not {RECIPE_VERSION}"),
+            Self::Version(v) => write!(f, "recipe version {v}, not one of {RECIPE_VERSIONS:?}"),
             Self::MaskKind(k) => write!(f, "a bone mask entry of kind {k}"),
             Self::MaskInput { entry, input } => {
                 write!(
@@ -242,10 +245,19 @@ pub fn inputs_of(kind: u8) -> usize {
     }
 }
 
-/// Bits of a sample's resource index in the demos checked: Esoterica sizes it to the serialization context's
-/// resource count (the main graph's clips and graphs, 909 + 67 here), so a CS2 build with more than 1024 would
-/// widen it.
-const RESOURCE_BITS: usize = 10;
+/// Bits of a sample's resource index for a recipe version: 10 in version 2, 11 in version 3. Esoterica sizes the
+/// index to the serialization context's resource count (the main graph's clips and graphs): 909 clips and 67 graphs
+/// in the version-2 builds checked fit 10 bits; today's graph has 975 clips reachable from the main graph, and a
+/// version-3 demo names indices up to 1038, past what 10 bits hold. A later build with more than 2048
+/// resources would widen it again, perhaps without a new version: the recipes would then stop decoding
+/// (`examples/pose_recipe.rs`, `OFAST_CHECK=1`, counts the errors).
+pub fn resource_bits(version: i64) -> Option<usize> {
+    match version {
+        2 => Some(10),
+        3 => Some(11),
+        _ => None,
+    }
+}
 
 /// Bits of a bone mask index in the demos checked: Esoterica sizes it to the skeleton's bone mask count (8 – 15 for
 /// 4 bits), so a CS2 build could change it.
@@ -406,9 +418,8 @@ pub fn decode_with(
     undecoded: &[u8],
     raw: Option<(u8, usize)>,
 ) -> Result<Decoded, RecipeError> {
-    if recipe.version != RECIPE_VERSION {
-        return Err(RecipeError::Version(recipe.version));
-    }
+    let resource_width =
+        resource_bits(recipe.version).ok_or(RecipeError::Version(recipe.version))?;
     let topology = parse_topology(&recipe.topology)?;
     let mut bits = Bits::new(&recipe.data, RecipeError::DataEnds);
     let tick = bits.take(32)?;
@@ -428,7 +439,7 @@ pub fn decode_with(
         }
         tasks.push(match node.kind {
             1 => Task::Sample {
-                resource: bits.take(RESOURCE_BITS)? as u16,
+                resource: bits.take(resource_width)? as u16,
                 time: bits.normalized(16)?,
             },
             7..=10 => {
@@ -482,9 +493,10 @@ mod tests {
         }
     }
 
+    /// A version-2 recipe (10-bit resource indices).
     fn recipe(topology: &Writer, data: &Writer) -> PoseRecipe {
         PoseRecipe {
-            version: RECIPE_VERSION,
+            version: 2,
             slot: 0,
             topology: topology.bytes.clone(),
             data: data.bytes.clone(),
@@ -660,5 +672,60 @@ mod tests {
         let mut old = recipe(&t2, &d2);
         old.version = 1;
         assert_eq!(decode(&old), Err(RecipeError::Version(1)));
+        old.version = 4;
+        assert_eq!(decode(&old), Err(RecipeError::Version(4)));
+    }
+
+    #[test]
+    fn version_3_samples_take_11_bit_indices() {
+        // Laid out like Neityu's recipe at demo tick 134000 of faze-vs-falcons-m2-anubis (CS2 build 10955): the
+        // locomotion triangle (three samples at one time, two weights), a pose under the upper-body mask, the aim (14)
+        // and the last task (5). The second clip's index is raised past 1023 (the round names indices up to 1038).
+        let mut t = Writer::default();
+        t.put(4, 4).put(9, 4);
+        t.put(1, 5).put(1, 5);
+        t.put(7, 5).put(0, 4).put(1, 4);
+        t.put(1, 5);
+        t.put(7, 5).put(2, 4).put(3, 4);
+        t.put(1, 5);
+        t.put(8, 5).put(4, 4).put(5, 4);
+        t.put(14, 5).put(6, 4);
+        t.put(5, 5).put(7, 4);
+        let mut d = Writer::default();
+        d.put(180_665, 32);
+        d.put(859, 11).put(65468, 16);
+        d.put(1038, 11).put(65468, 16);
+        d.put(249, 8).put(0, 1);
+        d.put(449, 11).put(65468, 16);
+        d.put(212, 8).put(0, 1);
+        d.put(943, 11).put(0, 16);
+        d.put(255, 8).put(1, 1).put(1, 5).put(0, 3).put(0, 4);
+        let aim_at = d.at;
+        d.put(32768, 16).put(33983, 16);
+        let mut v3 = recipe(&t, &d);
+        v3.version = 3;
+        let decoded = decode(&v3).expect("decodes");
+        assert_eq!(decoded.tick, 180_665);
+        assert_eq!(decoded.tasks.len(), 7, "decoding stops at the aim");
+        assert_eq!(decoded.end_bit, aim_at);
+        assert_eq!(read_bits(&d.bytes, decoded.end_bit, 16), Some(32768));
+        let resources: Vec<u16> = decoded
+            .tasks
+            .iter()
+            .filter_map(|t| match t {
+                Task::Sample { resource, .. } => Some(*resource),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(resources, vec![859, 1038, 449, 943]);
+        assert!(matches!(
+            decoded.tasks[6],
+            Task::Blend { kind: 8, weight, ref mask } if weight == 1.0 && *mask == vec![MaskTask::Mask(0)]
+        ));
+        // Read as version 2, the same bytes lose their alignment: the first time takes the index's eleventh bit.
+        let mut v2 = v3.clone();
+        v2.version = 2;
+        let misread = decode(&v2);
+        assert!(misread.is_err() || misread.is_ok_and(|d| d.end_bit != aim_at));
     }
 }
