@@ -389,7 +389,10 @@ frame each, over a ledge on 59 and 4, the pelvis and ankles move as smoothly as 
 The demo's hits fit the posed bodies as well as without (de_anubis: 49 of 49 on a posed body, 45 within an inch of a
 hitbox's surface, their way in within an inch 28, each hit within 0.01 inch of where it was): the server's poses keep
 the body up on slopes, which lowering it only for what the legs cannot reach respects (lowering it to the lower foot
-every time gave 40 of 49 within an inch). Side views drawn from the bones (`OFAST_FEET=0` turns the feet off to
+every time gave 40 of 49 within an inch). Those de_anubis numbers are from OFAST's own poses (its demo's pose
+recipes were not read yet); with CS2's poses on 70 % of its living player-ticks (recipe version 3, the same day) the
+feet move on 41 % of the frames still, out of reach on 1, over a ledge on 41, and 44 of 49 hits lie within an inch of
+a hitbox's surface. Side views drawn from the bones (`OFAST_FEET=0` turns the feet off to
 compare; `OFAST_FEET_DUMP` writes the bones for `tools/compare/feet_views.py`): kyousuke up the stairs out of T spawn
 (ticks 133210 – 133260), a player beside the stone block.
 
