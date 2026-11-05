@@ -104,8 +104,11 @@ per index what OFAST bakes on its ticks and who holds it; details in
   OFAST did not know, so the bake played no reload there. They are `action_reload_silent` now (with 803 the outro of
   802, as 801 is of 800), and `anim::eval` takes a transition on ID parameters that holds as a state is entered (the
   gun graphs' `Reload0` → `ReloadSilent0`, the only one it fires for on the rounds checked), so the bake plays the
-  `reload_<w>_silent` clips CS2 plays (993 `reload_ak_silent`, Jaccard 0.96). The first-person view maps the states
-  the same way.
+  `reload_<w>_silent` clips CS2 plays (993 `reload_ak_silent`, Jaccard 0.96). The first-person view mapped the states
+  the same way at first; a GOTV demo of a local game (2026-11-05) showed every reload going from 800 to 802 17 ticks
+  in, standing still too, and CS2's first-person view showing the viewmodel's `reload_silent_<w>` clip, which is
+  twice as long as the reload, at twice its pace, going on from the time the reload had run. The first-person bake
+  now does the same ([animation.md](../formats/animation.md), "Shotguns loading shell by shell").
 
 On today's install (build 2000940), recipes on against `OFAST_RECIPE=0`:
 

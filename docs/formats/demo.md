@@ -522,7 +522,7 @@ renames one, it reads as its default and positions keep working.
 **Weapon animation states** seen in round 5 of the match demo, by the weapons holding them: 11 = draw (after every
 switch, every weapon), 50 = idle, 100 = shooting (rifles and pistols), 200 / 202 = grenade (pin, throw), 300 = C4
 planting, 500 / 501 / 503 = knife attacks, 800 / 801 = reloading (with `m_bInReload`; in the demos of CS2 build
-10955 on also 802 / 803, a silent reload while walking: [Version 3](#pose-recipe-cs2s-own-animation)), 1000 / 1001 =
+10955 on 800 for a reload's first 17 ticks, then 802 / 803, the "silent" reload: [Version 3](#pose-recipe-cs2s-own-animation)), 1000 / 1001 =
 after a draw on every weapon, mostly knives (7,162 of 9,945 samples): very likely the inspect animation and its end
 (not yet checked in the game). On the Aurora vs FURIA de_nuke demo (round 5) 1000 comes 1 – 28 ticks after a draw (the
 inspect key pressed during the draw, which CS2's viewmodel graphs turn into an inspect from the draw: see
@@ -645,8 +645,9 @@ Jaccard index, the blends it feeds; `OFAST_TIMELINE`: one player's ticks, CS2's 
   0.54, 747 `crouch_e_rifle` 0.72); the dead also made up 20 – 43 % of the sample tasks counted. `demo::players`
   drops the recipe of a pawn that is not alive (version 2's dead have none anyway). No living recipe repeats
   its server tick on the next tick (62,723 consecutive pairs on anubis round 14).
-- **Silent reloads.** Build 10955's weapons reload through gameplay states 802 and 803 (with `m_bInReload`) while the
-  player walks, where OFAST knew 800 and 801 only, so the bake played no reload there. The gun graphs take them as
+- **Silent reloads.** Build 10955's weapons reload through gameplay states 802 and 803 (with `m_bInReload`) after
+  the reload's first 17 ticks in 800, standing or walking (first seen on walking players; a local game's GOTV demo
+  showed it standing still too), where OFAST knew 800 and 801 only, so the bake played no reload there. The gun graphs take them as
   `action_reload_silent`: `SM/Reload/SM/Reload0` goes on to `ReloadSilent0` (`reload_<w>_silent`) on the condition
   `action in [action_reload_silent]`, which CS2 takes on the state's first update (`anim::eval` now takes such a
   transition on ID parameters as the state is entered). 993 is now `reload_ak_silent` (Jaccard 0.96), 574

@@ -63,7 +63,7 @@ pub const LADDER_CYCLE_HEIGHT: f32 = 40.0;
 /// |---|---|---|
 /// | 11 | all | `action_deploy` |
 /// | 800, 801 | guns | `action_reload` |
-/// | 802, 803 | guns | `action_reload_silent` (demos of CS2 build 10955 on: a reload while walking, its `reload_silent` clips) |
+/// | 802, 803 | guns | `action_reload_silent` (demos of CS2 build 10955 on: a reload after its first 17 ticks in 800, its `reload_silent` clips; first person plays its own at twice their pace: `anim::viewmodel::SILENT_RELOAD_RATE`) |
 /// | 600, 601 | guns | `action_silencer_attach`, `_detach` |
 /// | 200, 201, 202 | grenades | `action_attack` + `attack_grenade_charge`, `_ready`, `_throw` |
 /// | 500 – 505 | knives | `action_attack` + `attack_knife_lighthit`, `_lightmiss`, `_heavyhit`, `_heavymiss`, `_lightbackstab`, `_heavybackstab` |

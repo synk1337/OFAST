@@ -267,7 +267,10 @@ player and round.
   tube's inside), CS2's own placement read from its code rather than fitted to one frame.
 - [x] **Shotguns loading shell by shell** in first person (2026-11-05): the reload clip's shell played again for each
   shell the demo's magazine gains
-  ([animation.md](formats/animation.md#first-person-view-animviewmodel-exportviewmodel)).
+  ([animation.md](formats/animation.md#first-person-view-animviewmodel-exportviewmodel)). Checked against CS2's
+  first-person frames on a GOTV demo of a local game, which also showed CS2 build 10955's reloads going on in a silent
+  state after 17 ticks: first person now plays the silent clips CS2 shows, at twice their pace (before, on new demos,
+  OFAST 1.0.9 dropped the reload after 17 ticks).
 - [x] **Knife swings and grenade throws checked against CS2** (2026-11-05, Falcons vs Vitality, de_anubis, round 6,
   CS2's own frames at their demo bar's ticks): NiKo's heavy swing, m0NESY's light one and karrigan's throw match
   pose for pose (the throw's arm a tick or two behind at its highest).

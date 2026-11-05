@@ -268,7 +268,7 @@ The bake (`anim::states`) decides each tick what the graph's inputs would be, fr
 
 | Graph parameter | From the demo |
 |---|---|
-| `action`, `attack_type` | the weapon's gameplay state: 11 → `action_deploy`; 800 / 801 → `action_reload` (one action: the outro goes on with it); 802 / 803 → `action_reload_silent` (likewise; demos of CS2 build 10955 on, a reload while walking: the gun graphs' `ReloadSilent` states and `reload_<w>_silent` clips); 600 / 601 → silencer; 200 / 201 / 202 (grenades) → `action_attack` + `attack_grenade_charge` / `_ready` / `_throw`; 500 – 505 (knives) → `attack_knife_lighthit`, `_lightmiss`, `_heavyhit`, `_heavymiss`, `_lightbackstab`, `_heavybackstab`; 400 → `action_healthshot_inject`; gun shots and inspects leave the layer off (CS2's gun graphs play nothing for them in third person) |
+| `action`, `attack_type` | the weapon's gameplay state: 11 → `action_deploy`; 800 / 801 → `action_reload` (one action: the outro goes on with it); 802 / 803 → `action_reload_silent` (likewise; demos of CS2 build 10955 on, a reload after its first 17 ticks in 800: the gun graphs' `ReloadSilent` states and `reload_<w>_silent` clips; first person plays its own silent clips at twice their pace); 600 / 601 → silencer; 200 / 201 / 202 (grenades) → `action_attack` + `attack_grenade_charge` / `_ready` / `_throw`; 500 – 505 (knives) → `attack_knife_lighthit`, `_lightmiss`, `_heavyhit`, `_heavymiss`, `_lightbackstab`, `_heavybackstab`; 400 → `action_healthshot_inject`; gun shots and inspects leave the layer off (CS2's gun graphs play nothing for them in third person) |
 | restarts | `m_flWeaponGameplayAnimStateTimestamp`: two right-click misses in a row are state 503 twice, with two timestamps |
 | `KnifeSwingBack` (event) | a knife attack that starts while the previous swing's clip is in its `KnifeSwingBack` event (`frontswing_knife`: 10 – 63 %) plays the `_b` swing |
 | `attack_throw_strength` | the grenade's `m_flThrowStrength` (≤ 0.33: underhand) |
@@ -649,8 +649,24 @@ the clip's time to them (`anim::viewmodel::ShellReload`: the Nova's shell 0.367 
 0.933, the XM1014's four 0.6 s shells from 0.700; the first shells repeating the clip's first, the last on its last,
 then the outro). A two-shell Nova reload plays 2.1 s, a seven-shell one 4.2 s, where it used to freeze after one
 shell. In third person the pose recipes already loop it as CS2 did; OFAST's own animation (without a recipe) still
-plays one shell. Not checked against CS2's own first-person frames yet: the local demos have one shotgun reload
-(XANTARES's XM1014 on the local match demo, round 15, two shells in before a switch to the knife).
+plays one shell.
+
+Checked on a GOTV demo of a local game (CS2 1.41.9.6, de_dust2): the Nova, the XM1014 and the Sawed-Off each reload
+four shells, one shell, and a reload cut short by a shot, filmed in CS2's first-person playback at a quarter speed.
+On this build every reload goes from gameplay state 800 to 802 17 ticks in, standing still too, then to 803 for its
+outro and 50: the "silent reload" of decision 020 is not about walking. Each of the 35 viewmodel
+`reload_silent_<w>` clips is exactly twice as long as its weapon's `reload_<w>` (the Nova's 3.27 s against 1.63 s,
+the AK-47's 4.87 against 2.43), with the same events at the same shares of the clip, and the server times the
+reload by the plain clip (it enters 803 on the tick the plain clip's outro begins, give or take one). CS2's
+first-person view shows the silent clip's pose, the Nova swung 47° to the left and rolled with its port up (the
+plain clip turns it 12°), at the plain clip's pace: four shells about 28 ticks apart, back at idle as the state goes
+to 50. The bake had started the silent clip from its start at 802 and played it at its own length; it now goes on
+from the time the reload has run and plays it twice as fast (`anim::viewmodel::SILENT_RELOAD_RATE`), the shells
+counted over the whole reload, and the events a segment hands on are read at its clip's time. Every full reload of
+the demo is in its outro when CS2 goes idle, and the Nova's frames in Unreal match CS2's at ticks 2703, 2711, 2736,
+2776 and 2829 (the gun's angle and roll, the hand loading a shell, the pump in the outro; the hand within a fraction
+of a shell). A reload cut short by a shot shows the outro or its last shell at the cut, where CS2 was still loading
+the next shell.
 
 Not yet: the view punch on the camera; weapon skins.
 
