@@ -274,6 +274,21 @@ impl Locomotion {
         }
     }
 
+    /// Whether the clip weighing most in `blend` has event `id` on at normalised `phase` (event spans are fractions
+    /// of the clip, as the phase is; a span may run past the cycle's end). The walks and runs mark the half of their
+    /// stride where a plant turns cross-legged (`USE_CROSSLEG`: `walk_e` 0 – 0.5, `walk_w` 0.27 – 0.97).
+    pub fn event_at(&self, blend: &LocomotionBlend, phase: f32, id: &str) -> bool {
+        let Some(&(clip, _)) = blend.clips.iter().max_by(|a, b| a.1.total_cmp(&b.1)) else {
+            return false;
+        };
+        let phase = phase.rem_euclid(1.0);
+        self.clips[clip]
+            .1
+            .events
+            .iter()
+            .any(|e| e.id == id && (phase - e.start).rem_euclid(1.0) <= e.duration)
+    }
+
     /// The blended pose at normalised `phase` (0 – 1 through the cycle), one transform per clip-skeleton bone.
     pub fn sample(&self, blend: &LocomotionBlend, phase: f32) -> Result<Vec<Transform>, AnimError> {
         let phase = phase.rem_euclid(1.0);

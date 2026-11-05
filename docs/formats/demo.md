@@ -660,14 +660,52 @@ counted twice, 4.0 inches from the recipe's body (just past `BODY_MATCH`) and 2.
 frozen starts off from a standstill with a 0.53 s clip the table does not know, so the recipe's legs stand idle.
 The 10 version-2 rounds and round 5 of the de_nuke pro demo do not move (373 and 38 within an inch).
 
-What stays unmatched is mostly the 0.53 s plants: the starts from a standstill and the plant-and-turns of
-counter-strafes. CS2 starts a plant-and-turn on the tick the speed first drops (NiKo jiggling on anubis round 14,
-ticks 133792 – 133900, 110 – 130 units/s sideways: 629 begins at 133802 with the speed at 107, 99, 74), switches its
-direction inside it (the graph's `E2W` ↔ `W2E`, 0.1 s, on a new `ground_action_direction_id`) and leaves it for
-`Move` at the clip's `PLANT_AND_TURN_COMPLETE` event, 41 % in. OFAST plants once the velocity points the other way
-(about 5 ticks later), plays the whole clip and passes over reversals meanwhile, so through a jiggle it catches every
-other one, always the same way (`planted_slow_e2w_rifle` throughout), and CS2's plants of both directions come with
-that one clip under 0.3 (629 at 0.28, 978 0.18, 611 0.16). The recipes give CS2's plant ticks to re-decide them by.
+What stayed unmatched was mostly the 0.53 s plants: the starts from a standstill and the plant-and-turns of
+counter-strafes. OFAST planted once the velocity pointed the other way (about 5 ticks after CS2), played the whole
+clip and passed over reversals meanwhile, so through an A-D jiggle (NiKo on anubis round 14, ticks 133792 – 133900,
+110 – 130 units/s sideways) it caught every other one, always the same way (`planted_slow_e2w_rifle` throughout), and
+CS2's plants of both directions came with that one clip under 0.3 (629 at 0.28, 978 0.18, 611 0.16). The recipes give
+CS2's plant and start ticks, so OFAST re-decides them by those (`anim::states`, since 2026-11-04). Read off four
+version-3 rounds (`examples/recipe_table.rs` with `OFAST_DUMP=file.tsv` writes every living player-tick: velocity,
+CS2's samples, the clips OFAST bakes), CS2's rules are:
+
+- **A plant begins when the movement keys push against the motion.** The demo has no keys, but CS2's friction
+  (`sv_friction` 5.2, `sv_stopspeed` 80) takes a known share off the speed each tick, and what the velocity changes
+  beyond it is the keys': a key let go is friction alone (NiKo at 133801: 107 → 99, nothing beyond friction, no
+  plant), the opposite key 17 – 21 units a tick against the motion (133802: 99 → 74, the plant begins). OFAST plants
+  on the first tick of such a counter-strafe (at least 135° against the motion, 1 – 26 units a tick: more is a hit,
+  a landing or a wall; moving at 20 units/s or more), confirmed by the next tick (still braking: a single tick of it
+  is the speed clamped to a walk). Of 3,416 plants of moving players on the four rounds, 73 % begin on the same tick,
+  86 % within one (CS2 is a tick earlier when the key went down late in a tick: sub-tick input the velocities do not
+  show), and the rule plants 489 times where CS2 does not. A crouched counter-strafe never plants (CS2 keeps the
+  crouch walk); on a diagonal run, countering only the minor axis does not either.
+- **It lasts 13 ticks from the last time it was set off** (74 % of plants; 0.2 s): the plant state's
+  `PLANT_AND_TURN_COMPLETE` is not a clip event but a timed one (0.1 s in the state), so CS2's game code ends the
+  plant by setting `ground_action` back to `move`. A counter-strafe the other way within those ticks turns the plant
+  over (`E2W` ↔ `W2E`, 0.1 s), restarting them.
+- **A start lasts 7 ticks** (6 when walking), walking players start too, and Move comes back. CS2 starts 71 % of
+  the running starts from a standstill (42 % walking); it also starts players speeding up again after a cut (a hit,
+  a landing, a weapon drawn at the round start), which OFAST does not.
+- **The clip**: the plant's selector takes `move_speed_horizontal_previous` (the speed before the counter-strafe:
+  under 80 the new direction's `planted_start_*`, which is why low jiggles play start clips, 80 – 170 `planted_slow_*`,
+  more `planted_*`) and the `USE_CROSSLEG` event, which the walks and runs carry over half of their stride
+  (`walk_e` 0 – 0.5, `walk_w` 0.27 – 0.97): a plant leaving a walk in that half turns cross-legged, one turning over
+  from another plant never. For it to match, the walk's phase must be CS2's: a start or plant hands over to `Move`
+  with the walk at a time offset (`m_timeOffsetOverrideNodeIdx`, an `IDToFloat` on `move_direction_id`: west 0.9
+  after `E2W`, east 0.6 after `W2E`, east 0.95 after a start), which OFAST had not set (its walks restarted at 0).
+
+On anubis round 14 the plant indices now match: 629 `planted_slow_e2w_rifle` (Jaccard 0.64), 611
+`planted_slow_w2e_crossleg_rifle` (0.53), 978 `planted_slow_w2e_rifle` (0.45), 720 `planted_start_w_rifle` (0.53),
+348 `planted_start_e_rifle` (0.49), and the table names 96.7 % of the round's sample tasks (90.5 % before). Of
+CS2's 930 plant and start entries on the round, OFAST's bake begins 722 on the same tick (76 before) and 816 within
+one (97), misses 110 (815), and begins 237 where CS2 has none (352). The version-3 rounds' tables name 96.3 –
+96.9 % of their sample tasks (86.5 – 90.9 % before), the version-2 rounds' 93.6 – 98.2 %. On the hitbox fit, with
+the recipes (the default): the four version-3 rounds 185 of 235 hits within an inch (158 before), 227 on a posed
+body (220); the ten version-2 rounds 388 of 505 (373), 472 on a posed body (470); round 5 of the de_nuke pro demo
+40 of 50 (38), all 50 on a posed body. The re-decided poses alone (`OFAST_RECIPE=0`) fit better too: 171 of 235
+(156), 366 of 505 (347), 38 of 50 on de_nuke (34), though there 48 lie on a posed body against 50: one hit counted
+twice, 4.5 inches from yuurih's re-decided body against 2.2 (a hit cut his run; his walk's phase, last set by a plant
+800 ticks before, drifts differently from CS2's).
 
 The resource index is not the graph's own resource order. The main graph and its 66 child graphs refer to 909 clips
 (`examples/recipe_table.rs` counts them); their indices follow no rule tried by hand (their order in the graphs, their
@@ -723,7 +761,9 @@ fits), gives nothing without its first input and its first input alone without i
 know is left out: giving no pose there instead, for masked layers over a quarter of weight, fit the hits worse, 364
 of 505 within an inch against 371, the layers left out being mostly wrong matches, such as an additive idle blended
 with a whole pose, rather than clips OFAST does not play; an action CS2 plays with a clip the table misses is lost
-from the pose while OFAST's aim weights for it remain); a cached
+from the pose while OFAST's aim weights for it remain), and so is a layer made of nothing known (since 2026-11-04:
+an unknown flinch over the empty pose, `9(empty, flinch)` under the upper body's `8`, had laid the reference pose
+over the body, standing a crouched XANTARES up 13 inches from a hit once the plant under it was known); a cached
 pose is kept by its ID and read back on later ticks (forgotten when the player dies, or when its ID is written from
 nothing known); the empty pose is the skeleton's reference. A
 recipe whose result is a delta, or that no known clip went into (the empty pose alone), gives no pose. That pose

@@ -413,6 +413,69 @@ fn graph_states_play_their_clips() {
             .abs()
             < 0.01
     );
+    // Plants: turning west (`E2W`), the clip by the speed before and the walk's cross-legged half; slow under 80
+    // plays the start the other way.
+    let plant = |before: f32, crossleg: bool| {
+        let params = Params::default()
+            .id("move_type", "move_type_ground")
+            .id("ground_action", "ground_action_plant_and_turn")
+            .id("ground_action_direction_id", "W")
+            .float("move_speed_horizontal_previous", before);
+        if crossleg {
+            params.event("USE_CROSSLEG")
+        } else {
+            params
+        }
+    };
+    assert_eq!(
+        playing(locomotion, &plant(110.0, false), 0.1),
+        "planted_slow_e2w_knife"
+    );
+    assert_eq!(
+        playing(locomotion, &plant(110.0, true), 0.1),
+        "planted_slow_e2w_crossleg_knife"
+    );
+    assert_eq!(
+        playing(locomotion, &plant(200.0, false), 0.1),
+        "planted_e2w_knife"
+    );
+    assert_eq!(
+        playing(locomotion, &plant(50.0, false), 0.1),
+        "planted_start_w"
+    );
+    // The plant hands over to Move (with its own events and `PLANT_AND_TURN_COMPLETE`) in 0.2 s, the walk starting 0.9
+    // into its cycle when moving west, 0.6 from `W2E` moving east; a start east hands over 0.95 in.
+    let moving = |direction: &str, events: &[&str]| {
+        let mut params = Params::default()
+            .id("move_type", "move_type_ground")
+            .id("ground_action", "ground_action_move")
+            .id("move_direction_id", direction);
+        for e in events {
+            params = params.event(e);
+        }
+        params
+    };
+    let west = moving("W", &["PLANT_AND_TURN_COMPLETE", "Plant_E2W"]);
+    let from = states(locomotion, &plant(110.0, false));
+    assert!(
+        eval.state_events(&from).contains("Plant_E2W"),
+        "{:?}",
+        eval.state_events(&from)
+    );
+    let to = states(locomotion, &west);
+    assert!((eval.transition_time(&from, &to, &west).unwrap() - 0.2).abs() < 1e-6);
+    assert!((eval.transition_offset(&from, &to, &west).unwrap() - 0.9).abs() < 1e-6);
+    let east = moving("E", &["PLANT_AND_TURN_COMPLETE", "Plant_W2E"]);
+    let w2e = plant(110.0, false).id("ground_action_direction_id", "E");
+    let offset =
+        eval.transition_offset(&states(locomotion, &w2e), &states(locomotion, &east), &east);
+    assert!((offset.unwrap() - 0.6).abs() < 1e-6, "{offset:?}");
+    let offset = eval.transition_offset(
+        &states(locomotion, &start("E")),
+        &states(locomotion, &moving("E", &[])),
+        &moving("E", &[]),
+    );
+    assert!((offset.unwrap() - 0.95).abs() < 1e-6, "{offset:?}");
 
     // Defusing with a rifle: the enter clip, then the loop.
     let defusing = Params::default()

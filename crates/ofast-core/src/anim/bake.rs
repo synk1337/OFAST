@@ -36,7 +36,7 @@
 //! Poses are sampled at a fixed frame rate from the round's first tick, ready to key on a model's skeleton (after
 //! [`super::Retargeter`]). Not baked yet: foot IK, ragdolls.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 
 use super::aim::{AimBones, AimInputs, aim, snap_weapon};
 use super::eval::{Evaluator, Leave, Library, Params, StateId};
@@ -45,9 +45,10 @@ use super::locomotion::{LocomotionBlend, blend_poses};
 use super::recipe::RECIPE_GAP;
 use super::states::{
     BURN_GAP, GroundAction, GroundInputs, LADDER_CYCLE_HEIGHT, MIN_AIR_TICKS, Movement,
-    PLANT_STATE, REVERSAL_SPEED, REVERSAL_WINDOW, SMALL_TURN_MAX, SMALL_TURN_MIN, STANDING_SPEED,
-    air_runs, direction4, flashed_amount, flinch_types, ground_action, is_fire, ladder_angles,
-    ladder_bearings, passive_action, reload_outro, reversal, turn_extent, weapon_action,
+    PLANT_CROUCH, PLANT_HOLD, PLANT_STATE, PlantSample, SMALL_TURN_MAX, SMALL_TURN_MIN,
+    STANDING_SPEED, START_HOLD, air_runs, direction4, direction8, flashed_amount, flinch_types,
+    ground_action, is_fire, ladder_angles, ladder_bearings, passive_action, plant_triggers,
+    reload_outro, turn_extent, weapon_action,
 };
 use super::{AnimError, Clip, Locomotion, Transform};
 use crate::demo::events::GameEvent;
@@ -242,7 +243,8 @@ pub(crate) const STATE_TIMESTAMP_SLACK: f32 = 1.0;
 struct MovementSegment {
     state: Movement,
     start: u32,
-    /// Length of a start or plant (its clip), seconds.
+    /// How long a start or plant is held ([`START_HOLD`], [`PLANT_HOLD`]: a plant's from the last time it was set
+    /// off) or a small turn plays (its clip), seconds.
     length: f32,
     previous: Option<PreviousMovement>,
     blend: f32,
@@ -358,7 +360,7 @@ struct Step {
     crouch: f32,
     walking: bool,
     defusing: bool,
-    /// Velocity in the body's frame, its length, and the fastest speed of the last [`REVERSAL_WINDOW`].
+    /// Velocity in the body's frame, its length, and the speed at the tick before.
     body: [f32; 2],
     speed: f32,
     speed_previous: f32,
@@ -663,6 +665,22 @@ impl Baker<'_> {
                 .collect::<Vec<_>>(),
         );
         let yaws: Vec<Option<f32>> = players.iter().map(|p| p.map(|p| p.rig.body_yaw)).collect();
+        // Where CS2 plants: the counter-strafes' first ticks and their acceleration (world, units/s²).
+        let plants = plant_triggers(
+            &track
+                .samples
+                .iter()
+                .zip(&players)
+                .map(|(s, p)| {
+                    p.map(|p| {
+                        let able =
+                            p.rig.on_ground && !p.rig.on_ladder && p.rig.duck_amount < PLANT_CROUCH;
+                        (s.tick, [p.rig.velocity[0], p.rig.velocity[1]], able)
+                    })
+                })
+                .collect::<Vec<PlantSample>>(),
+            dt,
+        );
         let mut run_of = vec![None; players.len()];
         for run in &runs {
             for slot in &mut run_of[run.start..=run.end] {
@@ -674,7 +692,8 @@ impl Baker<'_> {
         let mut phase = 0.0f32;
         let mut previous: Option<(u32, f32, f32, Movement)> = None; // tick, body yaw, speed, movement
         let mut turn_rate = 0.0f32;
-        let mut history: VecDeque<(u32, [f32; 2])> = VecDeque::new();
+        // The tick a plant playing was last set off (its hold runs from there).
+        let mut plant_from: u32 = 0;
         let mut movement: Option<MovementSegment> = None;
         let mut action: Option<ActionSegment> = None;
         let mut handover: Option<ActionSegment> = None;
@@ -717,7 +736,6 @@ impl Baker<'_> {
                 }
                 flash_seen = None;
                 previous = None;
-                history.clear();
                 movement = None;
                 action = None;
                 handover = None;
@@ -756,18 +774,7 @@ impl Baker<'_> {
             } else {
                 turn_rate = 0.0;
             }
-            while history
-                .front()
-                .is_some_and(|&(t, _)| (tick - t) as f32 * dt > REVERSAL_WINDOW)
-            {
-                history.pop_front();
-            }
-            let recent: Vec<[f32; 2]> = history.iter().map(|&(_, v)| v).collect();
-            let speed_previous = recent
-                .iter()
-                .map(|v| v[0].hypot(v[1]))
-                .fold(speed, f32::max);
-            let world = [rig.velocity[0], rig.velocity[1]];
+            let speed_previous = previous.map_or(speed, |(_, _, s, _)| s);
 
             // Movement: ladder, air or one of the ground actions.
             let run = run_of[i];
@@ -789,23 +796,39 @@ impl Baker<'_> {
                         start,
                         length,
                         ..
-                    }) => (g, self.seconds((tick - start) as f32), length),
+                    }) => {
+                        // A plant's hold runs from the last time it was set off.
+                        let from = if matches!(g, GroundAction::PlantAndTurn(..)) {
+                            plant_from.max(start)
+                        } else {
+                            start
+                        };
+                        (g, self.seconds((tick - from) as f32), length)
+                    }
                     _ => (GroundAction::Move, 0.0, 0.0),
                 };
-                // Standing: slow at the last tick and not just passing through zero (a counter-strafe crosses
-                // it within a tick or two, from a run).
-                let recently_fast = recent.iter().any(|v| v[0].hypot(v[1]) >= REVERSAL_SPEED);
+                // A plant set off: the side the counter-strafe pushes to, in the body's frame, and the speed before
+                // it (the graph's start, slow or fast plant); cross-legged when the walk is in that half of its
+                // stride, as CS2 reads it off the walk it leaves.
+                let plant = plants[i].map(|a| {
+                    let pushes = body_relative([a[0], a[1], 0.0], rig.body_yaw);
+                    (direction4(pushes), speed_previous)
+                });
                 let inputs = GroundInputs {
                     speed,
                     body,
                     walking: rig.walking,
                     turn_rate,
-                    was_standing: !recently_fast
-                        && previous.is_some_and(|(_, _, s, _)| s < STANDING_SPEED),
-                    reversal: reversal(&recent, world, body),
+                    was_standing: previous.is_some_and(|(_, _, s, _)| s < STANDING_SPEED),
+                    plant,
+                    crossleg: self.sets.get(set).event_at(&blend, phase, "USE_CROSSLEG"),
                 };
                 let before = matches!(current, Some(Movement::Ground(_)));
-                match ground_action(now, elapsed, length, before, &inputs) {
+                let decided = ground_action(now, elapsed, length, before, &inputs);
+                if plant.is_some() && matches!(decided, GroundAction::PlantAndTurn(..)) {
+                    plant_from = tick;
+                }
+                match decided {
                     // A new turn on the spot: one stepping turn when the body settles within ±45°, else the loop.
                     GroundAction::Turn
                         if !matches!(now, GroundAction::Turn | GroundAction::SmallTurn(_)) =>
@@ -824,7 +847,6 @@ impl Baker<'_> {
             } else {
                 Movement::Ground(GroundAction::Move)
             };
-            history.push_back((tick, world));
 
             let air_height = run.map_or(0.0, |r| r.height(player.position[2], rig.velocity[2]));
             let ladder = bearings[i].map_or((0.0, 180.0), |b| ladder_angles(b, rig.body_yaw));
@@ -877,9 +899,13 @@ impl Baker<'_> {
                             from: old.previous.map(|p| (p.state, p.start)),
                             blend: old.blend,
                         });
-                        next.blend = self
-                            .movement_transition(&step, old.state, desired)
-                            .unwrap_or(DEFAULT_BLEND);
+                        let handover = self.movement_transition(&step, old.state, desired);
+                        next.blend = handover.map_or(DEFAULT_BLEND, |(blend, _)| blend);
+                        // A start or plant hands over to the walk where CS2's transition starts it.
+                        if let Some((_, Some(offset))) = handover {
+                            phase = offset.rem_euclid(1.0);
+                            step.phase = phase;
+                        }
                     }
                     if matches!(
                         desired,
@@ -1155,7 +1181,8 @@ impl Baker<'_> {
             .float("ladder_angle_yaw", step.ladder_angle)
             .float("ladder_angle_yaw_backwards", step.ladder_back)
             .flag("move_is_walking", step.walking)
-            .id("move_type", state.move_type());
+            .id("move_type", state.move_type())
+            .id("move_direction_id", direction8(step.body));
         match state {
             Movement::Ground(ground) => {
                 params = params.id("ground_action", ground.id());
@@ -1163,10 +1190,13 @@ impl Baker<'_> {
                     GroundAction::Start(direction) => {
                         params = params.id("ground_action_direction_id", direction);
                     }
-                    GroundAction::PlantAndTurn(direction, before) => {
+                    GroundAction::PlantAndTurn(direction, before, crossleg) => {
                         params = params
                             .id("ground_action_direction_id", direction)
                             .float("move_speed_horizontal_previous", before);
+                        if crossleg {
+                            params = params.event("USE_CROSSLEG");
+                        }
                     }
                     GroundAction::SmallTurn(angle) => {
                         params = params.float("ground_turn_angle_or_velocity", angle);
@@ -1195,21 +1225,56 @@ impl Baker<'_> {
         Some((graph.as_str(), self.eval?.root(graph)?))
     }
 
-    fn movement_transition(&self, step: &Step, from: Movement, to: Movement) -> Option<f32> {
+    /// CS2's blend time from one movement state to the next, and, when a start or plant hands over to `Move`, where
+    /// the walk starts (a fraction of its cycle). The game code still has the start's or plant's direction then, and
+    /// the plant state sends its events (`Plant_E2W`…, `PLANT_AND_TURN_COMPLETE` once 0.1 s in): they pick the exit
+    /// (0.2 s from `E2W`/`W2E`, 0.3 s from `N2S`/`S2N`, 0.35 s to `Idle` for a player standing) and its time offset
+    /// (an `E2W` walks on 0.9 into the cycle, a `W2E` 0.6, a start east 0.95).
+    fn movement_transition(
+        &self,
+        step: &Step,
+        from: Movement,
+        to: Movement,
+    ) -> Option<(f32, Option<f32>)> {
         let eval = self.eval?;
         let (graph, root) = self.locomotion_graph(step)?;
-        let states = |m: Movement| {
-            eval.states(graph, root, &self.locomotion_params(step, m), 0.0)
-                .ok()
+        let from_states = eval
+            .states(graph, root, &self.locomotion_params(step, from), 0.0)
+            .ok()?;
+        let mut params = self.locomotion_params(step, to);
+        let handover = match from {
+            Movement::Ground(GroundAction::Start(d) | GroundAction::PlantAndTurn(d, ..))
+                if to.is_move() =>
+            {
+                params = params
+                    .id("ground_action_direction_id", d)
+                    .event("PLANT_AND_TURN_COMPLETE");
+                for event in eval.state_events(&from_states) {
+                    params = params.event(&event);
+                }
+                if step.speed < STANDING_SPEED {
+                    params = params.id("ground_action", "ground_action_idle");
+                }
+                true
+            }
+            _ => false,
         };
-        eval.transition_time(
-            &states(from)?,
-            &states(to)?,
-            &self.locomotion_params(step, to),
-        )
+        let to_states = eval.states(graph, root, &params, 0.0).ok()?;
+        let blend = eval.transition_time(&from_states, &to_states, &params)?;
+        let offset = handover
+            .then(|| eval.transition_offset(&from_states, &to_states, &params))
+            .flatten();
+        Some((blend, offset))
     }
 
+    /// How long a start or plant is held (CS2's game code holds them: [`START_HOLD`], [`PLANT_HOLD`]), or a small
+    /// turn plays (its clip).
     fn movement_length(&self, step: &Step, state: Movement) -> f32 {
+        match state {
+            Movement::Ground(GroundAction::Start(_)) => return START_HOLD,
+            Movement::Ground(GroundAction::PlantAndTurn(..)) => return PLANT_HOLD,
+            _ => {}
+        }
         let (Some(eval), Some((graph, root))) = (self.eval, self.locomotion_graph(step)) else {
             return 0.0;
         };
