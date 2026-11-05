@@ -255,9 +255,26 @@ player and round.
 - [x] **One viewmodel for the movie** (the user's ask, 2026-11-01): CS2's default viewmodel for every player, changed
   in Unreal's Viewmodel panel (field of view, offsets, hand, how much the gun moves; or each player's own), for every
   round of the project ([viewmodel.md](formats/viewmodel.md)).
-- [ ] Ironsights; shotguns' staged reloads;
-  `FirstPersonScale` against walls; grenade throws and knife swings checked against CS2; the viewmodel's place
-  mid-spray (its muzzle 4 % of the frame higher than CS2's).
+- [x] **Scopes and sights** (the user's choice, 2026-11-05: CS2's scope over the view, a Look panel switch): the view
+  zooms as the demo's camera services set it (the AWP's 40 and 10, the SSG 08's 40 and 15, the AUG's and SG 553's 45,
+  eased as CS2 eases them: [cameras.md](formats/cameras.md#scopes)); behind a sniper's scope the gun is hidden and
+  CS2's scope drawn (the black ring, its darkened rim, the two lines); the AUG and SG 553 raise their sight (their
+  graphs' `weapon_ironsight_amount`, from the demo's `m_iIronSightMode`); **Scope overlay** in the Look panel turns
+  the scope off for an editor's own ([decision 026](decisions/026-scopes-over-the-view.md)).
+- [ ] **The AUG's and SG 553's sight at the eye**: CS2's client brings the sight right to the eye (its housing 0.54 of
+  the screen's height in radius) where its clip holds the gun 17 inches out; then the sight's card (blur, dot), built
+  but not placed ([cameras.md](formats/cameras.md#in-unreal)).
+- [x] **Shotguns loading shell by shell** in first person (2026-11-05): the reload clip's shell played again for each
+  shell the demo's magazine gains
+  ([animation.md](formats/animation.md#first-person-view-animviewmodel-exportviewmodel)).
+- [x] **Knife swings and grenade throws checked against CS2** (2026-11-05, Falcons vs Vitality, de_anubis, round 6,
+  CS2's own frames at their demo bar's ticks): NiKo's heavy swing, m0NESY's light one and karrigan's throw match
+  pose for pose (the throw's arm a tick or two behind at its highest).
+- [ ] `FirstPersonScale` against walls; the viewmodel's place on a shot: in a local game CS2's AK sight moves 0.35 % of
+  the screen's height in the 8 ticks after a single shot, OFAST's rises 3 % (ZywOo's first shot, round 6 above): the
+  shoot clip (`shoot1_ak`) played at its own speed puts the gun 3.2 inches back and up within 5 ticks, where CS2
+  plays it faster or weaker (its `weapon_action_speedscale` by the gun's cycle time? to test); the recoil OFAST adds
+  past the camera is a fifth of a degree.
 
 ## M6 progress
 
@@ -309,8 +326,11 @@ player and round.
 - [x] A player's depth from their hitboxes (the agent's 19 capsules on its posed bones, where CS2's server checks
   the shot); the map's `prop_dynamic` models and brush entities checked and left out: CS2's bullets go through them
   (on 13 demos they made every count worse).
-- [ ] Shots, the rest: each gun's own muzzle flash, bullet holes that move with doors, what the hits after walls
-  that the trace does not explain came out of.
+- [x] **Each gun's own muzzle flash** (2026-11-05): the flash system each gun's model fires (`export::flashes`: 15
+  of them, the M4A1-S's silenced one at its silencer's tip) rebuilt as layers with CS2's choosers
+  ([replay.md](formats/replay.md#in-unreal-import_demopy)); their sizes from CS2's files, still to film gun by gun.
+- [x] **Bullet holes that move with doors** (2026-11-05): a hole on a door that swings is a card on the door's actor.
+- [ ] Shots, the rest: what the hits after walls that the trace does not explain came out of.
 - [x] The map's physics props as the demo moves them (`CPhysicsPropMultiplayer`: de_nuke's hanging hard hats and
   mugs, 25 of them): in round 5 an HE grenade knocks the A site's three hats off their rack, and they lie on the floor
   where CS2 shows them.

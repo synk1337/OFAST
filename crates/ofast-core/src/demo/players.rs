@@ -289,10 +289,101 @@ pub struct RigInputs {
     /// demo ticks to a fraction (`m_nCsViewPunchAngleTick` + `m_flCsViewPunchAngleTickRatio`, a game tick); `None`
     /// before any. It decays from then on ([`super::recoil::view_punch_at`]).
     pub view_punch: Option<super::recoil::ViewPunch>,
+    /// The view's zoom as last set ([`Zoom`]: a scope or a sight), `None` in a demo without it.
+    pub zoom: Option<Zoom>,
     /// The AnimGraph2 tasks the server's graph ran for the pawn this tick, as sent ([`super::recipe`]): `None` while
     /// dead (version 2 empties a dead pawn's recipe; version 3 keeps its last living one, frozen, which is dropped)
     /// or in a demo without them.
     pub pose_recipe: Option<super::recipe::PoseRecipe>,
+}
+
+/// The view's field of view as the server last set it (`m_pCameraServices`): a scope or a sight zooms it in, and it
+/// eases from where it was to `target` over `rate` seconds from `time` ([`view_fovs`]).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Zoom {
+    /// The field of view it goes to, CS2's degrees (horizontal at 4:3, like its `fov`): `m_iFOV`, where 0 means the
+    /// player's own (90): the AWP's scope 40 then 10, the SSG 08's and the auto-snipers' 40 then 15, the AUG's and
+    /// SG 553's sight 45.
+    pub target: f32,
+    /// Where it eases from (`m_iFOVStart`, 0 the player's own); not always where the view was (an AWP's unzoom from
+    /// 10 was sent from 66), so [`view_fovs`] eases from where it was instead.
+    pub start: f32,
+    /// When it was set (`m_flFOVTime`, game seconds), in demo ticks to a fraction.
+    pub time: f64,
+    /// How long it eases, seconds (`m_flFOVRate`): 0.05 to scope in or out, 0.1 for a sight and for a sniper's
+    /// zoom coming back after a shot, 0 at once (a weapon switch).
+    pub rate: f32,
+}
+
+/// The field of view the player's view has when nothing zooms it (CS2's `fov`, which `m_iFOV` 0 stands for).
+pub const DEFAULT_VIEW_FOV: f32 = 90.0;
+
+/// A zoom easing from one field of view to another ([`view_fovs`]).
+#[derive(Debug, Clone, Copy)]
+struct Ease {
+    from: f32,
+    to: f32,
+    /// Demo ticks: when it starts, and how long it takes.
+    start: f64,
+    ticks: f64,
+}
+
+impl Ease {
+    /// The field of view at demo tick `t`: along a smooth step (3x² − 2x³, Source's `SimpleSpline`, which CS2's
+    /// `GetFOV` eases with).
+    fn at(&self, t: f64) -> f32 {
+        if self.ticks <= 0.0 || t >= self.start + self.ticks {
+            return self.to;
+        }
+        let x = ((t - self.start) / self.ticks).clamp(0.0, 1.0) as f32;
+        self.from + (self.to - self.from) * x * x * (3.0 - 2.0 * x)
+    }
+}
+
+/// The field of view of a player's view on each of the track's samples (CS2's degrees: [`Zoom`]), `None` where the
+/// player has no living pawn: [`DEFAULT_VIEW_FOV`] unless a scope or a sight zooms it. Each new zoom eases from where
+/// the view was when it was set (rather than from `m_iFOVStart`, which an AWP's unzoom from 10 sent as 66) to its
+/// target over its rate; a death or a gap starts again from the player's own.
+pub fn view_fovs(track: &RoundTrack, controller: u32) -> Vec<Option<f32>> {
+    let interval = f64::from(track.tick_interval.max(f32::EPSILON));
+    let mut ease: Option<Ease> = None;
+    let mut seen: Option<Zoom> = None;
+    track
+        .samples
+        .iter()
+        .map(|sample| {
+            let tick = f64::from(sample.tick);
+            let Some(player) = sample
+                .players
+                .iter()
+                .find(|p| p.controller == controller && p.alive)
+            else {
+                ease = None;
+                seen = None;
+                return None;
+            };
+            if let Some(zoom) = player.rig.zoom
+                && seen.is_none_or(|s| s.target != zoom.target || s.time != zoom.time)
+            {
+                let target = if zoom.target > 0.0 {
+                    zoom.target
+                } else {
+                    DEFAULT_VIEW_FOV
+                };
+                // A zoom seen for the first time was set before: it has eased already (or eases from the player's
+                // own, if it was set this tick).
+                let from = ease.map_or(DEFAULT_VIEW_FOV, |e| e.at(zoom.time));
+                ease = Some(Ease {
+                    from,
+                    to: target,
+                    start: zoom.time,
+                    ticks: f64::from(zoom.rate.max(0.0)) / interval,
+                });
+                seen = Some(zoom);
+            }
+            Some(ease.map_or(DEFAULT_VIEW_FOV, |e| e.at(tick)))
+        })
+        .collect()
 }
 
 /// Whether a pawn's flash duration ([`RigInputs::flash_duration`]) going from `seen` to `duration` is a new blinding.
@@ -333,6 +424,9 @@ pub struct ActiveWeapon {
     pub reserve: Option<u32>,
     /// The silencer is on (`m_bSilencerOn`: the M4A1-S and USP-S, while screwed on).
     pub silenced: bool,
+    /// Where the AUG's and SG 553's sight is going (`m_iIronSightMode`): 1 up to the eye, 0 down, 2 while the
+    /// weapon is drawn, 3 dropped; 0 for other weapons.
+    pub ironsight: u8,
 }
 
 /// `m_fFlags` bit: the pawn stands on something.
@@ -720,6 +814,8 @@ struct RigPaths {
     flash_duration: Option<FieldPath>,
     flash_max_alpha: Option<FieldPath>,
     view_punch: Option<[FieldPath; 3]>,
+    /// `m_iFOV`, `m_iFOVStart`, `m_flFOVTime`, `m_flFOVRate` ([`Zoom`]).
+    zoom: Option<[FieldPath; 4]>,
     recipe: Option<super::recipe::RecipePaths>,
     /// Per weapon class id: every class with an item definition index (each weapon has its own serializer, so the
     /// same field sits at a different path in each).
@@ -738,6 +834,7 @@ struct WeaponPaths {
     /// The reserve ammunition array (element 0 one level deeper).
     reserve: Option<FieldPath>,
     silenced: Option<FieldPath>,
+    ironsight: Option<FieldPath>,
     model: Option<FieldPath>,
     mesh_groups: Option<FieldPath>,
     /// Who carries it (`m_hOwnerEntity`) and what it is attached to (`CBodyComponent.m_hParent`).
@@ -778,6 +875,7 @@ impl RigPaths {
                     clip: field("m_iClip1"),
                     reserve: field("m_pReserveAmmo"),
                     silenced: field("m_bSilencerOn"),
+                    ironsight: field("m_iIronSightMode"),
                     model: field(MODEL_FIELD),
                     mesh_groups: field(MESH_GROUPS_FIELD),
                     owner: field("m_hOwnerEntity"),
@@ -815,6 +913,14 @@ impl RigPaths {
                     path("m_pCameraServices.m_vecCsViewPunchAngle")?,
                     path("m_pCameraServices.m_nCsViewPunchAngleTick")?,
                     path("m_pCameraServices.m_flCsViewPunchAngleTickRatio")?,
+                ])
+            })(),
+            zoom: (|| {
+                Some([
+                    path("m_pCameraServices.m_iFOV")?,
+                    path("m_pCameraServices.m_iFOVStart")?,
+                    path("m_pCameraServices.m_flFOVTime")?,
+                    path("m_pCameraServices.m_flFOVRate")?,
                 ])
             })(),
             recipe: super::recipe::RecipePaths::find(serializers),
@@ -1697,6 +1803,11 @@ fn read_rig(parser: &DemoParser<'_>, paths: &RigPaths, pawn: &Entity) -> RigInpu
                 silenced: value(&fields.silenced)
                     .and_then(FieldValue::as_bool)
                     .unwrap_or(false),
+                // A signed integer in the demo.
+                ironsight: value(&fields.ironsight)
+                    .and_then(FieldValue::as_i64)
+                    .and_then(|m| u8::try_from(m).ok())
+                    .unwrap_or(0),
             })
         });
     RigInputs {
@@ -1734,6 +1845,24 @@ fn read_rig(parser: &DemoParser<'_>, paths: &RigPaths, pawn: &Entity) -> RigInpu
             let tick = parser.game_tick_to_demo(u32::try_from(tick).ok()?)?;
             let ratio = pawn.get(ratio).and_then(FieldValue::as_f32).unwrap_or(0.0);
             Some(([angle[0], angle[1]], f64::from(tick) + f64::from(ratio)))
+        }),
+        zoom: paths.zoom.as_ref().and_then(|[target, start, time, rate]| {
+            let degrees = |p: &FieldPath| {
+                pawn.get(p)
+                    .and_then(|v| v.as_u64().map(|n| n as f32).or_else(|| v.as_f32()))
+                    .unwrap_or(0.0)
+            };
+            // Game seconds → game ticks → demo ticks, keeping the fraction.
+            let seconds = pawn.get(time).and_then(FieldValue::as_f32).unwrap_or(0.0);
+            let game = f64::from(seconds) / f64::from(parser.tick_interval()?);
+            let whole = game.floor();
+            let demo = parser.game_tick_to_demo(u32::try_from(whole as i64).ok()?)?;
+            Some(Zoom {
+                target: degrees(target),
+                start: degrees(start),
+                time: f64::from(demo) + (game - whole),
+                rate: pawn.get(rate).and_then(FieldValue::as_f32).unwrap_or(0.0),
+            })
         }),
         pose_recipe: paths
             .recipe

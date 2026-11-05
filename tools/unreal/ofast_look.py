@@ -105,6 +105,10 @@ class OfastLook(unreal.PrimaryDataAsset):
                         "1 is the look's own; 0 black and white, 2 twice as colourful.", (0.0, 4.0))
     warmth = slider(float, "Colour and film", "Warm / cool", -1.0, 1.0,
                     "The whole picture warmer (+, orange) or cooler (−, blue). 0 is the look's own.")
+    scope_overlay = unreal.uproperty(bool, meta={
+        "Category": "Camera", "DisplayName": "Scope overlay",
+        "ToolTip": "Through the players' eyes, CS2's scope over the view while they look through a sniper's scope "
+                   "(the black ring and lines). Off: only the zoom, to add your own scope in editing."})
     motion_blur = slider(float, "Camera", "Motion blur", 0.0, 1.0,
                          "How much moving things and fast turns smear. 0: none; 0.5 is Unreal's usual.")
     blur_distance = unreal.uproperty(float, meta={
@@ -147,12 +151,12 @@ class OfastLook(unreal.PrimaryDataAsset):
 
 # The panel's fields, in their order on screen.
 FIELDS = ["sun_height", "sun_direction", "sun_strength", "sun_warmth", "ambient", "haze", "light_beams", "brightness",
-          "depth_of_field", "depth_blur", "blur_distance", "motion_blur", "warmth", "saturation", "contrast",
-          "vignette", "film_grain", "bloom", "lens_flare", "reset"]
+          "depth_of_field", "depth_blur", "blur_distance", "motion_blur", "scope_overlay", "warmth", "saturation",
+          "contrast", "vignette", "film_grain", "bloom", "lens_flare", "reset"]
 # Their values for the map's own look; those not here start at what the level has (start_values).
 NEUTRAL = {"sun_height": 0.0, "sun_direction": 0.0, "sun_strength": 1.0, "sun_warmth": 0.0, "ambient": 1.0,
            "haze": 1.0, "light_beams": 1.0, "brightness": 0.0, "depth_blur": False, "blur_distance": BLUR_DISTANCE_M,
-           "warmth": 0.0, "saturation": 1.0, "contrast": 1.0, "reset": False}
+           "scope_overlay": True, "warmth": 0.0, "saturation": 1.0, "contrast": 1.0, "reset": False}
 
 
 def editor_world():
@@ -390,6 +394,9 @@ def apply(look, level, sequence=None):
             mel.update_material_instance(instance)
 
     pov_lens(v, sequence or unreal.LevelSequenceEditorBlueprintLibrary.get_current_level_sequence())
+    import scopes
+
+    scopes.set_overlay(v["scope_overlay"])
 
 
 def own_focus_sections(sequence):

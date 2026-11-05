@@ -337,6 +337,9 @@ pub struct WeaponFrames {
     /// `muzzle_flash` in the `weapon` bone's frame: where a shot leaves the barrel, its x axis along the barrel
     /// (`None`: knives, grenades, the C4).
     pub muzzle: Option<Affine>,
+    /// `muzzle_flash2` the same way: the M4A1-S's silencer tip, the Dual Berettas' left pistol, where some flashes
+    /// play ([`super::flashes`]; `None`: most guns).
+    pub muzzle2: Option<Affine>,
     /// `shell_eject` in the `weapon` bone's frame: the ejection port, the frame a fired case is thrown in
     /// ([`super::brass`]; `None`: guns that keep their cases, the revolver, and what is not a gun).
     pub shell_eject: Option<Affine>,
@@ -359,6 +362,7 @@ impl WeaponFrames {
             weapon_bone,
             holster_center: on_weapon_bone("weapon_holster_center"),
             muzzle: on_weapon_bone("muzzle_flash"),
+            muzzle2: on_weapon_bone("muzzle_flash2"),
             shell_eject: on_weapon_bone("shell_eject"),
         })
     }
@@ -640,6 +644,7 @@ mod tests {
             weapon_bone: affine([0.0, 0.0, 0.0, 1.0], [0.0; 3]),
             holster_center: Some(affine([0.0, 0.0, 0.0, 1.0], [2.0, 0.0, 0.0])),
             muzzle: None,
+            muzzle2: None,
             shell_eject: None,
         };
         let world = [

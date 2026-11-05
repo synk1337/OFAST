@@ -31,7 +31,7 @@ use super::keychains;
 use super::loadout::{Finish, WeaponFrames, WeaponLook};
 use super::nametags;
 use super::paint::{Paint, Paints};
-use super::players::{Muzzle, shown_groups, stem};
+use super::players::{Muzzle, muzzle_place, shown_groups, stem};
 use super::stattrak;
 use crate::anim::bake::frame_samples;
 use crate::anim::eval::Library;
@@ -195,6 +195,8 @@ struct Slot {
     /// The model's `muzzle_flash` attachment: the model's bone it hangs on and its frame on that bone (`None`:
     /// knives, grenades, the C4).
     muzzle: Option<(usize, Affine)>,
+    /// Its `muzzle_flash2`, the same way (`None`: most guns; [`super::flashes`]).
+    muzzle2: Option<(usize, Affine)>,
     /// Its `shell_eject` attachment, the same way (`None`: what throws no cases).
     eject: Option<(usize, Affine)>,
 }
@@ -458,6 +460,9 @@ pub fn export_viewmodel_look(
         let muzzle = model
             .attachment("muzzle_flash")
             .and_then(|a| a.on_bone(&model.skeleton));
+        let muzzle2 = model
+            .attachment("muzzle_flash2")
+            .and_then(|a| a.on_bone(&model.skeleton));
         let eject = model
             .attachment("shell_eject")
             .and_then(|a| a.on_bone(&model.skeleton));
@@ -467,6 +472,7 @@ pub fn export_viewmodel_look(
             first,
             retarget,
             muzzle,
+            muzzle2,
             eject,
         });
     }
@@ -765,11 +771,15 @@ pub fn export_viewmodel_look(
                 let world = posed(&skeleton, keys.get(j).filter(|_| same)?);
                 Some(compose(&world[slot.first + bone], &offset))
             };
+            let (position, direction) = muzzle_place(&m);
             muzzles.push(Muzzle {
                 controller: *controller,
                 tick: shot.tick,
-                position: [m[0][3], m[1][3], m[2][3]],
-                direction: [m[0][0], m[1][0], m[2][0]],
+                position,
+                direction,
+                alternate: slot.muzzle2.map(|(bone, offset)| {
+                    muzzle_place(&compose(&world[slot.first + bone], &offset))
+                }),
                 eject: std::array::from_fn(|d| eject_at(k + d)),
             });
         }

@@ -93,8 +93,8 @@ def round_file(sequence):
 
 def save_round(sequence, frames, end_frame, players):
     """The round's data (import_demo.py): `frames` its sample frames, `players` [{"name", "fov", "offset", "hands":
-    [[frame, left]] (each change), "punch": [[frame, pitch, yaw]], "sway": [[frame, pitch, yaw]]}] (Source's
-    degrees: positive pitch down, positive yaw left)."""
+    [[frame, left]] (each change), "punch": [[frame, pitch, yaw]], "sway": [[frame, pitch, yaw]], "zoom": [[frame,
+    CS2 fov]] (key_zoom)}] (Source's degrees: positive pitch down, positive yaw left)."""
     path = round_file(sequence)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -196,6 +196,40 @@ def turns_by_frame(frames, punch, sway, motion):
     return out
 
 
+ZOOM_PATH = "FieldOfView"
+
+
+def key_zoom(sequence, binding, camera, zoom, view_fov, end_frame):
+    """A POV camera's field of view: the view's own (`view_fov`, the panel's) unless a scope or a sight zooms it in,
+    `zoom` [[frame, CS2 fov], ...] (import_demo.zoom_keys) keyed linearly on its component's binding (the one its focus
+    track is on, under the camera's `binding`). CS2's zooms are its own degrees whatever the view's (the AWP's 40 and
+    10, the AUG's 45: m_iFOV); the view's own, 90 in the file, is the panel's. Without zoom, no track."""
+    component = camera.camera_component
+    component.set_editor_property("field_of_view", hfov_16_9(view_fov))
+    name = str(component.get_name())
+    child = None
+    if binding is not None:
+        child = next((c for c in binding.get_child_possessables() if str(c.get_display_name()) == name), None)
+    if child is not None:
+        for track in child.find_tracks_by_type(unreal.MovieSceneFloatTrack):
+            if str(track.get_property_path()) == ZOOM_PATH:
+                child.remove_track(track)
+    if not zoom:
+        return 0
+    if child is None:
+        child = sequence.add_possessable(component)
+    track = child.add_track(unreal.MovieSceneFloatTrack)
+    track.set_property_name_and_path(ZOOM_PATH, ZOOM_PATH)
+    section = track.add_section()
+    section.set_range(0, end_frame)
+    channel = section.get_all_channels()[0]
+    linear = unreal.MovieSceneKeyInterpolation.LINEAR
+    for frame, fov in zoom:
+        value = hfov_16_9(view_fov if fov >= 89.99 else fov)
+        channel.add_key(unreal.FrameNumber(int(frame)), value, 0.0, unreal.MovieSceneTimeUnit.DISPLAY_RATE, linear)
+    return len(zoom)
+
+
 def bindings_by_name(sequence):
     out = {}
     for binding in sequence.get_bindings():
@@ -214,11 +248,12 @@ def key(sequence, settings=None):
     cameras = {a.get_actor_label(): a for a in actors.get_all_level_actors() if isinstance(a, unreal.CameraActor)}
     frames, end_frame = data["frames"], data["end_frame"]
     # The view through every player's eyes (POV cameras are CameraActors: their field of view is horizontal, of the
-    # 16:9 picture).
+    # 16:9 picture), zoomed in by their scopes and sights.
     for player in data["players"]:
         camera = cameras.get("POV %s" % player["name"])
         if camera is not None:
-            camera.camera_component.set_editor_property("field_of_view", hfov_16_9(settings["view_fov"]))
+            key_zoom(sequence, bindings.get("POV %s" % player["name"]), camera, player.get("zoom") or [],
+                     settings["view_fov"], end_frame)
     count = 0
     for player in data["players"]:
         binding = bindings.get("VM %s" % player["name"])

@@ -150,6 +150,8 @@ struct Segment {
     /// Index of the segment it blends in from (same weapon), and over how long.
     from: Option<usize>,
     blend: f32,
+    /// Shells that went in during it (`m_iClip1` rising: a shotgun's reload, [`ShellReload`]).
+    shells: u32,
 }
 
 /// Whether gameplay state `now` goes on with `before` rather than starting anew: a reload's outro (801, 803:
@@ -217,8 +219,96 @@ fn magazines(track: &RoundTrack) -> HashMap<u32, f32> {
     out
 }
 
-/// What a sample says for the viewmodel: its segment and whether the silencer is on.
-type SampleState = Option<(usize, bool)>;
+/// What a sample says for the viewmodel: its segment, whether the silencer is on, and the sight ([`Sight`]).
+type SampleState = Option<(usize, bool, Sight)>;
+
+/// How fast the AUG's and SG 553's sight comes up to the eye and goes down (`weapon_ironsight_amount` per second:
+/// `scripts/weapons.vdata`'s `m_flIronSightPullUpSpeed` 10 and `m_flIronSightPutDownSpeed` 8, the same for both).
+pub const SIGHT_UP_SPEED: f32 = 10.0;
+/// See [`SIGHT_UP_SPEED`].
+pub const SIGHT_DOWN_SPEED: f32 = 8.0;
+
+/// A shotgun's first-person reload, loaded shell by shell: its clip (`reload_<gun>`) plays an intro up to
+/// `loop_start`, then `periods` shells of `period` seconds each, then its outro. CS2's graph plays it to the number of
+/// shells going in: the Nova's and Sawed-Off's `Reload` machine goes back to the shell's start (`WPN_RELOAD_LOOP`, the
+/// twin state, 0 s) each time the clip reaches `WPN_RELOAD_OUTRO` while shells are still to load (the client's
+/// `reload_stage`); the XM1014's own machine, at each `WPN_RELOAD_STAGE_END`, loops its first shell while 4 or more
+/// are missing and otherwise jumps to its `3SHELLS`, `2SHELLS` or `1SHELL` section, which runs to the end. Timings read
+/// from the clips' sync events (2026-11-05).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShellReload {
+    /// The weapon (`weapon_nova`).
+    pub weapon: &'static str,
+    /// Where the first shell's part of the clip begins, seconds.
+    pub loop_start: f32,
+    /// One shell's part, seconds.
+    pub period: f32,
+    /// How many shells the clip loads played straight through (the outro starts after them).
+    pub periods: u32,
+}
+
+/// The shotguns that reload shell by shell (the MAG-7 has a magazine).
+pub const SHELL_RELOADS: [ShellReload; 3] = [
+    ShellReload {
+        weapon: "weapon_nova",
+        loop_start: 0.367,
+        period: 0.433,
+        periods: 1,
+    },
+    ShellReload {
+        weapon: "weapon_sawedoff",
+        loop_start: 0.400,
+        period: 0.533,
+        periods: 1,
+    },
+    ShellReload {
+        weapon: "weapon_xm1014",
+        loop_start: 0.700,
+        period: 0.600,
+        periods: 4,
+    },
+];
+
+impl ShellReload {
+    /// The clip's time `t` seconds into a reload that loads `shells` (at least one): the intro as it is; shell `i` of
+    /// `n` on the clip's shell `max(0, periods − n + i)` (the last shells on the clip's last ones, the first repeating
+    /// its first: the Nova's loop, the XM1014's sections); after the last, the outro.
+    pub fn clip_time(&self, shells: u32, t: f32) -> f32 {
+        if t < self.loop_start {
+            return t;
+        }
+        let n = shells.max(1);
+        let u = t - self.loop_start;
+        let i = (u / self.period).floor().max(0.0) as u32;
+        if i >= n {
+            return self.loop_start
+                + self.period * self.periods as f32
+                + (u - self.period * n as f32);
+        }
+        let j = (self.periods + i).saturating_sub(n);
+        self.loop_start + self.period * j as f32 + (u - self.period * i as f32)
+    }
+}
+
+/// The sight at a sample: how far up it is (the graph's `weapon_ironsight_amount`, 0 down, 1 at the eye, which blends
+/// the idle into the sight's pose and plays the sight's shot) and whether it is going up (`m_iIronSightMode` 1) or
+/// down after it.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct Sight {
+    amount: f32,
+    up: bool,
+}
+
+impl Sight {
+    /// `seconds` later, moving at its speed toward up or down, as CS2's iron sight controller approaches its target.
+    fn after(self, seconds: f32) -> f32 {
+        if self.up {
+            (self.amount + seconds.max(0.0) * SIGHT_UP_SPEED).min(1.0)
+        } else {
+            (self.amount - seconds.max(0.0) * SIGHT_DOWN_SPEED).max(0.0)
+        }
+    }
+}
 
 struct Baker<'a> {
     track: &'a RoundTrack,
@@ -246,6 +336,10 @@ impl Baker<'_> {
         let mut segments: Vec<Segment> = Vec::new();
         let mut of_sample = Vec::with_capacity(self.track.samples.len());
         let mut current: Option<usize> = None;
+        // The sight as of the sample before, and that sample's tick.
+        let mut sight: Option<(Sight, u32, u32)> = None;
+        // The segment and the magazine at the sample before.
+        let mut last_clip: Option<(usize, u32)> = None;
         for sample in &self.track.samples {
             let tick = sample.tick;
             let player: Option<&PlayerSample> = sample
@@ -257,9 +351,19 @@ impl Baker<'_> {
                 Some((p, w, self.rig.weapons.get(&w.item)?))
             }) else {
                 current = None;
+                sight = None;
                 of_sample.push(None);
                 continue;
             };
+            // Up or down since the sample before, with the same weapon in hand (a new one starts down).
+            let amount = sight
+                .filter(|&(_, _, item)| item == w.item)
+                .map_or(0.0, |(s, at, _)| s.after(self.seconds((tick - at) as f32)));
+            let now = Sight {
+                amount,
+                up: w.ironsight == 1,
+            };
+            sight = Some((now, tick, w.item));
             let (action, attack) = weapon_action(w.anim_state, &weapon.category)
                 .unwrap_or_else(|| passive_action(w.anim_state));
             let same = current.map(|c| &segments[c]).is_some_and(|s| {
@@ -298,6 +402,7 @@ impl Baker<'_> {
                     events: HashSet::new(),
                     from: None,
                     blend: 0.0,
+                    shells: 0,
                 };
                 if let Some(c) = current.filter(|&c| segments[c].item == w.item) {
                     let old = &segments[c];
@@ -328,9 +433,32 @@ impl Baker<'_> {
                 segments.push(next);
                 current = Some(segments.len() - 1);
             }
-            of_sample.push(current.map(|c| (c, w.silenced)));
+            // Shells going in: the magazine rising within the segment.
+            if let (Some(c), Some(clip)) = (current, w.clip) {
+                if let Some((at, before)) = last_clip
+                    && at == c
+                    && clip > before
+                {
+                    segments[c].shells += clip - before;
+                }
+                last_clip = Some((c, clip));
+            }
+            of_sample.push(current.map(|c| (c, w.silenced, now)));
         }
         Ok((segments, of_sample))
+    }
+
+    /// A segment's clip time `time` seconds into it: a shotgun's reload played to its shells ([`ShellReload`]),
+    /// anything else as it is.
+    fn clip_time(&self, segment: &Segment, time: f32) -> f32 {
+        if !matches!(segment.action, "action_reload" | "action_reload_silent") {
+            return time;
+        }
+        let weapon = &self.rig.weapons[&segment.item].weapon;
+        SHELL_RELOADS
+            .iter()
+            .find(|r| r.weapon == weapon)
+            .map_or(time, |r| r.clip_time(segment.shells, time))
     }
 
     /// One segment's parameters at `time` seconds into it: the silencer as it is now (`silenced`), and the clip's
@@ -338,9 +466,18 @@ impl Baker<'_> {
     /// hides it unless the weapon is silenced or this event is on). Other events of the clip playing are not added:
     /// the graph's entry conditions, evaluated again at every time here, would read them as if the state were
     /// entered anew.
-    fn params_at(&self, segment: &Segment, time: f32, silenced: bool) -> Result<Params, AnimError> {
+    fn params_at(
+        &self,
+        segment: &Segment,
+        time: f32,
+        silenced: bool,
+        sight: f32,
+    ) -> Result<Params, AnimError> {
         let weapon = &self.rig.weapons[&segment.item];
-        let mut params = self.params(segment).flag("weapon_is_silenced", silenced);
+        let mut params = self
+            .params(segment)
+            .flag("weapon_is_silenced", silenced)
+            .float("weapon_ironsight_amount", sight);
         if self
             .eval
             .events_at(&weapon.graph, weapon.node, &params, time)?
@@ -400,23 +537,26 @@ impl Baker<'_> {
         Ok(1.0 - on as f32 / SAMPLES as f32)
     }
 
+    /// The frame at `tick` (a fraction), from the state of the sample at or before it, whose tick is `at`.
     fn frame(
         &self,
         segments: &[Segment],
-        (index, silenced): (usize, bool),
+        (index, silenced, sight): (usize, bool, Sight),
+        at: u32,
         tick: f32,
     ) -> Result<ViewmodelFrame, AnimError> {
         let segment = &segments[index];
-        let time = self.seconds(tick - segment.start as f32);
-        let params = self.params_at(segment, time, silenced)?;
+        let time = self.clip_time(segment, self.seconds(tick - segment.start as f32));
+        let sight = sight.after(self.seconds(tick - at as f32));
+        let params = self.params_at(segment, time, silenced, sight)?;
         let (mut arms, mut weapon) = self.segment_pose(segment, &params, time)?;
         if let Some(from) = segment.from.map(|f| &segments[f])
             && segment.blend > 0.0
             && time < segment.blend
         {
             let w = time / segment.blend;
-            let old_time = self.seconds(tick - from.start as f32);
-            let old_params = self.params_at(from, old_time, silenced)?;
+            let old_time = self.clip_time(from, self.seconds(tick - from.start as f32));
+            let old_params = self.params_at(from, old_time, silenced, sight)?;
             let (old_arms, old_weapon) = self.segment_pose(from, &old_params, old_time)?;
             arms = mix(old_arms, arms, w);
             weapon = match (old_weapon, weapon) {
@@ -458,7 +598,9 @@ pub fn bake_viewmodel(
         .into_iter()
         .map(
             |(tick, index)| match of_sample.get(index).copied().flatten() {
-                Some(state) => baker.frame(&segments, state, tick).map(Some),
+                Some(state) => baker
+                    .frame(&segments, state, track.samples[index].tick, tick)
+                    .map(Some),
                 None => Ok(None),
             },
         )
@@ -500,4 +642,50 @@ pub fn viewmodel_timeline(
             )
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-4
+    }
+
+    #[test]
+    fn a_nova_loops_its_shell_once_per_shell() {
+        let nova = SHELL_RELOADS[0];
+        // Three shells: the intro, the shell three times, then the outro.
+        assert!(close(nova.clip_time(3, 0.2), 0.2));
+        assert!(close(nova.clip_time(3, 0.367 + 0.1), 0.467));
+        assert!(
+            close(nova.clip_time(3, 0.367 + 0.433 + 0.1), 0.467),
+            "the second shell plays the shell again"
+        );
+        assert!(close(nova.clip_time(3, 0.367 + 2.0 * 0.433 + 0.1), 0.467));
+        assert!(
+            close(nova.clip_time(3, 0.367 + 3.0 * 0.433 + 0.1), 0.900),
+            "then the outro"
+        );
+        // One shell: the clip straight through.
+        assert!(close(nova.clip_time(1, 1.2), 1.2));
+    }
+
+    #[test]
+    fn an_xm1014_jumps_to_its_last_shells() {
+        let xm = SHELL_RELOADS[2];
+        // Four shells: the clip straight through.
+        assert!(close(xm.clip_time(4, 2.0), 2.0));
+        // Two: the intro, then the clip's last two shells (its 2SHELLS section, from 1.9 s).
+        assert!(close(xm.clip_time(2, 0.69), 0.69));
+        assert!(close(xm.clip_time(2, 0.71), 1.91));
+        assert!(
+            close(xm.clip_time(2, 0.7 + 1.2 + 0.1), 3.2),
+            "the outro after both"
+        );
+        // Six: the first shell three times, then the rest of the clip.
+        assert!(close(xm.clip_time(6, 0.7 + 0.6 + 0.1), 0.8));
+        assert!(close(xm.clip_time(6, 0.7 + 1.2 + 0.1), 0.8));
+        assert!(close(xm.clip_time(6, 0.7 + 1.8 + 0.1), 1.4));
+    }
 }

@@ -235,8 +235,9 @@ def import_png(replay_path, file_name, folder):
 # REPLAY_COLLECTION's parameters and their defaults: `ReplayTick`, the demo tick the sequence shows (keyed by
 # key_replay_tick), which the smoke volumes and the effects read; `EffectBrightness`, what the effects' unlit sprites
 # and their lights are multiplied by (1 in CS2's look; in the realistic look, how much brighter its sun is than
-# CS2's, keyed by the round's sequence: its auto exposure would leave them invisible otherwise).
-REPLAY_PARAMETERS = {"ReplayTick": 0.0, "EffectBrightness": 1.0}
+# CS2's, keyed by the round's sequence: its auto exposure would leave them invisible otherwise); `ScopeOverlay`, 1 to
+# draw CS2's scopes and sights over the players' views, 0 not (the Look panel's switch, scopes.set_overlay: not keyed).
+REPLAY_PARAMETERS = {"ReplayTick": 0.0, "EffectBrightness": 1.0, "ScopeOverlay": 1.0}
 
 
 def replay_collection():

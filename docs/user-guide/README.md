@@ -190,7 +190,11 @@ in Unreal's window. It is in the menu bar too: **OFAST → Look**. Drag a slider
   sharp, and the map blurs more the further away it is, whatever the player looks at (what they aim at far away
   blurs too). **Depth of field** then sets how blurred the far map gets, and **Blur distance** how far away it is half
   that (20 m at first; nearer blurs more of the map). It is for the players' eyes when the round has no focus keys
-  (below, *Depth of field over the round*).
+  (below, *Depth of field over the round*). **Scope overlay** (ticked at first): through a player's eyes, while they
+  look through a scope, CS2's scope over the view: the AWP's, SSG 08's and auto-snipers' black ring with its thin
+  lines. Untick it to keep only the zoom and add your own scope in editing. The zoom itself (40 then 10 for the AWP,
+  45 for the AUG…) and the gun hidden behind a sniper's scope are always as in CS2. The AUG and SG 553 zoom and raise
+  their sight, but OFAST does not bring it right up to the eye as CS2 does yet.
 - **Colour and film**: warm or cool, saturation (0 is black and white), contrast, vignette, film grain; in the
   realistic look also bloom and lens flare.
 - **Reset everything** puts every slider back to the map's own look. Each slider's own reset arrow puts it back to

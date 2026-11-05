@@ -26,18 +26,36 @@ default, 106.26° on a 16:9 picture).
 | `server_tick_offset` | how far the server's tick runs ahead of the demo's (`RoundTrack::server_tick_offset`; `null` without one): HLAE's times are `(tick + offset) × tick_interval` |
 | `plan` | what was asked: `shots` (kill tick → `pov`, `victim`, `behind`, `orbit`, `tripod`, `above`), `smoothing` (0 – 1), `hlae` (the files read), `player` (the player the round is about: a Steam id, a bot's name; `null`: each kill's killer) |
 | `players` | controller (as text) → the player's last known name (Unreal finds their camera by it: `POV <name>`) |
-| `eyes` | controller (as text) → `[tick, x, y, z, pitch, yaw]` on every sample tick with a pawn: the first-person camera |
+| `eyes` | controller (as text) → `[tick, x, y, z, pitch, yaw, fov]` on every sample tick with a pawn: the first-person camera; `fov` its field of view in CS2's degrees (horizontal at 4:3), 90 unless a scope or sight zooms it ([Scopes](#scopes); files from before 2026-11-05 have six values) |
 | `cameras` | the cameras of their own: `name` (`Orbit around XANTARES, kill at 153245`), `kind` (`behind`, `orbit`, `tripod`, `above`, `hlae`), `subject` (controller or `null`), `keys`: `[tick, x, y, z, pitch, yaw, roll, fov]` (ticks may fall between ticks: an HLAE recording's frames) |
 | `cuts` | in order: `{start, end, eyes: controller}` or `{start, end, camera: index into cameras}`, ticks, `end` not included |
 | `subject` | the controller of the player the round is about (`plan.player`), `null` for none |
 | `last_tick` | the last tick shown: the round's `end_tick`, or 2 s after the death of the player it is about (Unreal plays the sequence to it) |
 | `focus` | where each player's eyes focus, by controller: `[tick, distance]` rows every 4 ticks, the distance (units) along the view to the first wall (the map's collision) or player's body in it, between 40 and 4000, smoothed over 0.15 s (in its logarithm); the POV cameras' focus distance in Unreal, keyed in both looks, the depth of field on in the realistic look and set by the Look panel's slider in either (since 2026-10-31) |
+| `scopes` | when each player looks through a scope or a sight, by controller: `[first tick, last tick, kind]` runs of sample ticks, `kind` `"scope"` (a sniper's: CS2 hides the gun and draws its scope) or `"sight"` (the AUG's and SG 553's: the gun up to the eye); empty without CS2's content ([Scopes](#scopes)) |
 
 ### Eyes
 
 The first-person camera: the eyes (feet + `m_vecViewOffset`), looking along the eye angles turned by recoil
 (`export::punch`: 0.9 × the aim punch + the view punch; [demo.md](demo.md#recoil-on-the-view)) — what CS2 shows when
 spectating that player in first person. Without CS2's content (`export-demo` without `--players`) there is no recoil.
+
+### Scopes
+
+[Decision 026](../decisions/026-scopes-over-the-view.md). A scope or a sight zooms the view in: the server sets the
+pawn's `m_pCameraServices.m_iFOV` (0: the player's own, 90), `m_iFOVStart`, `m_flFOVTime` (game seconds) and
+`m_flFOVRate` (seconds), and CS2's `GetFOV` eases from the start to the target over the rate along a smooth step
+(3x² − 2x³). Seen on FaZe vs Falcons, de_anubis, round 6 (an AWP: 90 → 40 at 0.05 s to scope in, 40 → 10 at 0.05 s
+for the second zoom, back to 90 when it fires, 40 again over 0.1 s once the bolt is back), an SSG 08 (40, then 15)
+and an AUG (45 over 0.1 s). `demo::players::view_fovs` eases each change from where the view was (an AWP's unzoom
+from 10 was sent from 66), the `fov` of the eyes. The zoom levels are CS2's own degrees (`scripts/weapons.vdata`:
+`m_nZoomFOV1` / `2`), not a share of the player's field of view.
+
+`scopes` (`export::cameras::scope_spans`) says what the view looks through: the ticks a living player is scoped
+(`m_bIsScoped`) with a weapon that zooms — `m_bHideViewModelWhenZoomed` (AWP, SSG 08, SCAR-20, G3SG1): a scope,
+the gun hidden; `m_flIronSightFOV` (AUG, SG 553): a sight, the gun brought up to the eye (its pose:
+`weapon_ironsight_amount`, [animation.md](animation.md#first-person-view-animviewmodel-exportviewmodel)). A sniper's
+scope is down between a shot and its zoom coming back, the bolt showing, as in CS2.
 
 **Smoothing** (`--smooth`, the Studio's "First-person smoothing"): the eye angles smoothed before the recoil is added,
 by a Whittaker smoother (`camera::smooth`): the curve closest to the angles whose second differences stay small,
@@ -143,7 +161,24 @@ from when it is started (its first frame then), so the times only need to be rig
 - **Eyes**: each player's `POV <name>` camera (a CameraActor, 106.26° at 16:9: CS2's 90; the Viewmodel panel's
   **View field of view** sets another for every POV camera, [viewmodel.md](viewmodel.md)) keyed linearly on `eyes`,
   after dropping keys a straight line gives (0.2 cm, 0.1°). Its depth of field is a post-process lens on a sensor 40
-  full frames wide, so that the map blurs ([lighting.md](lighting.md#the-look-panel)).
+  full frames wide, so that the map blurs ([lighting.md](lighting.md#the-look-panel)). A player who zooms gets a
+  field of view track on the camera's component, keyed linearly around each change of the eyes' `fov`
+  (`ofast_viewmodel.key_zoom`, again with the Viewmodel panel and the cameras' update), the view's own from the panel.
+- **Scopes** (`scopes.py`): while a player looks through a scope their viewmodel is hidden, and a card 2.5 cm in front
+  of their POV camera draws CS2's scope over the view: black outside a lens of radius 0.425 × the screen's height
+  (its edge 0.03), darker toward its rim, crossed by two one-pixel lines (CS2's `legacy_sniper_scope.vfx`). A
+  translucent unlit material drawn from the screen's position, keyed visible over the player's `scope` runs, seen
+  only through their eyes; the Look panel's **Scope overlay** turns it off (the replay collection's `ScopeOverlay`)
+  for an editor's own scope. Checked on m0NESY's AWP (FaZe vs Falcons, de_anubis, round 6, ticks 55030 – 55370):
+  the scope from the tick after he scopes in, the gun hidden, the view at 40 then 10, the gun and its bolt back
+  between a shot and the zoom's return, no scope in the other players' views.
+- **Sights**: the AUG's and SG 553's zoom and their sight's pose only. In CS2 the sight then fills the middle of the
+  view, its housing about 0.54 of the screen's height in radius (karrigan's AUG, Falcons vs Vitality, de_anubis,
+  round 6, tick 44348), the eye 2 – 3 inches behind it, where the sight clip (`ironsight_fidget_aug`) holds the gun
+  17 inches out: CS2's client brings the viewmodel to the eye (as CS:GO's iron sight code did with its eye position
+  and field of view), which OFAST does not yet. The sight's own card (`scopes.sight_material`: the picture outside a
+  lens of 0.257 × the height blurred, the lens darker, a green dot) is built but not placed until then: a blur round
+  the middle with the gun below it looked wrong.
 - **Shot and HLAE cameras**: a CineCameraActor each (label = `name`, tags `OFAST_replay`, `OFAST_camera`), keyed on
   every key with cubic keys (auto tangents: smooth between ticks in slow motion; sub-frame keys for HLAE frames), its
   focal length keyed from the field of view on a 16:9 sensor (36 × 20.25 mm: `focal = 18 / tan(hfov / 2)`), depth of

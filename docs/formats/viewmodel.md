@@ -23,7 +23,7 @@ viewmodel for everyone (a new install's `viewmodel_presetpos 1`).
 
 | Field | What |
 |---|---|
-| `view_fov` | the view's field of view through every player's eyes (the `POV <name>` cameras' `field_of_view`, set from it as CS2's `fov`: horizontal at 4:3, degrees; 90 is CS2's, and a file without it reads 90). Since 2026-11-03: the user's "the field of view should affect the POV shot as well", where `fov` moves only the gun, as CS2's `viewmodel_fov` does |
+| `view_fov` | the view's field of view through every player's eyes (the `POV <name>` cameras' `field_of_view`, set from it as CS2's `fov`: horizontal at 4:3, degrees; 90 is CS2's, and a file without it reads 90). Since 2026-11-03: the user's "the field of view should affect the POV shot as well", where `fov` moves only the gun, as CS2's `viewmodel_fov` does. A scope or a sight zooms to CS2's own degrees whatever it is (the round's `zoom`, keyed on the camera: [cameras.md](cameras.md#scopes)) |
 | `whose` | `Same for everyone`: `fov` and `offset` for every player; `Each player's own`: the settings each player had in the demo (`m_flViewmodelFOV`, `m_flViewmodelOffsetX/Y/Z`; [demo.md](demo.md#first-person-view)) |
 | `fov` | the gun's: CS2's `viewmodel_fov`, horizontal at 4:3, degrees (CS2 allows 54 – 68); the panel's **Gun field of view** |
 | `offset` | CS2's `viewmodel_offset_x`, `_y`, `_z`: inches right, forward, up (CS2 allows −2.5 – 2.5, −2 – 2 for z) |
@@ -61,6 +61,7 @@ draws every first-person gun smaller and further away than that, whatever the se
 | `players[].hands` | `[frame, left]` at each change of hand |
 | `players[].punch` | `[frame, pitch, yaw]`: the agents manifest's `punch`, its viewmodel part (Source's degrees) |
 | `players[].sway` | `[frame, pitch, yaw]`: the agents manifest's `sway` |
+| `players[].zoom` | `[frame, fov]`: the player's view zoomed by a scope or sight (the cameras file's eyes' `fov`, CS2's degrees) on its first frame and around each change; empty when they never zoom (since 2026-11-05) |
 
 ## Keyed in Unreal
 
@@ -68,5 +69,5 @@ draws every first-person gun smaller and further away than that, whatever the se
 open round keyed with other settings (the sequence's `OFAST_viewmodel` metadata tag holds the settings it was keyed
 with), and after each change in the panel (once its fields are left alone 0.4 s): each `VM <name>` binding's transform
 track made anew (the offsets, the hand mirroring it, the recoil plus the motion: [replay.md](replay.md#in-unreal-import_demopy))
-and each `POV <name>` camera's `FirstPersonFieldOfView`. A round sent before the panel (2026-11-01) has no data:
-send it again.
+and each `POV <name>` camera's `FirstPersonFieldOfView` and field of view (a track on its component where the player
+zooms: `key_zoom`). A round sent before the panel (2026-11-01) has no data: send it again.

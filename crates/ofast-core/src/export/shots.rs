@@ -20,11 +20,12 @@
 //! of where the trace comes out of one; the damage CS2 recorded for 289 of the 314 non-lethal hits through walls is
 //! the rule's exactly, 6 more within 1 (10 of the others are on one de_inferno demo's plaster walls, where that
 //! build of CS2 took plaster's distance modifier as 0.5, not the current 0.7). The rotating doors are walls too, as
-//! the demo has them standing ([`Doors`]: their own models, not in the world's collision), without bullet holes (a
-//! door moves); no hit of the 13 demos has a door on its line before it, so the demos neither confirm nor refute
-//! them. The map's other model entities are not walls: with its `func_brush`, `prop_dynamic` and `func_breakable`
-//! models placed as the entity lump has them, 33 of the 40 bullets that crossed a visible one still hit a player
-//! straight from the eyes, and the damages through walls came out worse (40 off, against 19); the disabled ones
+//! the demo has them standing ([`Doors`]: their own models, not in the world's collision), with their bullet holes
+//! on them (a door moves: each hole in the door's own space, `door`); no hit of the 13 demos has a door on its line
+//! before it, so the demos neither confirm nor refute them. The map's other model entities are not walls: with its
+//! `func_brush`, `prop_dynamic` and `func_breakable` models placed as the entity lump has them, 33 of the 40 bullets
+//! that crossed a visible one still hit a player straight from the eyes, and the damages through walls came out worse
+//! (40 off, against 19); the disabled ones
 //! (other game modes' blockers and props: `[PR#]retake.bsite`, de_nuke's `[PR#]props.2v2` silo doors, not
 //! networked) far worse (184 off). CS2 networks most of its `prop_dynamic` props without the `solid` interaction
 //! layer (de_nuke: 7 of 9 interact as window, block sound and touch all only). What the other 81 hits after
@@ -38,11 +39,12 @@
 //! | `time` | when it was fired, demo ticks to a thousandth ([`crate::demo::shots::shot_times`]: CS2 fires between ticks) |
 //! | `item`, `weapon`, `mode`, `silenced` | the weapon's item definition index and name (`weapon_ak47`); the fire mode (1: secondary); whether the weapon's silencer is on (its secondary mode) |
 //! | `tracer` | the weapon's tracer system's stem when this shot draws one ([`draws_tracer`]), else `null` |
+//! | `flash` | the muzzle flash's system stem ([`super::flashes`]: `uweapon_muzflsh_ak47`, `weapon_muzzleflash_snip`…; the first-person one is its `_fps` sibling), `null` for none; `muzzle` and `view_muzzle` are at its attachment |
 //! | `eye` | where the bullets start: the shooter's eyes (Source axes, inches) |
 //! | `muzzle`, `muzzle_direction` | where they left the barrel as the exported agent shows it (third person), and along the barrel; `null` when the agent shows no gun in hand then |
 //! | `view_muzzle`, `view_muzzle_direction` | the same as the shooter's viewmodel shows it (first person), in the viewmodel rig's model space: Source axes (x forward, y left, z up), inches (in Unreal the viewmodel's component space: the camera, before the player's viewmodel offsets and the left hand's mirroring); `null` without a viewmodel then |
 //! | `view_tracer` | where the shooter's own view shows the tracer leave, in the world: the viewmodel's muzzle on the shot tick's camera, moved to the world point seen at the same place on the screen ([`view_tracer_start`]); `null` without a viewmodel |
-//! | `bullets` | per bullet (shotguns fire several): `end` (where it stopped), `on` (`"world"`, `"player"` or `"air"`: nothing within range), `normal` (of the surface met, facing the shooter; `null` on a player or in the air), `surface` (the world surface's property name, `null` when unknown), `impact` (the surface's impact system, [`Impact::effect`]), `decal` (its bullet-hole decal group) and, on the world, `thickness` (of the wall it stopped in, `null` when the trace finds no way out of it); `through`: what it went through before, in order: each wall's way in and way out (`on` `"world"`, `end`, `normal`: facing back at the bullet going in, along it coming out, `surface`, `impact`, `decal`, `thickness`; `door` true on a door's side, which takes no bullet hole) and each player (`on` `"player"`, `end`: where it met them, `victim`: the player hit, their controller, from the posed hitboxes nearest the hit, [`body_hit`]; `null` when none is near; `damage`: the damage the demo's blood for the hit carries, `null` when it sent none, and `helmet`: whether a helmet's sparks were dispatched there, below); a bullet ending on a player has these too |
+//! | `bullets` | per bullet (shotguns fire several): `end` (where it stopped), `on` (`"world"`, `"player"` or `"air"`: nothing within range), `normal` (of the surface met, facing the shooter; `null` on a player or in the air), `surface` (the world surface's property name, `null` when unknown), `impact` (the surface's impact system, [`Impact::effect`]), `decal` (its bullet-hole decal group) and, on the world, `thickness` (of the wall it stopped in, `null` when the trace finds no way out of it); `through`: what it went through before, in order: each wall's way in and way out (`on` `"world"`, `end`, `normal`: facing back at the bullet going in, along it coming out, `surface`, `impact`, `decal`, `thickness`; `door` on a door's side: `hinge` (the door's closed position, which names it), `point` and `normal` in the door's own space as it stood then, for its hole to move with it) and each player (`on` `"player"`, `end`: where it met them, `victim`: the player hit, their controller, from the posed hitboxes nearest the hit, [`body_hit`]; `null` when none is near; `damage`: the damage the demo's blood for the hit carries, `null` when it sent none, and `helmet`: whether a helmet's sparks were dispatched there, below); a bullet ending on a player has these too |
 //!
 //! **Blood.** Each bullet's hit on a player is dispatched twice, as `Impact` and as `csblood`
 //! ([`crate::demo::shots::BLOOD_EFFECT`]), whose magnitude is the hit's damage to health, unrounded (on the Aurora vs
@@ -58,6 +60,7 @@ use std::path::Path;
 
 use serde_json::{Value as Json, json};
 
+use super::flashes::{FlashEvent, GunFlashes, load_flashes};
 use super::gltf::write_png;
 use super::players::Muzzle;
 use crate::content::Content;
@@ -105,6 +108,25 @@ pub struct WeaponShots {
     pub model: Option<String>,
     /// Its recoil keys ([`crate::demo::recoil::RecoilPattern`]).
     pub recoil: RecoilKeys,
+    /// `m_bHideViewModelWhenZoomed`: zoomed in, the view is the scope's and the gun is not drawn (the AWP, SSG 08,
+    /// SCAR-20 and G3SG1).
+    pub zoom_hides_viewmodel: bool,
+    /// `m_flIronSightFOV` is set: zooming brings the gun's sight up to the eye (the AUG and SG 553).
+    pub ironsight: bool,
+}
+
+impl WeaponShots {
+    /// What the view looks through while zoomed in with this weapon: `"scope"` (a sniper's, the gun hidden),
+    /// `"sight"` (the AUG's and SG 553's, the gun up to the eye), or `None` (it does not zoom).
+    pub fn scope_kind(&self) -> Option<&'static str> {
+        if self.zoom_hides_viewmodel {
+            Some("scope")
+        } else if self.ironsight {
+            Some("sight")
+        } else {
+            None
+        }
+    }
 }
 
 /// What a bullet does to a surface, from `scripts/surfaceproperties_impact_effects.txt`.
@@ -132,6 +154,9 @@ pub struct ShotData {
     /// Lower-cased surface name → what bullets going through it lose, as `scripts/surfaceproperties_game.txt` sets
     /// it (a surface sets only what differs from its base: [`ShotData::through`]).
     pub game: HashMap<String, SurfaceGame>,
+    /// Per weapon name, the muzzle flashes its model fires ([`super::flashes`]); empty unless
+    /// [`ShotData::load_flashes`] read them (the players' export: the cameras' does not need them).
+    pub flashes: BTreeMap<String, GunFlashes>,
 }
 
 /// A surface's game properties for bullets (`scripts/surfaceproperties_game.txt`); `None` where the file leaves it to
@@ -253,6 +278,28 @@ impl ShotData {
         self.weapons.get(self.items.get(&item)?)
     }
 
+    /// Reads every gun's muzzle flashes from its world model ([`ShotData::flashes`]).
+    pub fn load_flashes(&mut self, content: &Content) {
+        self.flashes = load_flashes(
+            content,
+            self.weapons
+                .iter()
+                .filter_map(|(name, w)| Some((name.as_str(), w.model.as_deref()?))),
+        );
+    }
+
+    /// The muzzle flash of `shot` ([`GunFlashes::of_shot`]): by its silencer, and for the Dual Berettas by its pistol
+    /// (alternating with the magazine's count: an even count `shoot_secondary`; which one CS2 fires is not checked).
+    pub fn flash_of(&self, shot: &Shot) -> Option<&FlashEvent> {
+        let name = self.items.get(&shot.item)?;
+        let weapon = self.weapons.get(name)?;
+        let silenced = weapon.silencer && shot.mode == 1;
+        let secondary = shot.bullets_left.is_multiple_of(2);
+        self.flashes
+            .get(name)?
+            .of_shot(weapon.silencer, silenced, secondary)
+    }
+
     /// The surface named by `hash` and the impact a bullet makes on it: the surface's name, and the impact of the
     /// nearest surface up its base chain that has one (`metal` → `solidmetal`, `sand` → `dirt`, `brick` →
     /// `concrete`…), else `default`'s (concrete).
@@ -360,6 +407,10 @@ fn weapons_of(root: &Value) -> HashMap<String, WeaponShots> {
                     magnitude: pair("m_flRecoilMagnitude"),
                     magnitude_variance: pair("m_flRecoilMagnitudeVariance"),
                 },
+                zoom_hides_viewmodel: field(name, "m_bHideViewModelWhenZoomed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                ironsight: number("m_flIronSightFOV", 0.0) > 0.0,
             };
             (name.to_owned(), shots)
         })
@@ -552,15 +603,49 @@ pub struct Wall {
     pub enter: Through,
     /// What it loses coming out.
     pub exit: Through,
-    /// The way in is a door's ([`Doors`]): it moves, so a bullet hole (a decal fixed in the world) would hang in the
-    /// air once it swings: the bullet makes its impact there but no hole.
-    pub door_in: bool,
+    /// The way in is a door's ([`Doors`]): its entity index. It moves, so its bullet hole is written in the door's own
+    /// space too (`door`), for Unreal to fix it on the door.
+    pub door_in: Option<u32>,
     /// The way out is a door's.
-    pub door_out: bool,
+    pub door_out: Option<u32>,
 }
 
-/// [`Crossing::shape`] of a door's surface ([`Doors::crossings`]).
+/// [`Crossing::shape`] of a door's surface ([`Doors::crossings`]): `DOOR_SHAPE − entity index`, below every world
+/// shape index.
 const DOOR_SHAPE: u32 = u32::MAX - 1;
+/// How many entity indices a door's shape can carry (CS2's entity indices are 14 bits).
+const DOOR_ENTITIES: u32 = 1 << 14;
+
+/// Where a point (and its surface's normal) on door `entity` lies in the door's own space, as the door stood on the
+/// first sample of `track` at or after `tick` (where [`Doors::crossings`] met it): `hinge` the door's closed position
+/// (the map entity's origin, what names it in the replay's `doors` and in Unreal), `point` and `normal` along the
+/// door's axes (x forward, y left, z up; inches from its origin). `None` without that door then.
+fn door_place(
+    track: &RoundTrack,
+    tick: u32,
+    entity: u32,
+    point: [f32; 3],
+    normal: [f32; 3],
+) -> Option<Json> {
+    let sample = track
+        .samples
+        .get(track.samples.partition_point(|s| s.tick < tick))?;
+    let door = sample.doors.iter().find(|d| d.entity == entity)?;
+    let [forward, right, up] = crate::demo::shots::angle_vectors(door.angles);
+    let axes = [forward, right.map(|c| -c), up];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let offset: [f32; 3] = std::array::from_fn(|k| point[k] - door.position[k]);
+    Some(json!({
+        "hinge": door.closed_position.map(|v| (f64::from(v) * 100.0).round() / 100.0),
+        "point": rounded(axes.map(|axis| dot(offset, axis))),
+        "normal": unit(axes.map(|axis| dot(normal, axis))),
+    }))
+}
+
+/// The door entity a crossing's shape names ([`DOOR_SHAPE`]), if it is a door's.
+fn door_of(shape: u32) -> Option<u32> {
+    (shape <= DOOR_SHAPE && shape > DOOR_SHAPE - DOOR_ENTITIES).then(|| DOOR_SHAPE - shape)
+}
 
 /// Two solids whose surfaces are closer than this (inches) along a bullet's line are one wall to it (a wall built of
 /// two hulls side by side).
@@ -621,8 +706,8 @@ pub fn walls_through(mut crossings: Vec<(Crossing, u32)>, data: &ShotData) -> Ve
                         exit_surface: 0,
                         enter: data.through(surface),
                         exit: data.through(surface),
-                        door_in: crossing.shape == DOOR_SHAPE,
-                        door_out: false,
+                        door_in: door_of(crossing.shape),
+                        door_out: None,
                     });
                 }
             }
@@ -635,7 +720,7 @@ pub fn walls_through(mut crossings: Vec<(Crossing, u32)>, data: &ShotData) -> Ve
                 wall.exit_normal = crossing.normal;
                 wall.exit_surface = surface;
                 wall.exit = data.through(surface);
-                wall.door_out = crossing.shape == DOOR_SHAPE;
+                wall.door_out = door_of(crossing.shape);
             }
         }
     }
@@ -824,7 +909,7 @@ impl Doors {
             for mut crossing in collision.ray_crossings(local_from, local_direction, reach) {
                 let n = crossing.normal;
                 crossing.normal = std::array::from_fn(|k| (0..3).map(|i| axes[i][k] * n[i]).sum());
-                crossing.shape = DOOR_SHAPE;
+                crossing.shape = DOOR_SHAPE - (door.entity % DOOR_ENTITIES);
                 let hash = surfaces
                     .get(crossing.surface as usize)
                     .copied()
@@ -1249,8 +1334,17 @@ pub fn shots_json(
                 })
                 .collect();
             let of_shot = |m: &&Muzzle| m.controller == *controller && m.tick == shot.tick;
-            let muzzle = muzzles.iter().find(of_shot);
-            let view_muzzle = view_muzzles.iter().find(of_shot);
+            // The flash, and the barrel's end it plays at (its attachment: `muzzle_flash2` where the gun has one).
+            let flash = data.flash_of(shot);
+            let second = flash.is_some_and(|f| f.attachment == "muzzle_flash2");
+            let place = |m: &Muzzle| {
+                second
+                    .then_some(m.alternate)
+                    .flatten()
+                    .unwrap_or((m.position, m.direction))
+            };
+            let muzzle = muzzles.iter().find(of_shot).map(place);
+            let view_muzzle = view_muzzles.iter().find(of_shot).map(place);
             let mode = (shot.mode as usize).min(1);
             let tracer = weapon
                 .filter(|w| draws_tracer(w.tracer_frequency[mode]))
@@ -1267,7 +1361,7 @@ pub fn shots_json(
                     .find(|p| p.controller == *controller)?;
                 let eye = std::array::from_fn(|k| player.position[k] + player.view_offset[k]);
                 Some(view_tracer_start(
-                    m.position,
+                    m.0,
                     &player.viewmodel,
                     eye,
                     player.pitch,
@@ -1282,12 +1376,13 @@ pub fn shots_json(
                 "weapon": data.items.get(&shot.item),
                 "mode": shot.mode,
                 "silenced": weapon.is_some_and(|w| w.silencer) && shot.mode == 1,
+                "flash": flash.map(|f| f.system.as_str()),
                 "tracer": tracer,
                 "eye": rounded(shot.eye),
-                "muzzle": muzzle.map(|m| rounded(m.position)),
-                "muzzle_direction": muzzle.map(|m| unit(m.direction)),
-                "view_muzzle": view_muzzle.map(|m| rounded(m.position)),
-                "view_muzzle_direction": view_muzzle.map(|m| unit(m.direction)),
+                "muzzle": muzzle.map(|m| rounded(m.0)),
+                "muzzle_direction": muzzle.map(|m| unit(m.1)),
+                "view_muzzle": view_muzzle.map(|m| rounded(m.0)),
+                "view_muzzle_direction": view_muzzle.map(|m| unit(m.1)),
                 "view_tracer": view_tracer.map(rounded),
                 "bullets": bullets,
             })
@@ -1462,14 +1557,18 @@ fn bullet_json(
                 };
                 let mut entry = on_world(wall.distance, wall.enter_normal, wall.enter_surface);
                 entry["thickness"] = thickness.clone();
-                // On a door: no hole (it would stay where the door was).
-                let no_hole = |item: &mut Json, door: bool| {
-                    if door {
-                        item["decal"] = Json::Null;
-                        item["door"] = json!(true);
+                // On a door: where on the door, for its hole to move with it ([`door_place`]).
+                let on_door = |item: &mut Json, door: Option<u32>, t: f32, normal: [f32; 3]| {
+                    if let Some(entity) = door {
+                        item["door"] = obstacles
+                            .doors
+                            .and_then(|(_, track)| {
+                                door_place(track, shot.tick, entity, point(t), normal)
+                            })
+                            .unwrap_or(json!(true));
                     }
                 };
-                no_hole(&mut entry, wall.door_in);
+                on_door(&mut entry, wall.door_in, wall.distance, wall.enter_normal);
                 let left = weapon
                     .filter(|_| gone < MAX_PENETRATIONS)
                     .and_then(|w| penetrate(w, wall, damage));
@@ -1483,7 +1582,7 @@ fn bullet_json(
                     at += wall.thickness;
                     let mut exit = on_world(at, wall.exit_normal, wall.exit_surface);
                     exit["thickness"] = thickness;
-                    no_hole(&mut exit, wall.door_out);
+                    on_door(&mut exit, wall.door_out, at, wall.exit_normal);
                     through.push(exit);
                 }
                 gone += 1;
@@ -1530,8 +1629,8 @@ fn bullet_json(
                     exit_surface: 0,
                     enter: flesh.clone(),
                     exit: flesh.clone(),
-                    door_in: false,
-                    door_out: false,
+                    door_in: None,
+                    door_out: None,
                 };
                 let left = weapon
                     .filter(|_| gone < MAX_PENETRATIONS)
@@ -1556,6 +1655,32 @@ fn unit(v: [f32; 3]) -> [f64; 3] {
 /// A position rounded to a hundredth of an inch.
 fn rounded(p: [f32; 3]) -> [f64; 3] {
     p.map(|c| (f64::from(c) * 100.0).round() / 100.0)
+}
+
+/// Weapons for other modules' tests.
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use super::*;
+
+    /// A rifle as CS2's AK-47: 36 damage, penetration 2, 0.98 kept per 500 units.
+    pub(crate) fn weapon() -> WeaponShots {
+        WeaponShots {
+            bullets: 1,
+            tracer_frequency: [0, 0],
+            tracer: None,
+            silencer: false,
+            range: REACH,
+            damage: 36.0,
+            penetration: 2.0,
+            range_modifier: 0.98,
+            headshot_multiplier: 4.0,
+            armor_ratio: 1.55,
+            model: None,
+            recoil: RecoilKeys::default(),
+            zoom_hides_viewmodel: false,
+            ironsight: false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1619,6 +1744,7 @@ mod tests {
             surfaces: surfaces_of(&surfaces),
             impacts: impacts_of(&impacts),
             game: HashMap::new(),
+            flashes: BTreeMap::new(),
         }
     }
 
@@ -1757,6 +1883,7 @@ mod tests {
             tick: 10,
             position: [30.0, -5.0, -5.0],
             direction: [1.0, 0.0, 0.0],
+            alternate: None,
             eject: [None; 4],
         }];
         let view_muzzles = [Muzzle {
@@ -1764,6 +1891,7 @@ mod tests {
             tick: 10,
             position: [28.0, -6.0, -4.0],
             direction: [0.0, 0.999_999_9, 0.0],
+            alternate: None,
             eject: [None; 4],
         }];
         let (shots, decals) = shots_json(
@@ -1834,22 +1962,8 @@ mod tests {
         assert_eq!(groups.len(), 1);
     }
 
-    /// A rifle as CS2's AK-47: 36 damage, penetration 2, 0.98 kept per 500 units.
     fn rifle() -> WeaponShots {
-        WeaponShots {
-            bullets: 1,
-            tracer_frequency: [0, 0],
-            tracer: None,
-            silencer: false,
-            range: REACH,
-            damage: 36.0,
-            penetration: 2.0,
-            range_modifier: 0.98,
-            headshot_multiplier: 4.0,
-            armor_ratio: 1.55,
-            model: None,
-            recoil: RecoilKeys::default(),
-        }
+        tests_support::weapon()
     }
 
     fn concrete(distance: f32, thickness: f32) -> Wall {
@@ -1867,8 +1981,8 @@ mod tests {
             exit_surface: 0,
             enter: side.clone(),
             exit: side,
-            door_in: false,
-            door_out: false,
+            door_in: None,
+            door_out: None,
         }
     }
 
@@ -2019,13 +2133,14 @@ mod tests {
         let open = line(20);
         assert_eq!(open.len(), 2, "{open:?}");
         assert!((open[0].0.distance - 96.0).abs() < 1e-3 && open[0].0.entering);
-        // A door's: its walls take no bullet hole.
-        assert!(open.iter().all(|(c, _)| c.shape == DOOR_SHAPE));
+        // A door's, and which: its walls name it (their holes go on it).
+        assert!(open.iter().all(|(c, _)| door_of(c.shape) == Some(1)));
         assert!(
             walls_through(open.clone(), &data())
                 .iter()
-                .all(|w| w.door_in && w.door_out)
+                .all(|w| w.door_in == Some(1) && w.door_out == Some(1))
         );
+        assert_eq!(door_of(0), None, "a world shape is no door");
         assert!(
             (open[0].0.normal[0] + 1.0).abs() < 1e-3,
             "{:?}",

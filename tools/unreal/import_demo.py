@@ -94,6 +94,7 @@ import ofast_look  # noqa: E402
 import ofast_viewmodel  # noqa: E402
 import pearlescence  # noqa: E402
 import replay_cameras  # noqa: E402
+import scopes  # noqa: E402
 import shot_effects  # noqa: E402
 import smoke_volumes  # noqa: E402
 import source_files  # noqa: E402
@@ -714,12 +715,14 @@ def animate_doors(sequence, replay, end_frame):
     """The map's rotating doors swung as the demo has them (the replay's `doors`). Each door is the map import's own
     actor whose origin is the door's closed position (its hinge, the map entity's origin) and whose rotation is its
     closed rotation; it is keyed with the demo's rotation on the ticks it swung, keeping its location and scale, and
-    takes no decals. Every stretch with the same closed position drives the same actor. A door an HE grenade blew
-    apart is hidden from then on (broken_doors). A door that never swings nor breaks is left as the map has it.
-    Returns the number of keys."""
+    takes no decals (the holes of bullets that met it are cards on it: shot_effects.place_door_hole). Every stretch
+    with the same closed position drives the same actor. A door an HE grenade blew apart is hidden from then on
+    (broken_doors). A door that never swings nor breaks is left as the map has it. Returns the number of keys and the
+    actors keyed, by closed position (the hinge)."""
     doors = replay.get("doors", [])
+    moved = {}
     if not doors:
-        return 0
+        return 0, moved
     tick0 = replay["start_tick"]
     by_hinge = {}
     closed_angles = {}
@@ -765,6 +768,7 @@ def animate_doors(sequence, replay, end_frame):
                                       rotations, (scale.x, scale.y, scale.z), end_frame)
             if gone:
                 key_visibility(binding, [(0, True), (gone - tick0, False)], end_frame)
+            moved[hinge] = actor
         swung += not still
         broken += gone is not None
         log("door at %s: %s, %d keys, swings %.0f degrees%s" % (
@@ -772,7 +776,7 @@ def animate_doors(sequence, replay, end_frame):
             max(abs(r[2] - rotations[0][2]) for r in rotations), ", broken at %d" % gone if gone else ""))
     if swung or broken:
         log("doors: %d of %d swung, %d broken" % (swung, len(by_hinge), broken))
-    return keys
+    return keys, moved
 
 
 def animate_props(sequence, replay, end_frame):
@@ -968,11 +972,29 @@ def spawn_viewmodel(player, mesh, camera):
     return actor
 
 
-def viewmodel_data(player, track, ticks, tick0, punch, sway):
+def zoom_keys(eyes, tick0):
+    """A player's zoom for ofast_viewmodel (its `zoom`): [frame, CS2 fov] from the cameras file's eyes rows (their
+    seventh value: export::cameras), on the first frame and around every change (the frame before it and its own), so
+    that linear keys hold it in between; empty when nothing zooms (a file from before 2026-11-05 has no seventh
+    value)."""
+    rows = [(r[0] - tick0, r[6]) for r in eyes if len(r) > 6]
+    if not any(fov < 89.99 for _, fov in rows):
+        return []
+    out = [list(rows[0])]
+    for (frame0, fov0), (frame1, fov1) in zip(rows, rows[1:]):
+        if fov1 != fov0:
+            if out[-1][0] != frame0:
+                out.append([frame0, fov0])
+            out.append([frame1, fov1])
+    return out
+
+
+def viewmodel_data(player, track, ticks, tick0, punch, sway, eyes):
     """What ofast_viewmodel keeps of a player's viewmodel (save_round): the settings they played with, the frames they
     switched hands (m_bLeftHanded, which the switch-hands key flips during a round; `track`'s per sample `ticks`), the
-    recoil on their viewmodel (`punch`: export::punch's rows, tick -> camera pitch, yaw, viewmodel pitch, yaw) and the
-    gun's motion (`sway`: export::sway's rows [tick, pitch, yaw])."""
+    recoil on their viewmodel (`punch`: export::punch's rows, tick -> camera pitch, yaw, viewmodel pitch, yaw), the
+    gun's motion (`sway`: export::sway's rows [tick, pitch, yaw]) and the zoom of their view (zoom_keys of their
+    `eyes` rows)."""
     settings = player.get("viewmodel") or {}
     hands, previous = [], None
     for tick, left in zip(ticks, track.get("left_handed", [])):
@@ -982,7 +1004,7 @@ def viewmodel_data(player, track, ticks, tick0, punch, sway):
     return {"name": player["name"], "fov": settings.get("fov", ofast_viewmodel.CS2_DEFAULT["fov"]),
             "offset": settings.get("offset", ofast_viewmodel.CS2_DEFAULT["offset"]), "hands": hands,
             "punch": [[t - tick0, row[2], row[3]] for t, row in sorted(punch.items())],
-            "sway": [[row[0] - tick0, row[1], row[2]] for row in sway]}
+            "sway": [[row[0] - tick0, row[1], row[2]] for row in sway], "zoom": zoom_keys(eyes, tick0)}
 
 
 def spawn_agent(player, mesh):
@@ -1206,8 +1228,12 @@ def build(replay, looks):
             vm_binding = sequence.add_possessable(vm)
             key_animation(vm_binding, viewmodel[1], end_frame)
             viewmodel_players.append(viewmodel_data(player, track, ticks, tick0, punches.get(controller, {}),
-                                                    sways.get(controller, [])))
-            living = [bool(a) and p is not None for a, p in zip(track["alive"], positions)]
+                                                    sways.get(controller, []),
+                                                    cameras_file["eyes"].get(str(controller), [])))
+            # Hidden while a sniper's scope is up, as CS2 hides it (scopes draws the scope instead).
+            scoped = scopes.scoped_frames((cameras_file.get("scopes") or {}).get(str(controller)), tick0)
+            living = [bool(a) and p is not None and f not in scoped
+                      for a, p, f in zip(track["alive"], positions, frames)]
             vm_changes = life_changes(frames, living)
             viewmodel_life[controller] = vm_changes
             key_visibility(vm_binding, vm_changes, end_frame)
@@ -1216,6 +1242,12 @@ def build(replay, looks):
     # changed), their data kept for the panel to key them again.
     ofast_viewmodel.save_round(sequence, frames, end_frame, viewmodel_players)
     ofast_viewmodel.key(sequence)
+    # The scopes and sights over the players' views while they look through them.
+    cards = scopes.place_scopes(sequence, cameras_file.get("scopes"), tick0, end_frame,
+                                {controller: camera for controller, (camera, _) in cameras.items()},
+                                {p["controller"]: p["name"] for p in replay["players"]}, spawn_tagged,
+                                key_visibility, lambda actor, c: own_view_only.setdefault(c, []).append(actor))
+    log("scopes: %d cards" % cards)
     world_models = looks["world_models"]
     keys += place_dropped_weapons(sequence, replay, world_models, end_frame)
     keys += place_grenades(sequence, replay, world_models, end_frame)
@@ -1240,12 +1272,14 @@ def build(replay, looks):
         key_visibility(binding, replay_cameras.light_changes(own_views.get(controller, []), in_first_person),
                        end_frame)
 
+    # The doors first: the holes of the bullets that met a door that swings go on its actor.
+    door_keys, moved_doors = animate_doors(sequence, replay, end_frame)
+    keys += door_keys
     shot_effects.place_shots(sequence, replay, REPLAY_PATH, end_frame, manifest[2] if manifest else {}, spawn_tagged,
-                             hide, viewmodel_actors, first_person, light)
+                             hide, viewmodel_actors, first_person, light, moved_doors)
     keys += place_brass(sequence, replay, looks["cases"], end_frame, viewmodel_actors,
                         lambda actor, c: hidden_in_own_view.setdefault(c, []).append(actor),
                         lambda actor, c: own_view_only.setdefault(c, []).append(actor))
-    keys += animate_doors(sequence, replay, end_frame)
     keys += animate_props(sequence, replay, end_frame)
     # The shot and HLAE cameras, and the cuts.
     shots = []

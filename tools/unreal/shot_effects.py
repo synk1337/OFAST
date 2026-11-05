@@ -15,7 +15,8 @@ main layers with grenade_effects' "particle system in a material" (CS2's own spr
   shot was fired, as fast as CS2's), hidden while the camera looks through their eyes; one actor for the rest
   ("shots"): per place a bullet met the world its surface family's impact (flying out along the surface's normal:
   both sides of each wall it went through, and where it stopped) and per player it met blood (back toward the
-  shooter). A silenced shot has no flame and no light, only its smoke.
+  shooter). Each gun's own flash (export::shots' `flash`, FLASHES: the AK's, the M4A4's, the snipers' big white puffs,
+  the pistols' small flames…); a silenced shot has no flame and no light, only its smoke, sparks and a small beam.
 - In the shooter's own view CS2 draws the first-person system instead (particles/unified_weapon_fx/*_fps.vpcf): the
   same layers smaller, on the viewmodel's barrel. Here they are instanced meshes on the shooter's viewmodel actor
   (shown and hidden with it, moved and mirrored with it), drawn with Unreal's first-person rendering as the viewmodel
@@ -37,6 +38,7 @@ import random
 import unreal
 
 import grenade_effects
+import replay_cameras
 import smoke_volumes
 
 UNITS_TO_CM = grenade_effects.UNITS_TO_CM
@@ -45,8 +47,8 @@ BULLET_HOLE_MATERIAL = "/Game/OFAST/Replays/M_BulletHole"
 
 # Sprite layers (grenade_effects' layer tables: CS2's ranges, read 2026-10-25). Muzzle flashes, along the barrel.
 # particles/unified_weapon_fx/uweapon_muzflsh_ak47 plays one flame child per shot (C_OP_ChooseRandomChildrenInGroup,
-# group 1: _primaryflash, _primaryflash_alt listed twice, or an empty one with a beam; here the first two, one in three
-# and two in three, picked by the shot: FLAME_CHOICE), its smoke and its light always.
+# group 1: _primaryflash, _primaryflash_alt listed twice, or an empty one with a beam: FLASHES, picked by the shot),
+# two of its compensator's side flashes, its sparks and nothing (group 2), its smoke and its light always.
 # _primaryflash: 8 sprites of fire_gas_batch_b_top (one of its 4 sequences), 0.05 s, born 3 - 20 units along the
 # barrel and flying on at 100 - 150 units/s, colour (198, 131, 80) to (216, 216, 216) of 255 at 4 x overbright, alpha
 # 0.24 - 0.59, radius 1 - 1.5 x a curve of 2.7 - 10 along the flash x 0.5. In full at once (a 0.05 s flash is three
@@ -76,22 +78,143 @@ MUZZLE_SMOKE = {"name": "muzzle_smoke", "role": "muzzle_smoke", "slots": 2, "lif
                 "tint": (0.6, 0.6, 0.6), "translucent": True, "lit": True, "size": 1.0, "lift": 0.0,
                 "along": (2.0, 8.0), "up": (10.0, 30.0)}
 MUZZLE_LAYERS = [MUZZLE_FLAME, MUZZLE_ALT, MUZZLE_SMOKE]
-# The share of shots drawing _primaryflash rather than _primaryflash_alt (1 of the 3 flames the chooser has).
-FLAME_CHOICE = 1.0 / 3.0
-# First person: each weapon's `_fps` system (m_nViewModelEffect) has its third-person system as its child and, in its
-# "game" configuration, puts control point 5 at (scale, 1, 1), which the children's C_INIT_GlobalScale reads (read
-# 2026-10-25: uweapon_muzflsh_ak47_fps 0.35, _riffle_fps 0.5 — the M4A4's). The layers above are the AK's, so other
-# weapons take the AK's scale too (their own systems are not rebuilt yet). Every length of a layer is scaled (its
-# sizes, where its particles are born, how far they fly): C_INIT_GlobalScale's switches are left at their defaults in
-# the files, which do not say what they are; with the sizes left whole, the main flame filled a fifth of the screen in
-# first person.
-VIEW_SCALES = {"weapon_ak47": 0.35, "weapon_m4a1": 0.5}
-VIEW_SCALE_DEFAULT = 0.35
+
+
+def variant(layer, name, **changes):
+    """A layer like `layer`, named `name`, with `changes`; `size_by` scales its radius."""
+    size = changes.pop("size_by", 1.0)
+    out = dict(layer, name=name, **changes)
+    if size != 1.0:
+        out["radius"] = tuple(r * size for r in out["radius"])
+    return out
+
+
+# The other children of CS2's flashes (particles/unified_weapon_fx/, read 2026-11-05; export::flashes says which gun
+# fires which system). Their beams, side flashes and sparks are trails in CS2 (C_OP_RenderTrails): stretched sprites
+# here, `up` their speed along the barrel and `speed` across it, as the tracers'.
+# _gen_beam: a thin orange streak shot out along the barrel (wispy_steam_set, 0.025 - 0.055 s).
+MUZZLE_BEAM = {"name": "muzzle_beam", "role": "fire_smoke", "slots": 2, "life": (0.025, 0.055), "radius": (1.0, 2.0),
+               "scale": (1.0, 1.0), "alpha": (0.7, 0.8), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 4.0,
+               "tint": (1.0, 0.65, 0.19), "size": 1.0, "lift": 0.0, "along": (2.0, 6.0), "up": (400.0, 700.0),
+               "stretch": 0.03, "max_length": 20.0, "fade_in": 0.0, "fade_out": 0.3}
+# _ak47_compensator_flash: 2 orange tongues out of the muzzle brake's sides (a ring wave at 90 degrees to the
+# barrel), radius 2 - 5, 0.05 s, tail colour (234, 144, 48), overbright 3.
+MUZZLE_SIDES = {"name": "muzzle_sides", "role": "fire_smoke", "slots": 2, "life": (0.05, 0.05), "radius": (2.0, 5.0),
+                "scale": (0.0, 1.0), "alpha": (0.7, 0.78), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 3.0,
+                "tint": (0.92, 0.56, 0.19), "size": 1.0, "lift": 0.0, "along": (0.0, 1.0), "up": (10.0, 30.0),
+                "speed": (150.0, 250.0), "stretch": 0.03, "max_length": 20.0, "fade_in": 0.0, "fade_out": 0.3}
+# _gen_spark: 4 - 12 sparks (effects/spark, drawn with sparks.vtex's streak), thrown forward and falling (gravity 500).
+MUZZLE_SPARKS = {"name": "muzzle_sparks", "role": "sparks", "slots": 8, "life": (0.1, 0.3), "radius": (0.3, 0.6),
+                 "scale": (1.0, 0.5), "alpha": (1.0, 1.0), "roll": 0.0, "spread": 0.0, "rise": 0.0, "bright": 2.0,
+                 "tint": (1.0, 0.75, 0.45), "size": 1.0, "lift": 0.0, "speed": (50.0, 200.0), "up": (200.0, 600.0),
+                 "gravity": 500.0, "stretch": 0.02, "max_length": 10.0, "sequence": (4, 1), "fade_in": 0.0}
+# _riffle_lrg's rifl_break: 4 white-blue flashes out of the Galil's and SG 553's brakes, every shot.
+MUZZLE_BRAKE = variant(MUZZLE_SIDES, "muzzle_brake", slots=4, tint=(0.85, 0.9, 1.0), bright=4.0)
+# _aug_primaryflash: 12 sprites of fire_small_sim_b, 0.056 s, near white at 2 x overbright, radius 1 - 1.5 x a curve
+# of 2.2 - 6.9 (the AUG's flame is short and white beside the AK's orange one); _aug_compensator_flash: 5 tongues
+# from white to orange (255, 165, 0).
+AUG_FLAME = variant(MUZZLE_FLAME, "muzzle_aug", role="fire", slots=12, life=(0.056, 0.056), radius=(2.2, 10.0),
+                    alpha=(0.7, 0.78), bright=2.0, tint=(0.95, 0.93, 0.9), along=(3.0, 15.0), up=(0.0, 30.0))
+AUG_SIDES = variant(MUZZLE_SIDES, "muzzle_aug_sides", slots=5, radius=(1.0, 3.0), life=(0.055, 0.075),
+                    tint=(1.0, 0.65, 0.0), bright=4.0)
+# weapon_muzzleflash_snip (AWP, SSG 08): 4 big puffs of fire_gas_batch_b_top (radius 9.3 - 11.8, growing 0.5 to 1.5
+# times, 0.15 - 0.2 s, white fading to (252, 163, 111), overbright 4, drag 0.3), flare trails, sparks and a ring of
+# ground smoke (`_ground_smoke`: up to 8 puffs).
+SNIPER_FLAME = variant(MUZZLE_FLAME, "muzzle_sniper", slots=4, life=(0.15, 0.2), radius=(9.3, 11.8),
+                       scale=(0.5, 1.5), alpha=(0.47, 0.71), bright=4.0, tint=(1.0, 0.82, 0.62), along=(0.0, 4.0),
+                       up=(10.0, 10.0), drag=0.3, fade_out=0.5)
+SNIPER_SMOKE = variant(MUZZLE_SMOKE, "muzzle_sniper_smoke", slots=6, life=(0.5, 1.0), radius=(6.0, 14.0),
+                       scale=(0.8, 2.5), alpha=(0.2, 0.35), speed=(40.0, 120.0), up=(10.0, 60.0))
+SNIPER_AR_FLAME = variant(SNIPER_FLAME, "muzzle_sniper_ar", size_by=0.75, life=(0.1, 0.15))
+# uweapon_muzzleflash_pist: always 8 small sprites of fire_gas (radius 2.2 - 4, alpha 0.2 - 0.4), the alt flame in
+# half the shots, a beam and sparks.
+# Drawn as the AK's flame (its radius and alpha): at the files' radius 2.2 - 6 and alpha 0.2 - 0.4 the Tec-9's flame
+# in first person stayed a third of CS2's (0.025 of the picture's width against 0.065 - 0.085, apEX at tick 43403)
+# whatever the scale; the files' sizes ride on a control point their configurations leave to the game.
+PISTOL_FLAME = variant(MUZZLE_FLAME, "muzzle_pistol", along=(2.0, 10.0))
+PISTOL_ALT = variant(MUZZLE_ALT, "muzzle_pistol_alt", size_by=0.6, slots=4)
+PISTOL_SPARKS = variant(MUZZLE_SPARKS, "muzzle_pistol_sparks", slots=4)
+PISTOL_SMOKE = variant(MUZZLE_SMOKE, "muzzle_pistol_smoke", size_by=0.7)
+# uweapon_muzflsh_deagle: 8 sprites (radius 3.7 - 8, flying out 60 units/s from 15 - 40 along the barrel, 0.056 -
+# 0.075 s), always a beam; its _gen_smoke 4 puffs growing 4 times.
+DEAGLE_FLAME = variant(MUZZLE_FLAME, "muzzle_deagle", radius=(3.7, 12.0), life=(0.056, 0.075), alpha=(0.7, 0.78),
+                       along=(15.0, 40.0), up=(60.0, 60.0))
+DEAGLE_SMOKE = variant(MUZZLE_SMOKE, "muzzle_deagle_smoke", slots=4, life=(0.5, 0.75), scale=(0.5, 3.0))
+# uweapon_muzzleflash_pist_revolver: always 6 sprites of fire_gas_batch_b, 0.05 - 0.1 s.
+REVOLVER_FLAME = variant(MUZZLE_FLAME, "muzzle_revolver", slots=6, life=(0.05, 0.1), alpha=(0.5, 0.7))
+# uweapon_muzzleflash_subm: one of its fire (6 sprites), its fire_alt (8) or nothing, smaller than a rifle's.
+SMG_FLAME = variant(MUZZLE_FLAME, "muzzle_smg", slots=6, size_by=0.75)
+SMG_ALT = variant(MUZZLE_ALT, "muzzle_smg_alt", slots=8, size_by=0.75)
+# uweapon_muzsilenced_*: no flame and no light; a small orange beam in half the shots (4 trails, radius 1 - 2, 0.025 -
+# 0.055 s), smoke and sparks every shot.
+SILENCED_BEAM = variant(MUZZLE_BEAM, "muzzle_silenced_beam", slots=4, up=(150.0, 300.0), bright=2.0)
+SILENCED_SPARKS = variant(MUZZLE_SPARKS, "muzzle_silenced_sparks", slots=3, bright=1.5)
+
+# A muzzle flash's light (uweapon_muzflsh_*_fakelight): see MUZZLE_LIGHT; each system's peak as a share of the AK's
+# (its fakelight's intensity: the AK's 0.2, the pistols' 0.1, the Desert Eagle's 0.5; the snipers' lasts half as long),
+# 0 for none (the silenced ones).
+AK_LIGHT = 1.0
+
+# CS2's flash systems (export::flashes: the shots' `flash`), as their root's children: `always` drawn; `choose` the
+# chooser groups (C_OP_ChooseRandomChildrenInGroup): (how many, [children]) with each child a list of layers, [] an
+# empty child (CS2 lists the AK's alt flame twice, so it plays twice as often as its main flame, and an empty one,
+# leaving only a beam); `view` the first-person scale (view_layer); `light` the light's peak (AK_LIGHT shares).
+# The first-person scales: the AK's 0.35 fitted to CS2's frames (2026-10-25); the others from CS2's own first-person
+# flash next to the AK's, one shot of each gun in a local game played at a tenth of its speed (de_dust2, CS2's default
+# viewmodel, 2026-11-05), the flame's radius at its biggest a tick after the shot, by eye, in shares of the picture's
+# width: AK 0.039, M4A4 0.033, Galil 0.059, AUG 0.059, AWP 0.036, G3SG1 0.033, Negev 0.026, Nova 0.098, MAC-10 0.046,
+# Glock 0.033 and Tec-9 0.065 (one system, picked children apart), Desert Eagle 0.085; the silenced guns only sparks.
+# Each scale is the AK's times its gun's share of the AK's flame, over its own flame's size against the AK's layers
+# (the AUG's, the SMGs' and the Desert Eagle's are smaller, the snipers' about as big; the pistols' drawn as the AK's,
+# their mean, 0.049, taken). The `_fps` systems' own control points (the AK's 0.35, the M4A4's 0.5, the pistols'
+# 0.25…) read literally drew the pistols' a seventh of CS2's: their third-person sizes ride on control points the
+# files leave to the game's code.
+AK_CHOICE = [(1, [[MUZZLE_FLAME], [MUZZLE_ALT], [MUZZLE_ALT], [MUZZLE_BEAM]]),
+             (2, [[MUZZLE_SIDES], [MUZZLE_SPARKS], []])]
+FLASHES = {
+    "uweapon_muzflsh_ak47": {"always": [MUZZLE_SMOKE], "choose": AK_CHOICE, "view": 0.35, "light": 1.0},
+    "uweapon_muzflsh_riffle": {"always": [MUZZLE_SMOKE],
+                               "choose": [AK_CHOICE[0], (1, [[MUZZLE_SPARKS], []])], "view": 0.3, "light": 1.0},
+    "uweapon_muzflsh_riffle_lrg": {"always": [MUZZLE_SMOKE, MUZZLE_BRAKE], "choose": AK_CHOICE, "view": 0.55,
+                                   "light": 1.0},
+    "uweapon_muzflsh_aug": {"always": [AUG_FLAME, AUG_SIDES, MUZZLE_BEAM], "choose": [], "view": 0.9, "light": 1.0},
+    "weapon_muzzleflash_snip": {"always": [SNIPER_FLAME, MUZZLE_SPARKS, SNIPER_SMOKE, MUZZLE_BEAM], "choose": [],
+                                "view": 0.3, "light": 1.0, "short": True},
+    "weapon_muzzleflash_snip_ar": {"always": [SNIPER_AR_FLAME, MUZZLE_SPARKS, MUZZLE_SMOKE], "choose": [],
+                                   "view": 0.4, "light": 1.0, "short": True},
+    "uweapon_muzflsh_mach": {"always": [MUZZLE_SMOKE], "choose": AK_CHOICE, "view": 0.25, "light": 1.0},
+    "uweapon_muzflsh_shot": {"always": [MUZZLE_SMOKE], "choose": AK_CHOICE, "view": 0.9, "light": 1.0},
+    "uweapon_muzzleflash_subm": {"always": [MUZZLE_SMOKE], "choose": [(1, [[SMG_FLAME], [SMG_ALT], []])],
+                                 "view": 0.55, "light": 0.75},
+    "uweapon_muzzleflash_pist": {"always": [PISTOL_FLAME, MUZZLE_BEAM, PISTOL_SPARKS, PISTOL_SMOKE],
+                                 "choose": [(1, [[PISTOL_ALT], []])], "view": 0.5, "light": 0.5},
+    "uweapon_muzflsh_deagle": {"always": [DEAGLE_FLAME, MUZZLE_BEAM, DEAGLE_SMOKE],
+                               "choose": [(2, [[MUZZLE_SIDES], [MUZZLE_SPARKS], []])], "view": 1.1, "light": 2.5},
+    "uweapon_muzzleflash_pist_revolver": {"always": [REVOLVER_FLAME, MUZZLE_BEAM, PISTOL_SMOKE], "choose": [],
+                                          "view": 0.45, "light": 1.0},
+    "uweapon_muzsilenced_subm": {"always": [PISTOL_SMOKE, SILENCED_SPARKS], "choose": [(1, [[SILENCED_BEAM], []])],
+                                 "view": 0.35, "light": 0.0},
+    "uweapon_muzsilenced_rif": {"always": [MUZZLE_SMOKE, SILENCED_SPARKS], "choose": [(1, [[SILENCED_BEAM], []])],
+                                "view": 0.5, "light": 0.0},
+}
+# A shot from an export before 2026-11-05 (no `flash`): the AK's, the silenced M4A1-S's when silenced.
+DEFAULT_FLASH = "uweapon_muzflsh_ak47"
+SILENCED_FLASH = "uweapon_muzsilenced_rif"
+
+
+def flash_of(shot):
+    """The shot's flash system (FLASHES)."""
+    name = shot.get("flash") or (SILENCED_FLASH if shot.get("silenced") else DEFAULT_FLASH)
+    return FLASHES.get(name, FLASHES[DEFAULT_FLASH])
 
 
 def view_layer(layer, scale):
-    """A muzzle layer as first person draws it (VIEW_SCALES): on the viewmodel (`local`), every length times
-    `scale`."""
+    """A muzzle layer as first person draws it (FLASHES' `view`): on the viewmodel (`local`), every length times
+    `scale`. Each weapon's `_fps` system (m_nViewModelEffect) has its third-person system as its child and puts a
+    control point at (scale, 1, 1), which the children's C_INIT_GlobalScale reads; every length of a layer is scaled
+    (its sizes, where its particles are born, how far they fly): C_INIT_GlobalScale's switches are left at their
+    defaults in the files, which do not say what they are; with the sizes left whole, the main flame filled a fifth of
+    the screen in first person."""
     option = grenade_effects.option
     out = dict(layer, name="%s_fp%d" % (grenade_effects.layer_name(layer), round(scale * 100)), local=True)
     out["radius"] = tuple(r * scale for r in layer["radius"])
@@ -103,11 +226,30 @@ def view_layer(layer, scale):
 
 
 def view_scale(shot):
-    return VIEW_SCALES.get(shot.get("weapon") or "", VIEW_SCALE_DEFAULT)
+    return flash_of(shot)["view"]
 
 
-VIEW_LAYERS = [view_layer(layer, scale) for scale in sorted(set(VIEW_SCALES.values()) | {VIEW_SCALE_DEFAULT})
-               for layer in MUZZLE_LAYERS]
+def flash_layers(flash):
+    """Every layer a flash system can draw."""
+    out = list(flash["always"])
+    for _, children in flash["choose"]:
+        for child in children:
+            out += child
+    return out
+
+
+def unique(layers):
+    seen, out = set(), []
+    for layer in layers:
+        name = grenade_effects.layer_name(layer)
+        if name not in seen:
+            seen.add(name)
+            out.append(layer)
+    return out
+
+
+FLASH_LAYERS = unique(layer for flash in FLASHES.values() for layer in flash_layers(flash))
+VIEW_LAYERS = unique(view_layer(layer, flash["view"]) for flash in FLASHES.values() for layer in flash_layers(flash))
 # Tracers (particles/weapons/cs_weapon_fx/weapon_tracers_*): one particle flying from the muzzle to where the bullet
 # stopped (C_INIT_MoveBetweenPoints) at the tracer's speed (units/s), drawn as a trail of sparks.vtex's streak
 # (sequence 4) as long as 0.085 - 0.1 s of its flight, at most `max_length` units, its colour (255, 68, 21) to
@@ -411,6 +553,8 @@ def blood_layers(hit):
 # plainly orange.
 MUZZLE_LIGHT = {"color": (0.89, 0.49, 0.15), "peak": 8.0, "radius": 185.0,
                 "decay": [(0, 1.0), (1, 0.4), (3, 0.0)]}
+# The snipers' light lasts half as long (their fakelight_64: 0.025 s).
+SHORT_LIGHT_DECAY = [(0, 1.0), (1, 0.15), (2, 0.0)]
 # Bullet holes: how far the decal's box reaches each way from the surface (units: CS2's DecalDepth is 12 through), and
 # the random size factor over DecalWorldWidth / Height (CS2's DecalSizeVariance 0.5 and DecalBoxGrowth 2 are not
 # understood): CS2's holes beside de_nuke's A sign, 449 units away, measure about 11 units across where concrete's
@@ -428,19 +572,25 @@ def log(message):
 
 def shot_layers():
     """Every sprite layer of the shots."""
-    layers = MUZZLE_LAYERS + VIEW_LAYERS + TRACER_LAYERS + BLOOD_LAYERS
+    layers = FLASH_LAYERS + VIEW_LAYERS + TRACER_LAYERS + BLOOD_LAYERS
     for family_layers in FAMILY_LAYERS.values():
         layers += family_layers
     return layers
 
 
 def muzzle_layers(shot, alt=True):
-    """The muzzle layers a shot draws: its flame (MUZZLE_FLAME or MUZZLE_ALT, picked by the shot as CS2's chooser
-    picks one: FLAME_CHOICE; MUZZLE_FLAME always without `alt`; none when silenced) and its smoke."""
-    if shot.get("silenced"):
-        return [MUZZLE_SMOKE]
-    pick = random.Random(shot["tick"] * 7919 + shot["controller"] * 104729).random()
-    return [MUZZLE_FLAME if pick < FLAME_CHOICE or not alt else MUZZLE_ALT, MUZZLE_SMOKE]
+    """The muzzle layers a shot draws: its flash system's (flash_of) always drawn children and, from each of its
+    chooser groups, as many children as CS2's chooser picks, picked by the shot (the same in every import). Without
+    `alt` (an export without the alt flame's sheet) the alt flames are drawn as the main one."""
+    flash = flash_of(shot)
+    rng = random.Random(shot["tick"] * 7919 + shot["controller"] * 104729)
+    out = list(flash["always"])
+    for count, children in flash["choose"]:
+        for k in sorted(rng.sample(range(len(children)), min(count, len(children)))):
+            out += children[k]
+    if not alt:
+        out = [MUZZLE_FLAME if layer["role"] == "muzzle_alt" else layer for layer in out]
+    return unique(out)
 
 
 def family_of(bullet):
@@ -544,17 +694,21 @@ def light_frames(shots, tick0, end_frame, key="muzzle"):
     cut each other short; the position is keyed on each shot's own frame."""
     by_shooter = {}
     for shot in shots:
-        if shot.get(key) and not shot.get("silenced"):
-            by_shooter.setdefault(shot["controller"], []).append((shot["tick"] - tick0, shot[key]))
+        flash = flash_of(shot)
+        if shot.get(key) and not shot.get("silenced") and flash["light"] > 0.0:
+            pulse = dict(MUZZLE_LIGHT, peak=MUZZLE_LIGHT["peak"] * flash["light"])
+            if flash.get("short"):
+                pulse["decay"] = SHORT_LIGHT_DECAY
+            by_shooter.setdefault(shot["controller"], []).append((shot["tick"] - tick0, shot[key], pulse))
     last = MUZZLE_LIGHT["decay"][-1][0]
     out = {}
     for controller, own in by_shooter.items():
-        frames = sorted({f for at, _ in own for f in range(at - 1, at + last + 1) if 0 <= f <= end_frame})
+        frames = sorted({f for at, _, _ in own for f in range(at - 1, at + last + 1) if 0 <= f <= end_frame})
         keys = []
         for frame in frames:
-            intensity = max(grenade_effects.pulse_intensity(MUZZLE_LIGHT, frame - at) for at, _ in own
+            intensity = max(grenade_effects.pulse_intensity(pulse, frame - at) for at, _, pulse in own
                             if at - 1 <= frame <= at + last)
-            position = next((muzzle for at, muzzle in own if at == frame), None)
+            position = next((muzzle for at, muzzle, _ in own if at == frame), None)
             keys.append((frame, position, intensity))
         out[controller] = keys
     return out
@@ -689,27 +843,69 @@ def bullet_hole_material():
     return material
 
 
+HOLE_CARD_MATERIAL = "/Game/OFAST/Replays/M_BulletHoleCard"
+PLANE = "/Engine/BasicShapes/Plane.Plane"
+# A hole card's distance off the door's surface (units): in front of it, not fighting its depth.
+HOLE_CARD_OFFSET = 0.05
+
+
+def hole_card_material():
+    """HOLE_CARD_MATERIAL, rebuilt in place: BULLET_HOLE_MATERIAL as a surface (a hole on a door, a card that moves with
+    it: place_door_hole), masked by the texture's alpha, lit as the door is; shown by its actor's keyed visibility."""
+    material = smoke_volumes.empty_material(HOLE_CARD_MATERIAL)
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+    texture = mel.create_material_expression(material, unreal.MaterialExpressionTextureSampleParameter2D, -700, -400)
+    texture.set_editor_property("parameter_name", "Tex")
+    texture.set_editor_property("texture", assets.load_asset("/Engine/EngineResources/DefaultTexture"))
+    depth = mel.create_material_expression(material, unreal.MaterialExpressionTextureSampleParameter2D, -900, -650)
+    depth.set_editor_property("parameter_name", "Height")
+    depth.set_editor_property("texture", assets.load_asset("/Engine/EngineResources/WhiteSquareTexture"))
+    deeper = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, -650, -650)
+    mel.connect_material_expressions(depth, "R", deeper, "A")
+    mel.connect_material_expressions(depth, "R", deeper, "B")
+    colour = mel.create_material_expression(material, unreal.MaterialExpressionMultiply, -400, -500)
+    mel.connect_material_expressions(texture, "RGB", colour, "A")
+    mel.connect_material_expressions(deeper, "", colour, "B")
+    rough = mel.create_material_expression(material, unreal.MaterialExpressionConstant, -400, -300)
+    rough.set_editor_property("r", 0.9)
+    prop = unreal.MaterialProperty
+    if not (mel.connect_material_property(colour, "", prop.MP_BASE_COLOR)
+            and mel.connect_material_property(rough, "", prop.MP_ROUGHNESS)
+            and mel.connect_material_property(texture, "A", prop.MP_OPACITY_MASK)):
+        raise RuntimeError("bullet hole card material: could not connect its outputs")
+    mel.recompile_material(material)
+    assets.save_loaded_asset(material)
+    return material
+
+
 def hole_instances(replay_path, decals):
     """Decal group -> [(instance, width, height, probability)]: the bullet holes' textures (the agents manifest's
     `decals`) imported, an instance of BULLET_HOLE_MATERIAL each (shared by every round: CS2's holes are the same)."""
     if not decals:
         return {}
     material = bullet_hole_material()
+    card = hole_card_material()
     out = {}
     for group, options in decals.items():
         for option in options:
             texture = smoke_volumes.import_png(replay_path, option["file"], FOLDER)
             assets.save_loaded_asset(texture)
-            name = "MI_BulletHole_" + option["file"].rsplit(".", 1)[0]
-            instance = smoke_volumes.material_instance(FOLDER, name, material)
-            mel.set_material_instance_texture_parameter_value(instance, "Tex", texture)
+            height = None
             if option.get("height_file"):
                 height = smoke_volumes.import_png(replay_path, option["height_file"], FOLDER)
                 assets.save_loaded_asset(height)
-                mel.set_material_instance_texture_parameter_value(instance, "Height", height)
-            assets.save_loaded_asset(instance)
-            out.setdefault(group, []).append((instance, option["width"], option["height"],
-                                              option.get("probability", 1.0)))
+            stem = option["file"].rsplit(".", 1)[0]
+            made = []
+            for parent, name in ((material, "MI_BulletHole_" + stem), (card, "MI_BulletHoleCard_" + stem)):
+                instance = smoke_volumes.material_instance(FOLDER, name, parent)
+                mel.set_material_instance_texture_parameter_value(instance, "Tex", texture)
+                if height is not None:
+                    mel.set_material_instance_texture_parameter_value(instance, "Height", height)
+                assets.save_loaded_asset(instance)
+                made.append(instance)
+            # (decal instance, width, height, probability, card instance)
+            out.setdefault(group, []).append((made[0], option["width"], option["height"],
+                                              option.get("probability", 1.0), made[1]))
     return out
 
 
@@ -724,7 +920,7 @@ def place_hole(spawn, label, tick, end, normal, options, rng, depth=HOLE_DEPTH):
     """One bullet hole: a decal actor at `end` facing the surface of `normal` (Source axes), a random option of its
     group (`options`: hole_instances' list), size and roll, reaching `depth` units each way (hole_depth); its decal
     colour's red is `tick`, from which it shows."""
-    instance, width, height, _ = rng.choices(options, weights=[o[3] for o in options])[0]
+    instance, width, height, _, _ = rng.choices(options, weights=[o[3] for o in options])[0]
     size = rng.uniform(*HOLE_SIZE)
     nx, ny, nz = normal
     facing = unreal.MathLibrary.make_rot_from_x(unreal.Vector(-nx, ny, -nz))
@@ -741,10 +937,54 @@ def place_hole(spawn, label, tick, end, normal, options, rng, depth=HOLE_DEPTH):
     component.set_fade_screen_size(0.0)
 
 
-def place_holes(shots, instances, spawn):
+def door_of(at, doors):
+    """The door actor a hole on a door goes on (`at`'s `door`, export::shots: its `hinge`, the door's closed position;
+    `doors`: hinge -> actor, the doors import_demo.animate_doors swings), or None: not on a door, or on one that does
+    not move (the map's own actor then takes the hole as a decal, as a wall does)."""
+    door = at.get("door")
+    if not isinstance(door, dict) or not doors:
+        return None
+    hinge = door["hinge"]
+    near = [(sum((a - b) ** 2 for a, b in zip(key, hinge)), actor) for key, actor in doors.items()]
+    distance, actor = min(near, key=lambda n: n[0])
+    return actor if distance < 1.0 else None
+
+
+def place_door_hole(spawn, label, door, place, options, rng):
+    """A hole on a door that swings: a card (the engine plane, its instance of HOLE_CARD_MATERIAL) attached to the
+    door's actor where the bullet met it in the door's own space (`place`: export::shots' `door`, Source axes of the
+    door: its `point` and `normal`; Unreal's local axes flip y), HOLE_CARD_OFFSET off the surface, the decal's size and
+    a random roll. Its visibility is keyed by place_holes."""
+    _, width, height, _, instance = rng.choices(options, weights=[o[3] for o in options])[0]
+    size = rng.uniform(*HOLE_SIZE)
+    px, py, pz = place["point"]
+    nx, ny, nz = place["normal"]
+    card = spawn(unreal.load_asset(PLANE), label, (0.0, 0.0, 0.0))
+    component = card.static_mesh_component
+    component.set_mobility(unreal.ComponentMobility.MOVABLE)
+    component.set_material(0, instance)
+    component.set_editor_property("cast_shadow", False)
+    keep = unreal.AttachmentRule.KEEP_RELATIVE
+    card.attach_to_actor(door, "", keep, keep, keep, False)
+    scale = door.get_actor_scale3d()
+    normal = unreal.Vector(nx, -ny, nz)
+    local = [(p + n * HOLE_CARD_OFFSET) * UNITS_TO_CM / s
+             for p, n, s in zip((px, -py, pz), (nx, -ny, nz), (scale.x, scale.y, scale.z))]
+    card.set_actor_relative_location(unreal.Vector(*local), False, False)
+    # The plane faces +Z: turned to face out of the door's surface, rolled at random about it.
+    facing = unreal.MathLibrary.make_rot_from_z(normal)
+    card.set_actor_relative_rotation(unreal.MathLibrary.compose_rotators(
+        unreal.Rotator(roll=0.0, pitch=0.0, yaw=rng.uniform(0.0, 360.0)), facing), False, False)
+    card.set_actor_relative_scale3d(unreal.Vector(width * size * UNITS_TO_CM / 100.0 / scale.x,
+                                                  height * size * UNITS_TO_CM / 100.0 / scale.y, 1.0))
+    return card
+
+
+def place_holes(shots, instances, spawn, doors=None, show=None):
     """A bullet hole (place_hole) per place a bullet of `shots` met the world with a decal group (`instances`:
-    hole_instances: both sides of each wall it went through, and where it stopped), showing from its shot's tick.
-    Returns the number placed.
+    hole_instances: both sides of each wall it went through, and where it stopped), showing from its shot's tick; on a
+    door that swings (`doors`: hinge -> actor) a card on the door (place_door_hole), shown from the shot's tick by
+    `show(actor, tick)`. Returns the number placed.
 
     Not the holes of earlier rounds (the agents manifest's `earlier_holes`): CS2 does not show them where it was
     checked (2026-10-30, round 17 of Aurora vs FURIA: none of the 391 in YEKINDAR's view at tick 153183, on the B
@@ -758,14 +998,21 @@ def place_holes(shots, instances, spawn):
                 if at["on"] != "world" or not options or not at.get("normal"):
                     continue
                 rng = random.Random(shot["tick"] * 7919 + shot["controller"] * 104729 + k * 31 + n)
-                place_hole(spawn, "bullet hole %d %d.%d.%d" % (shot["controller"], shot["tick"], k, n), shot["tick"],
-                           at["end"], at["normal"], options, rng, hole_depth(at))
+                label = "bullet hole %d %d.%d.%d" % (shot["controller"], shot["tick"], k, n)
+                door = door_of(at, doors)
+                if door is not None and show is not None:
+                    show(place_door_hole(spawn, label, door, at["door"], options, rng), shot["tick"])
+                elif isinstance(at.get("door"), dict) and doors is None:
+                    # Doors not known (a caller without them): a decal would hang where the door was.
+                    continue
+                else:
+                    place_hole(spawn, label, shot["tick"], at["end"], at["normal"], options, rng, hole_depth(at))
                 placed += 1
     return placed
 
 
 def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, viewmodels=None, show_first_person=None,
-                light=None):
+                light=None, doors=None):
     """Everything above for a round, from the agents manifest `agents` (its `shots`, `earlier_holes`, `effects` and
     `decals`; without them: nothing): an actor per shooter for their muzzle flashes and tracers, hidden with their
     body (`hide(actor, binding, controller)`: shown while the body is, and not in their own camera), their
@@ -831,7 +1078,13 @@ def place_shots(sequence, replay, replay_path, end_frame, agents, spawn, hide, v
     drawn += first_person + draw(spawn(unreal.Actor, "shots", (0.0, 0.0, 0.0)), shared)
     lights = place_lights(sequence, replay, shots, end_frame, spawn, light,
                           viewmodels if show_first_person else {}) if light else 0
-    holes = place_holes(shots, hole_instances(replay_path, agents.get("decals", {})), spawn)
+    tick0 = replay["start_tick"]
+
+    def show_from(actor, tick):
+        replay_cameras.key_visibility(sequence.add_possessable(actor), [(0, False), (max(tick - tick0, 0), True)],
+                                      end_frame)
+
+    holes = place_holes(shots, hole_instances(replay_path, agents.get("decals", {})), spawn, doors or {}, show_from)
     log("shots: %d (%d sprite slots, %d of them first person; %d muzzle lights, %d bullet holes)"
         % (len(shots), drawn, first_person, lights, holes))
     return len(shots)

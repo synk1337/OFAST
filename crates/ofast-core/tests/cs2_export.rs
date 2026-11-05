@@ -61,3 +61,58 @@ fn re_exports_leave_only_the_files_the_gltf_uses() {
     );
     let _ = fs::remove_dir_all(&out);
 }
+
+/// Each gun's muzzle flash as its model's shoot sequences start it (`export::flashes`), against what the particle
+/// systems' files said on 2026-11-05: the flash family per gun and the M4A1-S's silencer tip.
+#[test]
+fn guns_fire_their_own_muzzle_flashes() {
+    use ofast_core::export::shots::ShotData;
+
+    let install = Cs2Install::locate().expect("CS2 install found");
+    let content = Content::game(&install).expect("pak01 opens");
+    let items = content
+        .read("scripts/items/items_game.txt")
+        .ok()
+        .map(|b| String::from_utf8_lossy(&b).into_owned());
+    let mut warnings = Vec::new();
+    let mut data = ShotData::load(&content, items.as_deref(), &mut warnings);
+    data.load_flashes(&content);
+    for (name, flashes) in &data.flashes {
+        println!("{name}: {flashes:?}");
+    }
+    let fire = |weapon: &str| {
+        let flashes = &data.flashes[weapon];
+        let event = flashes.fire.as_ref().expect("a flash");
+        (event.system.as_str(), event.attachment.as_str())
+    };
+    assert_eq!(
+        fire("weapon_ak47"),
+        ("uweapon_muzflsh_ak47", "muzzle_flash")
+    );
+    assert_eq!(
+        fire("weapon_m4a1"),
+        ("uweapon_muzflsh_riffle", "muzzle_flash")
+    );
+    assert_eq!(fire("weapon_awp").0, "weapon_muzzleflash_snip");
+    assert_eq!(fire("weapon_negev").0, "uweapon_muzflsh_mach");
+    assert_eq!(fire("weapon_nova").0, "uweapon_muzflsh_shot");
+    assert_eq!(fire("weapon_mac10").0, "uweapon_muzzleflash_subm");
+    assert_eq!(fire("weapon_glock").0, "uweapon_muzzleflash_pist");
+    assert_eq!(
+        fire("weapon_deagle"),
+        ("uweapon_muzflsh_deagle", "muzzle_flash")
+    );
+    assert_eq!(
+        fire("weapon_m4a1_silencer"),
+        ("uweapon_muzsilenced_rif", "muzzle_flash2")
+    );
+    let m4 = &data.flashes["weapon_m4a1_silencer"];
+    assert_eq!(
+        m4.unsilenced.as_ref().expect("unsilenced").system,
+        "uweapon_muzflsh_ak47"
+    );
+    assert!(
+        !data.flashes.contains_key("weapon_taser"),
+        "the Zeus fires no flash"
+    );
+}

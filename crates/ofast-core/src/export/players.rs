@@ -330,7 +330,8 @@ pub fn export_players(
         .as_ref()
         .filter(|_| ground.is_some())
         .map(|w| WorldCollision::from_physics_where(w, CollisionAttribute::stops_players));
-    let shot_data = ShotData::load(content, items_text.as_deref(), &mut warnings);
+    let mut shot_data = ShotData::load(content, items_text.as_deref(), &mut warnings);
+    shot_data.load_flashes(content);
     let recoil = recoil_by_tick(track, &shot_data);
     let aim_punch = recoil
         .iter()
@@ -1059,6 +1060,9 @@ pub struct Muzzle {
     pub position: [f32; 3],
     /// Along the barrel (unit).
     pub direction: [f32; 3],
+    /// The gun's `muzzle_flash2`, position and direction the same way, where it has one (the M4A1-S's silencer
+    /// tip, the Dual Berettas' left pistol: [`super::flashes`]).
+    pub alternate: Option<([f32; 3], [f32; 3])>,
     /// The gun's ejection port (`shell_eject`) in the same space, where a fired case is thrown from
     /// ([`super::brass`]), on the shot's tick and each of the [`EJECT_TICKS`] − 1 after it (a case leaves the port
     /// up to 0.04 s after the shot, and the gun moves meanwhile); `None` when the gun has none (or is not in hand).
@@ -1078,14 +1082,20 @@ fn muzzle_at(
     mounts: &AgentMounts,
     weapon_models: &BTreeMap<String, (Model, WeaponFrames)>,
     actor: &Affine,
-) -> Option<(Affine, Option<Affine>)> {
+) -> Option<(Affine, Option<Affine>, Option<Affine>)> {
     let (slot, _) = carried?.iter().find(|(_, place)| *place == Place::Hand)?;
     let (_, frames) = weapon_models.get(&slot.look.model)?;
     let weapon_bone = compose(actor, &slot_target(world, mounts, frames, Place::Hand)?);
     Some((
         compose(&weapon_bone, &frames.muzzle?),
         frames.shell_eject.map(|e| compose(&weapon_bone, &e)),
+        frames.muzzle2.map(|m| compose(&weapon_bone, &m)),
     ))
+}
+
+/// A muzzle frame's position and its x axis (along the barrel).
+pub(crate) fn muzzle_place(m: &Affine) -> ([f32; 3], [f32; 3]) {
+    ([m[0][3], m[1][3], m[2][3]], [m[0][0], m[1][0], m[2][0]])
 }
 
 /// Writes one look's glTF ([`LookExport`]); `recipe_ticks` counts its players' living ticks and those played from the
@@ -1507,13 +1517,15 @@ fn export_look(
                     &actor,
                 )
             };
-            if let Some((m, _)) = at(k) {
+            if let Some((m, _, m2)) = at(k) {
+                let (position, direction) = muzzle_place(&m);
                 muzzles.push(Muzzle {
                     controller,
                     tick: shot.tick,
-                    position: [m[0][3], m[1][3], m[2][3]],
-                    direction: [m[0][0], m[1][0], m[2][0]],
-                    eject: std::array::from_fn(|d| at(k + d).and_then(|(_, e)| e)),
+                    position,
+                    direction,
+                    alternate: m2.as_ref().map(muzzle_place),
+                    eject: std::array::from_fn(|d| at(k + d).and_then(|(_, e, _)| e)),
                 });
             }
         }

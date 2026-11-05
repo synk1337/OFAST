@@ -620,8 +620,32 @@ when the gun is drawn again, and FOV 54 drew as 60 (CS2's least, it seems).
 XANTARES's gun also stands about 2° higher for three shots (ticks 153065 – 153071, as he steps down the stairs at
 B), with the keyed motion smooth there: to look into.
 
-Not yet: the view punch on the camera; ironsights (AUG, SG 553: `weapon_ironsight_amount`); the staged reloads of the
-shotguns (`reload_stage`, `CNmCurrentSyncEventIDNode`); weapon skins.
+**The AUG's and SG 553's sight** (2026-11-05). Zoomed in, CS2 brings their sight up to the eye: the gun graph's `Idle`
+is a 1D blend of `idle_aug` and the sight's pose (`ironsight_fidget_aug`, an animation pose node) by
+`weapon_ironsight_amount`, and a shot past an amount of `weapon_is_using_ironsights` plays `ironsight_shoot_aug`. The
+demo sends the weapon's `m_iIronSightMode` (1 going up, 0 down, 2 drawing, 3 dropped); the bake moves the amount
+toward 1 at 10 a second while it is 1 and toward 0 at 8 otherwise (`m_flIronSightPullUpSpeed` and
+`m_flIronSightPutDownSpeed`, `anim::viewmodel::SIGHT_UP_SPEED`), from sample to sample and within the frames between,
+starting down with each weapon drawn. The camera zooms with it (the cameras file's eyes,
+[cameras.md](cameras.md#scopes)). The clip's pose holds the gun 17.4 inches out on the eye's line (`wpn` at 17.42,
+−0.17, −1.89, what the bake gives: karrigan's AUG, Falcons vs Vitality, de_anubis, round 6); in CS2 the sight then
+fills the middle of the view, the eye 2 – 3 inches behind its housing: CS2's client also brings the viewmodel to the
+eye, which the bake does not yet.
+
+**Shotguns loading shell by shell** (2026-11-05). The Nova's, Sawed-Off's and XM1014's reload clips load one shell
+after an intro and end in an outro; CS2's graph plays the shell's part again for every shell going in (`Reload0` ↔
+`Reload1` at the clip's `WPN_RELOAD_OUTRO` while the client's `reload_stage` is not `stage_outro`, the twin starting at
+`WPN_RELOAD_LOOP`), and the XM1014's first-person machine jumps at each `WPN_RELOAD_STAGE_END` to its `3SHELLS`,
+`2SHELLS` or `1SHELL` section by the shells missing. Neither `reload_stage` nor the graph's current sync event is in
+the demo, but `m_iClip1` rises one shell at a time: the bake counts the shells that went in during the reload and plays
+the clip's time to them (`anim::viewmodel::ShellReload`: the Nova's shell 0.367 – 0.800 s, the Sawed-Off's 0.400 –
+0.933, the XM1014's four 0.6 s shells from 0.700; the first shells repeating the clip's first, the last on its last,
+then the outro). A two-shell Nova reload plays 2.1 s, a seven-shell one 4.2 s, where it used to freeze after one
+shell. In third person the pose recipes already loop it as CS2 did; OFAST's own animation (without a recipe) still
+plays one shell. Not checked against CS2's own first-person frames yet: the local demos have one shotgun reload
+(XANTARES's XM1014 on the local match demo, round 15, two shells in before a switch to the knife).
+
+Not yet: the view punch on the camera; weapon skins.
 
 ## Verified
 

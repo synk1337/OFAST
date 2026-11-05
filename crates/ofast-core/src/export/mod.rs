@@ -17,6 +17,7 @@
 //! - [`effects`]: CS2's sprite sheets for the grenades' effects (flames, fireballs, flares) as PNGs with their sequences.
 //! - [`shots`]: each bullet of a round traced through the map, walls and players, with what it met.
 //! - [`brass`]: the cases the guns throw out, flown as CS2's casing particles fly.
+//! - [`flashes`]: which of CS2's muzzle flashes each gun fires, and from which end of its barrel.
 //! - [`punch`]: how far recoil turns each player's first-person camera and viewmodel off their eye angles.
 //! - [`cameras`]: a round's cameras: every player's eyes, the shot cameras of its kills, HLAE cameras, the cuts.
 
@@ -25,6 +26,7 @@ pub mod cameras;
 pub mod deaths;
 pub mod effects;
 mod environment;
+pub mod flashes;
 mod gloves;
 pub mod gltf;
 pub mod ground;

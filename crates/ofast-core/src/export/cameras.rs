@@ -27,12 +27,12 @@ use super::ExportError;
 use super::players::{ITEMS_GAME, load_world_physics};
 use super::punch::{Recoil, recoil_by_tick};
 use super::shots::ShotData;
+use crate::camera::CameraKey;
 use crate::camera::hlae::{Clock, read_cam, read_campath};
-use crate::camera::shots::{LEAD_S, Poses, ShotKind, ShotSpec, build};
+use crate::camera::shots::{LEAD_S, Pose, Poses, ShotKind, ShotSpec, build};
 use crate::camera::smooth::{PIN_AROUND_SHOT, lambda, smooth_view};
-use crate::camera::{CameraKey, DEFAULT_FOV};
 use crate::content::Content;
-use crate::demo::players::RoundTrack;
+use crate::demo::players::{DEFAULT_VIEW_FOV, RoundTrack, view_fovs};
 use crate::demo::recoil::VIEW_SCALE;
 use crate::physics::ragdoll::WorldCollision;
 
@@ -120,8 +120,57 @@ pub struct RoundCameras {
     /// (the distance along the view to the first wall or player in it, smoothed), for the depth of field of a round
     /// built in the realistic look.
     pub focus: BTreeMap<u32, Vec<(u32, f64)>>,
+    /// When each player looks through a scope or a sight, by controller ([`scope_spans`]): `(first tick, last
+    /// tick, "scope" | "sight")`.
+    pub scopes: BTreeMap<u32, Vec<(u32, u32, &'static str)>>,
     /// What could not be done as asked.
     pub warnings: Vec<String>,
+}
+
+/// When each player looks through a scope or a sight ([`RoundCameras::scopes`]): the runs of sample ticks on which
+/// they are alive and zoomed in (`m_bIsScoped`) with a weapon `data` says zooms ([`super::shots::WeaponShots::
+/// scope_kind`]: a sniper's scope, where CS2 hides the gun and draws its scope over the view; the AUG's and SG 553's
+/// sight, the gun brought up to the eye). After a sniper's shot the scope is down until it zooms back in (the bolt
+/// shows), as in CS2.
+pub fn scope_spans(
+    track: &RoundTrack,
+    data: &ShotData,
+) -> BTreeMap<u32, Vec<(u32, u32, &'static str)>> {
+    let mut out: BTreeMap<u32, Vec<(u32, u32, &'static str)>> = BTreeMap::new();
+    let mut open: BTreeMap<u32, (u32, u32, &'static str)> = BTreeMap::new();
+    for sample in &track.samples {
+        let mut now: BTreeMap<u32, &'static str> = BTreeMap::new();
+        for p in sample.players.iter().filter(|p| p.alive && p.rig.scoped) {
+            if let Some(kind) = p
+                .rig
+                .weapon
+                .as_ref()
+                .and_then(|w| data.weapon(w.item))
+                .and_then(|w| w.scope_kind())
+            {
+                now.insert(p.controller, kind);
+            }
+        }
+        // Runs that end here (no longer scoped, or another kind).
+        let ended: Vec<u32> = open
+            .iter()
+            .filter(|(c, (_, _, kind))| now.get(c) != Some(kind))
+            .map(|(c, _)| *c)
+            .collect();
+        for c in ended {
+            let run = open.remove(&c).expect("open run");
+            out.entry(c).or_default().push(run);
+        }
+        for (c, kind) in now {
+            open.entry(c)
+                .and_modify(|run| run.1 = sample.tick)
+                .or_insert((sample.tick, sample.tick, kind));
+        }
+    }
+    for (c, run) in open {
+        out.entry(c).or_default().push(run);
+    }
+    out
 }
 
 /// How often a player's focus is measured (ticks): a focus puller follows the aim, not each twitch of it.
@@ -483,7 +532,16 @@ fn eyes(
         let Some(player) = poses.of(controller) else {
             continue;
         };
-        let known: Vec<_> = player.iter().flatten().collect();
+        // The zoom of each pose's tick (Poses are the track's samples, one by one).
+        let fovs = view_fovs(track, controller);
+        let (known, zoom): (Vec<&Pose>, Vec<f64>) = player
+            .iter()
+            .zip(&fovs)
+            .filter_map(|(pose, fov)| {
+                let fov = fov.unwrap_or(DEFAULT_VIEW_FOV);
+                pose.as_ref().map(|p| (p, f64::from(fov)))
+            })
+            .unzip();
         let mut view: Vec<[f64; 2]> = known.iter().map(|p| p.view).collect();
         if smoothing > 0.0 {
             // Pinned around the player's shots and kills: the aim the bullets were built from.
@@ -520,13 +578,14 @@ fn eyes(
         let keys = known
             .iter()
             .zip(view)
-            .map(|(p, [pitch, yaw])| {
+            .zip(zoom)
+            .map(|((p, [pitch, yaw]), fov)| {
                 let [dp, dy] = punch.get(&p.tick).copied().unwrap_or([0.0; 2]);
                 CameraKey {
                     tick: f64::from(p.tick),
                     position: p.eyes,
                     angles: [pitch + dp, crate::camera::wrap_degrees(yaw + dy), 0.0],
-                    fov: DEFAULT_FOV,
+                    fov,
                 }
             })
             .collect();
@@ -561,7 +620,8 @@ pub fn cameras_json(
                         rounded(k.position[1], 3),
                         rounded(k.position[2], 3),
                         rounded(k.angles[0], 4),
-                        rounded(k.angles[1], 4)
+                        rounded(k.angles[1], 4),
+                        rounded(k.fov, 2)
                     ])
                 })
                 .collect();
@@ -621,6 +681,14 @@ pub fn cameras_json(
             .iter()
             .map(|(c, keys)| {
                 let rows: Vec<Json> = keys.iter().map(|&(t, d)| json!([t, rounded(d, 0)])).collect();
+                (c.to_string(), Json::Array(rows))
+            })
+            .collect::<serde_json::Map<_, _>>(),
+        "scopes": cameras
+            .scopes
+            .iter()
+            .map(|(c, runs)| {
+                let rows: Vec<Json> = runs.iter().map(|&(a, b, kind)| json!([a, b, kind])).collect();
                 (c.to_string(), Json::Array(rows))
             })
             .collect::<serde_json::Map<_, _>>(),
@@ -726,14 +794,22 @@ pub fn export_cameras(
                 .ok()
                 .map(|b| String::from_utf8_lossy(&b).into_owned());
             let data = ShotData::load(content, items.as_deref(), &mut warnings);
-            (collision, Some(recoil_by_tick(track, &data)))
+            (
+                collision,
+                Some((recoil_by_tick(track, &data), scope_spans(track, &data))),
+            )
         }
         None => {
-            warnings.push("no CS2 content: shot cameras ignore walls, eyes have no recoil".into());
+            warnings.push(
+                "no CS2 content: shot cameras ignore walls, eyes have no recoil and no scopes"
+                    .into(),
+            );
             (None, None)
         }
     };
+    let (recoil, scopes) = recoil.unzip();
     let mut cameras = round_cameras(track, plan, hlae, collision.as_ref(), recoil.as_ref());
+    cameras.scopes = scopes.unwrap_or_default();
     warnings.append(&mut cameras.warnings);
     let json = cameras_json(&cameras, track, demo_name, plan);
     fs::create_dir_all(out_dir)?;
@@ -885,7 +961,7 @@ mod tests {
         assert_eq!(cameras.eyes.len(), 3);
         let eyes = &cameras.eyes[&1][100];
         assert_eq!(eyes.position, [100.0, 0.0, 64.0]);
-        assert_eq!(eyes.fov, DEFAULT_FOV);
+        assert_eq!(eyes.fov, crate::camera::DEFAULT_FOV);
     }
 
     #[test]
@@ -1132,5 +1208,74 @@ mod tests {
         assert!((at(1200).angles[1] - 2.0).abs() < 1e-4);
         // Smoothed away from it.
         assert!(at(1100).angles[1].abs() < 0.5, "{:?}", at(1100));
+    }
+
+    /// Player 1 scopes in with an AWP at 1100 (to 40 over 0.05 s), zooms to 10 at 1200, fires and unzooms at 1300
+    /// (back to the player's own at once, as `m_iFOV` 0 with no rate).
+    fn scoped_track() -> RoundTrack {
+        use crate::demo::players::{ActiveWeapon, Zoom};
+        let mut track = track();
+        for sample in &mut track.samples {
+            let p = &mut sample.players[0];
+            let (zoom, scoped) = match sample.tick {
+                ..1100 => (None, false),
+                1100..1200 => (Some((40.0, 1100.0, 0.05)), true),
+                1200..1300 => (Some((10.0, 1200.0, 0.05)), true),
+                _ => (Some((0.0, 1300.0, 0.0)), false),
+            };
+            p.rig.zoom = zoom.map(|(target, time, rate)| Zoom {
+                target,
+                start: 0.0,
+                time,
+                rate,
+            });
+            p.rig.scoped = scoped;
+            p.rig.weapon = Some(ActiveWeapon {
+                item: 9,
+                ..Default::default()
+            });
+        }
+        track
+    }
+
+    #[test]
+    fn zooms_ease_to_their_field_of_view() {
+        let track = scoped_track();
+        let fovs = view_fovs(&track, 1);
+        let at = |tick: u32| fovs[(tick - 1000) as usize].unwrap();
+        assert_eq!(at(1099), 90.0);
+        // Halfway through 0.05 s (3.2 ticks) the smooth step is at half.
+        let half = at(1101) + (at(1102) - at(1101)) * 0.6;
+        assert!((half - 65.0).abs() < 3.0, "{half}");
+        assert!(at(1101) < 90.0 && at(1101) > 65.0, "{}", at(1101));
+        assert_eq!(at(1104), 40.0);
+        assert!(at(1201) < 40.0 && at(1201) > 10.0);
+        assert_eq!(at(1210), 10.0);
+        assert_eq!(at(1300), 90.0, "unzoomed at once");
+        // The eyes carry it.
+        let cameras = round_cameras(&track, &CameraPlan::default(), Vec::new(), None, None);
+        let key = |tick: u32| cameras.eyes[&1][(tick - 1000) as usize].fov;
+        assert_eq!(key(1150), 40.0);
+        assert_eq!(key(1250), 10.0);
+        assert_eq!(key(1000), 90.0);
+    }
+
+    #[test]
+    fn scopes_run_while_scoped_with_a_weapon_that_zooms() {
+        let track = scoped_track();
+        let mut data = ShotData::default();
+        data.items.insert(9, "weapon_awp".into());
+        let mut awp = super::super::shots::tests_support::weapon();
+        awp.zoom_hides_viewmodel = true;
+        data.weapons.insert("weapon_awp".into(), awp);
+        let scopes = scope_spans(&track, &data);
+        assert_eq!(scopes[&1], vec![(1100, 1299, "scope")]);
+        assert!(!scopes.contains_key(&2));
+        // A weapon that does not zoom: no scope.
+        data.weapons
+            .get_mut("weapon_awp")
+            .unwrap()
+            .zoom_hides_viewmodel = false;
+        assert!(scope_spans(&track, &data).is_empty());
     }
 }

@@ -33,6 +33,7 @@ import unreal
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ofast_cameras  # noqa: E402
 import ofast_look  # noqa: E402
+import ofast_viewmodel  # noqa: E402
 import replay_cameras  # noqa: E402
 from replay_cameras import CAMERA_TAG, log, progress  # noqa: E402
 
@@ -119,6 +120,8 @@ def update(cameras):
     # The round's cinematics (the Cameras panel's), cut in again; the lights keyed again for them.
     cinematics = ofast_cameras.restore(sequence)
 
+    # The players' zoom, keyed again on the camera bindings made anew above (with the viewmodels: ofast_viewmodel).
+    ofast_viewmodel.key(sequence)
     # The level's Look panel settings (ofast_look.py: the depth of field just keyed again; with Blur with distance the
     # POV cameras' new focus tracks switched off).
     ofast_look.apply_level_look(sequence=sequence)
