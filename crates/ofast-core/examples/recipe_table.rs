@@ -346,6 +346,77 @@ fn main() {
             );
         }
     }
+    // `OFAST_DUMP=file.tsv`: every living player-tick with a recipe, one line each: tick, controller, name, world
+    // velocity, body yaw, on the ground, walking, duck amount, on a ladder, the weapon set, CS2's samples
+    // (`index@time`, `=clip` where the table names it, `,` between) and the clips OFAST bakes (`,` between).
+    if let Ok(path) = std::env::var("OFAST_DUMP") {
+        use std::io::Write;
+        let baked = baked_clips(&track, &rig.sets, rig.upper.as_ref(), rig.graphs.as_ref());
+        let stem = |c: &str| {
+            c.rsplit('/')
+                .next()
+                .unwrap_or(c)
+                .trim_end_matches(".vnmclip")
+                .to_owned()
+        };
+        let mut out = std::io::BufWriter::new(std::fs::File::create(&path).expect("dump file"));
+        for sample in &track.samples {
+            for p in sample.players.iter().filter(|p| p.alive) {
+                let Some(decoded) = p
+                    .rig
+                    .pose_recipe
+                    .as_ref()
+                    .and_then(|r| recipe::decode(r).ok())
+                else {
+                    continue;
+                };
+                let cs2: Vec<String> = decoded
+                    .tasks
+                    .iter()
+                    .filter_map(|t| match t {
+                        Task::Sample { resource, time } => Some(format!(
+                            "{resource}@{time:.3}{}",
+                            table
+                                .path(*resource)
+                                .map_or(String::new(), |p| format!("={}", stem(p)))
+                        )),
+                        _ => None,
+                    })
+                    .collect();
+                let ours: Vec<String> = baked
+                    .get(&(sample.tick, p.controller))
+                    .map(|c| c.iter().map(|c| stem(c)).collect())
+                    .unwrap_or_default();
+                let item = p.rig.weapon.as_ref().map(|w| w.item);
+                let set = rig
+                    .upper
+                    .as_ref()
+                    .and_then(|u| u.weapons.get(&item.unwrap_or(0)))
+                    .map_or(WeaponSet::for_item(item), |w| {
+                        WeaponSet::for_category(&w.category)
+                    });
+                let v = p.rig.velocity;
+                writeln!(
+                    out,
+                    "{}\t{}\t{}\t{:.2}\t{:.2}\t{:.2}\t{:.2}\t{}\t{}\t{:.2}\t{}\t{set:?}\t{}\t{}",
+                    sample.tick,
+                    p.controller,
+                    p.name,
+                    v[0],
+                    v[1],
+                    v[2],
+                    p.rig.body_yaw,
+                    u8::from(p.rig.on_ground),
+                    u8::from(p.rig.walking),
+                    p.rig.duck_amount,
+                    u8::from(p.rig.on_ladder),
+                    cs2.join(","),
+                    ours.join(",")
+                )
+                .expect("dump writes");
+            }
+        }
+    }
     if let Ok(list) = std::env::var("OFAST_INDEX") {
         let indices: Vec<u16> = list
             .split(',')

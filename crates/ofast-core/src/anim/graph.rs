@@ -49,6 +49,11 @@ pub struct Transition {
     /// Attack → Actions is 0 s into a draw and 0.2 s otherwise, the locomotion's fall 0.3 s and jump 0.1 s);
     /// [`super::eval::Evaluator`] evaluates it.
     pub duration_override: Option<usize>,
+    /// Where the target state starts, as a fraction of its time (`m_flTimeOffset`; 0 starts it from the start).
+    pub time_offset: f32,
+    /// A float value node that replaces `time_offset` when present (`m_timeOffsetOverrideNodeIdx`: the locomotion's
+    /// plants and starts hand over to `Move` at a point of the walk cycle chosen by `ground_action_direction_id`).
+    pub time_offset_override: Option<usize>,
 }
 
 fn strings(root: &Value, key: &'static str) -> Vec<String> {
@@ -125,6 +130,11 @@ impl Graph {
                         .unwrap_or(0.0) as f32,
                     duration_override: node
                         .and_then(|n| self.child(n, "m_nDurationOverrideNodeIdx")),
+                    time_offset: node
+                        .and_then(|n| self.number(n, "m_flTimeOffset"))
+                        .unwrap_or(0.0) as f32,
+                    time_offset_override: node
+                        .and_then(|n| self.child(n, "m_timeOffsetOverrideNodeIdx")),
                 })
             })
             .collect()

@@ -455,7 +455,8 @@ impl<'a> RecipePlayer<'a> {
 
     /// The pose `decoded` gives: its tasks played in order, each blend laying its second input over its first (an
     /// additive one added; type 8 in model space; the others bone by bone), under its bone mask. A sample whose clip
-    /// is unknown gives nothing; a blend without its first input gives nothing, without its second gives the first;
+    /// is unknown gives nothing; a blend without its first input gives nothing, without its second (or with one made
+    /// of nothing known, the empty pose alone) gives the first;
     /// a task not decoded (the aim and after) passes its
     /// first input on; a cached pose written from nothing is forgotten. `None` when the last task gives nothing, a
     /// delta, or nothing known went into it (the empty pose alone).
@@ -493,6 +494,11 @@ impl<'a> RecipePlayer<'a> {
                         // masked layers over a quarter), the layers left out being mostly wrong matches rather
                         // than clips OFAST does not play.
                         (Some(a), None) => Some(a),
+                        // So is a layer made of nothing known: the empty pose an unknown clip was to go over (a
+                        // flinch OFAST does not know, `9(empty, flinch)` under the upper body's `8`). Laid over the
+                        // body it stood the upper body up in the reference pose, 13 inches from a hit (XANTARES at
+                        // tick 2618 of the aurora-vs-furia dust2 demo, round 1, crouched in a plant's last frame).
+                        (Some(a), Some(b)) if !b.known => Some(a),
                         (Some(mut a), Some(b)) => {
                             let known = a.known || b.known;
                             match (a.additive, b.additive) {
@@ -681,6 +687,36 @@ mod tests {
             (layered_over.pose, layered_over.unknown),
             (moved.clone(), 1)
         );
+        // And so is an unknown clip over the empty pose, laid over a known pose: not the empty pose instead.
+        let empty_over = decoded(
+            vec![
+                (6, vec![]),
+                (13, vec![]),
+                (1, vec![]),
+                (9, vec![1, 2]),
+                (8, vec![0, 3]),
+            ],
+            vec![
+                Task::CachedPoseRead(4),
+                Task::EmptyPose,
+                Task::Sample {
+                    resource: 5,
+                    time: 0.2,
+                },
+                Task::Blend {
+                    kind: 9,
+                    weight: 1.0,
+                    mask: Vec::new(),
+                },
+                Task::Blend {
+                    kind: 8,
+                    weight: 1.0,
+                    mask: vec![MaskTask::Mask(0)],
+                },
+            ],
+        );
+        let made = player.pose(&empty_over).expect("a pose");
+        assert_eq!((made.pose, made.unknown), (moved.clone(), 1));
         // A blend whose first input is unknown gives nothing, whatever its second.
         let layered = decoded(
             vec![(1, vec![]), (13, vec![]), (8, vec![0, 1])],

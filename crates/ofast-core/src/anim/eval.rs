@@ -579,6 +579,35 @@ impl<'l> Evaluator<'l> {
         to: &[StateId],
         params: &Params,
     ) -> Option<f32> {
+        let (path, chosen) = self.transition_between(from, to, params)?;
+        Some(self.transition_duration(path, &chosen, params))
+    }
+
+    /// Where CS2's transition from the states `from` to the states `to` (the one [`Evaluator::transition_time`]
+    /// takes) starts the new state, as a fraction of its time: the transition's time offset, or its override node's
+    /// value for `params` (a plant hands over to `Move` 0.9 into the walk cycle when it turned west, 0.6 east).
+    /// `None` when the states are the same or no transition joins them.
+    pub fn transition_offset(
+        &self,
+        from: &[StateId],
+        to: &[StateId],
+        params: &Params,
+    ) -> Option<f32> {
+        let (path, chosen) = self.transition_between(from, to, params)?;
+        Some(
+            chosen
+                .time_offset_override
+                .map_or(chosen.time_offset, |n| self.float(path, n, params)),
+        )
+    }
+
+    /// The transition [`Evaluator::transition_time`] describes, and the graph it is in.
+    fn transition_between(
+        &self,
+        from: &[StateId],
+        to: &[StateId],
+        params: &Params,
+    ) -> Option<(&'l str, Transition)> {
         let (old, new) = from.iter().zip(to).find(|(a, b)| a != b)?;
         if old.0 != new.0 {
             return None;
@@ -591,16 +620,16 @@ impl<'l> Evaluator<'l> {
                 let states = graph.states(machine);
                 let source = states.iter().position(|&(s, _)| s == old.1)?;
                 let target = states.iter().position(|&(s, _)| s == new.1)?;
-                let transitions: Vec<_> = graph
+                let mut transitions: Vec<_> = graph
                     .transitions(machine, source)
                     .into_iter()
                     .filter(|t| t.target == target)
                     .collect();
                 let chosen = transitions
                     .iter()
-                    .find(|t| t.condition.is_some_and(|c| self.condition(path, c, params)))
-                    .or(transitions.first())?;
-                Some(self.transition_duration(path, chosen, params))
+                    .position(|t| t.condition.is_some_and(|c| self.condition(path, c, params)))
+                    .unwrap_or(0);
+                (!transitions.is_empty()).then(|| (path, transitions.swap_remove(chosen)))
             })
     }
 

@@ -159,14 +159,20 @@ clips' foot sync tracks are not read.
 | State | Selected by | Plays |
 |---|---|---|
 | `Ground/Standing/Starts` | `ground_action_start`, `ground_action_direction_id` (`N`, `NE` … `NW`, an `IDToFloat` index into a selector) | `planted_start_<dir>` (0.53 s), crouched: `idle_crouch` |
-| `Ground/Standing/PlantAndTurn` (`…Walks` when walking) | `ground_action_plant_and_turn`, the new direction (`E2W`, `W2E`, `N2S`, `S2N`), `move_speed_horizontal_previous` ≥ 110 (60 walking) for the cross-legged variants | `planted_<e2w…>`, `planted_slow_*`, `planted_walk_*` |
+| `Ground/Standing/PlantAndTurn` (`…Walks` when walking) | `ground_action_plant_and_turn`; `ground_action_direction_id`, the side it turns to (`W` enters `E2W`, `E` `W2E`, `S` `N2S_complex`, `N` `S2N_complex`); a selector on `move_speed_horizontal_previous` (under 80: the new direction's `planted_start_*`; 80 – 170: `planted_slow_*`, walking `planted_walk_*`; over 170: `planted_*`) and the `USE_CROSSLEG` event (the cross-legged variant), which the walks and runs mark over half of their stride (`walk_e` 0 – 0.5, `walk_w` 0.27 – 0.97) and the plant reads off the walk it leaves; `N2S`/`S2N` pick cross-legged by `move_speed_horizontal_previous` ≥ 110 (60 walking) | `planted_<e2w…>`, `planted_slow_*`, `planted_walk_*`, `…_crossleg_*` |
 | `Ground/Standing/TurnOnSpot` → `Turn Loop` | `ground_action_turn_on_spot_loop`, `ground_turn_angle_or_velocity` in degrees/s (positive left; blend points ±7, ±75, ±150, ±450) | `turn_<left/right>_loop_<45/90/180>` |
 | `Ladder` | `ladder_angle_yaw` (front within ±125°), crouch | `ladder_facing_fast_<angle>` poses (`CNmAnimationPoseNode`) at `ladder_cycle` (0 – 1) |
 | `InAir/SM/Jump` → `landing_blend` | `air_action_jump`; once the jump clip (0.4 s) completes, the landing blend | `jump_<stand/n/e/s/w>` (2D on velocity, crouch); then `inair_*` poses at a curve of `air_height_above_ground` |
 
 Transitions: Ground → InAir and → Ladder at once, InAir → Ground 0.2 s (0.05 s with the clip event `MS_AIR_FINISHING`,
-not read), Idle / Move → Starts 0.1 s, Starts → Move 0.2 s, Move → PlantAndTurn 0.1 s, plants back to Move 0.2 –
-0.3 s. "Stopping" is the move blend running down to its idle point (CS2's `Move` → `Idle` is the same clips).
+not read), Idle / Move → Starts 0.1 s, Starts → Move 0.2 s, Move → PlantAndTurn 0.1 s, inside `PlantAndTurn/SM`
+`E2W` ↔ `W2E` 0.1 s and to `N2S`/`S2N` 0.2 s (on a new `ground_action_direction_id`), plants back to Move 0.2 s from
+`E2W`/`W2E` and 0.3 s from `N2S`/`S2N` (on the state's events: `PLANT_AND_TURN_COMPLETE`, a timed event once 0.1 s
+have passed in `PlantAndTurn`, `ground_action_move`, and the state's own `Plant_E2W`…), to Idle 0.35 s. A start's or
+plant's hand-over to Move starts the walk cycle at a time offset (`m_timeOffsetOverrideNodeIdx`: an `IDToFloat` on
+`move_direction_id`, the new motion's eight-way direction): from `E2W` west 0.9, from `W2E` east 0.6, from a start
+east 0.95, west 0.35; CS2's recipes show the walk's times starting there. "Stopping" is the move blend running down to
+its idle point (CS2's `Move` → `Idle` is the same clips).
 
 The graph does not scale a clip's playback to the actual speed. `examples/locomotion_clips.rs` estimates each
 clip's own speed from its feet (a planted ankle slides back under the body): 130 – 205 units/s for the runs, 37 – 83
@@ -270,7 +276,7 @@ The bake (`anim::states`) decides each tick what the graph's inputs would be, fr
 | `deploy_variation` | a repeatable pick in 0 – 1 per player and draw (CS2 picks at random): the Butterfly draws with `draw2` 8 times in 9, as the graph's weights say |
 | `move_type`, `air_action` | ladder (`m_MoveType` 9); air when off the ground 3 ticks or more, or after a jump (`m_nLastJumpTick`); `air_action_jump` when the air time began with a jump, else `air_action_start_fall` |
 | `air_height_above_ground` | the feet over the take-off point while rising, over the landing point while falling |
-| `ground_action` | standing below 10 units/s (20 to leave a turn); a start when leaving a standstill (not just passing through one in a counter-strafe) without walking; a plant and turn when the velocity points against one of the last 0.25 s that was ≥ 60 units/s (a counter-strafe); turning on the spot when standing and the body turns faster than 15°/s (the body yaw turns smoothly in demos, ≤ 20° a tick): a `Small Turn` of the whole angle when the body settles within 10 – 45° (`turn_left_23/34/45`, `turn_right_*`, 1.3 s), the `Turn Loop` on the turn rate beyond, nothing under 10° |
+| `ground_action` | standing below 10 units/s (20 to leave a turn); a start when leaving a standstill, walking too, held 0.1 s as CS2 holds it (`START_HOLD`: `Move` comes back 7 ticks on in CS2's recipes); a plant and turn on a counter-strafe: on its first tick the velocity's change beyond CS2's friction (`sv_friction` 5.2, `sv_stopspeed` 80) is 1 – 26 units a tick at least 135° against the motion (the opposite key; a key let go is friction alone and plants nothing), the player not crouched and moving at 20 units/s or more, and the next tick goes on braking (one tick of it is the speed clamped to a walk); held 0.2 s from the last time it was set off (`PLANT_HOLD`, CS2's 13 ticks), a counter-strafe the other way during it turning the plant over; the direction it turns to is the acceleration's (`direction4`), the speed before it is `move_speed_horizontal_previous`, cross-legged when the walk it leaves is in its `USE_CROSSLEG` half (decided from CS2's pose recipes, demo.md's "Pose recipe"); turning on the spot when standing and the body turns faster than 15°/s (the body yaw turns smoothly in demos, ≤ 20° a tick): a `Small Turn` of the whole angle when the body settles within 10 – 45° (`turn_left_23/34/45`, `turn_right_*`, 1.3 s), the `Turn Loop` on the turn rate beyond, nothing under 10° |
 | `ladder_cycle` | the feet height over 40 units per cycle (the ladder clips repeat every 0.8 s with a foot travelling about 20 units per step: an estimate) |
 | `ladder_angle_yaw`, `ladder_angle_yaw_backwards` | the ladder's direction from the body, positive left (`ladder_facing_fast_45` puts the feet front-left), and that − 180° for the `back` clips beyond ±125°. On ladders the body yaw is the view's (round 5: XANTARES climbs looking 80° to his right, GoodBye with his back to the ladder), so the legs turn back to it. The ladder's direction: where the player walked from over the 16 ticks before mounting and the first 2 on it (else the body yaw then), turned by 180° when the first 8 ticks on it go down (mounted from the top, the player walks away from the ladder's face) |
 | `flinch_body_type`, `flinch_head_type` | each `player_hurt`: the hit group (head; chest, stomach, arms, legs) and the side the hit came from — against `bullet_damage`'s direction in the victim's body frame (the one from the same attacker on that tick), away from the `hegrenade_detonate` position for HE damage, else towards the attacker: `flinch_body_chest_north` plays `flinch_chest` (hit from ahead), `_south` `flinch_chest_rear`, `_east` / `_west` the right and left; by weapon set (`flinch_chest_pistol`, `flinch_head_left_knife`…). Additive, from the hit to the clip's end; fall damage makes none |
@@ -298,7 +304,8 @@ For every tick a player is alive: the weapon in hand (item index → name → ca
 main graph) picks the locomotion set, the velocity is turned into the body's frame by the body yaw, and the set's
 blend gives the clips, weights and cycle length; the phase advances by the tick. A start, plant and turn, turn on
 the spot, jump, fall or ladder replaces that move blend with the locomotion graph's state, blended over the graph's
-transition time. Then, bottom to top (`anim::bake`): planting (`SM0/Planting`: `planting` / `planting_crouch`, the
+transition time; a start or plant hands back to the move blend with its phase set to the transition's time offset
+(`Evaluator::transition_offset`). Then, bottom to top (`anim::bake`): planting (`SM0/Planting`: `planting` / `planting_crouch`, the
 whole body, 0.1 s in and out, the movement under it not evaluated once it is fully in) while the C4's state is 300;
 the planting state's own layer of C4 turns on the spot (`SM0/Planting/SM/Planting0/SM0/TurnOnSpot`, which its
 transitions enter on clip events, `CNmIDEventConditionNode`, that the evaluator does not follow) is not played, unlike
@@ -767,8 +774,9 @@ Not yet: the view punch on the camera; weapon skins.
   targets are the game's code): its feet are not checked against CS2's on stairs yet.
 - **Estimates**: the ladder's direction (from the approach: demos have no ladder normal), the ladder cycle height,
   the flash fading (CS:GO's overlay curve), the fire flinch's end.
-- **Not checked against CS2 yet**: the thresholds of `anim::states` (starts, plants and turns, turns on the spot),
-  the legs on ladders (CS2's chase camera shows only the torso), flinches (the round's hits are seen only from 16 m),
+- **Not checked against CS2 yet**: the thresholds of `anim::states` for turns on the spot and for starts while
+  moving (CS2 also starts when a player speeds up again after a cut: a hit, a landing, a weapon drawn at the round
+  start; OFAST starts from a standstill only), the legs on ladders (CS2's chase camera shows only the torso), flinches (the round's hits are seen only from 16 m),
   the flash's fading curve.
 - **Eye morphs**: the `CBoneConstraintDotToMorph` constraints turn the eyes' look morphs from the eyeballs' aim at
   `eye_target`; OFAST exports no morphs.

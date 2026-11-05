@@ -11,8 +11,9 @@
 //! | `move_type` | ladder (`m_MoveType` 9), air (off the ground for 3 ticks or more, or after a jump), ground |
 //! | `air_action` | `air_action_jump` when the air time began with a jump (`m_nLastJumpTick`), else `air_action_start_fall` |
 //! | `air_height_above_ground` | the height over the take-off point while rising, over the landing point while falling ([`AirRun`]) |
-//! | `ground_action` | [`GroundAction`]: starts from standing, plants and turns on direction reversals, turning on the spot, moving |
-//! | `ground_action_direction_id` | the body-relative direction ([`direction8`], [`direction4`]) |
+//! | `ground_action` | [`GroundAction`]: starts from standing, plants and turns on counter-strafes (the velocity's change beyond friction against the motion, [`plant_triggers`]), turning on the spot, moving; held as long as CS2 holds them ([`START_HOLD`], [`PLANT_HOLD`]) |
+//! | `ground_action_direction_id` | the body-relative direction: of the velocity for a start ([`direction8`]), of the counter-strafe's acceleration for a plant ([`direction4`]) |
+//! | `move_speed_horizontal_previous` | a plant's speed before the counter-strafe |
 //! | `ground_turn_angle_or_velocity` | the body's turn rate while standing (degrees/s, positive to the left), or a small turn's whole angle ([`turn_extent`]) |
 //! | `ladder_cycle` | the height climbed, one cycle every [`LADDER_CYCLE_HEIGHT`] units |
 //! | `ladder_angle_yaw`, `_backwards` | the ladder's direction from the body ([`ladder_bearings`], [`ladder_angles`]) |
@@ -28,10 +29,29 @@ pub const STANDING_SPEED: f32 = 10.0;
 pub const TURN_RATE: f32 = 15.0;
 /// Off the ground for fewer ticks than this, without a jump, is a step or a slope, not air time.
 pub const MIN_AIR_TICKS: usize = 3;
-/// A direction reversal plants and turns when the player moved at least this fast just before (units/s).
-pub const REVERSAL_SPEED: f32 = 60.0;
-/// How far back a reversal looks for the old direction, seconds.
-pub const REVERSAL_WINDOW: f32 = 0.25;
+/// CS2's ground friction (`sv_friction`): each tick takes `max(speed, FRICTION_STOP_SPEED) × FRICTION × interval`
+/// off the horizontal speed. With it, a demo's velocities tell what the movement keys did ([`counter_strafe`]).
+pub const FRICTION: f32 = 5.2;
+/// CS2's `sv_stopspeed` (units/s): below it friction takes off as much as at this speed.
+pub const FRICTION_STOP_SPEED: f32 = 80.0;
+/// A counter-strafe plants only when the player moved at least this fast before it (units/s).
+pub const PLANT_SPEED: f32 = 20.0;
+/// The acceleration beyond friction of a counter-strafe is at least this (units/s², 1 unit a tick at 64 ticks/s:
+/// what is left of a key let go is friction alone).
+pub const PLANT_ACCELERATION: f32 = 64.0;
+/// And at most this (units/s², 26 units a tick): the movement keys add at most `sv_accelerate` (5.5) × the
+/// weapon's speed a second (21.5 units a tick with a knife); faster changes are hits, landings and walls.
+pub const PLANT_ACCELERATION_MAX: f32 = 1664.0;
+/// A counter-strafe's acceleration points at least this far from the motion (degrees).
+pub const PLANT_ANGLE: f32 = 135.0;
+/// CS2 plays a plant for this long after it is set off, or set off again in the same direction (seconds): its
+/// `ground_action` goes back to `ground_action_move` 13 ticks on (74 % of 1,500 plants of four rounds), and the
+/// plant state lets go once 0.1 s have passed in it (`PLANT_AND_TURN_COMPLETE`).
+pub const PLANT_HOLD: f32 = 0.2;
+/// CS2 plays a start for this long (seconds): `Move` comes back 7 ticks on (6 when walking).
+pub const START_HOLD: f32 = 0.1;
+/// Players crouched this far never plant (CS2's crouched counter-strafes keep the crouch walk).
+pub const PLANT_CROUCH: f32 = 0.5;
 /// Height climbed per ladder clip cycle, units: the clips repeat every 0.8 s with a foot travelling about 20 units
 /// per step, two steps per clip (an estimate from `ladder_facing_fast_*`, not checked against CS2 yet).
 pub const LADDER_CYCLE_HEIGHT: f32 = 40.0;
@@ -203,9 +223,10 @@ pub enum GroundAction {
     Move,
     /// `Starts`: `planted_start_<direction>`, from standing into a run.
     Start(&'static str),
-    /// `PlantAndTurn` / `PlantAndTurnWalks`: the old direction reversed into `direction` (`N`, `S`, `E`, `W`) after
-    /// moving at `previous_speed`.
-    PlantAndTurn(&'static str, f32),
+    /// `PlantAndTurn` / `PlantAndTurnWalks`: a counter-strafe turning to `direction` (`N`, `S`, `E`, `W`) after
+    /// moving at `previous_speed` (the graph picks the start, slow or fast clip by it: under 80, to 170, over), and
+    /// whether the walk it came from was in its cross-legged half (`USE_CROSSLEG`).
+    PlantAndTurn(&'static str, f32, bool),
     /// `TurnOnSpot` → `Turn Loop`: standing and turning, `ground_turn_angle_or_velocity` the turn rate.
     Turn,
     /// `TurnOnSpot` → `Small Turn`: one stepping turn of this many degrees (positive left, up to
@@ -312,22 +333,28 @@ pub struct GroundInputs {
     pub walking: bool,
     /// The body's turn rate, degrees/s, positive to the left.
     pub turn_rate: f32,
-    /// The player stood still at the previous tick, and was not at [`REVERSAL_SPEED`] or more over the last
-    /// [`REVERSAL_WINDOW`] (a counter-strafe passes through a standstill without stopping).
+    /// The player stood still at the previous tick.
     pub was_standing: bool,
-    /// A direction reversal at this tick ([`reversal`]): the new direction and the speed before.
-    pub reversal: Option<(&'static str, f32)>,
+    /// A plant set off at this tick ([`plant_triggers`]): the direction it turns to ([`direction4`] of the
+    /// body-relative acceleration) and the speed before.
+    pub plant: Option<(&'static str, f32)>,
+    /// The walk or run the player is in has its cross-legged half on (`USE_CROSSLEG`, for a plant's clip).
+    pub crossleg: bool,
 }
 
-/// The ground action at a tick, given the current one, how long it has played (`elapsed`) of its `length`
-/// (seconds; starts and plants end with their clip), and whether the player was already on the ground (landing or
-/// stepping off a ladder never starts a run):
+/// The ground action at a tick, given the current one, how long it has played (`elapsed`; a plant's since it was
+/// last set off) of its `length` (seconds: [`START_HOLD`], [`PLANT_HOLD`], a small turn's clip), and whether the
+/// player was already on the ground (landing or stepping off a ladder never starts a run). As CS2 decides them
+/// (its pose recipes show when it plants and starts, demo.md's "Pose recipe"):
 ///
-/// - a start or a plant plays to its end (a start stops early if the player stops or reverses); a turn lasts while
-///   the player stays under twice [`STANDING_SPEED`] and turns at more than half [`TURN_RATE`] (both thresholds
-///   with a margin, so a body hovering around them does not flicker between turning and standing);
-/// - a reversal plants and turns; leaving a standstill without walking starts ([`direction8`] of the velocity);
-///   standing and turning faster than [`TURN_RATE`] turns on the spot; anything else moves.
+/// - a start lasts [`START_HOLD`] (less if the player stops or plants); a plant [`PLANT_HOLD`] from the last time
+///   it was set off in its direction, and one set off in another direction takes over (CS2's `E2W` ↔ `W2E`); a
+///   turn lasts while the player stays under twice [`STANDING_SPEED`] and turns at more than half [`TURN_RATE`]
+///   (both thresholds with a margin, so a body hovering around them does not flicker between turning and
+///   standing);
+/// - a counter-strafe plants and turns ([`plant_triggers`]; cross-legged when it comes from the cross-legged half
+///   of a walk); leaving a standstill starts ([`direction8`] of the velocity), walking too; standing and turning
+///   faster than [`TURN_RATE`] turns on the spot; anything else moves.
 pub fn ground_action(
     current: GroundAction,
     elapsed: f32,
@@ -337,23 +364,26 @@ pub fn ground_action(
 ) -> GroundAction {
     let standing = inputs.speed < STANDING_SPEED;
     let keep = match current {
-        GroundAction::Start(_) => elapsed < length && !standing && inputs.reversal.is_none(),
-        GroundAction::PlantAndTurn(..) => elapsed < length,
+        GroundAction::Start(_) => elapsed < length && !standing && inputs.plant.is_none(),
+        GroundAction::PlantAndTurn(direction, ..) => {
+            elapsed < length && inputs.plant.is_none_or(|(d, _)| d == direction)
+        }
         GroundAction::Turn => {
             inputs.speed < 2.0 * STANDING_SPEED && inputs.turn_rate.abs() >= TURN_RATE * 0.5
         }
         GroundAction::SmallTurn(_) => {
-            elapsed < length && inputs.speed < 2.0 * STANDING_SPEED && inputs.reversal.is_none()
+            elapsed < length && inputs.speed < 2.0 * STANDING_SPEED && inputs.plant.is_none()
         }
         GroundAction::Move => false,
     };
     if keep {
         return current;
     }
-    if let Some((direction, before)) = inputs.reversal {
-        return GroundAction::PlantAndTurn(direction, before);
+    if let Some((direction, before)) = inputs.plant {
+        let crossleg = inputs.crossleg && current == GroundAction::Move;
+        return GroundAction::PlantAndTurn(direction, before, crossleg);
     }
-    if !standing && inputs.was_standing && !inputs.walking && on_ground_before {
+    if !standing && inputs.was_standing && on_ground_before {
         return GroundAction::Start(direction8(inputs.body));
     }
     if standing && inputs.turn_rate.abs() >= TURN_RATE {
@@ -362,26 +392,73 @@ pub fn ground_action(
     GroundAction::Move
 }
 
-/// A direction reversal: the velocity `now` (world, units/s) points against one of the recent velocities (`recent`,
-/// within [`REVERSAL_WINDOW`]) that was at least [`REVERSAL_SPEED`] fast, and is itself under way (a third of that).
-/// Returns the new direction ([`direction4`] of `body_now`, the body-relative velocity) and the fastest recent
-/// speed.
-pub fn reversal(
-    recent: &[[f32; 2]],
-    now: [f32; 2],
-    body_now: [f32; 2],
-) -> Option<(&'static str, f32)> {
-    let length = |v: [f32; 2]| v[0].hypot(v[1]);
-    let speed = length(now);
-    if speed < REVERSAL_SPEED / 3.0 {
+/// What a tick's friction leaves of a horizontal velocity (units/s; [`FRICTION`], [`FRICTION_STOP_SPEED`]).
+pub fn after_friction(velocity: [f32; 2], interval: f32) -> [f32; 2] {
+    let speed = velocity[0].hypot(velocity[1]);
+    if speed < 0.1 {
+        return [0.0, 0.0];
+    }
+    let drop = speed.max(FRICTION_STOP_SPEED) * FRICTION * interval;
+    let k = (speed - drop).max(0.0) / speed;
+    [velocity[0] * k, velocity[1] * k]
+}
+
+/// The movement keys' acceleration from one tick's velocity to the next (world, units/s → units/s²): the change
+/// beyond friction, when it is a counter-strafe — between [`PLANT_ACCELERATION`] and [`PLANT_ACCELERATION_MAX`],
+/// at least [`PLANT_ANGLE`] from the motion, the player moving at [`PLANT_SPEED`] or more before.
+pub fn counter_strafe(before: [f32; 2], now: [f32; 2], interval: f32) -> Option<[f32; 2]> {
+    let speed = before[0].hypot(before[1]);
+    if speed < PLANT_SPEED || interval <= 0.0 {
         return None;
     }
-    let fastest = recent.iter().map(|&v| length(v)).fold(0.0f32, f32::max);
-    let against = recent.iter().any(|&v| {
-        let l = length(v);
-        l >= REVERSAL_SPEED && (v[0] * now[0] + v[1] * now[1]) / (l * speed) < -0.5
-    });
-    against.then(|| (direction4(body_now), fastest))
+    let left = after_friction(before, interval);
+    let a = [(now[0] - left[0]) / interval, (now[1] - left[1]) / interval];
+    let size = a[0].hypot(a[1]);
+    if !(PLANT_ACCELERATION..=PLANT_ACCELERATION_MAX).contains(&size) {
+        return None;
+    }
+    let cos = (a[0] * before[0] + a[1] * before[1]) / (size * speed);
+    (cos <= PLANT_ANGLE.to_radians().cos()).then_some(a)
+}
+
+/// One tick of what [`plant_triggers`] reads: the demo tick, the horizontal velocity (world, units/s), and whether
+/// the player could plant (on the ground, off ladders, crouched less than [`PLANT_CROUCH`]).
+pub type PlantSample = Option<(u32, [f32; 2], bool)>;
+
+/// The ticks CS2 plants at, from one player's samples: where a counter-strafe ([`counter_strafe`]) begins (not at
+/// the tick before; both ticks able to plant) and is confirmed by the next tick (a counter-strafe there too, or the
+/// speed still falling: a single tick of it is the speed clamped to a walk), with its acceleration. Against the
+/// plants in CS2's pose recipes (four rounds of build 10955, 3,416 plants of moving players): 73 % on the same
+/// tick, 86 % within a tick (CS2 is a tick earlier when the key went down late in a tick), 489 set off where CS2
+/// did not plant. A key let go is friction alone and plants nothing, as in CS2.
+pub fn plant_triggers(samples: &[PlantSample], interval: f32) -> Vec<Option<[f32; 2]>> {
+    let counter: Vec<Option<[f32; 2]>> = (0..samples.len())
+        .map(|i| {
+            let (Some((t0, v0, able0)), Some((t1, v1, able1))) =
+                (i.checked_sub(1).and_then(|j| samples[j]), samples[i])
+            else {
+                return None;
+            };
+            (t1 == t0 + 1 && able0 && able1)
+                .then(|| counter_strafe(v0, v1, interval))
+                .flatten()
+        })
+        .collect();
+    (0..samples.len())
+        .map(|i| {
+            let a = counter[i]?;
+            if i > 0 && counter[i - 1].is_some() {
+                return None;
+            }
+            let confirmed = match (samples[i], samples.get(i + 1).copied().flatten()) {
+                (Some((t, v, _)), Some((t1, v1, _))) if t1 == t + 1 => {
+                    counter[i + 1].is_some() || v1[0].hypot(v1[1]) < v[0].hypot(v[1]) - 1.0
+                }
+                _ => true,
+            };
+            confirmed.then_some(a)
+        })
+        .collect()
 }
 
 /// Ticks before mounting a ladder whose velocity gives the ladder's direction.
@@ -588,14 +665,15 @@ mod tests {
             walking: false,
             turn_rate: 0.0,
             was_standing: true,
-            reversal: None,
+            plant: None,
+            crossleg: false,
         };
         let moving = GroundInputs {
             speed: 40.0,
             body: [0.0, 40.0],
             ..still
         };
-        // Leaving a standstill starts to the left (W); walking or landing does not.
+        // Leaving a standstill starts to the left (W), walking too; landing does not.
         assert_eq!(
             ground_action(GroundAction::Move, 0.0, 0.0, true, &moving),
             GroundAction::Start("W")
@@ -606,13 +684,13 @@ mod tests {
         };
         assert_eq!(
             ground_action(GroundAction::Move, 0.0, 0.0, true, &walking),
-            GroundAction::Move
+            GroundAction::Start("W")
         );
         assert_eq!(
             ground_action(GroundAction::Move, 0.0, 0.0, false, &moving),
             GroundAction::Move
         );
-        // A start plays out its clip, then moves.
+        // A start lasts START_HOLD, then moves.
         let running = GroundInputs {
             speed: 200.0,
             body: [200.0, 0.0],
@@ -620,9 +698,12 @@ mod tests {
             ..still
         };
         let start = GroundAction::Start("W");
-        assert_eq!(ground_action(start, 0.3, 0.53, true, &running), start);
         assert_eq!(
-            ground_action(start, 0.6, 0.53, true, &running),
+            ground_action(start, 0.05, START_HOLD, true, &running),
+            start
+        );
+        assert_eq!(
+            ground_action(start, 0.11, START_HOLD, true, &running),
             GroundAction::Move
         );
         // Turning on the spot, with some hysteresis.
@@ -665,29 +746,83 @@ mod tests {
             ground_action(GroundAction::Move, 0.5, 0.0, true, &slowing),
             GroundAction::Move
         );
-        // A counter-strafe: right at 200, now left at 30.
-        let recent = [[0.0, -200.0], [0.0, -120.0]];
-        let flip = reversal(&recent, [0.0, 30.0], [0.0, 30.0]);
-        assert_eq!(flip, Some(("W", 200.0)));
-        assert_eq!(
-            reversal(&recent, [0.0, 10.0], [0.0, 10.0]),
-            None,
-            "not under way yet"
-        );
-        assert_eq!(
-            reversal(&[[0.0, 40.0]], [0.0, -30.0], [0.0, -30.0]),
-            None,
-            "too slow before"
-        );
-        let reversing = GroundInputs {
-            speed: 30.0,
-            body: [0.0, 30.0],
-            reversal: flip,
+        // A counter-strafe from a walk in its cross-legged half plants cross-legged, and lasts PLANT_HOLD.
+        let braking = GroundInputs {
+            speed: 99.0,
+            body: [0.0, -99.0],
+            was_standing: false,
+            plant: Some(("W", 107.0)),
+            crossleg: true,
             ..still
         };
+        let plant = GroundAction::PlantAndTurn("W", 107.0, true);
         assert_eq!(
-            ground_action(GroundAction::Move, 0.0, 0.0, true, &reversing),
-            GroundAction::PlantAndTurn("W", 200.0)
+            ground_action(GroundAction::Move, 0.0, 0.0, true, &braking),
+            plant
+        );
+        let after = GroundInputs {
+            plant: None,
+            ..braking
+        };
+        assert_eq!(ground_action(plant, 0.15, PLANT_HOLD, true, &after), plant);
+        assert_eq!(
+            ground_action(plant, 0.21, PLANT_HOLD, true, &after),
+            GroundAction::Move
+        );
+        // Set off again in its own direction it goes on (the bake restarts its hold); the other way it turns over,
+        // and not cross-legged (that comes from a walk only).
+        assert_eq!(
+            ground_action(plant, 0.15, PLANT_HOLD, true, &braking),
+            plant
+        );
+        let back = GroundInputs {
+            plant: Some(("E", 107.0)),
+            ..braking
+        };
+        assert_eq!(
+            ground_action(plant, 0.15, PLANT_HOLD, true, &back),
+            GroundAction::PlantAndTurn("E", 107.0, false)
+        );
+    }
+
+    #[test]
+    fn counter_strafes_plant() {
+        let interval = 1.0 / 64.0;
+        // NiKo on anubis round 14 (ticks 133798 – 133806, sideways units/s): holding the key, letting go (friction
+        // alone: no plant), the opposite key (a plant, confirmed as the speed goes on falling), through zero.
+        let speeds = [-89.0, -101.0, -107.0, -99.0, -74.0, -49.0, -24.0, 1.0, 13.0];
+        let samples: Vec<PlantSample> = speeds
+            .iter()
+            .enumerate()
+            .map(|(k, &v)| Some((133798 + k as u32, [0.0, v], true)))
+            .collect();
+        let fired: Vec<usize> = plant_triggers(&samples, interval)
+            .iter()
+            .enumerate()
+            .filter_map(|(k, a)| a.map(|_| k))
+            .collect();
+        assert_eq!(fired, [4], "the counter-strafe's first tick");
+        let a = plant_triggers(&samples, interval)[4].unwrap();
+        assert!(a[1] > 0.0, "pushing to the left (+y): {a:?}");
+        // Friction alone: 107 → 98.3 in a tick; a perpendicular key is no counter-strafe.
+        assert!(counter_strafe([0.0, 107.0], [0.0, 98.3], interval).is_none());
+        assert!(counter_strafe([0.0, 107.0], [15.0, 98.3], interval).is_none());
+        // A clamp to the walking speed (one tick of it, the speed holding after) is no plant.
+        let clamp: Vec<PlantSample> = [183.0, 168.0, 155.0, 142.0, 120.0, 120.0, 120.0]
+            .iter()
+            .enumerate()
+            .map(|(k, &v)| Some((k as u32, [v, 0.0], true)))
+            .collect();
+        assert!(plant_triggers(&clamp, interval).iter().all(Option::is_none));
+        // Crouched, nothing plants.
+        let crouched: Vec<PlantSample> = samples
+            .iter()
+            .map(|s| s.map(|(t, v, _)| (t, v, false)))
+            .collect();
+        assert!(
+            plant_triggers(&crouched, interval)
+                .iter()
+                .all(Option::is_none)
         );
     }
 
@@ -716,7 +851,8 @@ mod tests {
             walking: false,
             turn_rate: 0.0,
             was_standing: true,
-            reversal: None,
+            plant: None,
+            crossleg: false,
         };
         let small = GroundAction::SmallTurn(30.0);
         assert_eq!(ground_action(small, 0.5, 1.3, true, &still), small);

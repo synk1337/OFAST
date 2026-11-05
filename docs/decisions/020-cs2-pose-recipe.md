@@ -125,6 +125,39 @@ through an A-D jiggle it plays one direction throughout and CS2's plants of both
 under 0.3. The thresholds of `anim::states` were never checked against CS2; the recipes now give CS2's plant ticks to
 re-decide plants by, the next step for both the table and the re-decided poses.
 
+## Update 2026-11-04 (last): plants and starts as CS2 decides them
+
+The recipes give the ticks CS2 plants and starts on, so `anim::states` now decides them by CS2's rules, read off
+four version-3 rounds (details in [demo.md](../formats/demo.md#pose-recipe-cs2s-own-animation)):
+
+- **A plant begins on a counter-strafe's first tick**: the velocity's change beyond CS2's friction (`sv_friction`
+  5.2, `sv_stopspeed` 80) pointing at least 135° against the motion (`states::plant_triggers`). A key let go is
+  friction alone and plants nothing; crouched players do not plant. 73 % of CS2's 3,416 plants of moving players
+  begin on the same tick, 86 % within one. Before, OFAST planted once the velocity had turned (about 5 ticks late).
+- **It is held 0.2 s from the last time it was set off** (CS2's `ground_action` goes back to `move` 13 ticks on;
+  the state's `PLANT_AND_TURN_COMPLETE` is a timed event), and a counter-strafe the other way turns it over
+  (`E2W` ↔ `W2E`). Before, OFAST played the whole 0.53 s clip and passed over reversals meanwhile. **A start is
+  held 0.1 s** (7 ticks), walking ones too.
+- **The clip**: the speed before the counter-strafe picks start, slow or fast plant, and the walk's `USE_CROSSLEG`
+  half the cross-legged one; the walk resumes at the hand-over's time offset (`Evaluator::transition_offset`, on
+  `move_direction_id`, a parameter OFAST had not set), so its phase, and with it the next plant's leg, is CS2's.
+
+Anubis round 14's plant indices now match `planted_*` clips (629 `planted_slow_e2w` 0.64, 611
+`planted_slow_w2e_crossleg` 0.53, 978 `planted_slow_w2e` 0.45, 720 `planted_start_w` 0.53, 348 `planted_start_e`
+0.49; all under 0.3 before), and the table names 96.7 % of its sample tasks (90.5 %); the four version-3 rounds
+96.3 – 96.9 % (86.5 – 90.9 %). With the plants known, a pose recipe could lay an empty pose over the upper body
+where an unknown flinch was to go over it; the recipe player now leaves such a layer out, as it leaves out an
+unknown one. The hitbox fit, recipes on against `OFAST_RECIPE=0` (before in brackets):
+
+- The four version-3 rounds: 185 of 235 hits within an inch (158) against 171 (156); 227 on a posed body (220)
+  against 225 (222).
+- The 10 version-2 rounds: 388 of 505 (373) against 366 (347); 472 posed (470) against 471 (462).
+- Round 5 of the de_nuke pro demo: 40 of 50 (38) against 38 (34); 50 posed with the recipes, 48 without (50): one
+  hit counted twice, 4.5 inches from the re-decided body against 2.2, where the walk's phase drifts differently.
+
+Still re-decided only roughly: CS2's starts while moving (a player speeding up again after a hit, a landing or a
+weapon drawn at the round start), and the plants CS2 sets off a tick before the velocities show them.
+
 ## Alternatives considered
 
 - **Keep re-deciding the graph** (decision 013): works, but every state has to be found again and timed by guess;
