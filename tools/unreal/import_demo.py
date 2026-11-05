@@ -932,8 +932,9 @@ def import_viewmodels(replay):
         if not meshes:
             log("viewmodel %s: no skeletal mesh in %s" % (look, path))
             continue
-        log("viewmodel %s: %s with %d player animations, %d weapons"
-            % (look, meshes[0].get_name(), len(animations), len(entry.get("weapons", []))))
+        log("viewmodel %s: %s with %d player animations, %d weapons, %d sight lenses see-through"
+            % (look, meshes[0].get_name(), len(animations), len(entry.get("weapons", [])),
+               scopes.see_through_lenses(meshes[0])))
         for controller in entry["players"]:
             if controller in animations:
                 viewmodels[controller] = (meshes[0], animations[controller])
@@ -989,7 +990,13 @@ def zoom_keys(eyes, tick0):
     return out
 
 
-def viewmodel_data(player, track, ticks, tick0, punch, sway, eyes):
+def sight_frames(spans, tick0):
+    """A player's sight runs for ofast_viewmodel (its `sights`): [first, last] frames of the cameras file's `sight`
+    runs (the AUG's and SG 553's sight up)."""
+    return [[first - tick0, last - tick0] for first, last, kind in spans or [] if kind == "sight"]
+
+
+def viewmodel_data(player, track, ticks, tick0, punch, sway, eyes, spans=None):
     """What ofast_viewmodel keeps of a player's viewmodel (save_round): the settings they played with, the frames they
     switched hands (m_bLeftHanded, which the switch-hands key flips during a round; `track`'s per sample `ticks`), the
     recoil on their viewmodel (`punch`: export::punch's rows, tick -> camera pitch, yaw, viewmodel pitch, yaw), the
@@ -1004,7 +1011,8 @@ def viewmodel_data(player, track, ticks, tick0, punch, sway, eyes):
     return {"name": player["name"], "fov": settings.get("fov", ofast_viewmodel.CS2_DEFAULT["fov"]),
             "offset": settings.get("offset", ofast_viewmodel.CS2_DEFAULT["offset"]), "hands": hands,
             "punch": [[t - tick0, row[2], row[3]] for t, row in sorted(punch.items())],
-            "sway": [[row[0] - tick0, row[1], row[2]] for row in sway], "zoom": zoom_keys(eyes, tick0)}
+            "sway": [[row[0] - tick0, row[1], row[2]] for row in sway], "zoom": zoom_keys(eyes, tick0),
+            "sights": sight_frames(spans, tick0)}
 
 
 def spawn_agent(player, mesh):
@@ -1229,7 +1237,8 @@ def build(replay, looks):
             key_animation(vm_binding, viewmodel[1], end_frame)
             viewmodel_players.append(viewmodel_data(player, track, ticks, tick0, punches.get(controller, {}),
                                                     sways.get(controller, []),
-                                                    cameras_file["eyes"].get(str(controller), [])))
+                                                    cameras_file["eyes"].get(str(controller), []),
+                                                    (cameras_file.get("scopes") or {}).get(str(controller))))
             # Hidden while a sniper's scope is up, as CS2 hides it (scopes draws the scope instead).
             scoped = scopes.scoped_frames((cameras_file.get("scopes") or {}).get(str(controller)), tick0)
             living = [bool(a) and p is not None and f not in scoped

@@ -27,7 +27,7 @@ blending `idle` and `ironsight_fidget`), and the sniper scope as one shader with
 - **What the view looks through** is the cameras file's `scopes`: the runs of ticks a player is scoped with a gun that
   zooms, `scope` (the gun hidden: its visibility keyed off) or `sight`.
 - **The sight's pose** is baked with the viewmodel: `weapon_ironsight_amount` from `m_iIronSightMode` at the guns'
-  pull-up and put-down speeds.
+  pull-up and put-down speeds; the sight brought to the eye is keyed in Unreal (below, Consequences).
 - **The scope over the view** is a card a few centimetres in front of the POV camera, with a translucent unlit material
   computed from the screen's position (and, for the sight, the picture behind it), shown by keyed visibility over the
   player's spans and only through their eyes (OnlyOwnerSee, as the viewmodel); a replay collection parameter turns
@@ -44,11 +44,12 @@ blending `idle` and `ironsight_fidget`), and the sniper scope as one shader with
 
 ## Consequences
 
-- The sight's card is built but not placed (`scopes.PLACED`): in CS2 the sight comes right up to the eye (its housing
-  0.54 of the screen's height in radius), where its clip holds the gun 17 inches out; CS2's client moves the viewmodel
-  there (CS:GO's iron sight code did, by an eye position and a field of view), which OFAST does not yet, and a blur
-  round the middle of the screen with the gun below it looked wrong. Its lens will be a circle at a fixed size (0.257
-  of the screen's height: the AUG's at viewmodel FOV 68), where CS2 masks with the sight model's lens.
+- In CS2 the sight comes right up to the eye, where its clip holds the gun 17 inches out: CS2's client moves the
+  viewmodel there (CS:GO's iron sight code did, by an eye position and a field of view). OFAST does it in the
+  Viewmodel panel's keying, from a distance fitted to CS2's frame (15 inches toward the eye, the gun drawn at 45 and a
+  first-person scale of 0.5, the sight's rear glass see-through), not from CS2's code; round the lens it shows the
+  inside of the sight's tube where CS2 shows its rear face. The sight card's lens is a circle at a fixed size (0.257
+  of the screen's height), where CS2 masks with the sight model's lens.
 - The sniper scope's slight barrel warp and colour fringe at the rim are not drawn, nor its blur with inaccuracy.
 - A player's first-person flashes and tracers ride on the viewmodel, so a sniper's are hidden while its scope is up
   (whether CS2 draws one through the scope is not checked).

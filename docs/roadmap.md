@@ -261,9 +261,10 @@ player and round.
   CS2's scope drawn (the black ring, its darkened rim, the two lines); the AUG and SG 553 raise their sight (their
   graphs' `weapon_ironsight_amount`, from the demo's `m_iIronSightMode`); **Scope overlay** in the Look panel turns
   the scope off for an editor's own ([decision 026](decisions/026-scopes-over-the-view.md)).
-- [ ] **The AUG's and SG 553's sight at the eye**: CS2's client brings the sight right to the eye (its housing 0.54 of
-  the screen's height in radius) where its clip holds the gun 17 inches out; then the sight's card (blur, dot), built
-  but not placed ([cameras.md](formats/cameras.md#in-unreal)).
+- [x] **The AUG's and SG 553's sight at the eye** (2026-11-05): brought to the eye as CS2's client brings it, 15 inches
+  toward it at the sight's field of view, the rear glass see-through, the world round it blurred and the green dot in
+  it ([cameras.md](formats/cameras.md#in-unreal)). Not yet: the sight's rear face round the lens (OFAST shows the
+  tube's inside), CS2's own placement read from its code rather than fitted to one frame.
 - [x] **Shotguns loading shell by shell** in first person (2026-11-05): the reload clip's shell played again for each
   shell the demo's magazine gains
   ([animation.md](formats/animation.md#first-person-view-animviewmodel-exportviewmodel)).

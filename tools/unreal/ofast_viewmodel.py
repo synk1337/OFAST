@@ -114,7 +114,7 @@ def load_round(sequence):
 # Keying.
 
 
-def key_viewmodel(binding, frames, end_frame, hands, offset, turns):
+def key_viewmodel(binding, frames, end_frame, hands, offset, turns, sights=None):
     """The viewmodel's transform on its camera: moved by `offset` (CS2's viewmodel_offset_x / _y / _z: inches right,
     forward and up; Unreal's camera looks along +X with +Y to the right), mirrored from every frame `hands` says it is
     in the left hand (None: unchanged) — CS2 mirrors the whole viewmodel, the sideways offset with it. Step keys: the
@@ -141,6 +141,16 @@ def key_viewmodel(binding, frames, end_frame, hands, offset, turns):
             channels[name].add_key(unreal.FrameNumber(frame), value, 0.0, unreal.MovieSceneTimeUnit.DISPLAY_RATE,
                                    constant)
         previous = left
+    # The sight at the eye (sight_amounts): the offsets eased to nothing and the gun brought SIGHT_BACK_IN toward the
+    # eye, linear keys at each ramp's ends (the hand as it is then).
+    ordered = sorted(zip(frames, hands))
+    for frame, amount in sight_amounts(sights, end_frame):
+        at = max((i for i, (f, _) in enumerate(ordered) if f <= frame), default=0)
+        side = -1.0 if (ordered[at][1] if ordered else False) else 1.0
+        for name, base, target in (("Location.X", forward, -SIGHT_BACK_IN), ("Location.Y", side * right, 0.0),
+                                   ("Location.Z", up, SIGHT_UP_IN)):
+            channels[name].add_key(unreal.FrameNumber(frame), (base + (target - base) * amount) * UNITS_TO_CM, 0.0,
+                                   unreal.MovieSceneTimeUnit.DISPLAY_RATE, unreal.MovieSceneKeyInterpolation.LINEAR)
     # Source's pitch and yaw negated, as the camera's are; keyed while turned, with a key of nothing on the frame
     # before and the frame after each stretch (a channel holds its first key's value before it, and a linear segment
     # between two stretches would drift).
@@ -165,6 +175,43 @@ def key_viewmodel(binding, frames, end_frame, hands, offset, turns):
         turned = now
         before = frame
     return count
+
+
+# The AUG's and SG 553's sight at the eye (round data `sights`, the cameras file's `sight` runs). CS2 brings the sight
+# right up to the eye: through karrigan's AUG (Falcons vs Vitality, de_anubis, round 6, tick 44348) its housing fills
+# 0.54 of the screen's height in radius, where the sight clip holds the gun 17.4 inches out (anim::viewmodel). As
+# CS:GO's iron sight code did, the viewmodel's offsets go to nothing, it comes SIGHT_BACK_IN inches toward the eye and
+# is drawn at m_flIronSightFOV (45), as the sight comes up (SIGHT_UP_FRAMES: m_flIronSightPullUpSpeed 10, 0.1 s at 64
+# frames a second) and goes down (m_flIronSightPutDownSpeed 8); so near the eye its first-person scale grows to
+# SIGHT_FIRST_PERSON_SCALE, or the project's 2 cm near clip plane would cut the sight (import_demo.FIRST_PERSON_SCALE
+# shrinks the gun toward the camera five times). SIGHT_BACK_IN fitted to CS2's view at that tick (CS2's own placement
+# is in its code): at 10 inches the sight's rear glass showed whole, 0.24 of the height in radius, at 14 the tube's
+# inside with an opening 0.2 of the height in radius, at 16 an opening of 0.33; at 15 the opening is 0.25 of the
+# height in radius, CS2's 0.27, the sight's card's lens circle (scopes.SIGHT_LENS_RADIUS). Its rear glass is
+# see-through (scopes.see_through_lenses). Where CS2 shows the sight's rear face round the lens, this shows the inside
+# of its tube.
+SIGHT_FOV = 45.0
+SIGHT_BACK_IN = 15.0
+SIGHT_UP_IN = 0.0
+SIGHT_FIRST_PERSON_SCALE = 0.5
+SIGHT_UP_FRAMES = 6
+SIGHT_DOWN_FRAMES = 8
+# import_demo.FIRST_PERSON_SCALE (import_demo imports this module).
+FIRST_PERSON_SCALE = 0.2
+
+
+def sight_amounts(sights, end_frame):
+    """[(frame, amount)] keys of how far up the sight is (0 down, 1 at the eye) over a player's sight runs [[first,
+    last] frames]: up over SIGHT_UP_FRAMES from each run's first frame, down over SIGHT_DOWN_FRAMES after its last."""
+    out = []
+    for first, last in sorted(sights or []):
+        up = min(first + SIGHT_UP_FRAMES, last)
+        down = min(last + SIGHT_DOWN_FRAMES, end_frame)
+        if out and out[-1][0] >= first:
+            # Overlapping the one before (its way down not over): go on from it.
+            out = [k for k in out if k[0] < first]
+        out += [(first, 0.0 if not out or out[-1][1] == 0.0 else out[-1][1]), (up, 1.0), (last, 1.0), (down, 0.0)]
+    return out
 
 
 def hands_by_frame(frames, changes, hand):
@@ -230,6 +277,43 @@ def key_zoom(sequence, binding, camera, zoom, view_fov, end_frame):
     return len(zoom)
 
 
+SIGHT_PATHS = ("FirstPersonFieldOfView", "FirstPersonScale")
+
+
+def key_sight_lens(sequence, binding, camera, sights, gun_fov, end_frame):
+    """A POV camera's first-person field of view (`gun_fov`, CS2's degrees) and scale, set, and keyed toward
+    SIGHT_FOV and SIGHT_FIRST_PERSON_SCALE over the player's sight runs (sight_amounts) on its component's binding (as
+    key_zoom). Without sights, no tracks."""
+    component = camera.camera_component
+    component.set_editor_property("first_person_field_of_view", viewmodel_fov_16_9(gun_fov))
+    component.set_editor_property("first_person_scale", FIRST_PERSON_SCALE)
+    name = str(component.get_name())
+    child = None
+    if binding is not None:
+        child = next((c for c in binding.get_child_possessables() if str(c.get_display_name()) == name), None)
+    if child is not None:
+        for track in child.find_tracks_by_type(unreal.MovieSceneFloatTrack):
+            if str(track.get_property_path()) in SIGHT_PATHS:
+                child.remove_track(track)
+    amounts = sight_amounts(sights, end_frame)
+    if not amounts:
+        return 0
+    if child is None:
+        child = sequence.add_possessable(component)
+    linear = unreal.MovieSceneKeyInterpolation.LINEAR
+    for path, low, high in (("FirstPersonFieldOfView", viewmodel_fov_16_9(gun_fov), viewmodel_fov_16_9(SIGHT_FOV)),
+                            ("FirstPersonScale", FIRST_PERSON_SCALE, SIGHT_FIRST_PERSON_SCALE)):
+        track = child.add_track(unreal.MovieSceneFloatTrack)
+        track.set_property_name_and_path(path, path)
+        section = track.add_section()
+        section.set_range(0, end_frame)
+        channel = section.get_all_channels()[0]
+        for frame, amount in amounts:
+            channel.add_key(unreal.FrameNumber(int(frame)), low + (high - low) * amount, 0.0,
+                            unreal.MovieSceneTimeUnit.DISPLAY_RATE, linear)
+    return len(amounts)
+
+
 def bindings_by_name(sequence):
     out = {}
     for binding in sequence.get_bindings():
@@ -263,10 +347,12 @@ def key(sequence, settings=None):
         fov = settings["fov"] if same else player["fov"]
         offset = settings["offset"] if same else player["offset"]
         key_viewmodel(binding, frames, end_frame, hands_by_frame(frames, player["hands"], settings["hand"]), offset,
-                      turns_by_frame(frames, player["punch"], player["sway"], settings["motion"]))
+                      turns_by_frame(frames, player["punch"], player["sway"], settings["motion"]),
+                      player.get("sights"))
         camera = cameras.get("POV %s" % player["name"])
         if camera is not None:
-            camera.camera_component.set_editor_property("first_person_field_of_view", viewmodel_fov_16_9(fov))
+            key_sight_lens(sequence, bindings.get("POV %s" % player["name"]), camera, player.get("sights"), fov,
+                           end_frame)
         count += 1
     assets.set_metadata_tag(sequence, KEYED_TAG, json.dumps(settings, sort_keys=True))
     return count

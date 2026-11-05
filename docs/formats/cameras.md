@@ -172,13 +172,18 @@ from when it is started (its first frame then), so the times only need to be rig
   for an editor's own scope. Checked on m0NESY's AWP (FaZe vs Falcons, de_anubis, round 6, ticks 55030 – 55370):
   the scope from the tick after he scopes in, the gun hidden, the view at 40 then 10, the gun and its bolt back
   between a shot and the zoom's return, no scope in the other players' views.
-- **Sights**: the AUG's and SG 553's zoom and their sight's pose only. In CS2 the sight then fills the middle of the
-  view, its housing about 0.54 of the screen's height in radius (karrigan's AUG, Falcons vs Vitality, de_anubis,
-  round 6, tick 44348), the eye 2 – 3 inches behind it, where the sight clip (`ironsight_fidget_aug`) holds the gun
-  17 inches out: CS2's client brings the viewmodel to the eye (as CS:GO's iron sight code did with its eye position
-  and field of view), which OFAST does not yet. The sight's own card (`scopes.sight_material`: the picture outside a
-  lens of 0.257 × the height blurred, the lens darker, a green dot) is built but not placed until then: a blur round
-  the middle with the gun below it looked wrong.
+- **Sights**: in CS2 the AUG's and SG 553's sight comes right up to the eye and fills the middle of the view
+  (karrigan's AUG, Falcons vs Vitality, de_anubis, round 6, tick 44348: the lens's opening 0.27 of the screen's
+  height in radius), where the sight clip (`ironsight_fidget_aug`) holds the gun 17.4 inches out: CS2's client moves
+  the viewmodel to the eye, as CS:GO's iron sight code did. So does `ofast_viewmodel` over the player's `sights` (the
+  round data's, from the `sight` runs), as the sight comes up in 0.1 s and goes down in 0.125 s: the viewmodel's
+  offsets eased to nothing, the gun brought 15 inches toward the eye (`SIGHT_BACK_IN`, fitted to that frame: the
+  opening 0.25 of the height in radius), drawn at the sight's 45 (`FirstPersonFieldOfView`) and at a first-person
+  scale of 0.5 (from 0.2, which would put the sight inside the 2 cm near plane), with the sight's rear glass
+  (`shared_scope_lens`) a see-through darker glass in the first-person meshes (`scopes.see_through_lenses`). Its card
+  (`scopes.sight_material`, 0.1 s after the run starts): the picture outside a lens of 0.257 × the height blurred,
+  the lens darker, a green dot. Round the lens OFAST shows the inside of the sight's tube where CS2 shows its rear
+  face and bolts.
 - **Shot and HLAE cameras**: a CineCameraActor each (label = `name`, tags `OFAST_replay`, `OFAST_camera`), keyed on
   every key with cubic keys (auto tangents: smooth between ticks in slow motion; sub-frame keys for HLAE frames), its
   focal length keyed from the field of view on a 16:9 sensor (36 × 20.25 mm: `focal = 18 / tan(hfov / 2)`), depth of

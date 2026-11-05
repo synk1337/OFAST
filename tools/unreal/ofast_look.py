@@ -108,7 +108,8 @@ class OfastLook(unreal.PrimaryDataAsset):
     scope_overlay = unreal.uproperty(bool, meta={
         "Category": "Camera", "DisplayName": "Scope overlay",
         "ToolTip": "Through the players' eyes, CS2's scope over the view while they look through a sniper's scope "
-                   "(the black ring and lines). Off: only the zoom, to add your own scope in editing."})
+                   "(the black ring and lines), and the AUG's and SG 553's sight (the blur around it, the dot). Off: "
+                   "only the zoom, to add your own scope in editing."})
     motion_blur = slider(float, "Camera", "Motion blur", 0.0, 1.0,
                          "How much moving things and fast turns smear. 0: none; 0.5 is Unreal's usual.")
     blur_distance = unreal.uproperty(float, meta={

@@ -16,8 +16,8 @@ CS2 draws it after the world (checked on a local game's AWP, AUG and SG 553 at 2
   sight's lens blurred (at a quarter of the resolution in CS2: about 8 pixels of a 1440-high picture, the gun's own
   edges too), the lens a little darker (scope_filter.vmat) and a small green dot in its middle (scope.vmat, the
   crosshair's colour: CS2's default green). The lens is the sight model's (a stencil in CS2); here a circle of
-  SIGHT_LENS_RADIUS x the screen's height, where it shows with the gun at CS2's default viewmodel_fov 68. Built, not
-  placed yet (PLACED): the sight is not at the eye in OFAST yet.
+  SIGHT_LENS_RADIUS x the screen's height, where the sight's opening shows once ofast_viewmodel has brought it to the
+  eye (SIGHT_BACK_IN), its rear glass see-through (see_through_lenses).
 
 Each is a card in front of the player's POV camera (SCOPE_DISTANCE_CM: just past the near clip plane, in front of the
 first-person gun) with a translucent material drawn from the screen's own pixels: shown only while the player looks
@@ -190,19 +190,22 @@ def sight_material():
 
 MATERIALS = {"scope": sniper_material, "sight": sight_material}
 LABELS = {"scope": "Scope", "sight": "Sight"}
-# The cards placed. Not the sight's yet: CS2 also brings the AUG's and SG 553's sight right up to the eye (its housing
-# about 0.54 of the screen's height in radius, the eye 2 - 3 inches behind it), where their sight clip holds the gun
-# 17 inches out; until the viewmodel is moved there too, a blur round the middle of the screen with the gun below it
-# looks wrong (2026-11-05: karrigan's AUG, round 6 of Falcons vs Vitality on de_anubis, against CS2's view).
-PLACED = ("scope",)
+# The cards placed: both since the sight is brought to the eye (ofast_viewmodel's SIGHT_BACK_IN), its lens where the
+# sight card's circle is.
+PLACED = ("scope", "sight")
+# The sight's card shows once the sight is up (ofast_viewmodel.SIGHT_UP_FRAMES): from the run's first frame its blur
+# showed round the middle while the gun was still coming up.
+SIGHT_DELAY_FRAMES = 6
 
 
 def changes(spans, kind, end_frame):
-    """(frame, visible) for a card of `kind` from a player's spans [[first tick, last tick, kind], ...] (frames)."""
+    """(frame, visible) for a card of `kind` from a player's spans [[first tick, last tick, kind], ...] (frames); a
+    sight's from SIGHT_DELAY_FRAMES into its run."""
     out = [(0, False)]
+    delay = SIGHT_DELAY_FRAMES if kind == "sight" else 0
     for first, last, k in spans:
-        if k == kind:
-            out += [(first, True), (min(last + 1, end_frame), False)]
+        if k == kind and first + delay <= last:
+            out += [(first + delay, True), (min(last + 1, end_frame), False)]
     return out
 
 
@@ -239,6 +242,49 @@ def place_scopes(sequence, scopes, tick0, end_frame, cameras, names, spawn_tagge
             own_view_only(card, controller)
             placed += 1
     return placed
+
+
+# The first-person guns' sight glass: CS2's `shared_scope_lens` (the AUG's and SG 553's sights), which CS2's first
+# person draws as a window the view shows through, a little darker (karrigan's AUG against CS2's view, 2026-11-05):
+# the glTF's glass, opaque and shiny, hid the view through the sight brought to the eye. Black at LENS_OPACITY.
+LENS_SLOTS = ("shared_scope_lens",)
+LENS_MATERIAL = "/Game/OFAST/Replays/M_ViewScopeLens"
+LENS_OPACITY = 0.3
+
+
+def lens_material():
+    """LENS_MATERIAL, rebuilt in place: translucent unlit black at LENS_OPACITY."""
+    material = smoke_volumes.empty_material(LENS_MATERIAL)
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
+    material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+    material.set_editor_property("two_sided", True)
+    black = mel.create_material_expression(material, unreal.MaterialExpressionConstant3Vector, -400, -200)
+    black.set_editor_property("constant", unreal.LinearColor(0.0, 0.0, 0.0, 1.0))
+    opacity = mel.create_material_expression(material, unreal.MaterialExpressionConstant, -400, 0)
+    opacity.set_editor_property("r", LENS_OPACITY)
+    if not (mel.connect_material_property(black, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+            and mel.connect_material_property(opacity, "", unreal.MaterialProperty.MP_OPACITY)):
+        raise RuntimeError("scope lens: could not connect its outputs")
+    mel.recompile_material(material)
+    assets.save_loaded_asset(material)
+    return material
+
+
+def see_through_lenses(mesh, lens=None):
+    """Gives a first-person skeletal mesh's sight glass slots (LENS_SLOTS) the see-through lens (lens_material).
+    Returns the number of slots changed (the mesh is saved when any is)."""
+    materials = list(mesh.get_editor_property("materials"))
+    changed = 0
+    for slot in materials:
+        name = str(slot.get_editor_property("material_slot_name")).lower()
+        if any(s in name for s in LENS_SLOTS):
+            lens = lens or lens_material()
+            slot.set_editor_property("material_interface", lens)
+            changed += 1
+    if changed:
+        mesh.set_editor_property("materials", materials)
+        assets.save_loaded_asset(mesh)
+    return changed
 
 
 def set_overlay(on):

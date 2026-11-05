@@ -629,8 +629,8 @@ toward 1 at 10 a second while it is 1 and toward 0 at 8 otherwise (`m_flIronSigh
 starting down with each weapon drawn. The camera zooms with it (the cameras file's eyes,
 [cameras.md](cameras.md#scopes)). The clip's pose holds the gun 17.4 inches out on the eye's line (`wpn` at 17.42,
 −0.17, −1.89, what the bake gives: karrigan's AUG, Falcons vs Vitality, de_anubis, round 6); in CS2 the sight then
-fills the middle of the view, the eye 2 – 3 inches behind its housing: CS2's client also brings the viewmodel to the
-eye, which the bake does not yet.
+fills the middle of the view: CS2's client also brings the viewmodel to the eye, which Unreal's keying does
+(`ofast_viewmodel`, the sight's runs: [cameras.md](cameras.md#in-unreal)).
 
 **Shotguns loading shell by shell** (2026-11-05). The Nova's, Sawed-Off's and XM1014's reload clips load one shell
 after an intro and end in an outro; CS2's graph plays the shell's part again for every shell going in (`Reload0` ↔
