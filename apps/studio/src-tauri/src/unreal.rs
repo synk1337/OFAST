@@ -50,7 +50,7 @@ const LOG: &str = r"Saved\Logs\OFASTSandbox.log";
 
 /// The environment variables OFAST's Unreal scripts read: all are set for each run (empty when unused), so none
 /// leaks from the Studio's own environment.
-const SCRIPT_VARIABLES: [&str; 19] = [
+const SCRIPT_VARIABLES: [&str; 21] = [
     "OFAST_CAMERAS",
     "OFAST_GLTF",
     "OFAST_SHOT",
@@ -70,6 +70,8 @@ const SCRIPT_VARIABLES: [&str; 19] = [
     "OFAST_TICKS",
     "OFAST_FPS",
     "OFAST_MOTION_BLUR",
+    "OFAST_PLAYERS_LAYER",
+    "OFAST_POWER",
 ];
 
 /// Where a sending is.
@@ -394,8 +396,10 @@ pub async fn update_cameras(
 /// [module docs](self)): `preset`'s frames and passes between the demo ticks `ticks` (the end left out; the whole
 /// round without them), `fps` frames a second (60 without it; 250 or more for slow motion made in the editing
 /// software), with motion blur unless `motion_blur` is false (sharp frames, for velocity edits), into a folder of its
-/// own in `Videos\OFAST`. Returns that folder. About two seconds a frame for `final` on a recent graphics card, after
-/// a minute or two of Unreal starting.
+/// own in `Videos\OFAST`, with the players layer if `players_layer`, taking as much of the PC as `power` lets it
+/// ([`Power`]; all of it without it). `frames`, the frames the UI counts, is checked against the disk's free space
+/// (`frame_bytes`). Returns that folder. About a second a frame for `final` on a recent graphics card at full power,
+/// after a minute or two of Unreal starting.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri passes a command's arguments one by one.
 pub async fn render_round(
@@ -405,12 +409,136 @@ pub async fn render_round(
     ticks: Option<[u32; 2]>,
     fps: Option<u32>,
     motion_blur: Option<bool>,
+    players_layer: Option<bool>,
+    power: Option<String>,
+    frames: Option<u32>,
     app: AppHandle,
     sending: tauri::State<'_, Sending>,
 ) -> Result<String, String> {
     let _only = sending.0.try_lock().map_err(|_| BUSY.to_owned())?;
-    let blur = motion_blur.unwrap_or(true);
-    blocking(move || render(&app, &path, round, &preset, ticks, fps, blur)).await?
+    let power = match power {
+        None => Power::Full,
+        Some(name) => Power::parse(&name).ok_or(format!("There is no power \"{name}\"."))?,
+    };
+    let job = RenderJob {
+        preset,
+        ticks,
+        fps,
+        motion_blur: motion_blur.unwrap_or(true),
+        players_layer: players_layer.unwrap_or(false),
+        power,
+        frames,
+    };
+    blocking(move || render(&app, &path, round, &job)).await?
+}
+
+/// About how much disk a frame of `preset` takes (bytes), PNG and EXR, with the players layer if `layer`: measured
+/// 1.2 MB a preview frame (round 17 of Aurora vs FURIA on de_dust2, 1430 frames in 1.7 GB), 12 MB a Final frame and
+/// 35 MB a 4K one without the layer, 100 MB a 4K one with it (2026-11-04 and 06); Final with it about a quarter of that.
+fn frame_bytes(preset: &str, layer: bool) -> u64 {
+    const MB: u64 = 1 << 20;
+    match (preset, layer) {
+        ("preview", _) => 3 * MB / 2,
+        ("4k", false) => 35 * MB,
+        ("4k", true) => 100 * MB,
+        (_, false) => 12 * MB,
+        (_, true) => 25 * MB,
+    }
+}
+
+/// The free space (bytes) on the disk of `dir` for this user, if Windows says.
+#[cfg(windows)]
+fn free_bytes(dir: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetDiskFreeSpaceExW(
+            directory: *const u16,
+            free_to_caller: *mut u64,
+            total: *mut u64,
+            total_free: *mut u64,
+        ) -> i32;
+    }
+    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut free = 0u64;
+    // SAFETY: `wide` is a NUL-terminated path that outlives the call; `free` is a valid u64 and the other two
+    // outputs may be null (GetDiskFreeSpaceExW's documentation).
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(free)
+}
+
+#[cfg(not(windows))]
+fn free_bytes(_dir: &Path) -> Option<u64> {
+    None
+}
+
+/// What a render makes, and how ([`render_round`]'s arguments).
+struct RenderJob {
+    preset: String,
+    ticks: Option<[u32; 2]>,
+    fps: Option<u32>,
+    motion_blur: bool,
+    /// The players layer (`final` and `4k`): each frame rendered twice more, the players alone and the world without
+    /// them.
+    players_layer: bool,
+    power: Power,
+    /// How many frames the UI counts (for the disk's room).
+    frames: Option<u32>,
+}
+
+/// How much of the PC a render may take (the UI's "Power", `tools/unreal/render_round.py`'s POWER). Movie Render
+/// Queue renders flat out; below `Full` the script rests the graphics card between frames (it then draws less power,
+/// and other programs get it) and Unreal runs at a CPU priority below the user's programs, the shader compilers it
+/// starts too (they inherit it). de_nuke in 4K on an RTX 5070 (decision 027): `Full` 2.2 s a frame, 154 W;
+/// `Balanced` 2.5 s, 136 W; `Low` 3.7 s, 106 W.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Power {
+    /// All of it, as fast as the PC goes.
+    Full,
+    /// Rests now and then: about 15 % longer.
+    Balanced,
+    /// Rests as long as it works: about 1.7 times as long.
+    Low,
+}
+
+impl Power {
+    /// The names the UI and the script use.
+    const NAMES: [(&str, Power); 3] = [
+        ("full", Power::Full),
+        ("balanced", Power::Balanced),
+        ("low", Power::Low),
+    ];
+
+    fn parse(name: &str) -> Option<Power> {
+        Self::NAMES
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, p)| *p)
+    }
+
+    fn name(self) -> &'static str {
+        Self::NAMES
+            .iter()
+            .find(|(_, p)| *p == self)
+            .map_or("full", |(n, _)| n)
+    }
+
+    /// Unreal's CPU priority, as a Windows process creation flag (0: normal, the default).
+    fn priority_class(self) -> u32 {
+        /// `BELOW_NORMAL_PRIORITY_CLASS`, from Windows' process creation flags.
+        const BELOW_NORMAL: u32 = 0x0000_4000;
+        match self {
+            Power::Full => 0,
+            Power::Balanced | Power::Low => BELOW_NORMAL,
+        }
+    }
 }
 
 /// The frame rates a render may ask for (`tools/unreal/render_round.py`'s FPS_RANGE).
@@ -445,28 +573,23 @@ fn renders_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(videos.join("OFAST"))
 }
 
-fn render(
-    app: &AppHandle,
-    path: &str,
-    round: u32,
-    preset: &str,
-    ticks: Option<[u32; 2]>,
-    fps: Option<u32>,
-    motion_blur: bool,
-) -> Result<String, String> {
+fn render(app: &AppHandle, path: &str, round: u32, job: &RenderJob) -> Result<String, String> {
     let report = Reporter::new(app, Bar(vec![(Step::Render, RENDER_S)]));
+    let preset = job.preset.as_str();
     if !PRESETS.contains(&preset) {
         return Err(format!("There is no render preset \"{preset}\"."));
     }
-    if let Some(fps) = fps.filter(|f| !FPS_RANGE.contains(f)) {
+    if let Some(fps) = job.fps.filter(|f| !FPS_RANGE.contains(f)) {
         return Err(format!(
             "{fps} frames a second: pick from {} to {}.",
             FPS_RANGE.start(),
             FPS_RANGE.end()
         ));
     }
-    let fps = fps.map(|f| f.to_string()).unwrap_or_default();
-    let blur = if motion_blur { "" } else { "0" };
+    let fps = job.fps.map(|f| f.to_string()).unwrap_or_default();
+    let blur = if job.motion_blur { "" } else { "0" };
+    let layer = if job.players_layer { "1" } else { "" };
+    let ticks = job.ticks;
     let engine = unreal_dir().ok_or("Unreal Engine 5.8 was not found.")?;
     let side = unreal_side().ok_or("OFAST's Unreal project was not found.")?;
     unreal_closed()?;
@@ -487,6 +610,19 @@ fn render(
     }
     let out = renders_dir(app)?;
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    // A disk that fills stops the render and slows the whole PC (a 1-minute 4K render takes about 130 GB).
+    if let (Some(frames), Some(free)) = (job.frames, free_bytes(&out)) {
+        let need = u64::from(frames) * frame_bytes(preset, job.players_layer);
+        if need > free {
+            const GB: f64 = (1u64 << 30) as f64;
+            report.warn(format!(
+                "This render takes about {:.0} GB and the disk has {:.0} GB free: it will stop when the disk is \
+                 full. Render less of the round, or free some space.",
+                need as f64 / GB,
+                free as f64 / GB
+            ));
+        }
+    }
     let sequence = format!("/Game/OFAST/Replays/{prefix}");
     let range = ticks
         .map(|[start, end]| format!("{start},{end}"))
@@ -503,8 +639,7 @@ fn render(
         &engine,
         &side,
         "render_round.py",
-        // Movie Render Queue renders in Play In Editor, which needs a renderer.
-        true,
+        Editor::Drawing(job.power),
         &report,
         run,
         &[
@@ -513,6 +648,8 @@ fn render(
             ("OFAST_TICKS", range.as_ref()),
             ("OFAST_FPS", fps.as_ref()),
             ("OFAST_MOTION_BLUR", blur.as_ref()),
+            ("OFAST_PLAYERS_LAYER", layer.as_ref()),
+            ("OFAST_POWER", job.power.name().as_ref()),
             ("OFAST_SHOT", out.as_os_str()),
         ],
         "rendered ",
@@ -524,7 +661,12 @@ fn render(
             {
                 folder = Some(done.to_owned());
             }
-            report.line(line);
+            // "warning: …": the picture shaded smaller to fit the graphics card, or a render too big for it; kept on
+            // screen.
+            match line.strip_prefix("warning: ") {
+                Some(warning) => report.warn(warning.to_owned()),
+                None => report.line(line),
+            }
         },
     )?;
     folder.ok_or_else(|| "Unreal did not say where it put the frames.".into())
@@ -638,7 +780,7 @@ fn cameras(
         &engine,
         &side,
         "import_cameras.py",
-        false,
+        Editor::Headless,
         &report,
         run,
         &[("OFAST_CAMERAS", made.path.as_os_str())],
@@ -788,7 +930,7 @@ fn send(
             &engine,
             &side,
             "import_map.py",
-            false,
+            Editor::Headless,
             &report,
             run,
             &[
@@ -816,7 +958,7 @@ fn send(
         &engine,
         &side,
         "import_demo.py",
-        false,
+        Editor::Headless,
         &report,
         run,
         &[
@@ -871,13 +1013,13 @@ fn unreal_closed() -> Result<(), String> {
 /// `variables` set (the others empty), handing each `OFAST:` log line to `line` but its progress lines
 /// (`progress <start> <end>`: where its next stage starts and ends, 0 to 1 of its work), which move the bar where
 /// `run` says. Done once the script logged a line starting with `last`; an error when it says `FAILED` or stops
-/// before. Without `draws`, the editor has no renderer.
+/// before. The editor runs as `editor` says.
 #[allow(clippy::too_many_arguments)] // Each is the run's own.
 fn run_script(
     engine: &Path,
     side: &UnrealSide,
     script: &str,
-    draws: bool,
+    editor: Editor,
     report: &Reporter,
     run: Run,
     variables: &[(&str, &std::ffi::OsStr)],
@@ -900,17 +1042,21 @@ fn run_script(
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    if !draws {
-        // Nothing is drawn (no screenshots): no renderer, so the GPU's memory cannot run out.
-        command.arg("-nullrhi");
-    }
+    let priority = match editor {
+        Editor::Headless => {
+            // Nothing is drawn (no screenshots): no renderer, so the GPU's memory cannot run out.
+            command.arg("-nullrhi");
+            0
+        }
+        Editor::Drawing(power) => power.priority_class(),
+    };
     for name in SCRIPT_VARIABLES {
         command.env(name, "");
     }
     for (name, value) in variables {
         command.env(name, value);
     }
-    no_window(&mut command);
+    hidden(&mut command, priority);
     let mut editor = command
         .spawn()
         .map_err(|e| format!("Unreal did not start: {e}"))?;
@@ -1028,15 +1174,30 @@ fn system32(program: &str) -> PathBuf {
 
 /// Starts a console program without a console window (the Studio has none to share).
 fn no_window(command: &mut Command) {
+    hidden(command, 0);
+}
+
+/// [`no_window`], at the priority class `priority` (a Windows process creation flag, [`Power::priority_class`]; 0
+/// for normal).
+fn hidden(command: &mut Command, priority: u32) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         /// `CREATE_NO_WINDOW`, from Windows' process creation flags.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
+        command.creation_flags(CREATE_NO_WINDOW | priority);
     }
     #[cfg(not(windows))]
-    let _ = command;
+    let _ = (command, priority);
+}
+
+/// How the editor runs a script ([`run_script`]).
+#[derive(Debug, Clone, Copy)]
+enum Editor {
+    /// Without a renderer (`-nullrhi`): imports, which draw nothing.
+    Headless,
+    /// With one (Movie Render Queue renders in Play In Editor), taking as much of the PC as the [`Power`] says.
+    Drawing(Power),
 }
 
 #[cfg(test)]
@@ -1104,6 +1265,18 @@ mod tests {
         assert_eq!(progress_line("progress 0.350 0.720"), Some([0.35, 0.72]));
         assert_eq!(progress_line("progress 0.35"), None);
         assert_eq!(progress_line("imported de_dust2"), None);
+    }
+
+    #[test]
+    fn render_powers_are_named_as_the_script_names_them() {
+        for (name, power) in Power::NAMES {
+            assert_eq!(Power::parse(name), Some(power));
+            assert_eq!(power.name(), name);
+        }
+        assert_eq!(Power::parse("max"), None);
+        // Full power keeps Unreal at the normal priority; below it, under the user's programs.
+        assert_eq!(Power::Full.priority_class(), 0);
+        assert_ne!(Power::Low.priority_class(), 0);
     }
 
     #[test]

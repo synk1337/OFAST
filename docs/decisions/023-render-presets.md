@@ -1,7 +1,8 @@
 # 023 — Renders: Movie Render Queue presets, a players layer and depth
 
 - **Date:** 2026-10-27
-- **Status:** accepted (first pass)
+- **Status:** accepted (first pass); the players layer made optional and renders fitted to the graphics card by
+  [027](027-renders-fit-the-card.md)
 
 ## Context
 

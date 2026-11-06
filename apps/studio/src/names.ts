@@ -1,5 +1,14 @@
 // Names for people: weapons as the game's kill feed shows them, highlights, round ends.
-import type { Highlight, KillTag, RenderPreset, RoundEnd, RoundSummary, ShotKind, WeaponClass } from "./api";
+import type {
+  Highlight,
+  KillTag,
+  RenderPower,
+  RenderPreset,
+  RoundEnd,
+  RoundSummary,
+  ShotKind,
+  WeaponClass,
+} from "./api";
 
 /** The game's own names for the weapons of the kill feed (`player_death`'s `weapon` key). */
 const WEAPONS: Record<string, string> = {
@@ -162,5 +171,27 @@ export const RENDER_PRESETS: [RenderPreset, string, string][] = [
     "Final",
     "1920 × 1080 with motion blur, PNG and EXR frames, the players on a layer of their own and the depth",
   ],
-  ["4k", "4K", "3840 × 2160, as Final: about four times as long"],
+  [
+    "4k",
+    "4K",
+    "3840 × 2160, as Final. On a graphics card too small for it Unreal shades the frames smaller and scales them up",
+  ],
+];
+
+/** Render powers (`tools/unreal/render_round.py`'s POWER, `src-tauri/src/unreal.rs`'s Power): name, label, what it
+ * does. */
+export const RENDER_POWERS: [RenderPower, string, string][] = [
+  ["full", "Full", "As fast as your PC goes: Unreal takes the graphics card whenever it can"],
+  [
+    "balanced",
+    "Balanced",
+    "The graphics card rests now and then and Unreal runs below your other programs, so the PC stays usable: " +
+      "about 15 % longer",
+  ],
+  [
+    "low",
+    "Low",
+    "The graphics card rests as long as it works (a third less power, cooler and quieter), Unreal below your other " +
+      "programs: about 1.7 times as long",
+  ],
 ];

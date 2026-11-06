@@ -461,6 +461,15 @@ player and round.
 - [x] **Depth of field keyed over the round** (the user's ask, 2026-11-01, instead of a depth pass for compositing):
   the Cameras panel's focus keys (where the player looks, a player, a distance; blur strength) eased from key to key
   on every camera, and the foreground / background blur limits ([cinematics.md](formats/cinematics.md)).
+- [x] **Renders fit the graphics card** (the user's report, 2026-11-05: a 4K render "slows my PC like crazy"; decision
+  [027](decisions/027-renders-fit-the-card.md)): the card's memory had overflowed into the PC's (11 GB spilled, 1 to 4
+  minutes a frame). The editor's own copy of the world drawn unlit, TSR's history at the picture's size, the shadow
+  pool sized by the pixels shaded, the players layer off unless asked (**Players layer**), and the picture shaded
+  smaller (TSR scaling it up) where the card would not hold it; **Power** (Full, Balanced, Low) rests the card and
+  lowers Unreal's CPU priority; the bar warns when the disk will not hold the frames. de_nuke on 12 GB: 4K at 1.8 s a
+  frame shaded at 50 %, native 4K at 3.4 s.
+- [ ] Rendering in a process of its own (no editor world: the memory an 8 GB card lacks), a players matte instead of
+  the stencil layers (one render).
 - [ ] Movie Render Graph (the classic configuration is "legacy" in 5.8's own code), a depth pass readable in 8 bits,
   the linear (HDR) picture in the EXR, the players layer without the effects near them, other passes (normals,
   motion vectors, one matte per player).

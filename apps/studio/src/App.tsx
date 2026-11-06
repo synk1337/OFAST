@@ -8,7 +8,7 @@ import {
   DemoEntry,
   Environment,
   Look,
-  RenderPreset,
+  RenderOptions,
   RoundSummary,
   VersionCheck,
   demosStamp,
@@ -69,18 +69,13 @@ export function App() {
       `${demo.name}, round ${round.round}: cameras`,
       updateCameras(demo.path, round.start_tick, plan).then((sent) => ({ sent })),
     );
-  const render = (
-    demo: DemoEntry,
-    round: RoundSummary,
-    preset: RenderPreset,
-    ticks: [number, number] | null,
-    fps: number,
-    motionBlur: boolean,
-  ) =>
+  const render = (demo: DemoEntry, round: RoundSummary, options: RenderOptions) =>
     run(
       "Render",
-      `${demo.name}, round ${round.round}, ${preset}, ${fps} fps${motionBlur ? "" : ", sharp"}`,
-      renderRound(demo.path, round.round, preset, ticks, fps, motionBlur).then((folder) => ({ folder })),
+      `${demo.name}, round ${round.round}, ${options.preset}, ${options.fps} fps` +
+        `${options.motionBlur ? "" : ", sharp"}${options.playersLayer ? ", players layer" : ""}, ` +
+        `${options.power} power`,
+      renderRound(demo.path, round.round, options).then((folder) => ({ folder })),
     );
 
   useEffect(() => {
@@ -156,7 +151,7 @@ export function App() {
               send: canSend ? (round, plan, look) => send(opened, round, plan, look) : undefined,
               updateCameras: canSend ? (round, plan) => cameras(opened, round, plan) : undefined,
               render: canSend
-                ? (round, preset, ticks, fps, motionBlur) => render(opened, round, preset, ticks, fps, motionBlur)
+                ? (round, options) => render(opened, round, options)
                 : undefined,
               version,
             }}

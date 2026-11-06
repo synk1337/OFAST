@@ -10,6 +10,8 @@ import {
   Kill,
   Look,
   NO_PLAN,
+  RenderOptions,
+  RenderPower,
   RenderPreset,
   RoundSummary,
   ShotKind,
@@ -21,6 +23,7 @@ import {
 import { RadarView } from "./RadarView";
 import {
   HIGHLIGHT_FILTERS,
+  RENDER_POWERS,
   RENDER_PRESETS,
   SHOTS,
   SMOOTHING,
@@ -39,14 +42,8 @@ export interface UnrealActions {
   send?: (round: RoundSummary, plan: CameraPlan, look: Look) => void;
   /** Changes the cameras of a round sent before. */
   updateCameras?: (round: RoundSummary, plan: CameraPlan) => void;
-  /** Renders a round sent before, between two demo ticks or whole (null), at a frame rate, blurred or sharp. */
-  render?: (
-    round: RoundSummary,
-    preset: RenderPreset,
-    ticks: [number, number] | null,
-    fps: number,
-    motionBlur: boolean,
-  ) => void;
+  /** Renders a round sent before as the options say. */
+  render?: (round: RoundSummary, options: RenderOptions) => void;
   /** Changes when a job ends: the rounds in Unreal are looked up again. */
   version: number;
 }
@@ -230,7 +227,7 @@ function DemoView({ summary, path, unreal }: { summary: DemoSummary; path: strin
               }
               onRender={
                 unreal.render && sent.includes(round.round)
-                  ? (preset, ticks, fps, motionBlur) => unreal.render?.(round, preset, ticks, fps, motionBlur)
+                  ? (options) => unreal.render?.(round, options)
                   : undefined
               }
               onKill={replay ? (tick) => setSeek((s) => ({ tick, n: (s?.n ?? 0) + 1 })) : undefined}
@@ -470,7 +467,7 @@ function RoundFeed({
   /** Changes its cameras in Unreal (missing when it cannot be now, or the round was not sent). */
   onUpdateCameras?: () => void;
   /** Renders it in Unreal (missing when it cannot be now, or the round was not sent). */
-  onRender?: (preset: RenderPreset, ticks: [number, number] | null, fps: number, motionBlur: boolean) => void;
+  onRender?: (options: RenderOptions) => void;
 }) {
   const setShot = (tick: number, kind: ShotKind) => {
     const shots = { ...plan.shots };
@@ -651,9 +648,14 @@ function RoundFeed({
 const BEFORE_KILLS_S = 4;
 const AFTER_KILLS_S = 2;
 
-/** Where the Studio keeps the render frame rate last picked, and whether it was blurred. */
+/** Where the Studio keeps the render frame rate last picked, whether it was blurred, had the players layer, and its
+ * power. */
 const FPS_KEY = "ofast.renderFps";
 const BLUR_KEY = "ofast.renderMotionBlur";
+const LAYER_KEY = "ofast.renderPlayersLayer";
+const POWER_KEY = "ofast.renderPower";
+/** A render's power without a choice kept (the user's pick, 2026-11-06: the PC stays usable). */
+const DEFAULT_POWER: RenderPower = "balanced";
 /** Unreal's frame rate for a render played at normal speed. */
 const DEFAULT_FPS = 60;
 /** Frame rates offered in the render's box (any other can be typed). */
@@ -678,6 +680,25 @@ function storedBlur(): boolean {
   }
 }
 
+/** Whether the last render had the players layer (not without storage: it takes about three times the memory). */
+function storedLayer(): boolean {
+  try {
+    return localStorage.getItem(LAYER_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** The last render's power, or DEFAULT_POWER. */
+function storedPower(): RenderPower {
+  try {
+    const power = localStorage.getItem(POWER_KEY);
+    return RENDER_POWERS.some(([p]) => p === power) ? (power as RenderPower) : DEFAULT_POWER;
+  } catch {
+    return DEFAULT_POWER;
+  }
+}
+
 /** A round's render: the preset, the frame rate, motion blur or sharp frames, how much of the round (around the kills
  * marked by the finder, else all of them), and the button (Movie Render Queue, in Unreal). */
 function RenderRow({
@@ -690,13 +711,18 @@ function RenderRow({
   round: RoundSummary;
   /** The finder's kills in the round (indices into its kills). */
   marked: number[];
-  onRender?: (preset: RenderPreset, ticks: [number, number] | null, fps: number, motionBlur: boolean) => void;
+  onRender?: (options: RenderOptions) => void;
 }) {
   const [preset, setPreset] = useState<RenderPreset>("preview");
   const [whole, setWhole] = useState(false);
-  // Frames a second and motion blur, kept for the next render (this browser's storage; 60 and blurred without it).
+  // Frames a second, motion blur, the players layer and the power, kept for the next render (this browser's storage;
+  // 60, blurred, no layer and balanced without it).
   const [fps, setFps] = useState<number>(storedFps);
   const [blur, setBlur] = useState<boolean>(storedBlur);
+  const [layer, setLayer] = useState<boolean>(storedLayer);
+  const [power, setPower] = useState<RenderPower>(storedPower);
+  // The preview has no players layer (decision 023).
+  const layered = preset !== "preview";
   const fpsValid = Number.isInteger(fps) && fps >= FPS_RANGE[0] && fps <= FPS_RANGE[1];
   const keep = (key: string, value: string) => {
     try {
@@ -712,6 +738,14 @@ function RenderRow({
   const pickBlur = (value: boolean) => {
     setBlur(value);
     keep(BLUR_KEY, String(value));
+  };
+  const pickLayer = (value: boolean) => {
+    setLayer(value);
+    keep(LAYER_KEY, String(value));
+  };
+  const pickPower = (value: RenderPower) => {
+    setPower(value);
+    keep(POWER_KEY, value);
   };
   const kills = (marked.length ? marked.map((i) => round.kills[i]) : round.kills).map((k) => k.tick);
   const seconds = (s: number) => Math.round(s / summary.tick_interval);
@@ -780,12 +814,53 @@ function RenderRow({
       >
         <input type="checkbox" checked={blur} onChange={(e) => pickBlur(e.target.checked)} /> Motion blur
       </label>
+      <label
+        title={
+          layered
+            ? "The players layer, for compositing: the players alone on transparency and the world without them, " +
+              "as two more image folders (text or effects behind the players, grading them apart). Each is one more " +
+              "render of every frame: about three times the graphics memory, so on a smaller card Unreal shades the " +
+              "frames smaller and scales them up."
+            : "Final and 4K only"
+        }
+      >
+        <input
+          type="checkbox"
+          checked={layered && layer}
+          disabled={!layered}
+          onChange={(e) => pickLayer(e.target.checked)}
+        />{" "}
+        Players layer
+      </label>
+      <label title={RENDER_POWERS.find(([p]) => p === power)?.[2]}>
+        Power{" "}
+        <select value={power} onChange={(e) => pickPower(e.target.value as RenderPower)}>
+          {RENDER_POWERS.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
       <span className="muted">
         {clock(length)}
         {fpsValid ? `, ${Math.round(length * fps).toLocaleString()} frames` : ""}
       </span>
       <button
-        onClick={onRender && fpsValid ? () => onRender(preset, ticks, fps, blur) : undefined}
+        onClick={
+          onRender && fpsValid
+            ? () =>
+                onRender({
+                  preset,
+                  ticks,
+                  fps,
+                  motionBlur: blur,
+                  playersLayer: layered && layer,
+                  power,
+                  frames: Math.round(length * fps),
+                })
+            : undefined
+        }
         disabled={!onRender || !fpsValid}
         title={
           !fpsValid

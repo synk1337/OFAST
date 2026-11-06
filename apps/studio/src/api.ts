@@ -231,16 +231,37 @@ export const openInUnreal = (sent: Sent) => invoke<void>("open_in_unreal", { ...
 
 /** Movie Render Queue presets (`tools/unreal/render_round.py`). */
 export type RenderPreset = "preview" | "final" | "4k";
-/** Renders a round already in Unreal between two demo ticks (the whole round with null), `fps` frames a second,
- * with motion blur or sharp (`motionBlur` false, for velocity edits); gives the frames' folder. */
-export const renderRound = (
-  path: string,
-  round: number,
-  preset: RenderPreset,
-  ticks: [number, number] | null,
-  fps: number,
-  motionBlur: boolean,
-) => invoke<string>("render_round", { path, round, preset, ticks, fps, motionBlur });
+/** How much of the PC a render may take (`src-tauri/src/unreal.rs`, Power; `tools/unreal/render_round.py`, POWER):
+ * all of it, or the graphics card three quarters or half of the time with Unreal below the user's other programs. */
+export type RenderPower = "full" | "balanced" | "low";
+/** What a render makes, and how. */
+export interface RenderOptions {
+  preset: RenderPreset;
+  /** Demo ticks, the end left out; null for the whole round. */
+  ticks: [number, number] | null;
+  /** Frames a second. */
+  fps: number;
+  /** Motion blur, or sharp frames (false, for velocity edits). */
+  motionBlur: boolean;
+  /** The players layer (final and 4K): the players alone and the world without them, each one more render a frame. */
+  playersLayer: boolean;
+  power: RenderPower;
+  /** How many frames that makes (the Studio checks the disk has room for them). */
+  frames: number;
+}
+/** Renders a round already in Unreal as `options` say; gives the frames' folder. */
+export const renderRound = (path: string, round: number, options: RenderOptions) =>
+  invoke<string>("render_round", {
+    path,
+    round,
+    preset: options.preset,
+    ticks: options.ticks,
+    fps: options.fps,
+    motionBlur: options.motionBlur,
+    playersLayer: options.playersLayer,
+    power: options.power,
+    frames: options.frames,
+  });
 /** The frame rates a render may ask for (`src-tauri/src/unreal.rs`, FPS_RANGE). */
 export const FPS_RANGE: [number, number] = [10, 1000];
 export const openRenderFolder = (folder: string) => invoke<void>("open_render_folder", { folder });
