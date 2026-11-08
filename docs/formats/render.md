@@ -1,11 +1,12 @@
 # Renders (OFAST's own)
 
 What `tools/unreal/render_round.py` writes (the Studio's "Render", M9, [decision 023](../decisions/023-render-presets.md)):
-a round's Level Sequence rendered by Unreal's Movie Render Queue, as image sequences an editor imports.
+a round's Level Sequence rendered by Unreal's Movie Render Queue, as image sequences or videos an editor imports.
 
 ## Folders
 
-One folder per render, in the folder it was given (the Studio: `Videos\OFAST`):
+One folder per render, in the folder it was given (the Studio: `Videos\OFAST`). As images (`OFAST_OUTPUT` images,
+the default):
 
 ```
 <demo>_r<round>_<preset>[_<fps>fps][_sharp][_<start tick>-<end tick>]/
@@ -18,8 +19,22 @@ One folder per render, in the folder it was given (the Studio: `Videos\OFAST`):
     <demo>_r<round>.<frame>.exr                          final, 4k: all of the above, one layer each
 ```
 
+As videos (`OFAST_OUTPUT` prores, the Studio's **As: ProRes video**; [decision 028](../decisions/028-prores-video.md)):
+
+```
+<demo>_r<round>_<preset>[_<fps>fps][_sharp]_prores[_<start tick>-<end tick>]/
+    <demo>_r<round>_FinalImage.mov                       the picture
+    <demo>_r<round>_FinalImagePlayers.mov                with the players layer: the players alone, with alpha
+    <demo>_r<round>_FinalImageDefaultLayer.mov           with the players layer: the world, the players cut out
+```
+
+Apple ProRes 4444 XQ (`ap4x`), 4:4:4 at 12 bits, alpha in the layers' files, a timecode track, no sound; every camera
+cut of the render one after the other in each file, at the render's frame rate. No depth: the EXR images hold it.
+About 1.3 MB a Final frame (de_nuke round 17, 2026-11-08), against about 2 MB for the picture's PNG.
+
 - `<fps>fps`: the frames a second asked for, when not 60.
 - `sharp`: rendered without motion blur.
+- `prores`: written as videos.
 - `<start tick>-<end tick>`: the demo ticks asked for (the end left out); no suffix for the whole round.
 - `<frame>`: 5 digits (6 above 600 frames a second), the frame's number at the render's frame rate from the
   sequence's start (the round's start), so two renders of one round at one rate line up by number.
@@ -75,8 +90,10 @@ OFAST: graphics card: 11943 MB, the render needs about 10721 MB: shaded at 50 % 
 OFAST: warning: Shaded at 1920x1080 and scaled up to 3840x2160 by Unreal's TSR, to fit the graphics card's 11943 MB.
 ```
 
-On a 12 GB card: Final whole, Final with the players layer at 75 %, 4K at 50 %; on 16 GB 4K whole; on 24 GB
-everything. `OFAST_SCREEN_PERCENTAGE` (10 to 100) forces a size instead. For the memory, the editor's active viewport
+On a 12 GB card: Final whole, 4K at 50 %; the players layer (each of its layers about 1.1 GB more, mostly whatever
+the size) does not fit: Final with it at 67 %, still spilling a little, and warned. On 16 GB 4K whole and Final with
+the players layer whole; on 24 GB everything. With the players layer Unreal also holds 18 to 25 GB of the PC's own
+memory: on a 32 GB PC with other programs open (a game), close them. `OFAST_SCREEN_PERCENTAGE` (10 to 100) forces a size instead. For the memory, the editor's active viewport
 draws unlit during the render (its view mode given back before it quits), TSR's history is the picture's size and the
 shadow page pool has 8192 pages for 1080p shaded, more for more pixels, up to 16384.
 

@@ -468,8 +468,10 @@ player and round.
   smaller (TSR scaling it up) where the card would not hold it; **Power** (Full, Balanced, Low) rests the card and
   lowers Unreal's CPU priority; the bar warns when the disk will not hold the frames. de_nuke on 12 GB: 4K at 1.8 s a
   frame shaded at 50 %, native 4K at 3.4 s.
+- [x] **ProRes video** (the user's ask, 2026-11-08; [decision 028](decisions/028-prores-video.md)): the Studio's
+  **As** picks images or one Apple ProRes 4444 XQ .mov a pass (visually lossless, alpha for the players layer).
 - [ ] Rendering in a process of its own (no editor world: the memory an 8 GB card lacks), a players matte instead of
-  the stencil layers (one render).
+  the stencil layers (one render), ProRes checked in VEGAS Pro 16 and with the players layer's alpha.
 - [ ] Movie Render Graph (the classic configuration is "legacy" in 5.8's own code), a depth pass readable in 8 bits,
   the linear (HDR) picture in the EXR, the players layer without the effects near them, other passes (normals,
   motion vectors, one matte per player).

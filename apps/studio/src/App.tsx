@@ -73,7 +73,8 @@ export function App() {
     run(
       "Render",
       `${demo.name}, round ${round.round}, ${options.preset}, ${options.fps} fps` +
-        `${options.motionBlur ? "" : ", sharp"}${options.playersLayer ? ", players layer" : ""}, ` +
+        `${options.motionBlur ? "" : ", sharp"}${options.playersLayer ? ", players layer" : ""}` +
+        `${options.output === "prores" ? ", ProRes" : ""}, ` +
         `${options.power} power`,
       renderRound(demo.path, round.round, options).then((folder) => ({ folder })),
     );

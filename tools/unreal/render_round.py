@@ -22,6 +22,8 @@ Inputs (environment variables):
                      the world without them; without it the picture and its depth only
     OFAST_SCREEN_PERCENTAGE  optional: the share of the picture's size Unreal shades at (10 to 100), instead of the one
                      that fits the graphics card (fit_card)
+    OFAST_OUTPUT     optional images | prores (OUTPUTS below): PNG (and EXR) frames, or one Apple ProRes 4444 XQ video
+                     (.mov) per pass; images without it
 
 Every preset is also saved as a Movie Render Queue configuration, /Game/OFAST/Render/OFAST_<preset>, to pick in
 Unreal's own Movie Render Queue window (Window > Cinematics > Movie Render Queue, then the job's settings).
@@ -40,6 +42,8 @@ What a render holds (docs/formats/render.md):
   render of its own;
 - the picture's size kept, Unreal shading it smaller when the graphics card's memory would not hold it (fit_card):
   TSR scales it up from the frame's samples;
+- as images, or as videos (OFAST_OUTPUT prores): one Apple ProRes 4444 XQ .mov a pass, every camera cut in it, the
+  players layer's with their transparency; no depth (an 8-bit picture of centimetres clips: the EXR holds it);
 - the console variables the smokes need (smoke_volumes.SMOKE_CVARS);
 - the round's cinematics and focus keys (the Cameras panel's, ofast_cameras.py), made again from their file and cut
   in, and its depth of field's blur limits;
@@ -77,6 +81,11 @@ PRESETS = {
     "final": {"resolution": (1920, 1080), "temporal": 8, "exr": True, "depth": True},
     "4k": {"resolution": (3840, 2160), "temporal": 8, "exr": True, "depth": True},
 }
+# What a render writes (OFAST_OUTPUT; also listed in unreal.rs, OUTPUTS, and names.ts): image sequences, or Apple ProRes
+# 4444 XQ videos (Unreal's AppleProResMedia plugin, enabled in the project): visually lossless, 4:4:4 at 12 bits with
+# an alpha channel, the master format editors import (VEGAS Pro, Premiere, After Effects, Resolve), about the PNGs'
+# size. Unreal's other "uncompressed" video (Avid, .mxf) is 8-bit 4:2:2 without alpha: less than the PNGs hold.
+OUTPUTS = ("images", "prores")
 OUTPUT_FPS = 60
 # The frame rates a render may ask for (OFAST_FPS); also checked by the Studio (unreal.rs, FPS_RANGE).
 FPS_RANGE = (10, 1000)
@@ -116,14 +125,16 @@ SHADOW_PAGES = (8192, 16384)
 SHADOW_PAGES_MPIXELS = 2.07  # the pixels SHADOW_PAGES[0] holds (a 1080p picture), millions
 # The card's memory a render takes (MB), fitted to de_nuke round 17 (the heaviest map) on a 12 GB RTX 5070 with the
 # above (2026-11-06): 1080p 10.3 GB; 4K shaded at 50 % 10.7 GB, at 67 % 11.7, at 100 % 13.0 (1.2 GB of it spilled,
-# 3.4 s a frame); 1080p with the players layer 1.1 GB more a layer. FIT_BASE_MB whatever the size (the map, the
-# players, the editor and Windows' desktop, about 1 GB), FIT_MB_PER_OUTPUT_MPIXEL a million pixels of the picture,
-# FIT_MB_PER_MPIXEL a million pixels shaded, FIT_MB_PER_LAYER_MPIXEL for each layer of the players layer (its own
-# histories: the frame's work memory is shared), and the shadow pages' FIT_MB_PER_SHADOW_PAGE (a page and its HZB).
+# 3.4 s a frame); with the players layer at 75 % (2026-11-08) 1.4 GB more a layer. FIT_BASE_MB whatever the size (the
+# map, the players, the editor and Windows' desktop, about 1 GB), FIT_MB_PER_OUTPUT_MPIXEL a million pixels of the
+# picture, FIT_MB_PER_MPIXEL a million pixels shaded, for each layer of the players layer FIT_MB_PER_LAYER and
+# FIT_MB_PER_LAYER_MPIXEL a million pixels (its own view: Lumen's radiance cache and histories, mostly whatever the
+# size; the frame's work memory is shared), and the shadow pages' FIT_MB_PER_SHADOW_PAGE (a page and its HZB).
 FIT_BASE_MB = 8636
 FIT_MB_PER_OUTPUT_MPIXEL = 67
 FIT_MB_PER_MPIXEL = 173
-FIT_MB_PER_LAYER_MPIXEL = 550
+FIT_MB_PER_LAYER = 1100
+FIT_MB_PER_LAYER_MPIXEL = 250
 FIT_MB_PER_SHADOW_PAGE = 0.143
 # Left free on the card for the user's other programs, beyond the desktop FIT_BASE_MB holds.
 FIT_RESERVE_MB = 500
@@ -190,7 +201,7 @@ def need_mb(resolution, layer, percent):
     mpixels = resolution[0] * resolution[1] / 1e6
     shaded = mpixels * (percent / 100.0) ** 2
     return (FIT_BASE_MB + FIT_MB_PER_OUTPUT_MPIXEL * mpixels + FIT_MB_PER_MPIXEL * shaded
-            + (FIT_MB_PER_LAYER_MPIXEL * shaded * LAYERS if layer else 0)
+            + ((FIT_MB_PER_LAYER + FIT_MB_PER_LAYER_MPIXEL * shaded) * LAYERS if layer else 0)
             + FIT_MB_PER_SHADOW_PAGE * shadow_pages(resolution, percent))
 
 
@@ -257,22 +268,35 @@ def make_config(name, preset):
     return config
 
 
-def render_into(job, folder, frames, fps, preset, blur, cvars, layer):
+def render_into(job, folder, frames, fps, preset, blur, cvars, layer, output_kind):
     """The job's own copy of its configuration: the output folder, the frame rate, the range in the sequence's
     frames (or all: Movie Render Queue takes the range in the sequence's own frames, one a demo tick, whatever the
     output's rate), the console variables `cvars` (the round's depth of field's blur limits, the size Unreal shades
     at and the shadow pages that fit the card), without motion blur (`blur` False) the preset's samples spatial
-    (SHARP_CVARS), and with `layer` the players layer."""
+    (SHARP_CVARS), with `layer` the players layer, and for `output_kind` "prores" videos instead of images."""
     config = job.get_configuration()
     settings = config.find_or_add_setting_by_class(unreal.MoviePipelineConsoleVariableSetting)
     for cvar, value in dict(cvars, **({} if blur else SHARP_CVARS)).items():
         settings.add_or_update_console_variable(cvar, value)
+    deferred = config.find_or_add_setting_by_class(unreal.MoviePipelineDeferredPassBase)
     if layer:
-        deferred = config.find_or_add_setting_by_class(unreal.MoviePipelineDeferredPassBase)
         deferred.set_editor_property("actor_layers", [unreal.ActorLayer(name=PLAYERS_LAYER)])
         deferred.set_editor_property("add_default_layer", True)
         deferred.set_editor_property("accumulator_includes_alpha", True)
+    if output_kind == "prores":
+        for kind in (unreal.MoviePipelineImageSequenceOutput_PNG, unreal.MoviePipelineImageSequenceOutput_EXR):
+            image = config.find_setting_by_class(kind)
+            if image is not None:
+                config.remove_setting(image)
+        # The depth pass would be a video of clipped centimetres.
+        deferred.set_editor_property("additional_post_process_materials", [])
+        prores = config.find_or_add_setting_by_class(unreal.MoviePipelineAppleProResOutput)
+        prores.set_editor_property("codec", unreal.AppleProResEncoderCodec.PRO_RES_4444XQ)
+        prores.set_editor_property("include_audio", False)
     output = config.find_or_add_setting_by_class(unreal.MoviePipelineOutputSetting)
+    if output_kind == "prores":
+        # One file a pass (Movie Render Queue drops a video's frame numbers), every camera cut in it, in the folder.
+        output.set_editor_property("file_name_format", "{sequence_name}_{render_pass}")
     output.set_editor_property("output_directory", unreal.DirectoryPath(folder))
     output.set_editor_property("output_frame_rate", unreal.FrameRate(fps, 1))
     output.set_editor_property("zero_pad_frame_numbers", FRAME_DIGITS_FAST if fps > 600 else FRAME_DIGITS)
@@ -312,6 +336,9 @@ def main():
     share = POWER[power]
     preset = PRESETS[name]
     layer = os.environ.get("OFAST_PLAYERS_LAYER") == "1" and preset["depth"]
+    output_kind = os.environ.get("OFAST_OUTPUT") or "images"
+    if output_kind not in OUTPUTS:
+        raise RuntimeError("output %r: one of %s" % (output_kind, ", ".join(OUTPUTS)))
     # The size Unreal shades at, to fit the card (fit_card), and the shadow pages that size asks for: set before the
     # level loads too, so that the editor's own copy of the world gets no bigger pool if it draws lit before
     # unlit_editor.
@@ -328,7 +355,8 @@ def main():
     # A folder per rate, blur and range: frames are numbered from the sequence's start, so two ranges (or two rates) in
     # one folder would interleave, and a sharp render would overwrite a blurred one.
     folder = ("%s_%s" % (path.rsplit("/", 1)[-1], name) + ("_%dfps" % fps if fps != OUTPUT_FPS else "")
-              + ("" if blur else "_sharp") + ("_%d-%d" % tuple(ticks) if frames else ""))
+              + ("" if blur else "_sharp") + ("_prores" if output_kind == "prores" else "")
+              + ("_%d-%d" % tuple(ticks) if frames else ""))
     folder = os.path.join(os.environ["OFAST_SHOT"], folder)
     progress(0.0, SETUP_SHARE)
     levels.load_level(level)
@@ -344,9 +372,10 @@ def main():
     ofast_viewmodel.key(sequence)
     players = put_players_in_layer()
     config = make_config(name, preset)
-    log("render %s, preset %s, %d frames a second, %s, frames %s, %s, power %s, into %s"
+    log("render %s, preset %s, %d frames a second, %s, frames %s, %s, %s, power %s, into %s"
         % (path, name, fps, "motion blur" if blur else "sharp", frames or "all",
-           "%d player actors in layer %r" % (players, PLAYERS_LAYER) if layer else "no players layer", power, folder))
+           "%d player actors in layer %r" % (players, PLAYERS_LAYER) if layer else "no players layer",
+           "ProRes 4444 XQ" if output_kind == "prores" else "images", power, folder))
     shaded = (round(preset["resolution"][0] * percent / 100.0), round(preset["resolution"][1] * percent / 100.0))
     log("graphics card: %s MB, the render needs about %d MB: shaded at %d %% (%dx%d), %d shadow pages"
         % (card_mb if card_mb is not None else "unknown", need_mb(preset["resolution"], layer, percent), percent,
@@ -409,7 +438,7 @@ def main():
         job.set_editor_property("job_name", "OFAST %s" % name)
         job.set_configuration(config)
         render_into(job, folder, frames, fps, preset, blur,
-                    dict(ofast_cameras.blur_limits(ofast_cameras.load_record(sequence)), **fitted), layer)
+                    dict(ofast_cameras.blur_limits(ofast_cameras.load_record(sequence)), **fitted), layer, output_kind)
         executor = unreal.MoviePipelinePIEExecutor()
         executor.on_executor_finished_delegate.add_callable(finished)
         # Kept for the whole render: a Python callable bound to a delegate goes when its owner does.

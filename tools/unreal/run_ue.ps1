@@ -37,6 +37,8 @@ param(
     [switch]$PlayersLayer,
     # For render_round.py: full (default), balanced or low: how much of the graphics card the render takes.
     [string]$Power = "",
+    # For render_round.py: images (default: PNG and EXR frames) or prores (one ProRes 4444 XQ .mov a pass).
+    [string]$Output = "",
     # For import_demo.py: extra screenshots through players' eyes, "tick:controller,tick:controller".
     [string]$PovShots = "",
     # For import_demo.py: close-ups of players, "tick:controller,tick:controller".
@@ -83,6 +85,7 @@ $env:OFAST_FPS = $Fps
 $env:OFAST_MOTION_BLUR = if ($NoMotionBlur) { "0" } else { "" }
 $env:OFAST_PLAYERS_LAYER = if ($PlayersLayer) { "1" } else { "" }
 $env:OFAST_POWER = $Power
+$env:OFAST_OUTPUT = $Output
 $env:OFAST_POV_SHOTS = $PovShots
 $env:OFAST_CLOSE_SHOTS = $CloseShots
 $env:OFAST_VIEW_SHOTS = $ViewShots

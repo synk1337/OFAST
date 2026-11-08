@@ -2,6 +2,7 @@
 import type {
   Highlight,
   KillTag,
+  RenderOutput,
   RenderPower,
   RenderPreset,
   RoundEnd,
@@ -175,6 +176,23 @@ export const RENDER_PRESETS: [RenderPreset, string, string][] = [
     "4k",
     "4K",
     "3840 × 2160, as Final. On a graphics card too small for it Unreal shades the frames smaller and scales them up",
+  ],
+];
+
+/** What a render writes (`tools/unreal/render_round.py`'s OUTPUTS, `src-tauri/src/unreal.rs`'s OUTPUTS): name, label,
+ * what it is. */
+export const RENDER_OUTPUTS: [RenderOutput, string, string][] = [
+  [
+    "images",
+    "Images",
+    "A PNG image a frame (lossless), and for Final and 4K an EXR a frame with every pass and the depth: import " +
+      "them as an image sequence",
+  ],
+  [
+    "prores",
+    "ProRes video",
+    "One Apple ProRes 4444 XQ video (.mov), every cut in it: visually lossless, about the size of the images, the " +
+      "players layer with its transparency; no depth. Opens in VEGAS Pro, Premiere, After Effects and Resolve",
   ],
 ];
 

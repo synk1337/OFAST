@@ -11,6 +11,7 @@ import {
   Look,
   NO_PLAN,
   RenderOptions,
+  RenderOutput,
   RenderPower,
   RenderPreset,
   RoundSummary,
@@ -23,6 +24,7 @@ import {
 import { RadarView } from "./RadarView";
 import {
   HIGHLIGHT_FILTERS,
+  RENDER_OUTPUTS,
   RENDER_POWERS,
   RENDER_PRESETS,
   SHOTS,
@@ -654,6 +656,7 @@ const FPS_KEY = "ofast.renderFps";
 const BLUR_KEY = "ofast.renderMotionBlur";
 const LAYER_KEY = "ofast.renderPlayersLayer";
 const POWER_KEY = "ofast.renderPower";
+const OUTPUT_KEY = "ofast.renderOutput";
 /** A render's power without a choice kept (the user's pick, 2026-11-06: the PC stays usable). */
 const DEFAULT_POWER: RenderPower = "balanced";
 /** Unreal's frame rate for a render played at normal speed. */
@@ -689,6 +692,16 @@ function storedLayer(): boolean {
   }
 }
 
+/** What the last render wrote, images without storage. */
+function storedOutput(): RenderOutput {
+  try {
+    const output = localStorage.getItem(OUTPUT_KEY);
+    return RENDER_OUTPUTS.some(([o]) => o === output) ? (output as RenderOutput) : "images";
+  } catch {
+    return "images";
+  }
+}
+
 /** The last render's power, or DEFAULT_POWER. */
 function storedPower(): RenderPower {
   try {
@@ -721,6 +734,7 @@ function RenderRow({
   const [blur, setBlur] = useState<boolean>(storedBlur);
   const [layer, setLayer] = useState<boolean>(storedLayer);
   const [power, setPower] = useState<RenderPower>(storedPower);
+  const [output, setOutput] = useState<RenderOutput>(storedOutput);
   // The preview has no players layer (decision 023).
   const layered = preset !== "preview";
   const fpsValid = Number.isInteger(fps) && fps >= FPS_RANGE[0] && fps <= FPS_RANGE[1];
@@ -746,6 +760,10 @@ function RenderRow({
   const pickPower = (value: RenderPower) => {
     setPower(value);
     keep(POWER_KEY, value);
+  };
+  const pickOutput = (value: RenderOutput) => {
+    setOutput(value);
+    keep(OUTPUT_KEY, value);
   };
   const kills = (marked.length ? marked.map((i) => round.kills[i]) : round.kills).map((k) => k.tick);
   const seconds = (s: number) => Math.round(s / summary.tick_interval);
@@ -832,6 +850,16 @@ function RenderRow({
         />{" "}
         Players layer
       </label>
+      <label title={RENDER_OUTPUTS.find(([o]) => o === output)?.[2]}>
+        As{" "}
+        <select value={output} onChange={(e) => pickOutput(e.target.value as RenderOutput)}>
+          {RENDER_OUTPUTS.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
       <label title={RENDER_POWERS.find(([p]) => p === power)?.[2]}>
         Power{" "}
         <select value={power} onChange={(e) => pickPower(e.target.value as RenderPower)}>
@@ -857,6 +885,7 @@ function RenderRow({
                   motionBlur: blur,
                   playersLayer: layered && layer,
                   power,
+                  output,
                   frames: Math.round(length * fps),
                 })
             : undefined

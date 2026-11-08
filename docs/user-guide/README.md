@@ -301,10 +301,16 @@ put text or effects behind them, or to colour them alone) and the world without 
 every frame, so it takes about three times the graphics memory, and longer.
 
 Every render keeps its size, but Unreal shades the frames smaller when your graphics card's memory would not hold
-them, and its TSR scales them up from the 8 samples of each frame: on a 12 GB card, Final is shaded whole, Final with
-the players layer at 75 %, 4K at 50 % (1920 × 1080); on 16 GB 4K is whole, on 24 GB everything. The bar says so when
-it happens. A render too big for the card spills into the PC's memory, which makes every frame slow and the whole PC
-with it; the bar warns about that too (the players layer at 4K on a 12 GB card, any render on 8 GB).
+them, and its TSR scales them up from the 8 samples of each frame: on a 12 GB card, Final is shaded whole and 4K at
+50 % (1920 × 1080); on 16 GB 4K is whole, on 24 GB everything. The bar says so when it happens. A render too big for
+the card spills into the PC's memory, which makes every frame slow and the whole PC with it; the bar warns about that
+too: the players layer on a 12 GB card (it needs 16 GB), any render on 8 GB. The players layer also takes 18 to 25 GB
+of the PC's own memory: close games and other big programs before such a render.
+
+**As** says what the render writes: **Images** (a PNG a frame, and for Final and 4K an EXR a frame with the depth),
+or **ProRes video**: one Apple ProRes 4444 XQ file (.mov) with every cut in it, visually lossless, about the size of
+the images, the players layer as two more videos with their transparency (no depth). Import the .mov like any video;
+VEGAS Pro, Premiere, After Effects and Resolve read it.
 
 **Power** says how much of the PC the render may take: **Full** as fast as it goes; **Balanced** (the default) rests
 the graphics card now and then and runs Unreal below your other programs, so the PC stays usable while it renders

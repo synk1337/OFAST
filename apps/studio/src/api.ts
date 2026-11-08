@@ -234,6 +234,9 @@ export type RenderPreset = "preview" | "final" | "4k";
 /** How much of the PC a render may take (`src-tauri/src/unreal.rs`, Power; `tools/unreal/render_round.py`, POWER):
  * all of it, or the graphics card three quarters or half of the time with Unreal below the user's other programs. */
 export type RenderPower = "full" | "balanced" | "low";
+/** What a render writes (`tools/unreal/render_round.py`, OUTPUTS): image sequences (PNG, and EXR for Final and 4K),
+ * or one Apple ProRes 4444 XQ video a pass. */
+export type RenderOutput = "images" | "prores";
 /** What a render makes, and how. */
 export interface RenderOptions {
   preset: RenderPreset;
@@ -246,6 +249,7 @@ export interface RenderOptions {
   /** The players layer (final and 4K): the players alone and the world without them, each one more render a frame. */
   playersLayer: boolean;
   power: RenderPower;
+  output: RenderOutput;
   /** How many frames that makes (the Studio checks the disk has room for them). */
   frames: number;
 }
@@ -260,6 +264,7 @@ export const renderRound = (path: string, round: number, options: RenderOptions)
     motionBlur: options.motionBlur,
     playersLayer: options.playersLayer,
     power: options.power,
+    output: options.output,
     frames: options.frames,
   });
 /** The frame rates a render may ask for (`src-tauri/src/unreal.rs`, FPS_RANGE). */

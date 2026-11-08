@@ -76,8 +76,11 @@ Unreal's own allocation lists (`rhi.DumpResourceMemory`, grouped by owner) durin
 
 - de_nuke round 17 on the 12 GB card (2026-11-06): 1080p 10.3 GB, no spill; 4K at 50 % (1920 × 1080 shaded) 10.7 GB,
   1.8 s a frame; at 67 % 11.7 GB, 2.2 s; native 4K 13.0 GB, 1.2 GB spilled but 3.4 s a frame (before: 1 to 4 minutes).
-- The fit picks on a 12 GB card: Final 100 %, Final with the players layer 75 %, 4K 50 %; 16 GB: 4K 100 %, 4K with the
-  layer 60 %; 24 GB: all native. Below about 9 GB nothing fits: the map, the players, the editor and the desktop take
+- The fit picks on a 12 GB card: Final 100 %, 4K 50 %; the players layer does not fit (each layer about 1.1 GB more,
+  mostly whatever the size: de_nuke's Final with it at 75 % spilled 1.3 GB, 2026-11-08), Final with it is shaded at
+  67 % and warned. 16 GB: 4K 100 %, Final with the layer 100 %, 4K with it 60 %; 24 GB: all native. The players
+  layer also takes Unreal to 18 to 25 GB of the PC's memory: with a game open beside it (14.8 GB free), free memory
+  fell under 0.4 GB. Below about 9 GB nothing fits: the map, the players, the editor and the desktop take
   8.6 GB on de_nuke before a pixel is shaded; such renders spill (warned) but no longer tenfold.
 - The model is fitted to one map and one card: lighter maps get a smaller size than they could hold. Each render logs
   its estimate beside the card's size (`graphics card: …`) to check it against.

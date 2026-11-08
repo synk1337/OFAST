@@ -50,7 +50,7 @@ const LOG: &str = r"Saved\Logs\OFASTSandbox.log";
 
 /// The environment variables OFAST's Unreal scripts read: all are set for each run (empty when unused), so none
 /// leaks from the Studio's own environment.
-const SCRIPT_VARIABLES: [&str; 21] = [
+const SCRIPT_VARIABLES: [&str; 22] = [
     "OFAST_CAMERAS",
     "OFAST_GLTF",
     "OFAST_SHOT",
@@ -72,6 +72,7 @@ const SCRIPT_VARIABLES: [&str; 21] = [
     "OFAST_MOTION_BLUR",
     "OFAST_PLAYERS_LAYER",
     "OFAST_POWER",
+    "OFAST_OUTPUT",
 ];
 
 /// Where a sending is.
@@ -396,10 +397,10 @@ pub async fn update_cameras(
 /// [module docs](self)): `preset`'s frames and passes between the demo ticks `ticks` (the end left out; the whole
 /// round without them), `fps` frames a second (60 without it; 250 or more for slow motion made in the editing
 /// software), with motion blur unless `motion_blur` is false (sharp frames, for velocity edits), into a folder of its
-/// own in `Videos\OFAST`, with the players layer if `players_layer`, taking as much of the PC as `power` lets it
-/// ([`Power`]; all of it without it). `frames`, the frames the UI counts, is checked against the disk's free space
-/// (`frame_bytes`). Returns that folder. About a second a frame for `final` on a recent graphics card at full power,
-/// after a minute or two of Unreal starting.
+/// own in `Videos\OFAST`, with the players layer if `players_layer`, as `output` says (`OUTPUTS`; images without
+/// it), taking as much of the PC as `power` lets it ([`Power`]; all of it without it). `frames`, the frames the UI
+/// counts, is checked against the disk's free space (`frame_bytes`). Returns that folder. About a second a frame for
+/// `final` on a recent graphics card at full power, after a minute or two of Unreal starting.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri passes a command's arguments one by one.
 pub async fn render_round(
@@ -411,6 +412,7 @@ pub async fn render_round(
     motion_blur: Option<bool>,
     players_layer: Option<bool>,
     power: Option<String>,
+    output: Option<String>,
     frames: Option<u32>,
     app: AppHandle,
     sending: tauri::State<'_, Sending>,
@@ -420,6 +422,10 @@ pub async fn render_round(
         None => Power::Full,
         Some(name) => Power::parse(&name).ok_or(format!("There is no power \"{name}\"."))?,
     };
+    let output = output.unwrap_or_else(|| OUTPUTS[0].to_owned());
+    if !OUTPUTS.contains(&output.as_str()) {
+        return Err(format!("A render cannot be written as \"{output}\"."));
+    }
     let job = RenderJob {
         preset,
         ticks,
@@ -427,23 +433,35 @@ pub async fn render_round(
         motion_blur: motion_blur.unwrap_or(true),
         players_layer: players_layer.unwrap_or(false),
         power,
+        output,
         frames,
     };
     blocking(move || render(&app, &path, round, &job)).await?
 }
 
-/// About how much disk a frame of `preset` takes (bytes), PNG and EXR, with the players layer if `layer`: measured
+/// What a render writes (`tools/unreal/render_round.py`'s OUTPUTS, the UI's `names.ts`): image sequences (PNG, and
+/// EXR for `final` and `4k`), or one Apple ProRes 4444 XQ video a pass.
+const OUTPUTS: [&str; 2] = ["images", "prores"];
+
+/// About how much disk a frame of `preset` takes (bytes) as `output`, with the players layer if `layer`: measured
 /// 1.2 MB a preview frame (round 17 of Aurora vs FURIA on de_dust2, 1430 frames in 1.7 GB), 12 MB a Final frame and
-/// 35 MB a 4K one without the layer, 100 MB a 4K one with it (2026-11-04 and 06); Final with it about a quarter of that.
-fn frame_bytes(preset: &str, layer: bool) -> u64 {
+/// 35 MB a 4K one without the layer, 100 MB a 4K one with it (2026-11-04 and 06), Final with it about a quarter of
+/// that; as ProRes 4444 XQ 1.3 MB a Final frame (de_nuke round 17, 2026-11-08), four times that in 4K, the layer's two
+/// videos about as much again (mostly transparent).
+fn frame_bytes(preset: &str, output: &str, layer: bool) -> u64 {
     const MB: u64 = 1 << 20;
-    match (preset, layer) {
-        ("preview", _) => 3 * MB / 2,
+    let prores = output == "prores";
+    let base = match (preset, prores) {
+        ("preview", false) => 3 * MB / 2,
+        ("preview", true) => MB / 2,
+        ("4k", false) if layer => 100 * MB,
         ("4k", false) => 35 * MB,
-        ("4k", true) => 100 * MB,
+        ("4k", true) => 6 * MB,
+        (_, false) if layer => 25 * MB,
         (_, false) => 12 * MB,
-        (_, true) => 25 * MB,
-    }
+        (_, true) => 3 * MB / 2,
+    };
+    if prores && layer { 2 * base } else { base }
 }
 
 /// The free space (bytes) on the disk of `dir` for this user, if Windows says.
@@ -489,6 +507,8 @@ struct RenderJob {
     /// them.
     players_layer: bool,
     power: Power,
+    /// What it writes: one of [`OUTPUTS`].
+    output: String,
     /// How many frames the UI counts (for the disk's room).
     frames: Option<u32>,
 }
@@ -612,7 +632,7 @@ fn render(app: &AppHandle, path: &str, round: u32, job: &RenderJob) -> Result<St
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     // A disk that fills stops the render and slows the whole PC (a 1-minute 4K render takes about 130 GB).
     if let (Some(frames), Some(free)) = (job.frames, free_bytes(&out)) {
-        let need = u64::from(frames) * frame_bytes(preset, job.players_layer);
+        let need = u64::from(frames) * frame_bytes(preset, &job.output, job.players_layer);
         if need > free {
             const GB: f64 = (1u64 << 30) as f64;
             report.warn(format!(
@@ -650,6 +670,7 @@ fn render(app: &AppHandle, path: &str, round: u32, job: &RenderJob) -> Result<St
             ("OFAST_MOTION_BLUR", blur.as_ref()),
             ("OFAST_PLAYERS_LAYER", layer.as_ref()),
             ("OFAST_POWER", job.power.name().as_ref()),
+            ("OFAST_OUTPUT", job.output.as_ref()),
             ("OFAST_SHOT", out.as_os_str()),
         ],
         "rendered ",
