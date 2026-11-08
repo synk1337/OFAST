@@ -650,8 +650,9 @@ function RoundFeed({
 const BEFORE_KILLS_S = 4;
 const AFTER_KILLS_S = 2;
 
-/** Where the Studio keeps the render frame rate last picked, whether it was blurred, had the players layer, and its
- * power. */
+/** Where the Studio keeps the render size and frame rate last picked, whether it was blurred, had the players layer,
+ * what it wrote and its power. */
+const PRESET_KEY = "ofast.renderPreset";
 const FPS_KEY = "ofast.renderFps";
 const BLUR_KEY = "ofast.renderMotionBlur";
 const LAYER_KEY = "ofast.renderPlayersLayer";
@@ -663,6 +664,16 @@ const DEFAULT_POWER: RenderPower = "balanced";
 const DEFAULT_FPS = 60;
 /** Frame rates offered in the render's box (any other can be typed). */
 const FPS_CHOICES = [30, 60, 120, 240, 250, 300, 500];
+
+/** The render size last picked, 1080p without one. */
+function storedPreset(): RenderPreset {
+  try {
+    const preset = localStorage.getItem(PRESET_KEY);
+    return RENDER_PRESETS.some(([p]) => p === preset) ? (preset as RenderPreset) : "1080p";
+  } catch {
+    return "1080p";
+  }
+}
 
 /** The render frame rate last picked, or DEFAULT_FPS. */
 function storedFps(): number {
@@ -726,17 +737,15 @@ function RenderRow({
   marked: number[];
   onRender?: (options: RenderOptions) => void;
 }) {
-  const [preset, setPreset] = useState<RenderPreset>("preview");
   const [whole, setWhole] = useState(false);
-  // Frames a second, motion blur, the players layer and the power, kept for the next render (this browser's storage;
-  // 60, blurred, no layer and balanced without it).
+  // The size, frames a second, motion blur, the players layer, the files and the power, kept for the next render
+  // (this browser's storage; 1080p, 60, blurred, no layer, images and balanced without it).
+  const [preset, setPreset] = useState<RenderPreset>(storedPreset);
   const [fps, setFps] = useState<number>(storedFps);
   const [blur, setBlur] = useState<boolean>(storedBlur);
   const [layer, setLayer] = useState<boolean>(storedLayer);
   const [power, setPower] = useState<RenderPower>(storedPower);
   const [output, setOutput] = useState<RenderOutput>(storedOutput);
-  // The preview has no players layer (decision 023).
-  const layered = preset !== "preview";
   const fpsValid = Number.isInteger(fps) && fps >= FPS_RANGE[0] && fps <= FPS_RANGE[1];
   const keep = (key: string, value: string) => {
     try {
@@ -744,6 +753,10 @@ function RenderRow({
     } catch {
       // No storage: the choice lasts this page only.
     }
+  };
+  const pickPreset = (value: RenderPreset) => {
+    setPreset(value);
+    keep(PRESET_KEY, value);
   };
   const pickFps = (value: number) => {
     setFps(value);
@@ -782,7 +795,7 @@ function RenderRow({
     <div className="cameras-row">
       <label title={RENDER_PRESETS.find(([p]) => p === preset)?.[2]}>
         Render{" "}
-        <select value={preset} onChange={(e) => setPreset(e.target.value as RenderPreset)}>
+        <select value={preset} onChange={(e) => pickPreset(e.target.value as RenderPreset)}>
           {RENDER_PRESETS.map(([value, label]) => (
             <option key={value} value={value}>
               {label}
@@ -834,21 +847,13 @@ function RenderRow({
       </label>
       <label
         title={
-          layered
-            ? "The players layer, for compositing: the players alone on transparency and the world without them, " +
-              "as two more image folders (text or effects behind the players, grading them apart). Each is one more " +
-              "render of every frame: about three times the graphics memory, so on a smaller card Unreal shades the " +
-              "frames smaller and scales them up."
-            : "Final and 4K only"
+          "The players layer, for compositing: the players alone on transparency and the world without them, as " +
+          "two more image folders or videos (text or effects behind the players, grading them apart). Each is one " +
+          "more render of every frame: a graphics card under 16 GB does not hold it whole, so Unreal shades the " +
+          "frames smaller and scales them up."
         }
       >
-        <input
-          type="checkbox"
-          checked={layered && layer}
-          disabled={!layered}
-          onChange={(e) => pickLayer(e.target.checked)}
-        />{" "}
-        Players layer
+        <input type="checkbox" checked={layer} onChange={(e) => pickLayer(e.target.checked)} /> Players layer
       </label>
       <label title={RENDER_OUTPUTS.find(([o]) => o === output)?.[2]}>
         As{" "}
@@ -883,7 +888,7 @@ function RenderRow({
                   ticks,
                   fps,
                   motionBlur: blur,
-                  playersLayer: layered && layer,
+                  playersLayer: layer,
                   power,
                   output,
                   frames: Math.round(length * fps),

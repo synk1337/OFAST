@@ -2,7 +2,8 @@
 
 - **Date:** 2026-10-27
 - **Status:** accepted (first pass); the players layer made optional and renders fitted to the graphics card by
-  [027](027-renders-fit-the-card.md)
+  [027](027-renders-fit-the-card.md); videos beside the images by [028](028-prores-video.md); the presets became the
+  picture's sizes, 720p, 1080p, 2K (2560 × 1440) and 4K, all rendered alike, on 2026-11-08 (the user's ask)
 
 ## Context
 

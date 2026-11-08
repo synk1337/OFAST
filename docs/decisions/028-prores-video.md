@@ -23,11 +23,16 @@ What Unreal 5.8's Movie Render Queue can write as video, read from its plugins' 
 
 - **A choice, images or ProRes** (the user's pick, 2026-11-08): `OFAST_OUTPUT` images | prores, the Studio's **As**
   (Images, ProRes video), remembered like the other render settings; images by default.
-- **ProRes 4444 XQ**: visually lossless (the format studios master in), 4:4:4 at 12 bits, the players layer's files
-  with their alpha, and about the size of the PNGs (1.3 MB a Final frame against about 2 MB for the PNG, de_nuke round
-  17). One .mov a pass, every camera cut in it, in the render's folder (`<demo>_r<round>_<pass>.mov`, the folder
-  ending in `_prores`); no depth (a video of clipped centimetres), no sound. The project enables Unreal's
-  `AppleProResMedia` plugin (the Studio's project template carries it to installed projects with the next version).
+- **ProRes 4444**: visually lossless (the format studios master in), 4:4:4 at 12 bits, a 16-bit alpha channel for the
+  players layer's files, and about the size of the PNGs (1.3 MB a 1080p frame as 4444 XQ against about 2 MB for the
+  PNG, de_nuke round 17). One .mov a pass, every camera cut in it, in the render's folder
+  (`<demo>_r<round>_<pass>.mov`, the folder ending in `_prores`); no depth (a video of clipped centimetres), no sound.
+  The project enables Unreal's `AppleProResMedia` plugin (the Studio's project template carries it to installed
+  projects with the next version).
+- **Not 4444 XQ** (the first pick): Unreal 5.8 encodes XQ frames with their alpha (their frame headers say 16-bit
+  alpha) but writes the file's sample description as 24-bit (`AppleProResEncoder.cpp`, `GetBitDepth` answers 32 for
+  `ProRes_4444` only), so an editor reads the players layer as opaque. 4444 is labelled 32-bit; XQ's extra data rate
+  is for camera originals, past what an 8-sample render holds.
 
 ## Alternatives considered
 
@@ -40,6 +45,7 @@ What Unreal 5.8's Movie Render Queue can write as video, read from its plugins' 
 
 - One file to import, and the frame rate is in it: no image sequence settings in the editor.
 - ProRes in VEGAS Pro 16 is not checked yet (newer VEGAS Pro, Premiere, After Effects and Resolve read ProRes 4444).
-- The players layer's alpha in ProRes is not checked yet in a render (the writer writes it for 4444 and 4444 XQ).
+- The players layer's alpha: the frames carry it (checked in their headers, 2026-11-08); an editor's view of it is not
+  checked yet.
 - Unreal's warning "Failed to evaluate camera to create cur/prev camera locations" at a render's first camera cut is
   older than this (in image renders too) and harmless.

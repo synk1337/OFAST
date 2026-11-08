@@ -229,13 +229,13 @@ export const updateCameras = (path: string, startTick: number, plan: CameraPlan)
 export const sentRounds = (path: string) => invoke<number[]>("sent_rounds", { path });
 export const openInUnreal = (sent: Sent) => invoke<void>("open_in_unreal", { ...sent });
 
-/** Movie Render Queue presets (`tools/unreal/render_round.py`). */
-export type RenderPreset = "preview" | "final" | "4k";
+/** Movie Render Queue presets, the picture's size (`tools/unreal/render_round.py`). */
+export type RenderPreset = "720p" | "1080p" | "2k" | "4k";
 /** How much of the PC a render may take (`src-tauri/src/unreal.rs`, Power; `tools/unreal/render_round.py`, POWER):
  * all of it, or the graphics card three quarters or half of the time with Unreal below the user's other programs. */
 export type RenderPower = "full" | "balanced" | "low";
-/** What a render writes (`tools/unreal/render_round.py`, OUTPUTS): image sequences (PNG, and EXR for Final and 4K),
- * or one Apple ProRes 4444 XQ video a pass. */
+/** What a render writes (`tools/unreal/render_round.py`, OUTPUTS): image sequences (PNG and EXR),
+ * or one Apple ProRes 4444 video a pass. */
 export type RenderOutput = "images" | "prores";
 /** What a render makes, and how. */
 export interface RenderOptions {

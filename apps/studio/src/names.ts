@@ -163,19 +163,21 @@ export const SMOOTHING: [number, string][] = [
   [0.7, "very smooth"],
 ];
 
-/** Render presets (`tools/unreal/render_round.py`, also listed in `src-tauri/src/unreal.rs`): name, label, what it
- * makes. */
+/** Render presets, the picture's size (`tools/unreal/render_round.py`, also listed in `src-tauri/src/unreal.rs`):
+ * name, label, what it makes. Each is rendered alike: 8 samples a frame (motion blur), the depth, the players layer
+ * when asked. */
 export const RENDER_PRESETS: [RenderPreset, string, string][] = [
-  ["preview", "Preview", "1280 × 720 PNG frames, quick: to check the cuts and the timing"],
+  ["720p", "720p", "1280 × 720: the quickest, to check the cuts and the timing"],
+  ["1080p", "1080p", "1920 × 1080 (Full HD)"],
   [
-    "final",
-    "Final",
-    "1920 × 1080 with motion blur, PNG and EXR frames, the players on a layer of their own and the depth",
+    "2k",
+    "2K",
+    "2560 × 1440 (1440p). On a graphics card too small for it Unreal shades the frames smaller and scales them up",
   ],
   [
     "4k",
     "4K",
-    "3840 × 2160, as Final. On a graphics card too small for it Unreal shades the frames smaller and scales them up",
+    "3840 × 2160 (UHD). On a graphics card too small for it Unreal shades the frames smaller and scales them up",
   ],
 ];
 
@@ -185,14 +187,14 @@ export const RENDER_OUTPUTS: [RenderOutput, string, string][] = [
   [
     "images",
     "Images",
-    "A PNG image a frame (lossless), and for Final and 4K an EXR a frame with every pass and the depth: import " +
-      "them as an image sequence",
+    "A PNG image a frame (lossless), and an EXR a frame with every pass and the depth: import them as an image " +
+      "sequence",
   ],
   [
     "prores",
     "ProRes video",
-    "One Apple ProRes 4444 XQ video (.mov), every cut in it: visually lossless, about the size of the images, the " +
-      "players layer with its transparency; no depth. Opens in VEGAS Pro, Premiere, After Effects and Resolve",
+    "One Apple ProRes 4444 video (.mov), every cut in it: visually lossless, a tenth of the images' size (no EXR " +
+      "or depth), the players layer with its transparency. Opens in VEGAS Pro, Premiere, After Effects and Resolve",
   ],
 ];
 

@@ -27,7 +27,7 @@ param(
     [string]$Sequence = "",
     # For shoot_sequence.py: demo ticks to screenshot, "153200,154050"; for render_round.py: the range, "start,end".
     [string]$Ticks = "",
-    # For render_round.py: preview, final or 4k.
+    # For render_round.py: the picture's size, 720p, 1080p, 2k or 4k.
     [string]$Preset = "",
     # For render_round.py: frames a second (60 by default; 250 or more for slow motion in the editing software).
     [string]$Fps = "",
@@ -37,7 +37,7 @@ param(
     [switch]$PlayersLayer,
     # For render_round.py: full (default), balanced or low: how much of the graphics card the render takes.
     [string]$Power = "",
-    # For render_round.py: images (default: PNG and EXR frames) or prores (one ProRes 4444 XQ .mov a pass).
+    # For render_round.py: images (default: PNG and EXR frames) or prores (one ProRes 4444 .mov a pass).
     [string]$Output = "",
     # For import_demo.py: extra screenshots through players' eyes, "tick:controller,tick:controller".
     [string]$PovShots = "",

@@ -289,27 +289,33 @@ are replaced at the next change.
 
 ## Rendering a round
 
-Once a round is in Unreal, **Render** (under the round's cameras) renders it to images you import into your editor
-(After Effects, Premiere, DaVinci Resolve, Vegas), through the cameras and cuts of its sequence. Pick:
+Once a round is in Unreal, **Render** (under the round's cameras) renders it to images or a video you import into your
+editor (Vegas, After Effects, Premiere, DaVinci Resolve), through the cameras and cuts of its sequence. Pick the
+size: **720p** (1280 × 720), **1080p** (1920 × 1080), **2K** (2560 × 1440) or **4K** (3840 × 2160); every size is
+rendered with the same quality (8 samples a frame, motion blur or sharp: see below, and the depth for fog or depth of
+field), so 720p is simply the quickest, to check the cuts and the timing. Then how much of the round: **around the
+kills** (from 4 seconds before the first to 2 seconds after the last; if you opened the round from a highlight in the
+finder, only that highlight's kills) or **the whole round**. The length is shown beside it. Close Unreal first (the
+render needs OFAST's project to itself), and if you can, close CS2 and games: the render needs the graphics card's
+memory. Unreal loads the map without a window (a minute or two), then opens one that shows the frames as they render
+(closing it stops the render); the bar counts the percent done, and the sound plays at the end, as for a sending.
+1080p takes about a second a frame on a recent graphics card at full power (about 2 with the players layer), at 60
+frames a second (a 20-second highlight: 1200 frames, about 20 minutes); 2K and 4K about 2 seconds on a 12 GB card.
 
-- **Preview**: 1280 × 720, quick, to check the cuts and the timing.
-- **Final**: 1920 × 1080 with motion blur (or sharp: see below), and the depth (for fog or depth of field).
-- **4K**: as Final at 3840 × 2160.
-
-**Players layer** (Final and 4K, off by default) adds what compositing needs: the players on a layer of their own (to
-put text or effects behind them, or to colour them alone) and the world without them. Each is one more render of
-every frame, so it takes about three times the graphics memory, and longer.
+**Players layer** (off by default) adds what compositing needs: the players on a layer of their own (to put text or
+effects behind them, or to colour them alone) and the world without them. Each is one more render of every frame, so
+it takes about three times the graphics memory, and longer.
 
 Every render keeps its size, but Unreal shades the frames smaller when your graphics card's memory would not hold
-them, and its TSR scales them up from the 8 samples of each frame: on a 12 GB card, Final is shaded whole and 4K at
-50 % (1920 × 1080); on 16 GB 4K is whole, on 24 GB everything. The bar says so when it happens. A render too big for
-the card spills into the PC's memory, which makes every frame slow and the whole PC with it; the bar warns about that
-too: the players layer on a 12 GB card (it needs 16 GB), any render on 8 GB. The players layer also takes 18 to 25 GB
-of the PC's own memory: close games and other big programs before such a render.
+them, and its TSR scales them up from the 8 samples of each frame: on a 12 GB card, 720p and 1080p are shaded whole,
+2K at 85 % and 4K at 50 % (1920 × 1080); on 16 GB every size is whole, on 24 GB everything. The bar says so when it
+happens. A render too big for the card spills into the PC's memory, which makes every frame slow and the whole PC
+with it; the bar warns about that too: the players layer on a 12 GB card (it needs 16 GB), any render on 8 GB. The
+players layer also takes 18 to 25 GB of the PC's own memory: close games and other big programs before such a render.
 
-**As** says what the render writes: **Images** (a PNG a frame, and for Final and 4K an EXR a frame with the depth),
-or **ProRes video**: one Apple ProRes 4444 XQ file (.mov) with every cut in it, visually lossless, about the size of
-the images, the players layer as two more videos with their transparency (no depth). Import the .mov like any video;
+**As** says what the render writes: **Images** (a PNG a frame, and an EXR a frame with the depth), or **ProRes
+video**: one Apple ProRes 4444 file (.mov) with every cut in it, visually lossless, a tenth of the images' size (it
+has no EXR or depth), the players layer as two more videos with their transparency. Import the .mov like any video;
 VEGAS Pro, Premiere, After Effects and Resolve read it.
 
 **Power** says how much of the PC the render may take: **Full** as fast as it goes; **Balanced** (the default) rests
@@ -317,20 +323,11 @@ the graphics card now and then and runs Unreal below your other programs, so the
 (about 15 % longer); **Low** rests the card as long as it works (a third less power, cooler and quieter, about 1.7
 times as long). The frames are the same at any power.
 
-and how much of the round: **around the kills** (from 4 seconds before the first to 2 seconds after the last; if you
-opened the round from a highlight in the finder, only that highlight's kills) or **the whole round**. The length is
-shown beside it. Close Unreal first (the render needs OFAST's project to itself), and if you can, close CS2: the
-render needs the graphics card's memory. Unreal loads the map without a window (a minute or two), then opens one
-that shows the frames as they render (closing it stops the render); the bar counts the percent done, and the sound
-plays at the end, as for a sending. Final takes
-about a second a frame on a recent graphics card at full power (about 2 with the players layer), at 60 frames a second
-(a 20-second highlight: 1200 frames, about 20 minutes); 4K about 2 seconds on a 12 GB card.
-
 The **fps** box beside it is the frames a second: 60 plays at normal speed. For slow motion made in your editing
 software (Vegas, Premiere, After Effects), render more, 250 for example: slowed to a quarter, the clip still has over
 60 frames a second, each a real picture of its own moment, none blended from its neighbours. Type any number from 10
 to 1000, or pick a common one from its list; the Studio remembers it. The frame count beside it grows in proportion,
-and so does the render's time (that 20-second highlight at 250: 5000 frames, about 3 hours in Final). Import the
+and so does the render's time (that 20-second highlight at 250: 5000 frames, about 1.5 hours in 1080p). Import the
 images at the frame rate you rendered (in Vegas: the frame rate in the image sequence's import dialog, or its Media
 Properties; in Premiere: Clip → Modify → Interpret Footage), then slow the clip down there.
 
@@ -342,7 +339,7 @@ pass, each an image sequence your editor imports in one go (pick the first image
 - `FinalImageDefaultLayer`: the world, transparent where the players are (with the players layer).
 - `FinalImageWorldDepth`: ignore it; the depth is in the EXR files.
 
-Final and 4K also write an EXR file a frame beside the folders, with all the passes as layers in 16-bit colour, and
+Images also come as an EXR file a frame beside the folders, with all the passes as layers in 16-bit colour, and
 the depth in centimetres (in After Effects, read its layers with the EXtractoR effect; the depth is
 `FinalImageWorldDepth`, channel R). The [render format page](../formats/render.md) has the details.
 
@@ -352,8 +349,8 @@ comes out sharp, a picture of its exact moment. Ramp the speed in your editing s
 the fast ones. With 250 fps or more it gives what HLAE gave for this. A sharp render goes to its own folder (ending in
 `_sharp`), beside a blurred one of the same moment.
 
-In Unreal itself, the same presets are Movie Render Queue settings: `Content/OFAST/Render/OFAST_preview`,
-`OFAST_final`, `OFAST_4k` (Window → Cinematics → Movie Render Queue, add the round's sequence, then pick one under
+In Unreal itself, the same sizes are Movie Render Queue settings: `Content/OFAST/Render/OFAST_720p`, `OFAST_1080p`,
+`OFAST_2k`, `OFAST_4k` (Window → Cinematics → Movie Render Queue, add the round's sequence, then pick one under
 Settings). They exist once the Studio has rendered with them.
 
 ## Sending a round again
@@ -374,10 +371,10 @@ Unreal's own log is; a map whose first import did not finish is imported again t
   looks (their textures shared). `Replays` can be emptied from Unreal's Content Browser when it grows.
 - The panels' settings are in the project's `Saved/OFAST`: `Looks` (each map's look), `Cinematics` (each round's
   points and focus keys), `Viewmodel.json` (the gun in first person) and `Viewmodels` (each round's data for it).
-- Renders are in `Videos\OFAST`, a folder per render, and they are big: Preview about 1 MB a frame (a 20-second
-  highlight, 1200 frames: over a gigabyte), Final about 12 MB a frame (about 25 MB with the players layer), 4K about
-  35 MB (100 MB with the layer: a minute of 4K is over 100 GB). The bar warns when a render will not fit on the disk.
-  Delete the folders you no longer need.
+- Renders are in `Videos\OFAST`, a folder per render, and they are big as images: 720p about 5 MB a frame, 1080p
+  about 12 MB (a 20-second highlight, 1200 frames: about 14 GB), 2K about 16 MB, 4K about 35 MB (a minute of 4K is
+  over 100 GB); the players layer more than doubles it. As ProRes video, about a tenth of that. The bar warns when a
+  render will not fit on the disk. Delete the folders you no longer need.
 
 Everything OFAST makes comes from your own CS2 install and is for your own videos: never share the exported files
 (they are Valve's content).

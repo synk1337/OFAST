@@ -5,11 +5,11 @@ Run with tools/unreal/run_ue.ps1 (the editor renders in Play In Editor, so it ne
 Studio's "Render":
 
     powershell -File tools/unreal/run_ue.ps1 -Script tools/unreal/render_round.py \
-        -Sequence /Game/OFAST/Replays/<demo>_r17 -Preset final -Ticks 154760,154860 -Shot renders
+        -Sequence /Game/OFAST/Replays/<demo>_r17 -Preset 1080p -Ticks 154760,154860 -Shot renders
 
 Inputs (environment variables):
     OFAST_SEQUENCE   the round's sequence (import_demo.py made it and stored the demo's clock and map on it)
-    OFAST_PRESET     preview | final | 4k (PRESETS below); final by default
+    OFAST_PRESET     720p | 1080p | 2k | 4k (PRESETS below, the picture's size); 1080p by default
     OFAST_TICKS      optional "start,end": demo ticks to render (end not included); the whole round without it
     OFAST_FPS        optional frames a second (FPS_RANGE), OUTPUT_FPS without it: 250 or more for slow motion made
                      in the editing software (Vegas, Premiere), which then has a real frame for every slowed one
@@ -18,31 +18,31 @@ Inputs (environment variables):
     OFAST_SHOT       the folder the render's folder goes in: <sequence>_<preset>[_<fps>fps][_sharp][_<start>-<end>]/
     OFAST_POWER      optional full | balanced | low (POWER below): how much of the graphics card the render takes;
                      full without it
-    OFAST_PLAYERS_LAYER  "1" for the players layer (final and 4k): each frame rendered twice more, the players alone and
-                     the world without them; without it the picture and its depth only
+    OFAST_PLAYERS_LAYER  "1" for the players layer: each frame rendered twice more, the players alone and the world
+                     without them; without it the picture and its depth only
     OFAST_SCREEN_PERCENTAGE  optional: the share of the picture's size Unreal shades at (10 to 100), instead of the one
                      that fits the graphics card (fit_card)
-    OFAST_OUTPUT     optional images | prores (OUTPUTS below): PNG (and EXR) frames, or one Apple ProRes 4444 XQ video
+    OFAST_OUTPUT     optional images | prores (OUTPUTS below): PNG (and EXR) frames, or one Apple ProRes 4444 video
                      (.mov) per pass; images without it
 
 Every preset is also saved as a Movie Render Queue configuration, /Game/OFAST/Render/OFAST_<preset>, to pick in
 Unreal's own Movie Render Queue window (Window > Cinematics > Movie Render Queue, then the job's settings).
 
 What a render holds (docs/formats/render.md):
-- the picture (PNG, and 16-bit EXR for final and 4k), at 60 frames a second (or OFAST_FPS) whatever the sequence's
+- the picture (PNG and 16-bit EXR), at 60 frames a second (or OFAST_FPS) whatever the sequence's
   64: everything in a round moves smoothly between the demo's ticks (keys interpolated, the effects and smokes
   functions of a fractional tick), so 250 frames a second are 250 different pictures; a folder per pass, and one EXR
   a frame with every pass as its layers;
-- sharp frames (OFAST_MOTION_BLUR=0): the preset's samples spatial instead of temporal (the edges as smooth, every
+- sharp frames (OFAST_MOTION_BLUR=0): the frame's samples spatial instead of temporal (the edges as smooth, every
   sample at the frame's own moment) and Unreal's own motion blur off (SHARP_CVARS), set on the job's copy only;
-- final and 4k: temporal samples (8: motion blur as a camera's shutter makes it), 32 warm-up frames (Lumen and the
+- at every size: temporal samples (8: motion blur as a camera's shutter makes it), 32 warm-up frames (Lumen and the
   smokes settle), depth (Movie Render Queue's own WorldDepth material: the EXR's R channel, in centimetres), and, when
   asked (OFAST_PLAYERS_LAYER), a players layer: the frame with everything but the players cut out (stencil layer
   "Players": each player's body and viewmodel), over the rest of the world as a second layer ("DefaultLayer"), each a
   render of its own;
 - the picture's size kept, Unreal shading it smaller when the graphics card's memory would not hold it (fit_card):
   TSR scales it up from the frame's samples;
-- as images, or as videos (OFAST_OUTPUT prores): one Apple ProRes 4444 XQ .mov a pass, every camera cut in it, the
+- as images, or as videos (OFAST_OUTPUT prores): one Apple ProRes 4444 .mov a pass, every camera cut in it, the
   players layer's with their transparency; no depth (an 8-bit picture of centimetres clips: the EXR holds it);
 - the console variables the smokes need (smoke_volumes.SMOKE_CVARS);
 - the round's cinematics and focus keys (the Cameras panel's, ofast_cameras.py), made again from their file and cut
@@ -75,14 +75,18 @@ from replay_cameras import TAG, log, progress  # noqa: E402
 # up, LEVEL_TICKS); its frames take the rest.
 SETUP_SHARE = 0.15
 
-# Also listed in the Studio: apps/studio/src-tauri/src/unreal.rs (PRESETS) and apps/studio/src/names.ts.
+# The picture's sizes (the user's ask, 2026-11-08: 720p, 1080p, 2K and 4K instead of preview, final and 4k), each
+# rendered alike: SAMPLES a frame, PNG and EXR, depth. 2K is 2560 x 1440, as games and YouTube editors say it. Also
+# listed in the Studio: apps/studio/src-tauri/src/unreal.rs (PRESETS) and apps/studio/src/names.ts.
 PRESETS = {
-    "preview": {"resolution": (1280, 720), "temporal": 1, "exr": False, "depth": False},
-    "final": {"resolution": (1920, 1080), "temporal": 8, "exr": True, "depth": True},
-    "4k": {"resolution": (3840, 2160), "temporal": 8, "exr": True, "depth": True},
+    "720p": {"resolution": (1280, 720)},
+    "1080p": {"resolution": (1920, 1080)},
+    "2k": {"resolution": (2560, 1440)},
+    "4k": {"resolution": (3840, 2160)},
 }
+SAMPLES = 8
 # What a render writes (OFAST_OUTPUT; also listed in unreal.rs, OUTPUTS, and names.ts): image sequences, or Apple ProRes
-# 4444 XQ videos (Unreal's AppleProResMedia plugin, enabled in the project): visually lossless, 4:4:4 at 12 bits with
+# 4444 videos (Unreal's AppleProResMedia plugin, enabled in the project): visually lossless, 4:4:4 at 12 bits with
 # an alpha channel, the master format editors import (VEGAS Pro, Premiere, After Effects, Resolve), about the PNGs'
 # size. Unreal's other "uncompressed" video (Avid, .mxf) is 8-bit 4:2:2 without alpha: less than the PNGs hold.
 OUTPUTS = ("images", "prores")
@@ -236,21 +240,19 @@ def make_config(name, preset):
     output.set_editor_property("use_custom_frame_rate", True)
     output.set_editor_property("output_frame_rate", unreal.FrameRate(OUTPUT_FPS, 1))
     deferred = config.find_or_add_setting_by_class(unreal.MoviePipelineDeferredPassBase)
-    if preset["depth"]:
-        depth = unreal.MoviePipelinePostProcessPass()
-        depth.set_editor_property("enabled", True)
-        depth.set_editor_property("name", "WorldDepth")
-        depth.set_editor_property("material", unreal.load_asset(WORLD_DEPTH))
-        # 16-bit halves: 1 cm steps to 20 m, 4 cm at 80 m, enough for fog and focus; 32-bit floats doubled the EXR
-        # (its four channels are written whole, though only R is depth).
-        depth.set_editor_property("high_precision_output", False)
-        deferred.set_editor_property("additional_post_process_materials", [depth])
+    depth = unreal.MoviePipelinePostProcessPass()
+    depth.set_editor_property("enabled", True)
+    depth.set_editor_property("name", "WorldDepth")
+    depth.set_editor_property("material", unreal.load_asset(WORLD_DEPTH))
+    # 16-bit halves: 1 cm steps to 20 m, 4 cm at 80 m, enough for fog and focus; 32-bit floats doubled the EXR
+    # (its four channels are written whole, though only R is depth).
+    depth.set_editor_property("high_precision_output", False)
+    deferred.set_editor_property("additional_post_process_materials", [depth])
     config.find_or_add_setting_by_class(unreal.MoviePipelineImageSequenceOutput_PNG)
-    if preset["exr"]:
-        # PIZ, the default: lossless, read by every compositing app, a fifth smaller than ZIP on these frames.
-        config.find_or_add_setting_by_class(unreal.MoviePipelineImageSequenceOutput_EXR)
+    # PIZ, the default: lossless, read by every compositing app, a fifth smaller than ZIP on these frames.
+    config.find_or_add_setting_by_class(unreal.MoviePipelineImageSequenceOutput_EXR)
     aa = config.find_or_add_setting_by_class(unreal.MoviePipelineAntiAliasingSetting)
-    aa.set_editor_property("temporal_sample_count", preset["temporal"])
+    aa.set_editor_property("temporal_sample_count", SAMPLES)
     aa.set_editor_property("engine_warm_up_count", WARM_UP_FRAMES)
     aa.set_editor_property("render_warm_up_count", WARM_UP_FRAMES)
     cvars = config.find_or_add_setting_by_class(unreal.MoviePipelineConsoleVariableSetting)
@@ -268,11 +270,11 @@ def make_config(name, preset):
     return config
 
 
-def render_into(job, folder, frames, fps, preset, blur, cvars, layer, output_kind):
+def render_into(job, folder, frames, fps, blur, cvars, layer, output_kind):
     """The job's own copy of its configuration: the output folder, the frame rate, the range in the sequence's
     frames (or all: Movie Render Queue takes the range in the sequence's own frames, one a demo tick, whatever the
     output's rate), the console variables `cvars` (the round's depth of field's blur limits, the size Unreal shades
-    at and the shadow pages that fit the card), without motion blur (`blur` False) the preset's samples spatial
+    at and the shadow pages that fit the card), without motion blur (`blur` False) the SAMPLES spatial
     (SHARP_CVARS), with `layer` the players layer, and for `output_kind` "prores" videos instead of images."""
     config = job.get_configuration()
     settings = config.find_or_add_setting_by_class(unreal.MoviePipelineConsoleVariableSetting)
@@ -291,7 +293,9 @@ def render_into(job, folder, frames, fps, preset, blur, cvars, layer, output_kin
         # The depth pass would be a video of clipped centimetres.
         deferred.set_editor_property("additional_post_process_materials", [])
         prores = config.find_or_add_setting_by_class(unreal.MoviePipelineAppleProResOutput)
-        prores.set_editor_property("codec", unreal.AppleProResEncoderCodec.PRO_RES_4444XQ)
+        # 4444, not 4444 XQ: Unreal 5.8 writes XQ frames with their alpha but labels the file 24-bit
+        # (AppleProResEncoder.cpp, GetBitDepth: 32 for ProRes_4444 only), so editors drop the players layer's alpha.
+        prores.set_editor_property("codec", unreal.AppleProResEncoderCodec.PRO_RES_4444)
         prores.set_editor_property("include_audio", False)
     output = config.find_or_add_setting_by_class(unreal.MoviePipelineOutputSetting)
     if output_kind == "prores":
@@ -307,12 +311,12 @@ def render_into(job, folder, frames, fps, preset, blur, cvars, layer, output_kin
     if not blur:
         aa = config.find_or_add_setting_by_class(unreal.MoviePipelineAntiAliasingSetting)
         aa.set_editor_property("temporal_sample_count", 1)
-        aa.set_editor_property("spatial_sample_count", preset["temporal"])
+        aa.set_editor_property("spatial_sample_count", SAMPLES)
 
 
 def main():
     path = os.environ["OFAST_SEQUENCE"]
-    name = os.environ.get("OFAST_PRESET") or "final"
+    name = os.environ.get("OFAST_PRESET") or "1080p"
     if name not in PRESETS:
         raise RuntimeError("preset %r: one of %s" % (name, ", ".join(PRESETS)))
     sequence = assets.load_asset(path)
@@ -335,7 +339,7 @@ def main():
         raise RuntimeError("power %r: one of %s" % (power, ", ".join(POWER)))
     share = POWER[power]
     preset = PRESETS[name]
-    layer = os.environ.get("OFAST_PLAYERS_LAYER") == "1" and preset["depth"]
+    layer = os.environ.get("OFAST_PLAYERS_LAYER") == "1"
     output_kind = os.environ.get("OFAST_OUTPUT") or "images"
     if output_kind not in OUTPUTS:
         raise RuntimeError("output %r: one of %s" % (output_kind, ", ".join(OUTPUTS)))
@@ -375,7 +379,7 @@ def main():
     log("render %s, preset %s, %d frames a second, %s, frames %s, %s, %s, power %s, into %s"
         % (path, name, fps, "motion blur" if blur else "sharp", frames or "all",
            "%d player actors in layer %r" % (players, PLAYERS_LAYER) if layer else "no players layer",
-           "ProRes 4444 XQ" if output_kind == "prores" else "images", power, folder))
+           "ProRes 4444" if output_kind == "prores" else "images", power, folder))
     shaded = (round(preset["resolution"][0] * percent / 100.0), round(preset["resolution"][1] * percent / 100.0))
     log("graphics card: %s MB, the render needs about %d MB: shaded at %d %% (%dx%d), %d shadow pages"
         % (card_mb if card_mb is not None else "unknown", need_mb(preset["resolution"], layer, percent), percent,
@@ -437,7 +441,7 @@ def main():
         job.set_editor_property("map", unreal.SoftObjectPath(object_path(level)))
         job.set_editor_property("job_name", "OFAST %s" % name)
         job.set_configuration(config)
-        render_into(job, folder, frames, fps, preset, blur,
+        render_into(job, folder, frames, fps, blur,
                     dict(ofast_cameras.blur_limits(ofast_cameras.load_record(sequence)), **fitted), layer, output_kind)
         executor = unreal.MoviePipelinePIEExecutor()
         executor.on_executor_finished_delegate.add_callable(finished)

@@ -11,12 +11,12 @@ the default):
 ```
 <demo>_r<round>_<preset>[_<fps>fps][_sharp][_<start tick>-<end tick>]/
     FinalImage/<demo>_r<round>.<frame>.png               the picture
-    FinalImagePlayers/<demo>_r<round>.<frame>.png        final, 4k with the players layer: the players alone, the rest
+    FinalImagePlayers/<demo>_r<round>.<frame>.png        with the players layer: the players alone, the rest
                                                          transparent
-    FinalImageDefaultLayer/<demo>_r<round>.<frame>.png   final, 4k with the players layer: the world, the players'
-                                                         shapes transparent
-    FinalImageWorldDepth/<demo>_r<round>.<frame>.png     final, 4k: depth, clipped to white (use the EXR)
-    <demo>_r<round>.<frame>.exr                          final, 4k: all of the above, one layer each
+    FinalImageDefaultLayer/<demo>_r<round>.<frame>.png   with the players layer: the world, the players' shapes
+                                                         transparent
+    FinalImageWorldDepth/<demo>_r<round>.<frame>.png     depth, clipped to white (use the EXR)
+    <demo>_r<round>.<frame>.exr                          all of the above, one layer each
 ```
 
 As videos (`OFAST_OUTPUT` prores, the Studio's **As: ProRes video**; [decision 028](../decisions/028-prores-video.md)):
@@ -28,9 +28,11 @@ As videos (`OFAST_OUTPUT` prores, the Studio's **As: ProRes video**; [decision 0
     <demo>_r<round>_FinalImageDefaultLayer.mov           with the players layer: the world, the players cut out
 ```
 
-Apple ProRes 4444 XQ (`ap4x`), 4:4:4 at 12 bits, alpha in the layers' files, a timecode track, no sound; every camera
-cut of the render one after the other in each file, at the render's frame rate. No depth: the EXR images hold it.
-About 1.3 MB a Final frame (de_nuke round 17, 2026-11-08), against about 2 MB for the picture's PNG.
+Apple ProRes 4444 (`ap4h`), 4:4:4 at 12 bits with a 16-bit alpha channel (the file says 32-bit: the layers'
+transparency, opaque in the picture's), a timecode track, no sound; every camera cut of the render one after the other
+in each file, at the render's frame rate. No depth: the EXR images hold it. Not 4444 XQ: Unreal 5.8 labels XQ files
+24-bit though their frames hold the alpha, and editors then drop it. About 1.3 MB a 1080p frame as 4444 XQ (de_nuke
+round 17, 2026-11-08; 4444 a little less), against about 2 MB for the picture's PNG.
 
 - `<fps>fps`: the frames a second asked for, when not 60.
 - `sharp`: rendered without motion blur.
@@ -70,18 +72,24 @@ unprefixed). Movie Render Queue adds its metadata as string attributes: `unreal/
 
 ## Presets
 
-| Preset | Size | Samples a frame | Files |
-|---|---|---|---|
-| `preview` | 1280 × 720 | 1 | `FinalImage` PNG |
-| `final` | 1920 × 1080 | 8 (motion blur: 180° shutter; sharp: 8 spatial) | the picture and depth, PNG and EXR; the players layer's two passes when asked |
-| `4k` | 3840 × 2160 | 8 | as `final` |
+The preset is the picture's size (the user's ask, 2026-11-08: 720p, 1080p, 2K and 4K instead of preview, final and
+4k); every size is rendered alike: 8 samples a frame (motion blur: a 180° shutter; sharp: 8 spatial), the picture and
+its depth, PNG and EXR (or ProRes), the players layer's two passes when asked.
 
-`final` and `4k` start each cut with 32 warm-up frames that are not written (Lumen's lighting and the smokes settle).
+| Preset | Size |
+|---|---|
+| `720p` | 1280 × 720 |
+| `1080p` | 1920 × 1080 |
+| `2k` | 2560 × 1440 (1440p, as games and YouTube editors call 2K) |
+| `4k` | 3840 × 2160 |
+
+Each cut starts with 32 warm-up frames that are not written (Lumen's lighting and the smokes settle).
 
 ## Graphics memory
 
-The size is always the preset's; what Unreal shades may be smaller ([decision 027](../decisions/027-renders-fit-the-card.md)):
-when the graphics card's own memory would not hold the render, `render_round.py` shades the frames at the largest of
+The size is always the preset's; what Unreal shades may be smaller
+([decision 027](../decisions/027-renders-fit-the-card.md)): when the graphics card's own memory would not hold the
+render, `render_round.py` shades the frames at the largest of
 100, 85, 75, 67, 60, 50, 40, 33 % of the size that fits (`r.ScreenPercentage`) and TSR scales them up from the frame's
 samples. Its log says what it chose:
 
@@ -90,12 +98,13 @@ OFAST: graphics card: 11943 MB, the render needs about 10721 MB: shaded at 50 % 
 OFAST: warning: Shaded at 1920x1080 and scaled up to 3840x2160 by Unreal's TSR, to fit the graphics card's 11943 MB.
 ```
 
-On a 12 GB card: Final whole, 4K at 50 %; the players layer (each of its layers about 1.1 GB more, mostly whatever
-the size) does not fit: Final with it at 67 %, still spilling a little, and warned. On 16 GB 4K whole and Final with
-the players layer whole; on 24 GB everything. With the players layer Unreal also holds 18 to 25 GB of the PC's own
-memory: on a 32 GB PC with other programs open (a game), close them. `OFAST_SCREEN_PERCENTAGE` (10 to 100) forces a size instead. For the memory, the editor's active viewport
-draws unlit during the render (its view mode given back before it quits), TSR's history is the picture's size and the
-shadow page pool has 8192 pages for 1080p shaded, more for more pixels, up to 16384.
+On a 12 GB card: 720p and 1080p whole, 2K at 85 % (2176 × 1224: 1.9 s a frame on de_nuke), 4K at 50 %; the players
+layer (each of its layers about 1.1 GB more, mostly whatever the size) does not fit: 1080p with it at 67 %, still
+spilling a little, and warned. On 16 GB every size whole, the players layer too up to 2K; on 24 GB everything. With
+the players layer Unreal also holds 18 to 25 GB of the PC's own memory: on a 32 GB PC with other programs open (a
+game), close them. `OFAST_SCREEN_PERCENTAGE` (10 to 100) forces a size instead. For the memory, the editor's
+active viewport draws unlit during the render (its view mode given back before it quits), TSR's history is the
+picture's size and the shadow page pool has 8192 pages for 1080p shaded, more for more pixels, up to 16384.
 
 ## Power
 

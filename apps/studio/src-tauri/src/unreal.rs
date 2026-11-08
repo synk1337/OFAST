@@ -308,8 +308,14 @@ pub struct Sending(AsyncMutex<()>);
 /// Why a sending or a render cannot start: another one runs.
 const BUSY: &str = "Unreal is busy with another round (sent or rendered): wait for it to finish.";
 
-/// The presets of `tools/unreal/render_round.py` (listed there, and in the UI's `names.ts`, too).
-const PRESETS: [&str; 3] = ["preview", "final", "4k"];
+/// The presets of `tools/unreal/render_round.py`, the picture's size (listed there, and in the UI's `names.ts`, too):
+/// name, width, height.
+const PRESETS: [(&str, u32, u32); 4] = [
+    ("720p", 1280, 720),
+    ("1080p", 1920, 1080),
+    ("2k", 2560, 1440),
+    ("4k", 3840, 2160),
+];
 
 /// The `UnrealEditor-Cmd` running for a sending, so that closing the Studio stops it ([`stop_sending`]) rather than
 /// leaving a hidden editor importing on its own.
@@ -400,7 +406,7 @@ pub async fn update_cameras(
 /// own in `Videos\OFAST`, with the players layer if `players_layer`, as `output` says (`OUTPUTS`; images without
 /// it), taking as much of the PC as `power` lets it ([`Power`]; all of it without it). `frames`, the frames the UI
 /// counts, is checked against the disk's free space (`frame_bytes`). Returns that folder. About a second a frame for
-/// `final` on a recent graphics card at full power, after a minute or two of Unreal starting.
+/// `1080p` on a recent graphics card at full power, after a minute or two of Unreal starting.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri passes a command's arguments one by one.
 pub async fn render_round(
@@ -439,29 +445,23 @@ pub async fn render_round(
     blocking(move || render(&app, &path, round, &job)).await?
 }
 
-/// What a render writes (`tools/unreal/render_round.py`'s OUTPUTS, the UI's `names.ts`): image sequences (PNG, and
-/// EXR for `final` and `4k`), or one Apple ProRes 4444 XQ video a pass.
+/// What a render writes (`tools/unreal/render_round.py`'s OUTPUTS, the UI's `names.ts`): image sequences (PNG and
+/// EXR), or one Apple ProRes 4444 video a pass.
 const OUTPUTS: [&str; 2] = ["images", "prores"];
 
-/// About how much disk a frame of `preset` takes (bytes) as `output`, with the players layer if `layer`: measured
-/// 1.2 MB a preview frame (round 17 of Aurora vs FURIA on de_dust2, 1430 frames in 1.7 GB), 12 MB a Final frame and
-/// 35 MB a 4K one without the layer, 100 MB a 4K one with it (2026-11-04 and 06), Final with it about a quarter of
-/// that; as ProRes 4444 XQ 1.3 MB a Final frame (de_nuke round 17, 2026-11-08), four times that in 4K, the layer's two
-/// videos about as much again (mostly transparent).
-fn frame_bytes(preset: &str, output: &str, layer: bool) -> u64 {
-    const MB: u64 = 1 << 20;
-    let prores = output == "prores";
-    let base = match (preset, prores) {
-        ("preview", false) => 3 * MB / 2,
-        ("preview", true) => MB / 2,
-        ("4k", false) if layer => 100 * MB,
-        ("4k", false) => 35 * MB,
-        ("4k", true) => 6 * MB,
-        (_, false) if layer => 25 * MB,
-        (_, false) => 12 * MB,
-        (_, true) => 3 * MB / 2,
+/// About how much disk a frame of `width` × `height` takes (bytes) as `output`, with the players layer if `layer`, by
+/// its pixels: as images (PNG, EXR, depth) 12 MB a 1080p frame and 35 MB a 4K one without the layer (5 MB a million
+/// pixels), 25 MB and 100 MB with it (12 MB a million: 2026-11-04 and 06); as ProRes 4444 1.3 MB a 1080p frame
+/// (0.65 MB a million, de_nuke round 17, 2026-11-08), the layer's two videos about as much again (mostly transparent).
+fn frame_bytes(width: u32, height: u32, output: &str, layer: bool) -> u64 {
+    let mpixels = f64::from(width) * f64::from(height) / 1e6;
+    let mb_per_mpixel = match (output == "prores", layer) {
+        (false, false) => 5.0,
+        (false, true) => 12.0,
+        (true, false) => 0.65,
+        (true, true) => 1.3,
     };
-    if prores && layer { 2 * base } else { base }
+    (mpixels * mb_per_mpixel * f64::from(1u32 << 20)) as u64
 }
 
 /// The free space (bytes) on the disk of `dir` for this user, if Windows says.
@@ -503,8 +503,7 @@ struct RenderJob {
     ticks: Option<[u32; 2]>,
     fps: Option<u32>,
     motion_blur: bool,
-    /// The players layer (`final` and `4k`): each frame rendered twice more, the players alone and the world without
-    /// them.
+    /// The players layer: each frame rendered twice more, the players alone and the world without them.
     players_layer: bool,
     power: Power,
     /// What it writes: one of [`OUTPUTS`].
@@ -596,9 +595,9 @@ fn renders_dir(app: &AppHandle) -> Result<PathBuf, String> {
 fn render(app: &AppHandle, path: &str, round: u32, job: &RenderJob) -> Result<String, String> {
     let report = Reporter::new(app, Bar(vec![(Step::Render, RENDER_S)]));
     let preset = job.preset.as_str();
-    if !PRESETS.contains(&preset) {
+    let Some(&(_, width, height)) = PRESETS.iter().find(|(name, ..)| *name == preset) else {
         return Err(format!("There is no render preset \"{preset}\"."));
-    }
+    };
     if let Some(fps) = job.fps.filter(|f| !FPS_RANGE.contains(f)) {
         return Err(format!(
             "{fps} frames a second: pick from {} to {}.",
@@ -632,7 +631,7 @@ fn render(app: &AppHandle, path: &str, round: u32, job: &RenderJob) -> Result<St
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     // A disk that fills stops the render and slows the whole PC (a 1-minute 4K render takes about 130 GB).
     if let (Some(frames), Some(free)) = (job.frames, free_bytes(&out)) {
-        let need = u64::from(frames) * frame_bytes(preset, &job.output, job.players_layer);
+        let need = u64::from(frames) * frame_bytes(width, height, &job.output, job.players_layer);
         if need > free {
             const GB: f64 = (1u64 << 30) as f64;
             report.warn(format!(
@@ -1286,6 +1285,26 @@ mod tests {
         assert_eq!(progress_line("progress 0.350 0.720"), Some([0.35, 0.72]));
         assert_eq!(progress_line("progress 0.35"), None);
         assert_eq!(progress_line("imported de_dust2"), None);
+    }
+
+    #[test]
+    fn a_render_s_disk_grows_with_its_pixels() {
+        let mb = |bytes: u64| bytes as f64 / f64::from(1u32 << 20);
+        // As measured: about 12 MB a 1080p frame and 35 MB a 4K one as images; ProRes a tenth.
+        assert!((9.0..13.0).contains(&mb(frame_bytes(1920, 1080, "images", false))));
+        assert!((35.0..45.0).contains(&mb(frame_bytes(3840, 2160, "images", false))));
+        assert!(
+            frame_bytes(2560, 1440, "prores", false) < frame_bytes(2560, 1440, "images", false) / 5
+        );
+        assert!(
+            frame_bytes(1280, 720, "images", true) > 2 * frame_bytes(1280, 720, "images", false)
+        );
+        // Every preset has a size, and the sizes grow.
+        assert!(
+            PRESETS
+                .windows(2)
+                .all(|p| p[0].1 * p[0].2 < p[1].1 * p[1].2)
+        );
     }
 
     #[test]
