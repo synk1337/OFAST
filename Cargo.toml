@@ -14,8 +14,14 @@ resolver = "3"
 members = ["crates/ofast-core", "crates/ofast-cli", "apps/studio/src-tauri", "apps/capture"]
 default-members = ["crates/ofast-core", "crates/ofast-cli"]
 
+# Debug builds keep the line numbers (a panic or a backtrace still names its file and line), not the full debug
+# information: with all of it, `target/debug` grew to 153 GB (2026-11-09: the 64 examples and the tests each carry the
+# whole of it). Nobody steps through OFAST in a debugger; set `debug = true` for a session that does.
+[profile.dev]
+debug = "line-tables-only"
+
 [workspace.package]
-version = "1.0.10"
+version = "1.0.11"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/synk1337/OFAST"
