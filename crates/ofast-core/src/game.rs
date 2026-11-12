@@ -146,6 +146,7 @@ impl Cs2Install {
 /// one, a round is exported and imported again and its checks compared (docs/development.md, "After a CS2 update");
 /// the new build is added here once nothing is broken, or with the fix when something was.
 pub const CHECKED_VERSIONS: &[(&str, u32)] = &[
+    ("1.41.9.7", 2_000_943),
     ("1.41.9.6", 2_000_942),
     ("1.41.9.5", 2_000_940),
     ("1.41.9.4", 2_000_939),
