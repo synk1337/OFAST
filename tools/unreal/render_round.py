@@ -127,21 +127,25 @@ MAX_REST_S = 5.0
 TSR_CVARS = {"r.TSR.History.ScreenPercentage": 100.0}
 SHADOW_PAGES = (8192, 16384)
 SHADOW_PAGES_MPIXELS = 2.07  # the pixels SHADOW_PAGES[0] holds (a 1080p picture), millions
-# The card's memory a render takes (MB), fitted to de_nuke round 17 (the heaviest map) on a 12 GB RTX 5070 with the
-# above (2026-11-06): 1080p 10.3 GB; 4K shaded at 50 % 10.7 GB, at 67 % 11.7, at 100 % 13.0 (1.2 GB of it spilled,
-# 3.4 s a frame); with the players layer at 75 % (2026-11-08) 1.4 GB more a layer. FIT_BASE_MB whatever the size (the
-# map, the players, the editor and Windows' desktop, about 1 GB), FIT_MB_PER_OUTPUT_MPIXEL a million pixels of the
-# picture, FIT_MB_PER_MPIXEL a million pixels shaded, for each layer of the players layer FIT_MB_PER_LAYER and
-# FIT_MB_PER_LAYER_MPIXEL a million pixels (its own view: Lumen's radiance cache and histories, mostly whatever the
-# size; the frame's work memory is shared), and the shadow pages' FIT_MB_PER_SHADOW_PAGE (a page and its HZB).
-FIT_BASE_MB = 8636
+# The card's memory a render takes (MB), fitted on a 12 GB RTX 5070 with the above to de_nuke round 17 through
+# KSCERATO's eyes in a firefight (2026-11-12): 1080p 11.1 GB (2.1 s a frame), 2K shaded at 85 % 11.6 GB (2.4 s), 4K
+# at 50 % 11.5 GB (2.5 s), none spilling; native 4K spilled 1.7 GB and ran the PC's own 32 GB out. The slopes come from
+# the same level without its round, 0.76 GB lighter at every size (2026-11-06: 1080p 10.3 GB, 4K at 50 % 10.7, at 67 %
+# 11.7, at 100 % 13.0); the players layer's from a render at 75 % (2026-11-08): 1.4 GB more a layer. FIT_BASE_MB
+# whatever the size (the map, the players, the editor and Windows' desktop, about 1 GB), FIT_MB_PER_OUTPUT_MPIXEL a
+# million pixels of the picture, FIT_MB_PER_MPIXEL a million pixels shaded, for each layer of the players layer
+# FIT_MB_PER_LAYER and FIT_MB_PER_LAYER_MPIXEL a million pixels (its own view: Lumen's radiance cache and histories,
+# mostly whatever the size; the frame's work memory is shared), and the shadow pages' FIT_MB_PER_SHADOW_PAGE (a page
+# and its HZB).
+FIT_BASE_MB = 9400
 FIT_MB_PER_OUTPUT_MPIXEL = 67
 FIT_MB_PER_MPIXEL = 173
 FIT_MB_PER_LAYER = 1100
 FIT_MB_PER_LAYER_MPIXEL = 250
 FIT_MB_PER_SHADOW_PAGE = 0.143
-# Left free on the card for the user's other programs, beyond the desktop FIT_BASE_MB holds.
-FIT_RESERVE_MB = 500
+# Left free on the card for the user's other programs, beyond the desktop FIT_BASE_MB holds: the three renders above
+# had 0.3 to 0.9 GB to spare.
+FIT_RESERVE_MB = 350
 # The shares of the picture's size Unreal may shade at (r.ScreenPercentage), the largest that fits first; never under
 # about 1280 x 720 (FIT_MIN_MPIXELS), which a smaller card does not hold much better.
 SCREEN_PERCENTAGES = (100, 85, 75, 67, 60, 50, 40, 33)
@@ -165,6 +169,25 @@ def put_players_in_layer():
     for actor in players:
         layers.add_actor_to_layer(actor, PLAYERS_LAYER)
     return len(players)
+
+
+def missing_cut_cameras(sequence):
+    """The cameras the sequence cuts to that are not in the loaded level (their names, sorted). A level holds one round
+    at a time (import_demo.py, clean_level): once another round of the map is sent, or the map imported again, an
+    older round's sequence binds to nothing, and Movie Render Queue renders it all the same, from the map's origin
+    with nobody in it (de_nuke round 17, 2026-11-12: 45 minutes of one fixed view; Unreal's log only says "No camera
+    actor found" once)."""
+    world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
+    bindings = {b.get_id().export_text(): b for b in sequence.get_bindings()}
+    gone = set()
+    for track in sequence.find_tracks_by_type(unreal.MovieSceneCameraCutTrack):
+        for section in track.get_sections():
+            binding = bindings.get(section.get_camera_binding_id().get_editor_property("guid").export_text())
+            if binding is None:
+                gone.add("a deleted camera")
+            elif not sequence.locate_bound_objects(binding, world):
+                gone.add(str(binding.get_display_name()))
+    return sorted(gone)
 
 
 def video_memory_mb():
@@ -372,6 +395,11 @@ def main():
     # frames came out washed out: tonemapper.py, OUTPUT). Not saved: the editor quits after the render.
     tonemapper.movie_render(True)
     ofast_cameras.restore(sequence)
+    gone = missing_cut_cameras(sequence)
+    if gone:
+        raise RuntimeError("this round is no longer in its level (its cameras are missing: %s): another round of "
+                           "this map was sent since, or the map was imported again. Send the round again"
+                           % ", ".join(gone))
     # The Viewmodel panel's settings (ofast_viewmodel.py), whichever round they were last changed on.
     ofast_viewmodel.key(sequence)
     players = put_players_in_layer()

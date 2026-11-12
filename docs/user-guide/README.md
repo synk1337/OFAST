@@ -299,8 +299,9 @@ finder, only that highlight's kills) or **the whole round**. The length is shown
 render needs OFAST's project to itself), and if you can, close CS2 and games: the render needs the graphics card's
 memory. Unreal loads the map without a window (a minute or two), then opens one that shows the frames as they render
 (closing it stops the render); the bar counts the percent done, and the sound plays at the end, as for a sending.
-1080p takes about a second a frame on a recent graphics card at full power (about 2 with the players layer), at 60
-frames a second (a 20-second highlight: 1200 frames, about 20 minutes); 2K and 4K about 2 seconds on a 12 GB card.
+1080p takes one to two seconds a frame on a recent graphics card at full power (two in a firefight seen through a
+player's eyes), at 60 frames a second (a 20-second highlight: 1200 frames, 20 to 40 minutes); 2K and 4K about two and
+a half seconds on a 12 GB card.
 
 **Players layer** (off by default) adds what compositing needs: the players on a layer of their own (to put text or
 effects behind them, or to colour them alone) and the world without them. Each is one more render of every frame, so
@@ -319,15 +320,15 @@ has no EXR or depth), the players layer as two more videos with their transparen
 VEGAS Pro, Premiere, After Effects and Resolve read it.
 
 **Power** says how much of the PC the render may take: **Full** as fast as it goes; **Balanced** (the default) rests
-the graphics card now and then and runs Unreal below your other programs, so the PC stays usable while it renders
-(about 15 % longer); **Low** rests the card as long as it works (a third less power, cooler and quieter, about 1.7
-times as long). The frames are the same at any power.
+the graphics card a quarter of the time and runs Unreal below your other programs, so the PC stays usable while it
+renders (about a third longer); **Low** rests the card half of the time (a third less power, cooler and quieter,
+almost twice as long). The frames are the same at any power.
 
 The **fps** box beside it is the frames a second: 60 plays at normal speed. For slow motion made in your editing
 software (Vegas, Premiere, After Effects), render more, 250 for example: slowed to a quarter, the clip still has over
 60 frames a second, each a real picture of its own moment, none blended from its neighbours. Type any number from 10
 to 1000, or pick a common one from its list; the Studio remembers it. The frame count beside it grows in proportion,
-and so does the render's time (that 20-second highlight at 250: 5000 frames, about 1.5 hours in 1080p). Import the
+and so does the render's time (that 20-second highlight at 250: 5000 frames, 1.5 to 3 hours in 1080p). Import the
 images at the frame rate you rendered (in Vegas: the frame rate in the image sequence's import dialog, or its Media
 Properties; in Premiere: Clip → Modify → Interpret Footage), then slow the clip down there.
 
@@ -358,7 +359,8 @@ Settings). They exist once the Studio has rendered with them.
 Sending the same round again rebuilds its sequence; anything you changed in it by hand is replaced, except the
 Look panel's settings and the Cameras panel's cinematics, which are made again from their files. A map's level
 holds one round at a time: sending another round of the same map replaces the players and effects of the one before
-in the level (its sequence stays, but no longer plays them). If something goes wrong, the bar says what and where
+in the level (its sequence stays, but no longer plays them: **Render** on such a round stops at once and asks you to
+send it again). If something goes wrong, the bar says what and where
 Unreal's own log is; a map whose first import did not finish is imported again the next time.
 
 ## Where things are kept

@@ -466,14 +466,20 @@ player and round.
   minutes a frame). The editor's own copy of the world drawn unlit, TSR's history at the picture's size, the shadow
   pool sized by the pixels shaded, the players layer off unless asked (**Players layer**), and the picture shaded
   smaller (TSR scaling it up) where the card would not hold it; **Power** (Full, Balanced, Low) rests the card and
-  lowers Unreal's CPU priority; the bar warns when the disk will not hold the frames. de_nuke on 12 GB: 4K at 1.8 s a
-  frame shaded at 50 %, native 4K at 3.4 s.
+  lowers Unreal's CPU priority; the bar warns when the disk will not hold the frames. A firefight on de_nuke through
+  a player's eyes on 12 GB (2026-11-12): 1080p 2.1 s a frame, 2K (shaded at 85 %) 2.4 s, 4K (at 50 %) 2.5 s, none
+  spilling.
+- [x] **A round no longer in its level is not rendered** (2026-11-12): a level holds one round; an older round's
+  sequence rendered a fixed view from the map's origin for 45 minutes. `render_round.py` now checks the cameras the
+  sequence cuts to are in the level and says to send the round again.
 - [x] **ProRes video** (the user's ask, 2026-11-08; [decision 028](decisions/028-prores-video.md)): the Studio's
   **As** picks images or one Apple ProRes 4444 .mov a pass (visually lossless, alpha for the players layer).
 - [x] **Sizes instead of presets** (the user's ask, 2026-11-08): 720p, 1080p, 2K (2560 × 1440) and 4K, each rendered
   like the old Final (8 samples, depth, EXR); the quick one-sample preview is gone.
+- [x] **ProRes checked in Vegas Pro 2026** (2026-11-12, by script): size, rate, length, the frames' colours against
+  the PNGs', the players layer's alpha over another picture.
 - [ ] Rendering in a process of its own (no editor world: the memory an 8 GB card lacks), a players matte instead of
-  the stencil layers (one render), ProRes checked in VEGAS Pro 16 and with the players layer's alpha.
+  the stencil layers (one render: its players lit as in the picture).
 - [ ] Movie Render Graph (the classic configuration is "legacy" in 5.8's own code), a depth pass readable in 8 bits,
   the linear (HDR) picture in the EXR, the players layer without the effects near them, other passes (normals,
   motion vectors, one matte per player).

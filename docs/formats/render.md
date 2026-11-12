@@ -85,6 +85,11 @@ its depth, PNG and EXR (or ProRes), the players layer's two passes when asked.
 
 Each cut starts with 32 warm-up frames that are not written (Lumen's lighting and the smokes settle).
 
+A round must still be in its level: the level holds one round at a time, and Movie Render Queue renders an older
+round's sequence all the same, from the map's origin with nobody in it. `render_round.py` checks that the cameras the
+sequence cuts to are in the level and fails otherwise ("this round is no longer in its level … Send the round
+again").
+
 ## Graphics memory
 
 The size is always the preset's; what Unreal shades may be smaller
@@ -98,11 +103,12 @@ OFAST: graphics card: 11943 MB, the render needs about 10721 MB: shaded at 50 % 
 OFAST: warning: Shaded at 1920x1080 and scaled up to 3840x2160 by Unreal's TSR, to fit the graphics card's 11943 MB.
 ```
 
-On a 12 GB card: 720p and 1080p whole, 2K at 85 % (2176 × 1224: 1.9 s a frame on de_nuke), 4K at 50 %; the players
-layer (each of its layers about 1.1 GB more, mostly whatever the size) does not fit: 1080p with it at 67 %, still
-spilling a little, and warned. On 16 GB every size whole, the players layer too up to 2K; on 24 GB everything. With
-the players layer Unreal also holds 18 to 25 GB of the PC's own memory: on a 32 GB PC with other programs open (a
-game), close them. `OFAST_SCREEN_PERCENTAGE` (10 to 100) forces a size instead. For the memory, the editor's
+On a 12 GB card: 720p and 1080p whole, 2K at 85 % (2176 × 1224), 4K at 50 % (a firefight on de_nuke through a
+player's eyes, 2026-11-12: 11.1, 11.6 and 11.5 GB of the card, 2.1, 2.4 and 2.5 s a frame; native 4K spilled 1.7 GB
+and ran a 32 GB PC out of its own memory); the players layer (each of its layers about 1.1 GB more, mostly whatever
+the size) does not fit: 1080p with it at 67 %, still spilling a little, and warned. On 16 GB every size whole, the
+players layer too up to 1080p; on 24 GB everything. Unreal also holds 17 to 21 GB of the PC's own memory, 18 to 25
+with the players layer or at native 4K: on a 32 GB PC with other programs open (a game), close them. `OFAST_SCREEN_PERCENTAGE` (10 to 100) forces a size instead. For the memory, the editor's
 active viewport draws unlit during the render (its view mode given back before it quits), TSR's history is the
 picture's size and the shadow page pool has 8192 pages for 1080p shaded, more for more pixels, up to 16384.
 
@@ -110,13 +116,13 @@ picture's size and the shadow page pool has 8192 pages for 1080p shaded, more fo
 
 `OFAST_POWER` (the Studio's **Power**): `full` renders flat out; below it each of Unreal's frames owes a rest, a third
 of its time at `balanced` (the Studio's default), all of it at `low`, slept off on the game thread half a second or
-more at a time; the Studio also starts Unreal at below-normal CPU priority. de_nuke round 17 in 4K shaded at 67 % on
-a 12 GB RTX 5070 (2026-11-06):
+more at a time; the Studio also starts Unreal at below-normal CPU priority. A firefight of de_nuke round 17 in 1080p
+on a 12 GB RTX 5070 (2026-11-12):
 
 | Power | Seconds a frame | Graphics card busy | Its power |
 |---|---|---|---|
-| `full` | 2.2 | 72 % | 154 W |
-| `balanced` | 2.5 | 64 % | 136 W |
-| `low` | 3.7 | 41 % | 106 W |
+| `full` | 2.1 | 70 % | 153 W |
+| `balanced` | 2.7 | 57 % | 128 W |
+| `low` | 3.9 | 40 % | 98 W |
 
 The frames are the same at any power.

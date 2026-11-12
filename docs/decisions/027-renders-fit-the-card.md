@@ -74,14 +74,23 @@ Unreal's own allocation lists (`rhi.DumpResourceMemory`, grouped by owner) durin
 
 ## Consequences
 
-- de_nuke round 17 on the 12 GB card (2026-11-06): 1080p 10.3 GB, no spill; 4K at 50 % (1920 × 1080 shaded) 10.7 GB,
-  1.8 s a frame; at 67 % 11.7 GB, 2.2 s; native 4K 13.0 GB, 1.2 GB spilled but 3.4 s a frame (before: 1 to 4 minutes).
+- **Corrected on 2026-11-12.** The de_nuke measurements of 2026-11-06 in this decision (the Power figures, the
+  resources before and after the unlit viewport, the fit's first numbers) were taken on a level that no longer held
+  its round: the map re-imported on 11-05, the sequence's cameras gone, Movie Render Queue rendering a fixed view from
+  the map's origin with nobody in front of it. They compare like with like, but a real round is heavier. Sent again
+  and rendered through KSCERATO's eyes in a firefight: 1080p 11.1 GB of the card and 2.1 s a frame, 2K shaded at 85 %
+  11.6 GB and 2.4 s, 4K at 50 % 11.5 GB and 2.5 s, none spilling (0.76 GB more than the empty level at every size:
+  the fit's base raised to 9.4 GB, its reserve lowered to 0.35 GB, the picks unchanged); native 4K spilled 1.7 GB and
+  ran the PC's 32 GB out (stopped). Power in 1080p: Full 2.1 s a frame, the card busy 70 %, 153 W; Balanced 2.7 s,
+  57 %, 128 W; Low 3.9 s, 40 %, 98 W. `render_round.py` now refuses a round that is no longer in its level.
+- On the empty level (2026-11-06): 1080p 10.3 GB, no spill; 4K at 50 % (1920 × 1080 shaded) 10.7 GB, 1.8 s a frame;
+  at 67 % 11.7 GB, 2.2 s; native 4K 13.0 GB, 1.2 GB spilled, 3.4 s a frame (before the changes: 1 to 4 minutes).
 - The fit picks on a 12 GB card: Final 100 %, 4K 50 %; the players layer does not fit (each layer about 1.1 GB more,
   mostly whatever the size: de_nuke's Final with it at 75 % spilled 1.3 GB, 2026-11-08), Final with it is shaded at
   67 % and warned. 16 GB: 4K 100 %, Final with the layer 100 %, 4K with it 60 %; 24 GB: all native. The players
   layer also takes Unreal to 18 to 25 GB of the PC's memory: with a game open beside it (14.8 GB free), free memory
-  fell under 0.4 GB. Below about 9 GB nothing fits: the map, the players, the editor and the desktop take
-  8.6 GB on de_nuke before a pixel is shaded; such renders spill (warned) but no longer tenfold.
+  fell under 0.4 GB. Below about 10 GB nothing fits: the map, the players, the editor and the desktop take
+  9.4 GB on de_nuke before a pixel is shaded; such renders spill (warned) but no longer tenfold.
 - The model is fitted to one map and one card: lighter maps get a smaller size than they could hold. Each render logs
   its estimate beside the card's size (`graphics card: …`) to check it against.
 - Shaded below 100 %, the picture is TSR's reconstruction: a little softer than native, with the frame's 8 samples a

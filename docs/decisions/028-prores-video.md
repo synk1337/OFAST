@@ -7,7 +7,7 @@
 
 Renders were image sequences only: a folder of PNGs (and an EXR a frame) per pass, thousands of files for a highlight.
 The user asked for "an uncompressed video file instead of an image sequence, or even better a choice". Most CS
-editors cut in VEGAS Pro (the user too, VEGAS Pro 16 here); others use Premiere, After Effects or Resolve.
+editors cut in VEGAS Pro (the user too, Vegas Pro 2026 here); others use Premiere, After Effects or Resolve.
 
 What Unreal 5.8's Movie Render Queue can write as video, read from its plugins' code:
 
@@ -44,8 +44,15 @@ What Unreal 5.8's Movie Render Queue can write as video, read from its plugins' 
 ## Consequences
 
 - One file to import, and the frame rate is in it: no image sequence settings in the editor.
-- ProRes in VEGAS Pro 16 is not checked yet (newer VEGAS Pro, Premiere, After Effects and Resolve read ProRes 4444).
-- The players layer's alpha: the frames carry it (checked in their headers, 2026-11-08); an editor's view of it is not
-  checked yet.
+- **Checked in Vegas Pro 2026** (Boris FX, 2026-11-12, by a script run at its start: `-SCRIPT:`, the media's stream
+  properties and `SaveSnapshot` of the timeline): the .mov files read at their size, 60 frames a second and length,
+  alpha "Straight"; the six frames of a 1080p render snapshot to the PNG frames of the same render, in order, full
+  range on both sides (0 – 255, means within 0.7, mean difference 0.9 – 1.7: two renders differ as much); the
+  players layer over another picture shows that picture everywhere but behind the players. Vegas reads 4444 XQ's
+  alpha too (from the frames, not the file's label). A whole render started from the Studio (720p, 3764 frames,
+  2.4 GB, one file for its four cuts) reads at its length. VEGAS Pro 16 is not installed here any more: not checked.
+  After Effects 2022: not checked (its script stopped on a dialog that could not be read).
+- The players in the players layer are lit without Lumen's bounce (a dark tunnel's viewmodel comes out black): the
+  stencil layers' own flaw (decision 027), in the PNGs as well.
 - Unreal's warning "Failed to evaluate camera to create cur/prev camera locations" at a render's first camera cut is
   older than this (in image renders too) and harmless.

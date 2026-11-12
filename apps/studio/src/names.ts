@@ -205,13 +205,13 @@ export const RENDER_POWERS: [RenderPower, string, string][] = [
   [
     "balanced",
     "Balanced",
-    "The graphics card rests now and then and Unreal runs below your other programs, so the PC stays usable: " +
-      "about 15 % longer",
+    "The graphics card rests a quarter of the time and Unreal runs below your other programs, so the PC stays " +
+      "usable: about a third longer",
   ],
   [
     "low",
     "Low",
-    "The graphics card rests as long as it works (a third less power, cooler and quieter), Unreal below your other " +
-      "programs: about 1.7 times as long",
+    "The graphics card rests half of the time (a third less power, cooler and quieter), Unreal below your other " +
+      "programs: almost twice as long",
   ],
 ];

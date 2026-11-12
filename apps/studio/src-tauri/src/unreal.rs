@@ -515,15 +515,15 @@ struct RenderJob {
 /// How much of the PC a render may take (the UI's "Power", `tools/unreal/render_round.py`'s POWER). Movie Render
 /// Queue renders flat out; below `Full` the script rests the graphics card between frames (it then draws less power,
 /// and other programs get it) and Unreal runs at a CPU priority below the user's programs, the shader compilers it
-/// starts too (they inherit it). de_nuke in 4K on an RTX 5070 (decision 027): `Full` 2.2 s a frame, 154 W;
-/// `Balanced` 2.5 s, 136 W; `Low` 3.7 s, 106 W.
+/// starts too (they inherit it). A firefight on de_nuke in 1080p on an RTX 5070 (decision 027): `Full` 2.1 s a
+/// frame, 153 W; `Balanced` 2.7 s, 128 W; `Low` 3.9 s, 98 W.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Power {
     /// All of it, as fast as the PC goes.
     Full,
-    /// Rests now and then: about 15 % longer.
+    /// Rests a quarter of the time: about a third longer.
     Balanced,
-    /// Rests as long as it works: about 1.7 times as long.
+    /// Rests half of the time: almost twice as long.
     Low,
 }
 
