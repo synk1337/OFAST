@@ -37,12 +37,16 @@ OWN = "Each player's own"
 AS_PLAYED = "As played"
 RIGHT = "Right"
 LEFT = "Left"
-# CS2's own default viewmodel (viewmodel_presetpos 1, "Desktop"): what a new install shows; and its view's field of
-# view (`fov`, horizontal at 4:3, which every player has: CS2 lets no one change it).
+# CS2's "Classic" viewmodel (viewmodel_presetpos 2: the gun far to the right, as most players and movies have it),
+# for everyone unless the project says otherwise; and its view's field of view (`fov`, horizontal at 4:3, which
+# every player has: CS2 lets no one change it). Not what a new CS2 install shows: that is "Desktop"
+# (viewmodel_presetpos 1, the cvars' own defaults: viewmodel_fov 60, offsets 1 1 -1; read from CS2 1.41.9.7's
+# console, 2026-11-16, where no third preset exists).
 CS2_DEFAULT = {"fov": 68.0, "offset": [2.5, 0.0, -1.5], "view_fov": 90.0}
 DEFAULTS = {"whose": SAME, "fov": CS2_DEFAULT["fov"], "offset": list(CS2_DEFAULT["offset"]), "hand": AS_PLAYED,
             "motion": 1.0, "view_fov": CS2_DEFAULT["view_fov"]}
-# CS2's limits for viewmodel_fov and the offsets.
+# The panel's limits for the gun's field of view and the offsets: CS2's own for the offsets; CS2 1.41.9.7 allows a
+# viewmodel_fov of 60 to 68 (`help viewmodel_fov`), the panel goes on down to 54.
 FOV_RANGE = (54.0, 68.0)
 # The view's field of view: the slider's range (degrees at 4:3; 90 is CS2's; typed values from 20 to 150).
 VIEW_FOV_RANGE = (60.0, 120.0)

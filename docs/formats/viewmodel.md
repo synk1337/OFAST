@@ -5,8 +5,10 @@ every round of the project, and each round's own data to key its guns again with
 
 ## Settings
 
-One JSON file for the project: `Saved/OFAST/Viewmodel.json` in the Unreal project. Without it, CS2's own default
-viewmodel for everyone (a new install's `viewmodel_presetpos 1`).
+One JSON file for the project: `Saved/OFAST/Viewmodel.json` in the Unreal project. Without it, CS2's "Classic"
+viewmodel for everyone (`viewmodel_presetpos 2`: field of view 68, offsets 2.5 0 −1.5). A new CS2 install shows
+"Desktop" instead (`viewmodel_presetpos 1`, the cvars' defaults: 60; 1 1 −1), which is what `Each player's own` gives
+for a player who never changed it (read from CS2 1.41.9.7's console, 2026-11-16).
 
 ```json
 {
@@ -25,7 +27,7 @@ viewmodel for everyone (a new install's `viewmodel_presetpos 1`).
 |---|---|
 | `view_fov` | the view's field of view through every player's eyes (the `POV <name>` cameras' `field_of_view`, set from it as CS2's `fov`: horizontal at 4:3, degrees; 90 is CS2's, and a file without it reads 90). Since 2026-11-03: the user's "the field of view should affect the POV shot as well", where `fov` moves only the gun, as CS2's `viewmodel_fov` does. A scope or a sight zooms to CS2's own degrees whatever it is (the round's `zoom`, keyed on the camera: [cameras.md](cameras.md#scopes)) |
 | `whose` | `Same for everyone`: `fov` and `offset` for every player; `Each player's own`: the settings each player had in the demo (`m_flViewmodelFOV`, `m_flViewmodelOffsetX/Y/Z`; [demo.md](demo.md#first-person-view)) |
-| `fov` | the gun's: CS2's `viewmodel_fov`, horizontal at 4:3, degrees (CS2 allows 54 – 68); the panel's **Gun field of view** |
+| `fov` | the gun's: CS2's `viewmodel_fov`, horizontal at 4:3, degrees (CS2 1.41.9.7 allows 60 – 68; the panel 54 – 68); the panel's **Gun field of view** |
 | `offset` | CS2's `viewmodel_offset_x`, `_y`, `_z`: inches right, forward, up (CS2 allows −2.5 – 2.5, −2 – 2 for z) |
 | `hand` | `As played` (each player's `m_bLeftHanded`, tick by tick), `Right` or `Left` for everyone |
 | `motion` | the gun's motion with the player (the agents manifest's `sway`, [animation.md](animation.md#first-person-view-animviewmodel-exportviewmodel)) times this: 0 a still gun, 1 CS2's |

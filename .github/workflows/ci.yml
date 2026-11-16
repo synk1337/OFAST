@@ -32,6 +32,14 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
 
+  # The Unreal scripts' own arithmetic (tools/unreal/tests): plain Python, with a stand-in for Unreal's module.
+  scripts:
+    name: Unreal scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s tools/unreal/tests -v
+
   # Lint + test + docs on Windows (the platform CS2 and Unreal run on) and Linux (keeps the core portable).
   check:
     name: Clippy, tests, docs (${{ matrix.os }})

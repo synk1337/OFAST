@@ -19,7 +19,12 @@ cargo test                          # unit tests on synthetic fixtures (core and
 cargo test --workspace              # the same, with the Studio's Rust side (what CI runs; needs WebKitGTK on Linux)
 cargo test --features game-data     # extra tests that read YOUR local CS2 install
 cargo doc --no-deps --open          # browse the API docs
+python -m unittest discover -s tools/unreal/tests   # the Unreal scripts' own arithmetic, outside Unreal (CI runs it)
 ```
+
+The Unreal scripts (`tools/unreal/*.py`) only run inside the editor; what they compute without calling Unreal is
+tested in `tools/unreal/tests`, where a stand-in replaces Unreal's `unreal` module (so far: the thinning of keys,
+`replay_cameras.reduce_keys`).
 
 `game-data` tests find CS2 automatically through Steam's library list (`libraryfolders.vdf`). Override with the
 `OFAST_CS2_DIR` environment variable (the folder that contains `game\csgo\pak01_dir.vpk`). Add `--release` when

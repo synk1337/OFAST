@@ -9,7 +9,8 @@
 //! - the viewmodel clip skeleton (`viewmodel.vnmskel`) next to the arms model's (`weapon_arms.vmdl`) bones;
 //! - for the clip at a few times: where `wpn`, the hands and their weapon targets (`wpnHand_L` / `_R`) are in the
 //!   clip's model space (inches; the camera's axes: x forward, y left, z up), and how far each hand is from its
-//!   target (what the graph's hand IK closes);
+//!   target (what the graph's hand IK closes); with `OFAST_PROBE_FRAMES` set, `wpn` on every frame of the clip (a
+//!   shot's kick);
 //! - the clip's secondary animations (the weapon's own bones) at time 0, their skeletons and root bones;
 //! - the weapon model's bones next to its animation skeleton's;
 //! - the agent's bind pose against the arms model's, its mesh groups and the bones its first-person meshes are
@@ -174,6 +175,25 @@ fn main() {
             let (_, b) = model[bone(target)];
             let d = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
             println!("  {hand} is {d:.3} in from {target}");
+        }
+    }
+
+    // `wpn` frame by frame: where it is and where its x axis (the barrel's line) points, up and to the left.
+    if std::env::var_os("OFAST_PROBE_FRAMES").is_some() {
+        let fps = clip.fps();
+        for frame in 0..clip.frames {
+            let pose = clip.decode_frame(frame).expect("frame decodes");
+            let (q, t) = model_space(&pose, &skeleton.parents)[bone("wpn")];
+            let forward = rotate(q, [1.0, 0.0, 0.0]);
+            println!(
+                "  frame {frame:3} ({:.3} s): wpn at ({:7.3}, {:7.3}, {:7.3}), up {:6.2}°, left {:6.2}°",
+                frame as f32 / fps,
+                t[0],
+                t[1],
+                t[2],
+                forward[2].asin().to_degrees(),
+                forward[1].atan2(forward[0]).to_degrees(),
+            );
         }
     }
 

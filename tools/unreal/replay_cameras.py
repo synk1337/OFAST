@@ -33,9 +33,14 @@ CAMERA_TAG = unreal.Name("OFAST_camera")
 CAMERAS_FORMAT = "ofast-cameras"
 CAMERAS_VERSION = 1
 UNITS_TO_CM = 2.54
-# Key reduction tolerances: 0.2 cm and 0.1 degree.
+# Key reduction tolerances (reduce_keys): 0.2 cm and 0.1 degree; 0.02 degree for a first-person view, where the
+# whole picture turns with the angle: 0.1 degree is 1.3 pixels of a 1080p frame and 2.5 of a 4K one, and the last
+# 0.1 degree of the view's way back down after a shot would be one straight line a second long (a local game's AK
+# shot: CS2's view is back after 25 ticks). 0.02 degree keeps twice the keys of 0.1 (a quarter to a third of a
+# player's ticks).
 POSITION_TOLERANCE_CM = 0.2
 ANGLE_TOLERANCE_DEG = 0.1
+VIEW_TOLERANCE_DEG = 0.02
 # The shot cameras' sensor: 16:9.
 SENSOR_MM = (36.0, 20.25)
 # Muzzle lights' tags: "OFAST_light_tp_<controller>" on the third-person light actor, "OFAST_light_fp_<controller>"
@@ -71,18 +76,47 @@ def unwrap(angles):
 
 
 def reduce_keys(frames, values, tolerance):
-    """Drops keys that linear interpolation between the kept neighbours reproduces within `tolerance`. Keeps the
-    first and last key of every run (values are lists of floats of equal length)."""
+    """Drops the keys that the straight lines between the kept ones give back within `tolerance` (values are lists of
+    floats of equal length; frames go up), keeping the first and the last. Every dropped key is within `tolerance` of
+    the line that replaces it: from the last kept key, the slopes whose lines pass that close to each key since
+    narrow as the stretch grows, and the key before the first one that falls outside them is kept.
+
+    Until 2026-11-16 a key was dropped when the line from the last kept key to the very next key passed by it, which
+    says nothing of the longer line drawn in the end: on a curve that flattens (the view coming back down after a
+    shot) every key passed, and the view stayed up until the player's next sharp move; on real rounds views were 1 to
+    3 degrees off and players up to 7 cm."""
     if len(frames) <= 2:
         return list(zip(frames, values))
+    width = len(values[0])
     kept = [0]
-    for i in range(1, len(frames) - 1):
-        a, b = kept[-1], i + 1
-        t = (frames[i] - frames[a]) / (frames[b] - frames[a])
-        if any(abs(values[a][k] + (values[b][k] - values[a][k]) * t - values[i][k]) > tolerance
-               for k in range(len(values[i]))):
-            kept.append(i)
-    kept.append(len(frames) - 1)
+    anchor = 0
+    low, high = [-math.inf] * width, [math.inf] * width
+    i = 1
+    while i < len(frames):
+        span = frames[i] - frames[anchor]
+        if span <= 0:
+            # Two keys on one frame: no line between them, both kept.
+            fits = False
+        else:
+            slopes = [(values[i][k] - values[anchor][k]) / span for k in range(width)]
+            fits = all(low[k] <= slopes[k] <= high[k] for k in range(width))
+        if fits:
+            # The line to this key passes every key since the last kept one; a longer line must pass this one too.
+            reach = tolerance / span
+            for k in range(width):
+                low[k] = max(low[k], slopes[k] - reach)
+                high[k] = min(high[k], slopes[k] + reach)
+            i += 1
+            continue
+        # Kept: the key before (the line to it passed), or this one when it sits on the last kept key's frame.
+        anchor = i if span <= 0 else i - 1
+        if kept[-1] != anchor:
+            kept.append(anchor)
+        low, high = [-math.inf] * width, [math.inf] * width
+        if span <= 0:
+            i += 1
+    if kept[-1] != len(frames) - 1:
+        kept.append(len(frames) - 1)
     return [(frames[i], values[i]) for i in kept]
 
 
@@ -188,7 +222,8 @@ def transform_section(binding, end_frame):
 
 def key_eyes(binding, rows, tick0, end_frame):
     """A POV camera's transform from the file's `eyes` rows [tick, x, y, z, pitch, yaw]: linear keys, after dropping
-    those a straight line already gives. Returns the number of keys."""
+    those the straight lines between the kept ones give back (reduce_keys: within POSITION_TOLERANCE_CM and
+    VIEW_TOLERANCE_DEG). Returns the number of keys."""
     if not rows:
         return 0
     channels = transform_section(binding, end_frame)
@@ -199,7 +234,7 @@ def key_eyes(binding, rows, tick0, end_frame):
     rotations = list(zip([-r[4] for r in rows], unwrap([-r[5] for r in rows])))
     count = 0
     for name, values, tolerance, axes in (("Location", locations, POSITION_TOLERANCE_CM, ("X", "Y", "Z")),
-                                          ("Rotation", rotations, ANGLE_TOLERANCE_DEG, ("Y", "Z"))):
+                                          ("Rotation", rotations, VIEW_TOLERANCE_DEG, ("Y", "Z"))):
         for frame, value in reduce_keys(frames, values, tolerance):
             for axis, v in zip(axes, value):
                 add_key(channels["%s.%s" % (name, axis)], frame, v, linear)

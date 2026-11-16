@@ -160,7 +160,9 @@ from when it is started (its first frame then), so the times only need to be rig
 
 - **Eyes**: each player's `POV <name>` camera (a CameraActor, 106.26° at 16:9: CS2's 90; the Viewmodel panel's
   **View field of view** sets another for every POV camera, [viewmodel.md](viewmodel.md)) keyed linearly on `eyes`,
-  after dropping keys a straight line gives (0.2 cm, 0.1°). Its depth of field is a post-process lens on a sensor 40
+  after dropping the keys the straight lines between the kept ones give back (within 0.2 cm and 0.02° at every
+  dropped key: `reduce_keys`, [replay.md](replay.md#in-unreal-import_demopy); 0.02° and not the players' 0.1°
+  because the whole picture turns with the view: 0.1° is 1.3 pixels of a 1080p frame). Its depth of field is a post-process lens on a sensor 40
   full frames wide, so that the map blurs ([lighting.md](lighting.md#the-look-panel)). A player who zooms gets a
   field of view track on the camera's component, keyed linearly around each change of the eyes' `fov`
   (`ofast_viewmodel.key_zoom`, again with the Viewmodel panel and the cameras' update), the view's own from the panel.

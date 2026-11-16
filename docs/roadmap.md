@@ -274,11 +274,19 @@ player and round.
 - [x] **Knife swings and grenade throws checked against CS2** (2026-11-05, Falcons vs Vitality, de_anubis, round 6,
   CS2's own frames at their demo bar's ticks): NiKo's heavy swing, m0NESY's light one and karrigan's throw match
   pose for pose (the throw's arm a tick or two behind at its highest).
-- [ ] `FirstPersonScale` against walls; the viewmodel's place on a shot: in a local game CS2's AK sight moves 0.35 % of
-  the screen's height in the 8 ticks after a single shot, OFAST's rises 3 % (ZywOo's first shot, round 6 above): the
-  shoot clip (`shoot1_ak`) played at its own speed puts the gun 3.2 inches back and up within 5 ticks, where CS2
-  plays it faster or weaker (its `weapon_action_speedscale` by the gun's cycle time? to test); the recoil OFAST adds
-  past the camera is a fifth of a degree.
+- [x] **The view after a shot** (2026-11-16; the releases' known issue "the gun kicks up more after each shot than in
+  CS2"). Not the gun: the view. Checked on a GOTV demo of a local game against CS2's own frames of the same shots
+  (slow motion, `host_timescale 0.1`): after an AK's single shot CS2's view is 1.0° up on the first frame and back
+  within 25 ticks; OFAST's went 1.35° up and stayed there, a degree still left a second later. The exported keys
+  were right; `replay_cameras.reduce_keys` (Unreal) dropped every key of the way back down, checking each key against
+  the line to the very next key only ([replay.md](formats/replay.md#in-unreal-import_demopy)). Fixed: every dropped
+  key is within tolerance of the line that replaces it, and a first-person view keeps keys to 0.02°. On real rounds
+  the old check left views 1 to 3° off the demo and players up to 7 cm; rounds sent before must be sent again. The
+  gun itself was right: with the player's own viewmodel settings its front sight follows CS2's within 3 pixels of a
+  1080p frame at every tick compared (up 1 % of the height 6 ticks after the shot, 1.6 % under its rest place at 13,
+  back at 23), the shoot clip at its own speed. Left: on the shot's own tick OFAST's view is 0.3° higher than CS2's
+  first frame, and its last tenth of a degree takes longer to go.
+- [ ] `FirstPersonScale` against walls.
 
 ## M6 progress
 
