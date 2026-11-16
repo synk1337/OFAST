@@ -132,7 +132,22 @@ graph's top state machine: first person lost its weapons). The Studio shows the 
 3. `cargo run --release -p ofast-core --example paint_census`: a paint style or feature value not seen before, or a
    kit that no longer reads, is a new skin feature to port.
 4. Import the round into Unreal (`import_demo.py -Shot`) and compare the shots with the last ones.
-5. Add the build to `CHECKED_VERSIONS` (newest first), with the fixes if something broke.
+5. **Record a demo on the new build and export it.** The steps above replay demos recorded before the patch, which
+   keep the old build's format: they pass whatever the patch did to how demos are written. With CS2 offline and
+   nobody playing (`steam.exe -applaunch 730 -insecure -novid -console -netconport 2121 +map de_dust2`),
+   `python tools/cs2/record_bots.py` records two rounds of bots as `game/csgo/ofast_bots.dem`; then
+   `export-demo --round 1 --players` on it: no error, no warning, `check: pose recipes` with CS2's pose on nearly
+   every living player-tick (98 % on 1.41.9.7), `check: hitboxes` with most hits on a posed body. Compare
+   `cargo run --release -p ofast-core --example demo_inspect -- <demo> encoders` with the last check's
+   (`test-data/cs2-updates/<build>/encoders.txt`): a new encoder name stops the reader with an error by itself, a
+   known one on new types is worth a look.
+6. Add the build to `CHECKED_VERSIONS` (newest first), with the fixes if something broke.
+
+CS2 1.41.9.7 (2026-11-11) was marked checked on steps 1 – 4 alone and was not: its demos store one-byte fields
+with a new encoder, `fixed8` ([demo.md](formats/demo.md#field-decoders)), which OFAST 1.0.12 and earlier read as the
+varint they had been, into garbage from the first byte of 128 or more ("entity index … out of range", "element 2 of
+an array with 2 elements"), and stamp their pose recipes 65539 instead of 3. Fixed in 1.0.13, five days late:
+hence step 5.
 
 ## Exporting and checking in Unreal
 

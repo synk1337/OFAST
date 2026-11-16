@@ -143,8 +143,10 @@ impl Cs2Install {
 /// The CS2 builds OFAST was checked on, newest first: `PatchVersion` and `ClientVersion` of `game/csgo/steam.inf`.
 ///
 /// A CS2 patch can change what OFAST reads (demo messages, animation graphs, shaders) without warning. After each
-/// one, a round is exported and imported again and its checks compared (docs/development.md, "After a CS2 update");
-/// the new build is added here once nothing is broken, or with the fix when something was.
+/// one, a round is exported and imported again and its checks compared, and a demo recorded on the new build is
+/// exported (docs/development.md, "After a CS2 update"); the new build is added here once nothing is broken, or
+/// with the fix when something was. 1.41.9.7 went in on demos recorded before it, four days before its own demos
+/// could be read (OFAST 1.0.13).
 pub const CHECKED_VERSIONS: &[(&str, u32)] = &[
     ("1.41.9.7", 2_000_943),
     ("1.41.9.6", 2_000_942),

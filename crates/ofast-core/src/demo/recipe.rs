@@ -27,9 +27,11 @@ use super::fieldpath::FieldPath;
 use super::serializer::Serializers;
 
 /// The recipe formats this decoder reads (`m_nSerializePoseRecipeVersionAG2`): 2 (demos of CS2 builds 10772 and
-/// 10847) and 3 (build 10955), which differ, among the payloads decoded, only in the width of a sample's resource
-/// index ([`resource_bits`]).
-pub const RECIPE_VERSIONS: [i64; 2] = [2, 3];
+/// 10847), 3 (build 10955 until CS2 1.41.9.6) and 65539 (0x10003: CS2 1.41.9.7, 2026-11-11), which differ, among
+/// the payloads decoded, only in the width of a sample's resource index ([`resource_bits`]). 65539 reads as 3 does:
+/// a round of bots on 1.41.9.7 decodes without an error, its table names 99 % of the sample tasks and the demo's
+/// hits lie a median 0.3 inch from the bodies posed from it.
+pub const RECIPE_VERSIONS: [i64; 3] = [2, 3, 65539];
 
 /// Longest recipe data read (bytes); the demos send 32 – 96. A longer length is refused, not allocated.
 pub const MAX_RECIPE_BYTES: u64 = 4096;
@@ -246,8 +248,8 @@ pub fn inputs_of(kind: u8) -> usize {
     }
 }
 
-/// Bits of a sample's resource index for a recipe version: 10 in version 2, 11 in version 3. Esoterica sizes the
-/// index to the serialization context's resource count (the main graph's clips and graphs): 909 clips and 67 graphs
+/// Bits of a sample's resource index for a recipe version: 10 in version 2, 11 in versions 3 and 65539. Esoterica
+/// sizes the index to the serialization context's resource count (the main graph's clips and graphs): 909 clips and 67 graphs
 /// in the version-2 builds checked fit 10 bits; today's graph has 975 clips reachable from the main graph, and a
 /// version-3 demo names indices up to 1038, past what 10 bits hold. A later build with more than 2048
 /// resources would widen it again, perhaps without a new version: the recipes would then stop decoding
@@ -255,7 +257,7 @@ pub fn inputs_of(kind: u8) -> usize {
 pub fn resource_bits(version: i64) -> Option<usize> {
     match version {
         2 => Some(10),
-        3 => Some(11),
+        3 | 65539 => Some(11),
         _ => None,
     }
 }
@@ -723,6 +725,10 @@ mod tests {
             decoded.tasks[6],
             Task::Blend { kind: 8, weight, ref mask } if weight == 1.0 && *mask == vec![MaskTask::Mask(0)]
         ));
+        // CS2 1.41.9.7 stamps its recipes 65539 (0x10003): the same layout.
+        let mut patched = v3.clone();
+        patched.version = 65539;
+        assert_eq!(decode(&patched).as_ref(), Ok(&decoded));
         // Read as version 2, the same bytes lose their alignment: the first time takes the index's eleventh bit.
         let mut v2 = v3.clone();
         v2.version = 2;

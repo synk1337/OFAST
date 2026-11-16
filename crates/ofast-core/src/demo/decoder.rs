@@ -126,6 +126,11 @@ pub enum Decoder {
     Unsigned,
     /// 8 raw bytes, little-endian (`uint64` fields with the `fixed64` encoder, e.g. Steam IDs).
     Fixed64,
+    /// 8 raw bits (the `fixed8` encoder of CS2 1.41.9.7 on `uint8` and one-byte enums; a varint before, which takes
+    /// the same 8 bits only below 128).
+    Fixed8,
+    /// 8 raw bits as a signed number (`int8` with the `fixed8` encoder; a zigzag varint before).
+    Fixed8Signed,
     /// NUL-terminated string.
     String,
     /// Varint length + that many bytes.
@@ -212,13 +217,42 @@ impl FieldEncoding<'_> {
     }
 }
 
+/// Every encoder name [`Decoder::for_field`] knows what to do with (`""`: none; `qangle` is `QAngle`'s plain one).
+/// A demo whose send tables name another cannot be read: its fields' bits would be guessed
+/// ([`Decoder::knows_encoder`]).
+pub const KNOWN_ENCODERS: &[&str] = &[
+    "",
+    "coord",
+    "normal",
+    "simtime",
+    "runetime",
+    "fixed64",
+    "fixed8",
+    "qangle",
+    "qangle_precise",
+];
+
 impl Decoder {
+    /// Whether an encoder name is one of [`KNOWN_ENCODERS`]. CS2 1.41.9.7 brought `fixed8`: read as the varint its
+    /// fields had been, a demo decoded until the first byte of 128 or more, then into garbage.
+    pub fn knows_encoder(encoder: &str) -> bool {
+        KNOWN_ENCODERS.contains(&encoder)
+    }
+
     /// Chooses the decoder for a field, in this order:
-    /// 1. types whose decoder depends on encoder / bit count (`float32`, vectors, `QAngle`, `uint64`, …);
-    /// 2. fields special-cased by name (`m_iClip1`);
-    /// 3. types with a fixed decoder (`bool`, signed integers, strings, …);
-    /// 4. everything else is an unsigned varint (unsigned integers, enums, handles, colors, tokens…).
+    /// 1. the `fixed8` encoder, whatever the type (`uint8`, `int8`, one-byte enums);
+    /// 2. types whose decoder depends on encoder / bit count (`float32`, vectors, `QAngle`, `uint64`, …);
+    /// 3. fields special-cased by name (`m_iClip1`);
+    /// 4. types with a fixed decoder (`bool`, signed integers, strings, …);
+    /// 5. everything else is an unsigned varint (unsigned integers, enums, handles, colors, tokens…).
     pub fn for_field(f: &FieldEncoding<'_>) -> Self {
+        if f.encoder == "fixed8" {
+            return if f.base_type == "int8" {
+                Self::Fixed8Signed
+            } else {
+                Self::Fixed8
+            };
+        }
         match f.base_type {
             "float32" => return Self::Float(f.float()),
             "CNetworkedQuantizedFloat" => return Self::Float(f.quantized()),
@@ -305,6 +339,10 @@ impl Decoder {
             Self::Signed => FieldValue::Signed(r.varint_i64("signed field")?),
             Self::Unsigned => FieldValue::Unsigned(r.varint_u64("unsigned field")?),
             Self::Fixed64 => FieldValue::Unsigned(r.bits_u64(64, "fixed64 field")?),
+            Self::Fixed8 => FieldValue::Unsigned(u64::from(r.bits(8, "fixed8 field")?)),
+            Self::Fixed8Signed => {
+                FieldValue::Signed(i64::from(r.bits(8, "fixed8 field")? as u8 as i8))
+            }
             Self::String => FieldValue::String(r.string("string field")?.into()),
             Self::BinaryBlock => {
                 let len = r.varint_u32("binary block length")? as usize;
@@ -607,6 +645,60 @@ mod tests {
             ..encoding("float32", "", None)
         };
         assert_eq!(D::for_field(&sim), D::Float(FloatDecoder::SimulationTime));
+        // CS2 1.41.9.7's one-byte fields: the encoder decides, whatever the type (enums too).
+        assert_eq!(D::for_field(&encoding("uint8", "fixed8", None)), D::Fixed8);
+        assert_eq!(
+            D::for_field(&encoding("MoveType_t", "fixed8", None)),
+            D::Fixed8
+        );
+        assert_eq!(
+            D::for_field(&encoding("int8", "fixed8", None)),
+            D::Fixed8Signed
+        );
+        assert_eq!(
+            D::for_element(&encoding("uint8", "fixed8", None)),
+            D::Fixed8
+        );
+        assert_eq!(D::for_field(&encoding("uint8", "", None)), D::Unsigned);
+    }
+
+    #[test]
+    fn fixed8_takes_eight_bits_whatever_the_value() {
+        // 200 as a varint takes two bytes (0xC8 0x01): read as one, the field after it would start a byte late.
+        let mut w = BitWriter::default();
+        w.bits(200, 8);
+        w.bits(0xF6, 8);
+        w.bits(5, 8);
+        let bytes = w.finish();
+        let mut r = BitReader::new(&bytes);
+        assert_eq!(
+            Decoder::Fixed8.read(&mut r).unwrap(),
+            FieldValue::Unsigned(200)
+        );
+        assert_eq!(
+            Decoder::Fixed8Signed.read(&mut r).unwrap(),
+            FieldValue::Signed(-10)
+        );
+        assert_eq!(
+            Decoder::Fixed8.read(&mut r).unwrap(),
+            FieldValue::Unsigned(5)
+        );
+    }
+
+    #[test]
+    fn only_known_encoders_are_known() {
+        for encoder in [
+            "",
+            "coord",
+            "normal",
+            "fixed64",
+            "fixed8",
+            "qangle",
+            "qangle_precise",
+        ] {
+            assert!(Decoder::knows_encoder(encoder), "{encoder}");
+        }
+        assert!(!Decoder::knows_encoder("fixed16"));
     }
 
     #[test]

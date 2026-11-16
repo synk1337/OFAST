@@ -161,6 +161,18 @@ unknown one. The hitbox fit, recipes on against `OFAST_RECIPE=0` (before in brac
 Still re-decided only roughly: CS2's starts while moving (a player speeding up again after a hit, a landing or a
 weapon drawn at the round start), and the plants CS2 sets off a tick before the velocities show them.
 
+## Update 2026-11-16: version 65539 (CS2 1.41.9.7)
+
+Demos recorded since CS2 1.41.9.7 (2026-11-11) send `m_nSerializePoseRecipeVersionAG2` 65539 (0x10003) and store
+the recipe's bytes with a new field encoder, `fixed8`. Read as version 3, a round of bots recorded on that build
+decodes without an error: the table names 99 % of its sample tasks, CS2's pose plays on 98 % of the living
+player-ticks, and 62 of 68 hits lie on a posed body, a median 0.3 inch from its surface
+([demo.md](../formats/demo.md#pose-recipe-cs2s-own-animation)). `demo::recipe` reads 65539 as it reads 3.
+
+The 1.41.9.7 check (2026-11-12) missed both changes: it replayed demos recorded before the patch, which keep the
+old format. The check now records a demo on the new build (`tools/cs2/record_bots.py`,
+docs/development.md "After a CS2 update").
+
 ## Alternatives considered
 
 - **Keep re-deciding the graph** (decision 013): works, but every state has to be found again and timed by guess;

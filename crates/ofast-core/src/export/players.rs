@@ -365,8 +365,8 @@ pub fn export_players(
         .samples
         .iter()
         .any(|s| s.players.iter().any(|p| p.rig.pose_recipe.is_some()));
-    // A recipe format OFAST does not read (a CS2 update brings one now and then: build 10955 brought version 3) leaves
-    // every pose re-decided, which the check line only shows as a count of 0.
+    // A recipe format OFAST does not read (a CS2 update brings one now and then: build 10955 brought version 3, CS2
+    // 1.41.9.7 version 65539) leaves every pose re-decided, which the check line only shows as a count of 0.
     if let Some(version) = track
         .samples
         .iter()

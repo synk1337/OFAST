@@ -269,6 +269,12 @@ without changing their member names.
 
 Chosen per field, in this order:
 
+0. encoder `fixed8`, whatever the type → 8 raw bits (signed for `int8`). CS2 1.41.9.7 (2026-11-11) put it on its
+   one-byte fields: `uint8` and its arrays and vectors (the pose recipe's and the smoke voxels' bytes,
+   `m_networkAnimTiming`), `int8`, and one-byte enums (`MoveType_t`, `RenderMode_t`, `SolidType_t`…), 60-odd fields.
+   They were varints before (zigzag ones for `int8`), which take the same 8 bits only below 128: read the old
+   way, a demo of 1.41.9.7 decodes until the first larger byte, then into garbage. An encoder name not in
+   `decoder::KNOWN_ENCODERS` stops the send tables with an error for that reason: its bits cannot be guessed;
 1. by base type, depending on encoder and bit count:
 
    | Base type | Decoder |
@@ -563,7 +569,7 @@ The fields sit on the pawn's `CBodyComponent` → `m_animationController`:
 | `m_SerializePoseRecipeAG2Slots` | `CUtlVectorEmbeddedNetworkVar<AnimGraph2SerializedPoseRecipeSlot_t>`, 32 slots | each slot's `m_topology`, a byte blob: a task list the player has used lately (below) |
 | `m_nSerializePoseRecipeAG2ActiveSlot` | `uint32` | which slot this tick's tasks follow; changes when the graph's task list changes |
 | `m_SerializePoseRecipeAG2Dynamic` | `CNetworkUtlVectorBase<uint8>`: a length, then one element per byte (32, 64 or 96 in version 2; 32, 128 or 160 in version 3) | this tick's task data: the server tick (`u32`), then each task's payload in the slot's order |
-| `m_nSerializePoseRecipeVersionAG2` | `int32` | the format: 2 in the demos of CS2 builds 10772 and 10847, 3 in those of build 10955 (below, "Version 3") |
+| `m_nSerializePoseRecipeVersionAG2` | `int32` | the format: 2 in the demos of CS2 builds 10772 and 10847, 3 in those of build 10955 (below, "Version 3"), 65539 (0x10003) since CS2 1.41.9.7 (below, "Version 65539") |
 
 A **topology** is a 4-bit width `D` (at most 8), a `D`-bit task count, then per task a 5-bit type and its inputs
 (`D` bits each: indices of earlier tasks). How many inputs each type takes is not written: with the counts below
@@ -607,6 +613,15 @@ AK fire, restarting at each shot), the aim, the last step. The locomotion times 
 length` (0.026 a tick on a 0.6 s run cycle) and the weights ease as the player turns: this is the pose CS2 drew.
 Every clip and blend decodes in 98.4 % of round 5's recipes and 99.6 % of the local match's (decoding stops at a
 14, 15 or 5 with no clip or blend after it); the rest have a clip after a 14 or a 15.
+
+**Version 65539** (0x10003: demos of CS2 1.41.9.7, 2026-11-11, the same network build 10955; read since
+2026-11-16, OFAST 1.0.13). The patch that stored the recipe's bytes with the `fixed8` encoder
+([Field decoders](#field-decoders)) also stamped the recipes 65539 where they said 3. Nothing decoded changed: read
+as version 3 (11-bit resource indices), the 37,883 living player-ticks of a round of bots on de_dust2
+(`tools/cs2/record_bots.py`) decode without an error, the table names 131,169 of 132,536 sample tasks (99 %), CS2's
+pose plays on 37,193 ticks (98 %), and 62 of the round's 68 hits lie on a body posed from them, a median 0.3 inch
+from its surface. OFAST 1.0.12 and earlier stop on such a demo before any recipe (the `fixed8` bytes); with those
+read and the version unknown, every tick got OFAST's re-decided poses and the export warned about the version.
 
 **Version 3** (the demos of CS2 build 10955: the faze-vs-falcons matches; `demo::recipe` reads it since 2026-11-04,
 before which their exports played OFAST's re-decided poses on every tick). The topologies did not change: read as in

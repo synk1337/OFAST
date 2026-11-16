@@ -33,6 +33,19 @@ pub enum SerializerError {
     /// A length, symbol, field or serializer index points outside its data.
     #[error("send tables: {0}")]
     BadReference(String),
+    /// A field names an encoder OFAST has no decoder for ([`Decoder::knows_encoder`]): a newer CS2's.
+    #[error(
+        "this demo stores {field} ({var_type}) with the encoding \"{encoder}\", which this version of OFAST cannot \
+         read: it comes from a newer CS2, update OFAST"
+    )]
+    UnknownEncoder {
+        /// The field's name.
+        field: String,
+        /// Its C++ type.
+        var_type: String,
+        /// The encoder's name.
+        encoder: String,
+    },
 }
 
 /// A C++ type name split into its parts, e.g. `CNetworkUtlVectorBase< CHandle< CBaseEntity > >` → base
@@ -319,6 +332,13 @@ impl Serializers {
             send_node.clear();
         }
         let encoder = symbol(msg, f.var_encoder_sym)?;
+        if !Decoder::knows_encoder(&encoder) {
+            return Err(SerializerError::UnknownEncoder {
+                field: var_name,
+                var_type,
+                encoder,
+            });
+        }
         let serializer_name = symbol(msg, f.field_serializer_name_sym)?;
         let ty = FieldType::parse(&var_type);
 
@@ -776,5 +796,58 @@ mod tests {
             Some(FieldPath::new(&[2]))
         );
         assert_eq!(s.path_of(pawn, "m_nope"), None);
+    }
+
+    #[test]
+    fn one_byte_fields_follow_the_fixed8_encoder() {
+        // CS2 1.41.9.7's send tables: `fixed8` on plain bytes, byte arrays, byte vectors and one-byte enums.
+        let fixed = |name, ty| F {
+            name,
+            ty,
+            encoder: Some("fixed8"),
+            ..Default::default()
+        };
+        let msg = message(&[(
+            "CCSPlayerPawn",
+            vec![
+                fixed("m_iTeamNum", "uint8"),
+                fixed("m_MoveType", "MoveType_t"),
+                fixed("m_recentKillQueue", "uint8[8]"),
+                fixed("m_networkAnimTiming", "CNetworkUtlVectorBase< uint8 >"),
+                fixed("m_nIdealMotionType", "int8"),
+            ],
+        )]);
+        let s = Serializers::from_message(&msg).unwrap();
+        let pawn = s.by_name("CCSPlayerPawn").unwrap();
+        let lengths = |p: &FieldPath| matches!(p.indices(), [3]).then_some(8);
+        let resolve = |p: &[i32]| s.resolve(pawn, &FieldPath::new(p), lengths).unwrap();
+        assert_eq!(resolve(&[0]).decoder, &Decoder::Fixed8);
+        assert_eq!(resolve(&[1]).decoder, &Decoder::Fixed8);
+        assert_eq!(resolve(&[2, 7]).decoder, &Decoder::Fixed8);
+        // The vector's length stays a varint; its bytes are fixed.
+        assert!(resolve(&[3]).is_length);
+        assert_eq!(resolve(&[3, 7]).decoder, &Decoder::Fixed8);
+        assert_eq!(resolve(&[4]).decoder, &Decoder::Fixed8Signed);
+    }
+
+    #[test]
+    fn an_unknown_encoder_stops_the_send_tables() {
+        // Guessing its bits would decode the demo into garbage from the first value that differs.
+        let msg = message(&[(
+            "CCSPlayerPawn",
+            vec![F {
+                name: "m_nNew",
+                ty: "uint16",
+                encoder: Some("fixed16"),
+                ..Default::default()
+            }],
+        )]);
+        let error = Serializers::from_message(&msg).unwrap_err();
+        assert!(
+            matches!(&error, SerializerError::UnknownEncoder { field, encoder, .. }
+                if field == "m_nNew" && encoder == "fixed16"),
+            "{error}"
+        );
+        assert!(error.to_string().contains("update OFAST"), "{error}");
     }
 }

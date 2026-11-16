@@ -9,6 +9,10 @@
 //! cargo run --release --example demo_inspect -- path/to/match.dem events [weapon_fire ...]
 //! # how many network messages of each id the packets carry
 //! cargo run --release --example demo_inspect -- path/to/match.dem messages
+//! # the encoder names of the send tables, the types they are on and how many fields
+//! cargo run --release --example demo_inspect -- path/to/match.dem encoders [encoder, to list its fields]
+//! # the instance baselines, and the entities the first frames' packets give an alternate one
+//! cargo run --release --example demo_inspect -- path/to/match.dem baselines [frames]
 //! # the rounds and their tick ranges
 //! cargo run --release --example demo_inspect -- path/to/match.dem rounds
 //! ```
@@ -166,6 +170,80 @@ fn main() {
                     );
                     shown += 1;
                 }
+            }
+        }
+        return;
+    }
+
+    if args.get(1).map(String::as_str) == Some("baselines") {
+        // The `instancebaseline` table's entries (class id, or `class id:alternate`) and which entities the packets
+        // give an alternate baseline, over the first frames (`baselines 40`) or until the parser stops.
+        use ofast_core::demo::proto::{CsvcMsgPacketEntities, SvcMessages};
+        use prost::Message;
+        let frames: usize = args.get(2).and_then(|c| c.parse().ok()).unwrap_or(40);
+        parser.keep_messages(&[SvcMessages::SvcPacketEntities as i32]);
+        for _ in 0..frames {
+            match parser.next_frame() {
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(error) => {
+                    println!("stopped at tick {:?}: {error}", parser.tick());
+                    break;
+                }
+            }
+        }
+        if let Some(table) = parser.string_tables().by_name("instancebaseline") {
+            for entry in &table.entries {
+                let class = entry.key.split(':').next().and_then(|k| k.parse().ok());
+                println!(
+                    "  baseline {:>8} {:32} {} bytes",
+                    entry.key,
+                    class.and_then(|c| parser.class_name(c)).unwrap_or("?"),
+                    entry.value.as_ref().map_or(0, Vec::len)
+                );
+            }
+        }
+        for message in parser.take_messages() {
+            let Ok(packet) = CsvcMsgPacketEntities::decode(&message.body[..]) else {
+                continue;
+            };
+            println!(
+                "tick {}: {} entities updated, delta {:?}, alternate baselines {:?}",
+                message.tick,
+                packet.updated_entries.unwrap_or(0),
+                packet.legacy_is_delta,
+                packet
+                    .alternate_baselines
+                    .iter()
+                    .map(|a| (a.entity_index.unwrap_or(-1), a.baseline_index.unwrap_or(-1)))
+                    .collect::<Vec<_>>()
+            );
+        }
+        return;
+    }
+
+    if args.get(1).map(String::as_str) == Some("encoders") {
+        // Every encoder name of the send tables, with the types it is on and how many fields: a CS2 patch that
+        // brings a new one shows here first.
+        while parser.serializers().is_none() {
+            parser
+                .next_frame()
+                .expect("frame")
+                .expect("send tables before the end");
+        }
+        let mut counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for f in &parser.serializers().expect("checked").fields {
+            *counts
+                .entry((f.encoder.clone(), f.var_type.clone()))
+                .or_default() += 1;
+            // `encoders fixed8`: each field of that encoder too.
+            if args.get(2) == Some(&f.encoder) {
+                println!("  {:16} {:40} {}", f.encoder, f.var_type, f.name);
+            }
+        }
+        for ((encoder, var_type), count) in counts {
+            if !encoder.is_empty() {
+                println!("  {encoder:16} {var_type:60} {count}");
             }
         }
         return;
