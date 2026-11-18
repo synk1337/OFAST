@@ -274,18 +274,29 @@ player and round.
 - [x] **Knife swings and grenade throws checked against CS2** (2026-11-05, Falcons vs Vitality, de_anubis, round 6,
   CS2's own frames at their demo bar's ticks): NiKo's heavy swing, m0NESY's light one and karrigan's throw match
   pose for pose (the throw's arm a tick or two behind at its highest).
-- [x] **The view after a shot** (2026-11-16; the releases' known issue "the gun kicks up more after each shot than in
-  CS2"). Not the gun: the view. Checked on a GOTV demo of a local game against CS2's own frames of the same shots
-  (slow motion, `host_timescale 0.1`): after an AK's single shot CS2's view is 1.0° up on the first frame and back
-  within 25 ticks; OFAST's went 1.35° up and stayed there, a degree still left a second later. The exported keys
-  were right; `replay_cameras.reduce_keys` (Unreal) dropped every key of the way back down, checking each key against
-  the line to the very next key only ([replay.md](formats/replay.md#in-unreal-import_demopy)). Fixed: every dropped
-  key is within tolerance of the line that replaces it, and a first-person view keeps keys to 0.02°. On real rounds
-  the old check left views 1 to 3° off the demo and players up to 7 cm; rounds sent before must be sent again. The
-  gun itself was right: with the player's own viewmodel settings its front sight follows CS2's within 3 pixels of a
-  1080p frame at every tick compared (up 1 % of the height 6 ticks after the shot, 1.6 % under its rest place at 13,
-  back at 23), the shoot clip at its own speed. Left: on the shot's own tick OFAST's view is 0.3° higher than CS2's
-  first frame, and its last tenth of a degree takes longer to go.
+- [x] **The gun and the view on a shot, against CS2** (2026-11-16 and 18; the releases' known issue "the gun kicks up
+  more after each shot than in CS2"). Checked on a GOTV demo of a local game against CS2's own frames of the same
+  shots (slow motion, `host_timescale 0.1`), the same viewmodel settings on both sides:
+  - **The gun was right.** On an AK's single shot its front sight follows CS2's within 3 pixels of a 1080p frame at
+    every tick compared (up 1 % of the height 6 ticks after the shot, 1.6 % under its rest place at 13, back at 23),
+    the shoot clip at its own speed. The known issue's numbers (CS2 0.35 %, OFAST 3 %) set a still single shot in a
+    local game against ZywOo's first bullet of a spray during a flick (the second bullet 6 ticks later, 1.9° of gun
+    lag settling, the gun's recoil growing): not the same thing, and not a fault found again like for like.
+  - **The view stayed up when the mouse was still**: after the AK's single shot CS2's view is back within 25 ticks,
+    OFAST's went 1.35° up with a degree still left a second later. The exported keys were right;
+    `replay_cameras.reduce_keys` (Unreal) dropped every key of the way back down, checking each key against the line
+    to the very next key only ([replay.md](formats/replay.md#in-unreal-import_demopy)). Fixed (OFAST 1.0.14): every
+    dropped key is within tolerance of the line that replaces it, and a first-person view keeps keys to 0.02°;
+    rounds sent before must be sent again.
+  - **On tournament rounds** (two, computed from their keys) the old check left views up to 1 to 3° off the demo and
+    players up to 7 cm, but on slow turns, not after shots: within half a second of a first bullet or a single shot
+    the view was at most 0.4° off (36 of them), players' own aim correcting the recoil keeps the keys. The 1.0.14
+    notes' "1 to 3 degrees off the demo after shots" says more than that.
+  - **Through a spray** (11 bullets, fixed code): between the shots OFAST's view is 0.1 to 0.6° above CS2's. On a
+    shot's own tick it is up to 1.8° ahead for that tick: the demo's sample carries a kick stamped up to a tick later
+    (`view_punch_at` shows it whole from the sample on), and the game shows a spray's later kicks at their own moment.
+    The first bullet's kick shows 0.3° higher than CS2's first frame (CS2 draws it a tick into its decay; with a click
+    from the console, the worst case). Both are within a tick; left as they are.
 - [ ] `FirstPersonScale` against walls.
 
 ## M6 progress
