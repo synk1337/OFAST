@@ -619,7 +619,7 @@ Not a regression: the baked pose (bone for bone), the import, the keys and the e
 round 5's kills look as they did then (that check measured muzzle to rear sight, which this barely changes). In a
 local game with a Galil at XANTARES's settings, CS2 draws it as OFAST does: big and close. In demo playback CS2
 draws every first-person gun smaller and further away than in a game, and neither the viewer's settings (four grabbed,
-the same to the pixel) nor the player's recorded ones explain it; at CS2's default (68, 2.5 0 −1.5) a local gun is
+the same to the pixel) nor the player's recorded ones explain it; at CS2's Classic (68, 2.5 0 −1.5) a local gun is
 still bigger than the spectated one. So OFAST shows each player's gun as they saw it while playing; the demo view's
 smaller gun (what HLAE records) is a preset to calibrate later. In a local game CS2 applies new viewmodel settings
 when the gun is drawn again, and FOV 54 drew as 60 (CS2's least, it seems).

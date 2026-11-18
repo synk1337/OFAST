@@ -6,7 +6,7 @@ person"; docs/formats/viewmodel.md.
   players' eyes (CS2's `fov`, 90 at 4:3, for every POV camera: the user's ask, 2026-11-03, "the field of view should
   affect the POV shot as well", where the gun's only moved the gun), whose viewmodel ("Same for everyone", the
   default, or "Each player's own", as they played), the gun's field of view and the offsets for everyone (CS2's
-  viewmodel_fov and viewmodel_offset_x / _y / _z, in CS2's numbers; CS2's own default to start with), the hand (as
+  viewmodel_fov and viewmodel_offset_x / _y / _z, in CS2's numbers; CS2's "Classic" preset to start with), the hand (as
   played, right, left), the gun's motion with the player (0 still, 1 CS2's: export::sway).
 - Each round's own data (<project>/Saved/OFAST/Viewmodels/<demo>_r<round>.json, written by import_demo.py): its
   sample frames, and per player the viewmodel settings they played with, the frames they switched hands, the recoil
@@ -37,14 +37,14 @@ OWN = "Each player's own"
 AS_PLAYED = "As played"
 RIGHT = "Right"
 LEFT = "Left"
-# CS2's "Classic" viewmodel (viewmodel_presetpos 2: the gun far to the right, as most players and movies have it),
-# for everyone unless the project says otherwise; and its view's field of view (`fov`, horizontal at 4:3, which
-# every player has: CS2 lets no one change it). Not what a new CS2 install shows: that is "Desktop"
-# (viewmodel_presetpos 1, the cvars' own defaults: viewmodel_fov 60, offsets 1 1 -1; read from CS2 1.41.9.7's
-# console, 2026-11-16, where no third preset exists).
-CS2_DEFAULT = {"fov": 68.0, "offset": [2.5, 0.0, -1.5], "view_fov": 90.0}
-DEFAULTS = {"whose": SAME, "fov": CS2_DEFAULT["fov"], "offset": list(CS2_DEFAULT["offset"]), "hand": AS_PLAYED,
-            "motion": 1.0, "view_fov": CS2_DEFAULT["view_fov"]}
+# CS2's "Classic" viewmodel (viewmodel_presetpos 2: the gun far to the right), for everyone unless the project says
+# otherwise; and its view's field of view (`fov`, horizontal at 4:3, which every player has: CS2 lets no one change
+# it). Not what a new CS2 install shows: that is "Desktop" (viewmodel_presetpos 1, the cvars' own defaults:
+# viewmodel_fov 60, offsets 1 1 -1; read from CS2 1.41.9.7's console, 2026-11-16, where no third preset exists). The
+# panel and the guide called it "CS2's default" until 2026-11-18 (the user's choice: keep Classic, name it so).
+CLASSIC = {"fov": 68.0, "offset": [2.5, 0.0, -1.5], "view_fov": 90.0}
+DEFAULTS = {"whose": SAME, "fov": CLASSIC["fov"], "offset": list(CLASSIC["offset"]), "hand": AS_PLAYED,
+            "motion": 1.0, "view_fov": CLASSIC["view_fov"]}
 # The panel's limits for the gun's field of view and the offsets: CS2's own for the offsets; CS2 1.41.9.7 allows a
 # viewmodel_fov of 60 to 68 (`help viewmodel_fov`), the panel goes on down to 54.
 FOV_RANGE = (54.0, 68.0)
@@ -389,13 +389,13 @@ class OfastViewmodel(unreal.PrimaryDataAsset):
         "Category": "Viewmodel", "DisplayName": "Hand", "GetOptions": "hand_options",
         **tip("Which hand holds the gun: as each player played (some play left-handed), or the same for everyone.")})
     offset_z = slider("Offset Z (up)", OFFSET_Z_RANGE[0], OFFSET_Z_RANGE[1], "viewmodel_offset_z: the gun higher "
-                      "(+) or lower (−). CS2's default -1.5.", (-10.0, 10.0))
+                      "(+) or lower (−). Classic: -1.5.", (-10.0, 10.0))
     offset_y = slider("Offset Y (forward)", OFFSET_RANGE[0], OFFSET_RANGE[1], "viewmodel_offset_y: the gun further "
-                      "(+) or closer (−). CS2's default 0.", (-10.0, 10.0))
+                      "(+) or closer (−). Classic: 0.", (-10.0, 10.0))
     offset_x = slider("Offset X (right)", OFFSET_RANGE[0], OFFSET_RANGE[1], "viewmodel_offset_x: the gun more to the "
-                      "side (+) or toward the middle (−). CS2's default 2.5.", (-10.0, 10.0))
+                      "side (+) or toward the middle (−). Classic: 2.5.", (-10.0, 10.0))
     fov = slider("Gun field of view", FOV_RANGE[0], FOV_RANGE[1], "viewmodel_fov: smaller makes the gun bigger, "
-                 "the view stays as it is (that is View field of view, above). CS2's default 68 (CS2 allows 54 to "
+                 "the view stays as it is (that is View field of view, above). Classic: 68 (CS2 itself allows 60 to "
                  "68).", (30.0, 120.0))
     whose = unreal.uproperty(str, meta={
         "Category": "Viewmodel", "DisplayName": "Viewmodel", "GetOptions": "whose_options",
@@ -413,9 +413,9 @@ class OfastViewmodel(unreal.PrimaryDataAsset):
     def hand_options(self):
         return [AS_PLAYED, RIGHT, LEFT]
 
-    @unreal.ufunction(meta={"CallInEditor": "true", "Category": "Viewmodel", "DisplayName": "CS2's default",
-                            **tip("Back to CS2's own default: view field of view 90, gun field of view 68, offsets "
-                                  "2.5, 0, -1.5, the hand as played, CS2's gun motion.")})
+    @unreal.ufunction(meta={"CallInEditor": "true", "Category": "Viewmodel", "DisplayName": "Classic",
+                            **tip("Back to CS2's Classic viewmodel, for everyone: view field of view 90, gun field "
+                                  "of view 68, offsets 2.5, 0, -1.5, the hand as played, CS2's gun motion.")})
     def reset(self):
         load_fields(DEFAULTS)
 

@@ -1008,8 +1008,8 @@ def viewmodel_data(player, track, ticks, tick0, punch, sway, eyes, spans=None):
         if left is not None and left != previous:
             hands.append([tick - tick0, left])
             previous = left
-    return {"name": player["name"], "fov": settings.get("fov", ofast_viewmodel.CS2_DEFAULT["fov"]),
-            "offset": settings.get("offset", ofast_viewmodel.CS2_DEFAULT["offset"]), "hands": hands,
+    return {"name": player["name"], "fov": settings.get("fov", ofast_viewmodel.CLASSIC["fov"]),
+            "offset": settings.get("offset", ofast_viewmodel.CLASSIC["offset"]), "hands": hands,
             "punch": [[t - tick0, row[2], row[3]] for t, row in sorted(punch.items())],
             "sway": [[row[0] - tick0, row[1], row[2]] for row in sway], "zoom": zoom_keys(eyes, tick0),
             "sights": sight_frames(spans, tick0)}
@@ -1247,7 +1247,7 @@ def build(replay, looks):
             viewmodel_life[controller] = vm_changes
             key_visibility(vm_binding, vm_changes, end_frame)
             own_view_only.setdefault(controller, []).append(vm)
-    # The viewmodels keyed as the Viewmodel panel's settings say (CS2's default viewmodel for everyone unless
+    # The viewmodels keyed as the Viewmodel panel's settings say (CS2's Classic viewmodel for everyone unless
     # changed), their data kept for the panel to key them again.
     ofast_viewmodel.save_round(sequence, frames, end_frame, viewmodel_players)
     ofast_viewmodel.key(sequence)

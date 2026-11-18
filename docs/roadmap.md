@@ -252,9 +252,10 @@ player and round.
   first-person frames played slowly, then modelled from the demo's movement: the bob while running, the gun lowered
   while running and while falling (no dip after a landing in CS2), a small lag behind turns
   ([animation.md](formats/animation.md#first-person-view-animviewmodel-exportviewmodel)).
-- [x] **One viewmodel for the movie** (the user's ask, 2026-11-01): CS2's default viewmodel for every player, changed
+- [x] **One viewmodel for the movie** (the user's ask, 2026-11-01): CS2's Classic viewmodel for every player, changed
   in Unreal's Viewmodel panel (field of view, offsets, hand, how much the gun moves; or each player's own), for every
-  round of the project ([viewmodel.md](formats/viewmodel.md)).
+  round of the project ([viewmodel.md](formats/viewmodel.md)). Called "CS2's default" until 2026-11-18: a new CS2
+  install shows Desktop; the user's choice, keep Classic and name it so.
 - [x] **Scopes and sights** (the user's choice, 2026-11-05: CS2's scope over the view, a Look panel switch): the view
   zooms as the demo's camera services set it (the AWP's 40 and 10, the SSG 08's 40 and 15, the AUG's and SG 553's 45,
   eased as CS2 eases them: [cameras.md](formats/cameras.md#scopes)); behind a sniper's scope the gun is hidden and

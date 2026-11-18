@@ -206,7 +206,7 @@ project's `Saved/OFAST/Looks` folder.
 
 ### The gun in first person: the Viewmodel panel
 
-Every player's gun is drawn with CS2's default viewmodel (field of view 68, offsets 2.5, 0, −1.5), so a movie made of
+Every player's gun is drawn with CS2's Classic viewmodel (field of view 68, offsets 2.5, 0, −1.5), so a movie made of
 several players' views looks like one game. **Open in Unreal** also opens the **Viewmodel** panel (**OFAST →
 Viewmodel**) to change it, for every round of the project; the viewport changes a moment after you let go of a
 slider:
@@ -218,12 +218,14 @@ slider:
 
 The gun is drawn as CS2 draws it in a game. CS2's demo playback (and so HLAE) shows guns a little smaller and further
 away than that, whatever the settings.
-- **Gun field of view**: smaller makes the gun bigger (CS2's `viewmodel_fov`: 54 to 68); the view stays as it is.
+- **Gun field of view**: smaller makes the gun bigger (CS2's `viewmodel_fov`; the panel goes from 54 to 68, CS2
+  itself from 60); the view stays as it is.
 - **Offset X (right)**, **Offset Y (forward)**, **Offset Z (up)**: where the gun sits (CS2's `viewmodel_offset_x`,
   `_y`, `_z`).
 - **Hand**: **As played** (some players play left-handed), or **Right** or **Left** for everyone.
 - **Gun motion**: how much the gun bobs, sits lower and trails behind the player's moves; 1 is CS2's, 0 a still gun.
-- **CS2's default** puts everything back.
+- **Classic** puts everything back: CS2's Classic viewmodel for everyone (a new CS2 install shows another one,
+  Desktop: field of view 60, offsets 1, 1, −1).
 
 The settings are kept in the Unreal project's `Saved/OFAST/Viewmodel.json`; renders and rounds sent later use them.
 A round sent before this version has to be sent again first.
