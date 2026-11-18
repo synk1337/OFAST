@@ -291,7 +291,7 @@ player and round.
   - **On tournament rounds** (two, computed from their keys) the old check left views up to 1 to 3° off the demo and
     players up to 7 cm, but on slow turns, not after shots: within half a second of a first bullet or a single shot
     the view was at most 0.4° off (36 of them), players' own aim correcting the recoil keeps the keys. The 1.0.14
-    notes' "1 to 3 degrees off the demo after shots" says more than that.
+    notes first said "1 to 3 degrees off the demo after shots"; corrected the day they came out.
   - **Through a spray** (11 bullets, fixed code): between the shots OFAST's view is 0.1 to 0.6° above CS2's. On a
     shot's own tick it is up to 1.8° ahead for that tick: the demo's sample carries a kick stamped up to a tick later
     (`view_punch_at` shows it whole from the sample on), and the game shows a spray's later kicks at their own moment.
