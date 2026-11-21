@@ -268,7 +268,7 @@ The bake (`anim::states`) decides each tick what the graph's inputs would be, fr
 
 | Graph parameter | From the demo |
 |---|---|
-| `action`, `attack_type` | the weapon's gameplay state: 11 → `action_deploy`; 800 / 801 → `action_reload` (one action: the outro goes on with it); 802 / 803 → `action_reload_silent` (likewise; demos of CS2 build 10955 on, a reload after its first 17 ticks in 800: the gun graphs' `ReloadSilent` states and `reload_<w>_silent` clips; first person plays its own silent clips at twice their pace); 600 / 601 → silencer; 200 / 201 / 202 (grenades) → `action_attack` + `attack_grenade_charge` / `_ready` / `_throw`; 500 – 505 (knives) → `attack_knife_lighthit`, `_lightmiss`, `_heavyhit`, `_heavymiss`, `_lightbackstab`, `_heavybackstab`; 400 → `action_healthshot_inject`; gun shots and inspects leave the layer off (CS2's gun graphs play nothing for them in third person) |
+| `action`, `attack_type` | the weapon's gameplay state: 11 → `action_deploy`; 800 / 801 → `action_reload` (one action: the outro goes on with it); 802 / 803 → `action_reload_silent` (likewise; demos of CS2 build 10955 on, a reload after its first 17 ticks in 800: the gun graphs' `ReloadSilent` states and `reload_<w>_silent` clips; CS2's slow reload: first person plays its own silent clips, twice as long, to end with the reload, below); 600 / 601 → silencer; 200 / 201 / 202 (grenades) → `action_attack` + `attack_grenade_charge` / `_ready` / `_throw`; 500 – 505 (knives) → `attack_knife_lighthit`, `_lightmiss`, `_heavyhit`, `_heavymiss`, `_lightbackstab`, `_heavybackstab`; 400 → `action_healthshot_inject`; gun shots and inspects leave the layer off (CS2's gun graphs play nothing for them in third person) |
 | restarts | `m_flWeaponGameplayAnimStateTimestamp`: two right-click misses in a row are state 503 twice, with two timestamps |
 | `KnifeSwingBack` (event) | a knife attack that starts while the previous swing's clip is in its `KnifeSwingBack` event (`frontswing_knife`: 10 – 63 %) plays the `_b` swing |
 | `attack_throw_strength` | the grenade's `m_flThrowStrength` (≤ 0.33: underhand) |
@@ -653,48 +653,60 @@ plays one shell.
 
 Checked on a GOTV demo of a local game (CS2 1.41.9.6, de_dust2): the Nova, the XM1014 and the Sawed-Off each reload
 four shells, one shell, and a reload cut short by a shot, filmed in CS2's first-person playback at a quarter speed.
-On this build every reload goes from gameplay state 800 to 802 17 ticks in, standing still too, then to 803 for its
-outro and 50: the "silent reload" of decision 020 is not about walking. Each of the 35 viewmodel
-`reload_silent_<w>` clips is exactly twice as long as its weapon's `reload_<w>` (the Nova's 3.27 s against 1.63 s,
-the AK-47's 4.87 against 2.43), with the same events at the same shares of the clip, and the server times the
-reload by the plain clip (it enters 803 on the tick the plain clip's outro begins, give or take one). CS2's
-first-person view shows the silent clip's pose, the Nova swung 47° to the left and rolled with its port up (the
-plain clip turns it 12°), at the plain clip's pace: four shells about 28 ticks apart, back at idle as the state goes
-to 50. The bake had started the silent clip from its start at 802 and played it at its own length; it now goes on
-from the time the reload has run and plays it twice as fast (`anim::viewmodel::SILENT_RELOAD_RATE`), the shells
-counted over the whole reload, and the events a segment hands on are read at its clip's time. Every full reload of
-the demo is in its outro when CS2 goes idle, and the Nova's frames in Unreal match CS2's at ticks 2703, 2711, 2736,
-2776 and 2829 (the gun's angle and roll, the hand loading a shell, the pump in the outro; the hand within a fraction
-of a shell). A reload cut short by a shot shows the outro or its last shell at the cut, where CS2 was still loading
-the next shell.
+In that demo the player's reloads go from gameplay state 800 to 802 17 ticks in, then to 803 for the outro and 50:
+CS2's slow reload (below), whose clip, the Nova swung 47° to the left and rolled with its port up (the plain clip
+turns it 12°), plays there at twice its pace: four shells about 28 ticks apart, back at idle as the state goes to
+50. The shells are counted over the whole reload, and the events a segment hands on are read at its clip's time. The
+Nova's frames in Unreal match CS2's at ticks 2703, 2711, 2736, 2776 and 2829 (the gun's angle and roll, the hand
+loading a shell, the pump in the outro; the hand within a fraction of a shell). A reload cut short by a shot shows
+the outro or its last shell at the cut, where CS2 was still loading the next shell.
 
-**Slow reloads, as known on 2026-11-21 (open: first person plays them wrong).** Found while checking CS2 1.42.0.0,
-whose notes say "Updated slow reload animation for the AWP" (`reload_silent_awp.vnmclip`, 7.33 s as before, twice
-`reload_awp`'s 3.67 s; OFAST reads it as it is). "Every reload goes to 802" above was one local game's; states 802
-and 803 are CS2's slow reload, and what they last depends on where the demo comes from:
+**Slow reloads (2026-11-21).** Gameplay states 802 and 803 are CS2's slow reload ("Updated slow reload animation
+for the AWP", CS2 1.42.0.0's notes: `reload_silent_awp.vnmclip`). A reload starts in 800 and leaves it for 802 after
+17 ticks, then 803 is its outro as 801 is the plain reload's. Each of the 35 viewmodel `reload_silent_<w>` clips is
+exactly twice as long as its weapon's `reload_<w>` (the Nova's 3.27 s against 1.63 s, the AK-47's 4.87 against 2.43,
+the AWP's 7.33 against 3.67), with the same events at the same shares of the clip. How long the two states last
+depends on where the demo comes from:
 
 - **A tournament demo** (FaZe vs Falcons, de_anubis, CS2 1.41.9.5, rounds 3, 7, 11, 14, 18): 4 of 10 reloads are slow,
   each by a player holding the walk key when the reload starts (NiKo standing still with it held; a player who starts
   walking during the reload stays in 800). They last twice a plain reload: m0NESY's AK-47 800 for 17 ticks, 802 for
-  124, 803 for 171, 312 ticks in all, the silent viewmodel clip's own 4.87 s (plain: 71 and 85, 156 ticks). OFAST
-  plays the silent clip twice as fast (`SILENT_RELOAD_RATE`), so in first person the gun is back at rest halfway:
-  kyousuke's Galil AR (round 14, 134543 – 134880) is idle from about tick 134730, 150 ticks before CS2's state ends
-  (`examples/viewmodel_timeline`). Not yet compared with CS2's own playback of these ticks. In third person the pose
-  recipes carry CS2's own pose.
+  124, 803 for 171, 312 ticks in all, the silent viewmodel clip's own 4.87 s (plain: 71 and 85, 156 ticks). CS2's
+  playback shows the clip at its own pace all the way: the magazine going in 145 ticks after the start, the charging
+  handle pulled at 264. (CS2's own third-person samples do not: the pose recipe's `reload_galilar_silent` runs at
+  the plain reload's pace and holds its end for the second half.)
 - **Bots, a matchmaking demo of build 10847, players not walking**: 800 then 801, the plain reload.
-- **A local game** (GOTV demo, the player's reload sent by the console as `+reload` for 0.3 – 0.4 s, standing or
-  walking): 802 after 17 ticks at the game's own speed, and the plain reload at `host_timescale 0.25` (filming in
-  slow motion films the plain reload; a guess, not tested: the key must still be down 17 ticks in, and 0.4 s of
-  key is 6 ticks at a quarter speed). There 802 and 803 together last the plain clip's whole length, 17 ticks more than a plain reload in all (1.42.0.0: the AK-47 71
-  and 85, the Desert Eagle 50 and 91, the AWP 128 and 107, a Nova's four shells 128 then 62), and CS2's own frames
-  show the silent clip from its start at 802, twice as fast: OFAST, going on from the time the reload has run, is 17
-  ticks ahead (the AK-47's magazine in while CS2's hand is coming up). On 2026-11-05 the same Nova reload took 119
-  ticks of 802: CS2 changed this in between.
+- **A local game** (GOTV demos of CS2 1.41.9.6 and 1.42.0.0, the reload sent by the console): the player's reload
+  goes to 802 too, walking or not, but 802 and 803 last about a plain reload's time, and CS2's own frames show the
+  silent clip at twice its pace. With the key tapped, 9 ticks more than a plain reload in all (the AK-47 63 and 85,
+  the Desert Eagle 42 and 91, a Nova's four shells 119 and 62), the clip going on from the reload's 17 ticks; with
+  the key held 0.3 s, 17 more (the AK-47 71 and 85, the Desert Eagle 50 and 91, the AWP 128 and 107, the Nova 128
+  and 62), the clip starting over at 802. Some taps stay in 800 and 801, and so does the same key at
+  `host_timescale 0.25`: filming a reload in slow motion films the plain one.
 
-So the silent clip's pace is not one number: the states' own lengths give it (twice a plain reload's in a match, a
-plain reload's in a local game). To do: time the silent clip by the lengths of 802 and 803 (or by the pose recipe's
-reload clip, whose time steps are in the demo), check a tournament slow reload against CS2's playback, and a local
-one against the frames above (starting the clip over at 802 matches them: AWP and AK-47, 15 ticks compared).
+So the silent clip's pace is not one number, and the bake fits it to the reload (`anim::viewmodel::silent_pace`): a
+reload that ran to its end (803, then idle) has its clip end with it, going on from the reload's time or starting
+over at 802, whichever needs a rate nearer the clip's own pace or twice it (m0NESY's: on, at 1.00; a tapped local
+one: on, at 1.99; a held one: over, at 2.00, where going on would need 1.89). A reload cut short has no length to
+fit: its clip goes on at its own pace when the player holds the walk key, at twice it otherwise. A shotgun's shells
+are played on the same clock (the intro, the shells and the outro for the clip's length). Until then the bake played
+every silent clip twice as fast, going on from the reload's time: right for no case but near a tapped local one (9
+ticks ahead), 17 ticks ahead of a held one, and in a match the gun back at rest halfway through the reload and still
+for two seconds (kyousuke's Galil AR, round 14: idle from tick 134730, the reload ending at 134880).
+
+Checked in Unreal against CS2's own frames, the gun's tilt and roll and where the hand is (the magazine out, in, the
+slap, the charging handle or bolt, a shotgun's shells):
+
+- The match demo in CS2's playback through the players' eyes, at the demo bar's ticks: m0NESY's AK-47 (round 14,
+  134620 – 134932, run to its end) at 8 ticks from 134646 to 134920, kyousuke's Galil AR (134543 – 134880, cut short
+  by a weapon switch: the walk key's guess) at 8 ticks from 134589 to 134873; all alike, the Galil's hand a little
+  early at the first.
+- GOTV demos of a local game on CS2 1.42.0.0, filmed at the game's own speed: the key tapped (the Desert Eagle at 8
+  ticks, a Nova's four shells at 10) and held 0.3 s (the AK-47, the Desert Eagle and the Nova at 6 ticks each); all
+  alike. The AWP, held, with the clip started over at 802: 8 ticks alike, its new clip of 1.42.0.0 among them.
+
+Not checked: a slow reload in a match recorded after CS2 1.41.9.5 (none here), a shotgun's in a match, the XM1014
+and the Sawed-Off on 1.42.0.0.
 
 Not yet: the view punch on the camera; weapon skins.
 

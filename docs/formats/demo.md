@@ -661,8 +661,10 @@ Jaccard index, the blends it feeds; `OFAST_TIMELINE`: one player's ticks, CS2's 
   drops the recipe of a pawn that is not alive (version 2's dead have none anyway). No living recipe repeats
   its server tick on the next tick (62,723 consecutive pairs on anubis round 14).
 - **Silent reloads.** Build 10955's weapons reload through gameplay states 802 and 803 (with `m_bInReload`) after
-  the reload's first 17 ticks in 800, standing or walking (first seen on walking players; a local game's GOTV demo
-  showed it standing still too), where OFAST knew 800 and 801 only, so the bake played no reload there. The gun graphs take them as
+  the reload's first 17 ticks in 800: CS2's slow reload, which a player holding the walk key as the reload starts
+  gets in a match (twice as long as a plain one) and the player of a local game with or without it (about as long
+  as a plain one; [animation.md](animation.md#first-person-view-animviewmodel-exportviewmodel), "Slow reloads").
+  OFAST knew 800 and 801 only, so the bake played no reload there. The gun graphs take them as
   `action_reload_silent`: `SM/Reload/SM/Reload0` goes on to `ReloadSilent0` (`reload_<w>_silent`) on the condition
   `action in [action_reload_silent]`, which CS2 takes on the state's first update (`anim::eval` now takes such a
   transition on ID parameters as the state is entered). 993 is now `reload_ak_silent` (Jaccard 0.96), 574

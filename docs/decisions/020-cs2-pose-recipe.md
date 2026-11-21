@@ -108,7 +108,9 @@ per index what OFAST bakes on its ticks and who holds it; details in
   the same way at first; a GOTV demo of a local game (2026-11-05) showed every reload going from 800 to 802 17 ticks
   in, standing still too, and CS2's first-person view showing the viewmodel's `reload_silent_<w>` clip, which is
   twice as long as the reload, at twice its pace, going on from the time the reload had run. The first-person bake
-  now does the same ([animation.md](../formats/animation.md), "Shotguns loading shell by shell").
+  did the same ([animation.md](../formats/animation.md), "Shotguns loading shell by shell") until 2026-11-21: these
+  states are CS2's slow reload, which a player holding the walk key gets in a match and which lasts twice a plain
+  one there, the clip at its own pace; the bake now times the clip to end with the reload ("Slow reloads").
 
 On today's install (build 2000940), recipes on against `OFAST_RECIPE=0`:
 

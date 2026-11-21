@@ -21,9 +21,9 @@
 //! Like the body's weapons layer ([`super::bake`]), from the weapon in hand and its gameplay state
 //! (`m_iWeaponGameplayAnimState` and its timestamp): every change of state is a **segment** — an `action` and
 //! `attack_type` ([`weapon_action`], [`passive_action`]: idle 50, drawing 11, shooting 100 / 101 with a new
-//! timestamp per shot, reloading 800 then its outro 801 (from CS2 build 10955 on, the silent reload 802 and 803
-//! after the first 17 ticks, its clip going on from there at twice its pace: [`SILENT_RELOAD_RATE`]), inspecting
-//! 1000 then 1001,
+//! timestamp per shot, reloading 800 then its outro 801 (from CS2 build 10955 on, the slow reload 802 and 803
+//! after the first 17 ticks, its clip twice as long and played to end with the reload: [`SILENT_CLIP_LENGTH`]),
+//! inspecting 1000 then 1001,
 //! knife swings, grenade throws), from the tick the state began. A segment's pose is the weapon graph evaluated by
 //! [`super::eval`] that long after it began, for the arms and, through [`Evaluator::secondary`], for the weapon's
 //! bones; it blends in from the segment before over CS2's transition time between their states
@@ -156,8 +156,62 @@ struct Segment {
     /// reload those of the reload it goes on with.
     shells: u32,
     /// Seconds of the same reload played before it began: a silent reload's (802) after the reload's first ticks
-    /// (800), which its clip goes on from ([`SILENT_RELOAD_RATE`]).
+    /// (800).
     reload_before: f32,
+    /// The demo tick of its last sample so far, and the gameplay state then (803: a silent reload in its outro).
+    last: u32,
+    last_state: i64,
+    /// A silent reload's clock ([`silent_pace`]): a guess from the walk key when it begins, the fit to its length
+    /// once it has run to its end.
+    pace: SilentPace,
+}
+
+/// A silent reload's clock: its clip's time (seconds) when the segment (802) begins, and how many seconds of the
+/// clip pass in a second. On the silent clip's own clock, [`SILENT_CLIP_LENGTH`] times the plain clip's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SilentPace {
+    start: f32,
+    rate: f32,
+}
+
+/// The clock of a silent reload (gameplay states 802 and 803, [`SILENT_CLIP_LENGTH`]). CS2 plays the silent clip so
+/// that it ends with the reload, and reloads through these states last very different times:
+///
+/// - `lasted`, the seconds 802 and 803 took, when the reload ran to its end (803, then idle): the clip either goes on
+///   from the reload's own time (`before`, the seconds of state 800 before 802) or starts over at 802, at the rate
+///   that ends it with the reload. Of the two, the one whose rate is nearer the clip's own pace or twice it, which
+///   are the two CS2 plays: a slow reload in a match goes on at the clip's pace (m0NESY's AK-47: 17 ticks of 800,
+///   then 295 for a clip of 311.5: 0.998), a local game's reload at twice it, going on when the key was tapped (the
+///   Desert Eagle: 133 ticks for 281.6 less 17: 1.99) and starting over when it was held (the AK-47: 156 ticks for
+///   311.5: 1.997, where going on would be 1.89).
+/// - cut short (a weapon switch, a death) there is no length to fit: the clip goes on from `before`, at its own pace
+///   when the player holds the walk key (`walking`: every slow reload of the match demo) and at twice it otherwise.
+///
+/// `length`: the whole reload on the silent clip's clock, seconds (the clip's length; a shotgun's intro, shells and
+/// outro: [`ShellReload::length`], doubled).
+fn silent_pace(length: f32, before: f32, lasted: Option<f32>, walking: bool) -> SilentPace {
+    let guess = SilentPace {
+        start: before,
+        rate: if walking { 1.0 } else { SILENT_CLIP_LENGTH },
+    };
+    let Some(lasted) = lasted.filter(|&l| l > 0.0 && length > before) else {
+        return guess;
+    };
+    let on = SilentPace {
+        start: before,
+        rate: (length - before) / lasted,
+    };
+    let over = SilentPace {
+        start: 0.0,
+        rate: length / lasted,
+    };
+    // How far a rate is from the nearer of the two paces CS2 plays.
+    let off = |rate: f32| (rate - 1.0).abs().min((rate - SILENT_CLIP_LENGTH).abs());
+    if off(over.rate) < off(on.rate) {
+        over
+    } else {
+        on
+    }
 }
 
 /// Whether gameplay state `now` goes on with `before` rather than starting anew: a reload's outro (801, 803:
@@ -166,37 +220,42 @@ fn continues(before: i64, now: i64) -> bool {
     reload_outro(before, now) || (before, now) == (1000, 1001)
 }
 
-/// A reload segment's clip time `time` seconds into it: on the plain clip's clock the time into the whole reload (a
-/// silent one goes on from the reload before it), played to the shells for a shotgun (`shells`), then twice as fast
-/// for the silent clip ([`SILENT_RELOAD_RATE`]).
+/// A reload segment's clip time `time` seconds into it. A plain reload: the time itself, played to the shells for a
+/// shotgun (`shells`). A silent one: its own clock ([`SilentPace`]), which a shotgun's shells are played on at half
+/// its time (the plain clip's clock, [`SILENT_CLIP_LENGTH`]).
 fn reload_clip_time(
     shells: Option<&ShellReload>,
     segment: &Segment,
     silent: bool,
     time: f32,
 ) -> f32 {
-    let time = if silent {
-        segment.reload_before + time
-    } else {
-        time
-    };
-    let time = shells.map_or(time, |r| r.clip_time(segment.shells, time));
-    if silent {
-        SILENT_RELOAD_RATE * time
-    } else {
-        time
+    if !silent {
+        return shells.map_or(time, |r| r.clip_time(segment.shells, time));
+    }
+    let clock = segment.pace.start + segment.pace.rate * time;
+    match shells {
+        Some(r) => SILENT_CLIP_LENGTH * r.clip_time(segment.shells, clock / SILENT_CLIP_LENGTH),
+        None => clock,
     }
 }
 
-/// How much faster than its own length CS2's first-person view plays a gun's silent reload (`action_reload_silent`,
-/// gameplay states 802 and 803: from CS2 build 10955 on, every reload after its first 17 ticks in 800, standing or
-/// walking). Each of the 35 viewmodel `reload_silent_<w>` clips is exactly twice as long as its weapon's
-/// `reload_<w>` (the Nova's 3.27 s against 1.63 s, the AK-47's 4.87 against 2.43), with the same events at the same
-/// shares of the clip, and the server times the reload by the plain clip: a Nova loading four shells enters 803 on
-/// the tick the plain clip's outro begins, give or take one. CS2's first-person view shows the silent clip's pose
-/// (the Nova swung 47° to the left and rolled, where the plain clip turns it 12°) at that pace: four shells about
-/// 28 ticks apart, back at idle as the state goes to 50 (a GOTV demo of a local game, 2026-11-05).
-pub const SILENT_RELOAD_RATE: f32 = 2.0;
+/// How many times longer than its weapon's `reload_<w>` each of the 35 viewmodel `reload_silent_<w>` clips is (the
+/// Nova's 3.27 s against 1.63 s, the AK-47's 4.87 against 2.43, the AWP's 7.33 against 3.67), with the same events
+/// at the same shares of the clip. It is the clip of CS2's slow reload (`action_reload_silent`, gameplay states 802
+/// and 803, CS2 build 10955 on), which the first-person view plays so that it ends with the reload
+/// (`silent_pace`, in this file):
+///
+/// - In a match (FaZe vs Falcons, de_anubis, CS2 1.41.9.5) a player holding the walk key as the reload starts
+///   leaves 800 for 802 after 17 ticks, and the reload lasts twice a plain one, the silent clip's own length:
+///   m0NESY's AK-47 17, 124 and 171 ticks (plain: 71 and 85). CS2's playback shows the clip at its own pace all the
+///   way (the magazine going in 145 ticks after the start, the charging handle at 264), where OFAST until
+///   2026-11-21 played it twice as fast and showed the gun at rest for the second half.
+/// - In a local game (GOTV demos of CS2 1.41.9.6 and 1.42.0.0) the player's reload goes to 802 too, walking or not,
+///   but lasts about a plain reload's time: the clip at twice its pace, going on from the reload's time when the key
+///   was tapped (9 ticks more than a plain reload in all) and starting over at 802 when it was held 0.3 s (17 ticks
+///   more). Some taps, bots and a local game slowed down (`host_timescale 0.25`) reload through 800 and 801: the
+///   plain reload.
+pub const SILENT_CLIP_LENGTH: f32 = 2.0;
 
 /// Whether a category is a gun's (the viewmodel graph's `weapon_is_gun`: not a knife, grenade or equipment).
 fn is_gun(category: &str) -> bool {
@@ -326,6 +385,13 @@ impl ShellReload {
         let j = (self.periods + i).saturating_sub(n);
         self.loop_start + self.period * j as f32 + (u - self.period * i as f32)
     }
+
+    /// How long a reload that loads `shells` (at least one) plays, seconds: the intro, the shells, and the outro of a
+    /// clip `clip` seconds long.
+    pub fn length(&self, shells: u32, clip: f32) -> f32 {
+        let outro = (clip - self.loop_start - self.period * self.periods as f32).max(0.0);
+        self.loop_start + self.period * shells.max(1) as f32 + outro
+    }
 }
 
 /// The sight at a sample: how far up it is (the graph's `weapon_ironsight_amount`, 0 down, 1 at the eye, which blends
@@ -442,14 +508,28 @@ impl Baker<'_> {
                     blend: 0.0,
                     shells: 0,
                     reload_before: 0.0,
+                    last: tick,
+                    last_state: w.anim_state,
+                    pace: silent_pace(0.0, 0.0, None, p.rig.walking),
                 };
                 if let Some(c) = current.filter(|&c| segments[c].item == w.item) {
+                    let at = self.seconds(start as f32 - segments[c].start as f32);
+                    // A silent reload that ran to its end (its outro, then idle, or a shot at once: a magazine is in
+                    // only when the reload is over, where a shot cuts a shotgun's short): its clock fitted to its
+                    // length, before anything is read at its clip's time.
+                    let shells = SHELL_RELOADS.iter().any(|r| r.weapon == weapon.weapon);
+                    if segments[c].action == "action_reload_silent"
+                        && segments[c].last_state == 803
+                        && (action == "action_idle" || (action == "action_attack" && !shells))
+                    {
+                        segments[c].pace = self.fitted_pace(&segments[c], at)?;
+                    }
                     let old = &segments[c];
                     let old_params = self.params(old);
-                    let at = self.seconds(start as f32 - old.start as f32);
                     if old.action == "action_reload" && action == "action_reload_silent" {
                         next.reload_before = old.reload_before + at;
                         next.shells = old.shells;
+                        next.pace = silent_pace(0.0, next.reload_before, None, p.rig.walking);
                     }
                     // Where the old segment's clip is (a shotgun's or silent reload's runs to its own clock).
                     let clip_at = self.clip_time(old, at);
@@ -478,6 +558,10 @@ impl Baker<'_> {
                 segments.push(next);
                 current = Some(segments.len() - 1);
             }
+            if let Some(c) = current {
+                segments[c].last = tick;
+                segments[c].last_state = w.anim_state;
+            }
             // Shells going in: the magazine rising within the segment.
             if let (Some(c), Some(clip)) = (current, w.clip) {
                 if let Some((at, before)) = last_clip
@@ -493,9 +577,31 @@ impl Baker<'_> {
         Ok((segments, of_sample))
     }
 
+    /// The clock of a silent reload that took `lasted` seconds from 802 to its end ([`silent_pace`]), for its
+    /// clip's length (a shotgun's: with the shells that went in).
+    fn fitted_pace(&self, segment: &Segment, lasted: f32) -> Result<SilentPace, AnimError> {
+        let weapon = &self.rig.weapons[&segment.item];
+        let clip = self
+            .eval
+            .duration(&weapon.graph, weapon.node, &self.params(segment))?;
+        if clip <= segment.reload_before {
+            // No clip to fit (a graph without a silent reload): the guess stays.
+            return Ok(segment.pace);
+        }
+        let length = match SHELL_RELOADS.iter().find(|r| r.weapon == weapon.weapon) {
+            Some(r) => SILENT_CLIP_LENGTH * r.length(segment.shells, clip / SILENT_CLIP_LENGTH),
+            None => clip,
+        };
+        Ok(silent_pace(
+            length,
+            segment.reload_before,
+            Some(lasted),
+            false,
+        ))
+    }
+
     /// A segment's clip time `time` seconds into it: a shotgun's reload played to its shells ([`ShellReload`]), a
-    /// silent reload going on from the reload before it at twice its clip's pace ([`SILENT_RELOAD_RATE`]), anything
-    /// else as it is.
+    /// silent reload on its own clock ([`SilentPace`]), anything else as it is.
     fn clip_time(&self, segment: &Segment, time: f32) -> f32 {
         let silent = match segment.action {
             "action_reload" => false,
@@ -654,8 +760,8 @@ pub fn bake_viewmodel(
 }
 
 /// What [`bake_viewmodel`] decides for a player, as readable changes: `(tick, what began)` for every segment
-/// (`item 7: action_attack attack_gun_primaryfire (state 100) after 0.00 s`). For checking the decisions against a
-/// demo.
+/// (`item 7: action_attack attack_gun_primaryfire (state 100) after 0.00 s`; a silent reload with its clock:
+/// `, its clip from 0.27 s at 1.00 of its pace over 295 ticks`). For checking the decisions against a demo.
 pub fn viewmodel_timeline(
     track: &RoundTrack,
     controller: u32,
@@ -679,10 +785,21 @@ pub fn viewmodel_timeline(
                 list.sort();
                 format!(" with {list:?}")
             };
+            // A silent reload's clock, and how long the segment lasted.
+            let pace = if s.action == "action_reload_silent" {
+                format!(
+                    ", its clip from {:.2} s at {:.2} of its pace over {} ticks",
+                    s.pace.start,
+                    s.pace.rate,
+                    s.last + 1 - s.start
+                )
+            } else {
+                String::new()
+            };
             (
                 s.start,
                 format!(
-                    "item {}: {} {} (state {}) after {:.2} s{events}",
+                    "item {}: {} {} (state {}) after {:.2} s{events}{pace}",
                     s.item, s.action, s.attack, s.state, s.blend
                 ),
             )
@@ -736,7 +853,7 @@ mod tests {
     }
 
     /// A silent reload (802) that began after `before` seconds of its reload (800), with `shells` gone in.
-    fn silent_reload(shells: u32, before: f32) -> Segment {
+    fn silent_reload(shells: u32, before: f32, pace: SilentPace) -> Segment {
         Segment {
             item: 0,
             action: "action_reload_silent",
@@ -755,28 +872,122 @@ mod tests {
             blend: 0.0,
             shells,
             reload_before: before,
+            last: 0,
+            last_state: 803,
+            pace,
         }
     }
 
+    /// Demo ticks as seconds (64 a second).
+    fn ticks(n: f32) -> f32 {
+        n / 64.0
+    }
+
     #[test]
-    fn a_silent_reload_goes_on_at_twice_its_pace() {
-        let before = 17.0 / 64.0;
-        // A rifle's: 0.1 s into 802 is 0.366 s into the reload, twice that into the silent clip.
-        let rifle = silent_reload(0, before);
+    fn a_silent_reload_ends_with_its_states() {
+        let before = ticks(17.0);
+        // The AK-47's silent clip, 4.867 s. In a match (m0NESY, FaZe vs Falcons, de_anubis round 14) 802 and 803
+        // last 124 + 171 ticks: the clip goes on from the reload's 17 ticks at its own pace.
+        let slow = silent_pace(4.867, before, Some(ticks(295.0)), true);
+        assert!(close(slow.start, before));
+        assert!((slow.rate - 1.0).abs() < 0.01, "{slow:?}");
+        // In a local game, the key tapped (63 + 85 ticks): on from the 17 ticks, at twice the pace.
+        let tapped = silent_pace(4.867, before, Some(ticks(148.0)), false);
+        assert!(close(tapped.start, before));
+        assert!((tapped.rate - 2.0).abs() < 0.02, "{tapped:?}");
+        // The key held 0.3 s (71 + 85 ticks, a plain reload's): the clip starts over at 802, at twice the pace;
+        // going on would need 1.89 of it.
+        let held = silent_pace(4.867, before, Some(ticks(156.0)), false);
+        assert!(close(held.start, 0.0));
+        assert!((held.rate - 2.0).abs() < 0.01, "{held:?}");
+        // Held longer (74 + 86 ticks): still nearer to starting over.
+        assert!(close(
+            silent_pace(4.867, before, Some(ticks(160.0)), false).start,
+            0.0
+        ));
+        // Whichever it is, the clip ends as the reload does.
+        for pace in [slow, tapped, held] {
+            let lasted = if pace == slow {
+                295.0
+            } else if pace == tapped {
+                148.0
+            } else {
+                156.0
+            };
+            assert!((pace.start + pace.rate * ticks(lasted) - 4.867).abs() < 1e-3);
+        }
+        // The Desert Eagle's (4.4 s), tapped: 42 + 91 ticks.
+        let deagle = silent_pace(4.4, before, Some(ticks(133.0)), false);
+        assert!(close(deagle.start, before) && (deagle.rate - 2.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn a_silent_reload_cut_short_goes_by_the_walk_key() {
+        let before = ticks(17.0);
+        // No length to fit: on from the reload's time, at the clip's pace for a player holding the walk key (a
+        // match's slow reload), at twice it otherwise.
+        assert_eq!(
+            silent_pace(4.867, before, None, true),
+            SilentPace {
+                start: before,
+                rate: 1.0
+            }
+        );
+        assert_eq!(
+            silent_pace(4.867, before, None, false),
+            SilentPace {
+                start: before,
+                rate: 2.0
+            }
+        );
+        // A length of nothing fits nothing.
+        assert_eq!(silent_pace(4.867, before, Some(0.0), false).rate, 2.0);
+    }
+
+    #[test]
+    fn a_silent_reload_plays_on_its_own_clock() {
+        let before = ticks(17.0);
+        // A rifle's slow reload in a match: 0.1 s into 802 is 0.1 s further into the silent clip.
+        let pace = SilentPace {
+            start: before,
+            rate: 1.0,
+        };
+        let rifle = silent_reload(0, before, pace);
+        assert!(close(reload_clip_time(None, &rifle, true, 0.0), before));
         assert!(close(
             reload_clip_time(None, &rifle, true, 0.1),
-            2.0 * (before + 0.1)
+            before + 0.1
         ));
-        // A Nova loading four shells: 0.05 s into the outro, which begins after 0.367 + 4 × 0.433 s of the
-        // reload at the plain clip's 0.8 s.
+        // Started over at twice the pace: 0.1 s into 802 is 0.2 s into the clip.
+        let over = SilentPace {
+            start: 0.0,
+            rate: 2.0,
+        };
+        let held = silent_reload(0, before, over);
+        assert!(close(reload_clip_time(None, &held, true, 0.1), 0.2));
+        // A Nova loading four shells, started over at twice the pace: its shells are played on the plain clip's
+        // clock, half the silent one's. 0.05 s into the outro, which begins 0.367 + 4 × 0.433 s into 802 at the
+        // plain clip's 0.8 s.
         let nova = SHELL_RELOADS[0];
-        let four = silent_reload(4, before);
-        let outro = 0.367 + 4.0 * 0.433 - before;
+        let four = silent_reload(4, before, over);
+        let outro = 0.367 + 4.0 * 0.433;
         assert!(close(
             reload_clip_time(Some(&nova), &four, true, outro + 0.05),
             2.0 * 0.85
         ));
         // The plain reload as it was.
         assert!(close(reload_clip_time(None, &four, false, 0.5), 0.5));
+    }
+
+    #[test]
+    fn a_shell_reload_lasts_its_intro_shells_and_outro() {
+        let nova = SHELL_RELOADS[0];
+        // The Nova's clip, 1.633 s: intro 0.367, one shell 0.433, outro 0.833.
+        assert!(close(nova.length(1, 1.633), 1.633));
+        assert!(close(nova.length(4, 1.633), 0.367 + 4.0 * 0.433 + 0.833));
+        // The XM1014's clip holds four shells.
+        let xm = SHELL_RELOADS[2];
+        assert!(close(xm.length(4, 3.6), 3.6));
+        assert!(close(xm.length(2, 3.6), 3.6 - 2.0 * 0.6));
     }
 }

@@ -272,13 +272,14 @@ player and round.
   first-person frames on a GOTV demo of a local game, which also showed CS2 build 10955's reloads going on in a silent
   state after 17 ticks: first person now plays the silent clips CS2 shows, at twice their pace (before, on new demos,
   OFAST 1.0.9 dropped the reload after 17 ticks).
-- [ ] **Slow reloads in first person** (found 2026-11-21, checking CS2 1.42.0.0): states 802 and 803 are CS2's slow
+- [x] **Slow reloads in first person** (2026-11-21, found checking CS2 1.42.0.0): states 802 and 803 are CS2's slow
   reload, which a player gets by holding the walk key as the reload starts, and which lasts twice a plain one in a
-  match (a tournament demo of CS2 1.41.9.5: 4 of 10 reloads). OFAST plays its clip twice as fast, as a local game's
-  demo had shown it, so the gun is back at rest halfway through and idle for two seconds while the player still
-  reloads; and on a local game's demo of 1.42.0.0 it runs 17 ticks ahead. To do: time the clip by the states' own
-  lengths, check against CS2's playback of a tournament slow reload
-  ([animation.md](formats/animation.md#first-person-view-animviewmodel-exportviewmodel), "Slow reloads").
+  match (a tournament demo of CS2 1.41.9.5: 4 of 10 reloads). OFAST played its clip twice as fast, as a local game's
+  demo had shown it, so the gun was back at rest halfway through and idle for two seconds while the player still
+  reloaded. The clip is now timed to end with the reload, by the states' own lengths
+  ([animation.md](formats/animation.md#first-person-view-animviewmodel-exportviewmodel), "Slow reloads"). Checked
+  against CS2's playback of two slow reloads of that demo and CS2's own frames of tapped and held reloads in a local
+  game (AK-47, AWP, Desert Eagle, Nova).
 - [x] **Knife swings and grenade throws checked against CS2** (2026-11-05, Falcons vs Vitality, de_anubis, round 6,
   CS2's own frames at their demo bar's ticks): NiKo's heavy swing, m0NESY's light one and karrigan's throw match
   pose for pose (the throw's arm a tick or two behind at its highest).
