@@ -2560,9 +2560,14 @@ BOUNCE_ONLY_DIFFUSE_SCALE = 0.02
 # overflow ... missing shadow" in the log), and whole pages of shadow go missing: blocky patches of light on
 # de_nuke's B site that changed from one render to the next. Also set in the sandbox's DefaultEngine.ini
 # ([SystemSettings]); repeated here so the screenshots get them in any project.
+# Lumen's diffuse indirect off async compute: beside it, the one-pass projection of the shadowed lamps hung the GPU in
+# the first frames after a level loaded (the realistic de_mirage in 3 of 10 editor starts; de_inferno and de_anubis in
+# October; docs/formats/lighting.md, "A GPU hang while loading"). The project's DefaultEngine.ini is what protects
+# those first frames (it is set before anything is drawn); here it only covers a project without it.
 RENDER_CVARS = (
     "r.Shadow.Virtual.MaxPhysicalPages 16384",
     "r.Shadow.Virtual.OnePassProjection.MaxLightsPerPixel 32",
+    "r.Lumen.DiffuseIndirect.AsyncCompute 0",
 )
 
 

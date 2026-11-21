@@ -103,6 +103,41 @@ engine's maximum (`VirtualShadowMapArray.cpp` clamps it); de_nuke still logs one
 only costs the lights beyond 32 at a pixel their full shadow filtering. CS2 itself logs "failed to allocate … shadow
 from atlas" on de_nuke.
 
+**A GPU hang while loading (2026-11-22).** The realistic de_mirage in the user's project (the Studio's,
+`%LOCALAPPDATA%\OFAST\Unreal`) hung the GPU in the editor's first ~100 frames after the level loaded: in 5 of 9 runs
+of `shoot_sequence.py` on 2026-11-21, with or without CS2 open; the next night in 3 of 10 editor starts of a smaller
+test (the level, its Look and its round's sequence loaded, then 400 editor frames; 0 of 4 without the sequence) and
+in 2 of 5 runs of `shoot_sequence.py` again. `DXGI_ERROR_DEVICE_HUNG`, UE 5.8.3, RTX 5070, driver 617.42. All ten
+Aftermath dumps say the same: the shader still running was the virtual shadow maps' one-pass projection
+(`VirtualShadowMapProjection`: every shadowed local light at a pixel in one pass, here de_mirage's 72 lamps; Unreal's
+breadcrumbs name the first of its 20 `light_omni2` point lamps), with ~120 warps going round two short stretches of
+its code, while Lumen's screen probe gather (its diffuse indirect lighting) ran beside it on the async compute queue.
+What it was not:
+
+- too much work: when it does not hang, that pass takes 1.4 ms and the whole frame 8.3 ms (`profilegpu`, frames 101
+  and 351), and every loop in the shader has a fixed bound (at most 33 lights a pixel, 7 rays, 9 samples a ray);
+- de_mirage or the realistic look: the sandbox's own crash dumps hold the same hang five times on 2026-10-16, in CS2's
+  look of de_inferno and de_anubis (`import_map.py` and `shoot_views.py`, frames 171 – 536; the roadmap's "GPU crash
+  on re-import"), in the same stretch of the shader and with the same Lumen pass beside it. What they share: shadowed
+  `light_omni2` point lamps, the first few hundred frames after the editor starts (loading the realistic de_mirage
+  again 30 times in one editor session never hung), and that Lumen pass on async compute;
+- Unreal's stand-in "ubershader" for a shader still compiling: that needs PSO precaching, which is off in the editor
+  (`PipelineStateCache::IsPSOPrecachingEnabled`).
+
+A report on Unreal's forum for 5.8.4 (Nanite rasterization hanging beside the same Lumen pass on async compute, in 13
+of 44 cold starts) found the hang gone with `r.Lumen.DiffuseIndirect.AsyncCompute=0`. Here too: with it, 0 of 12
+starts of the test and 0 of 12 runs of the command that hung (10 of them in a row, with this `DefaultEngine.ini`
+installed in the user's project). The project template's `DefaultEngine.ini` (`[SystemSettings]`, which the Studio
+installs as the user's project settings) sets it, so it holds from the editor's first frame, opening the level by hand
+included; `RENDER_CVARS` in `import_map.py` and `shoot_views.py` repeat it, and
+`tools/unreal/tests/test_render_cvars.py` keeps the scripts and the ini in step. Async compute only lets Lumen's
+pass overlap others: without it the same passes run one after the other, so the picture does not change (screenshots
+through the round's camera at three moments, with and without it, differ by 1.3 of 255 levels on average, as much as
+two screenshots with it: the Look's film grain and the edges of the anti-aliasing), and a frame takes about
+0.7 ms longer (9.5 against 8.8 ms in the editor at frame 351, two runs each; the one-pass projection itself, with
+nothing beside it, 0.84 instead of 1.36 ms). What goes wrong inside the GPU (a race between the two queues, or the
+driver) is not known.
+
 **Unreal rect lights shine twice their candela value** along their axis: `RectLightSceneProxy.cpp` sets the luminance
 to intensity / (0.5 × width × height), while point and spot lights use the intensity as is. `import_map.py` halves
 rect lights' candela; without it de_mirage's palace came out 1.48× too bright, with it 0.81× (then 0.93 with the
