@@ -668,6 +668,34 @@ the demo is in its outro when CS2 goes idle, and the Nova's frames in Unreal mat
 of a shell). A reload cut short by a shot shows the outro or its last shell at the cut, where CS2 was still loading
 the next shell.
 
+**Slow reloads, as known on 2026-11-21 (open: first person plays them wrong).** Found while checking CS2 1.42.0.0,
+whose notes say "Updated slow reload animation for the AWP" (`reload_silent_awp.vnmclip`, 7.33 s as before, twice
+`reload_awp`'s 3.67 s; OFAST reads it as it is). "Every reload goes to 802" above was one local game's; states 802
+and 803 are CS2's slow reload, and what they last depends on where the demo comes from:
+
+- **A tournament demo** (FaZe vs Falcons, de_anubis, CS2 1.41.9.5, rounds 3, 7, 11, 14, 18): 4 of 10 reloads are slow,
+  each by a player holding the walk key when the reload starts (NiKo standing still with it held; a player who starts
+  walking during the reload stays in 800). They last twice a plain reload: m0NESY's AK-47 800 for 17 ticks, 802 for
+  124, 803 for 171, 312 ticks in all, the silent viewmodel clip's own 4.87 s (plain: 71 and 85, 156 ticks). OFAST
+  plays the silent clip twice as fast (`SILENT_RELOAD_RATE`), so in first person the gun is back at rest halfway:
+  kyousuke's Galil AR (round 14, 134543 – 134880) is idle from about tick 134730, 150 ticks before CS2's state ends
+  (`examples/viewmodel_timeline`). Not yet compared with CS2's own playback of these ticks. In third person the pose
+  recipes carry CS2's own pose.
+- **Bots, a matchmaking demo of build 10847, players not walking**: 800 then 801, the plain reload.
+- **A local game** (GOTV demo, the player's reload sent by the console as `+reload` for 0.3 – 0.4 s, standing or
+  walking): 802 after 17 ticks at the game's own speed, and the plain reload at `host_timescale 0.25` (filming in
+  slow motion films the plain reload; a guess, not tested: the key must still be down 17 ticks in, and 0.4 s of
+  key is 6 ticks at a quarter speed). There 802 and 803 together last the plain clip's whole length, 17 ticks more than a plain reload in all (1.42.0.0: the AK-47 71
+  and 85, the Desert Eagle 50 and 91, the AWP 128 and 107, a Nova's four shells 128 then 62), and CS2's own frames
+  show the silent clip from its start at 802, twice as fast: OFAST, going on from the time the reload has run, is 17
+  ticks ahead (the AK-47's magazine in while CS2's hand is coming up). On 2026-11-05 the same Nova reload took 119
+  ticks of 802: CS2 changed this in between.
+
+So the silent clip's pace is not one number: the states' own lengths give it (twice a plain reload's in a match, a
+plain reload's in a local game). To do: time the silent clip by the lengths of 802 and 803 (or by the pose recipe's
+reload clip, whose time steps are in the demo), check a tournament slow reload against CS2's playback, and a local
+one against the frames above (starting the clip over at 802 matches them: AWP and AK-47, 15 ticks compared).
+
 Not yet: the view punch on the camera; weapon skins.
 
 ## Verified

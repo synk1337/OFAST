@@ -148,6 +148,7 @@ impl Cs2Install {
 /// with the fix when something was. 1.41.9.7 went in on demos recorded before it, four days before its own demos
 /// could be read (OFAST 1.0.13).
 pub const CHECKED_VERSIONS: &[(&str, u32)] = &[
+    ("1.42.0.0", 2_000_948),
     ("1.41.9.8", 2_000_946),
     ("1.41.9.7", 2_000_943),
     ("1.41.9.6", 2_000_942),
