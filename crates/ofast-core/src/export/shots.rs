@@ -288,9 +288,10 @@ impl ShotData {
         );
     }
 
-    /// The muzzle flash of `shot` ([`GunFlashes::of_shot`]): by its silencer, and for the Dual Berettas by its pistol
-    /// (alternating with the magazine's count: an even count `shoot_secondary`; which one CS2 fires is not checked).
-    pub fn flash_of(&self, shot: &Shot) -> Option<&FlashEvent> {
+    /// The muzzle flash of `shot` ([`GunFlashes::of_shot`]): by its silencer (a silenced shot at the silencer's tip),
+    /// and for the Dual Berettas by its pistol (alternating with the magazine's count: an even count
+    /// `shoot_secondary`; which one CS2 fires is not checked).
+    pub fn flash_of(&self, shot: &Shot) -> Option<FlashEvent> {
         let name = self.items.get(&shot.item)?;
         let weapon = self.weapons.get(name)?;
         let silenced = weapon.silencer && shot.mode == 1;
@@ -1336,7 +1337,9 @@ pub fn shots_json(
             let of_shot = |m: &&Muzzle| m.controller == *controller && m.tick == shot.tick;
             // The flash, and the barrel's end it plays at (its attachment: `muzzle_flash2` where the gun has one).
             let flash = data.flash_of(shot);
-            let second = flash.is_some_and(|f| f.attachment == "muzzle_flash2");
+            let second = flash
+                .as_ref()
+                .is_some_and(|f| f.attachment == "muzzle_flash2");
             let place = |m: &Muzzle| {
                 second
                     .then_some(m.alternate)
@@ -1376,7 +1379,7 @@ pub fn shots_json(
                 "weapon": data.items.get(&shot.item),
                 "mode": shot.mode,
                 "silenced": weapon.is_some_and(|w| w.silencer) && shot.mode == 1,
-                "flash": flash.map(|f| f.system.as_str()),
+                "flash": flash.as_ref().map(|f| f.system.as_str()),
                 "tracer": tracer,
                 "eye": rounded(shot.eye),
                 "muzzle": muzzle.map(|m| rounded(m.0)),

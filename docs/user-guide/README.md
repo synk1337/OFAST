@@ -165,7 +165,7 @@ The select beside **Send to Unreal** picks the map's look:
 - **CS2's look**: the picture CS2 shows, its sun, sky, lights and colours.
 - **Realistic**: the map lit like the real world (a real sun and sky, real light levels, a camera's exposure), with an
   ambiance: a warm haze the sun's beams show in through doorways and roofs, light shafts round the sun, a little film
-  grain, and depth of field on the players' eyes, which focus on what they look at. The first round you send in
+  grain, and a light blur on the players' eyes, growing with distance. The first round you send in
   this look on a map imports that map again in it (a while, once per map); after that rounds take as long as in
   CS2's look. A round is in one look at a time: sending it in the other look builds it again there.
 
@@ -183,18 +183,21 @@ in Unreal's window. It is in the menu bar too: **OFAST → Look**. Drag a slider
 - **Sun**: its height (raise it, or lower it for a golden hour: in the realistic look the sky follows), its
   direction round the map, its strength, its colour (warmer or cooler), and how bright the shade is.
 - **Atmosphere** (realistic look): how thick the haze is, and how strongly the sun's beams show in it.
-- **Camera**: brightness (in camera stops: +1 is twice as bright), depth of field (blur away from what the player
-  looks at, through their eyes: 0 is everything sharp, 0.8 a strong cinematic blur of the map behind what they look
-  at; the gun stays sharp), motion blur. How wide their view is: **View field of view** in the Viewmodel panel.
-  Tick **Blur with distance** for the blur of a depth pass in After Effects instead: the gun and what is near stay
-  sharp, and the map blurs more the further away it is, whatever the player looks at (what they aim at far away
-  blurs too). **Depth of field** then sets how blurred the far map gets, and **Blur distance** how far away it is half
-  that (20 m at first; nearer blurs more of the map). It is for the players' eyes when the round has no focus keys
-  (below, *Depth of field over the round*). **Scope overlay** (ticked at first): through a player's eyes, while they
-  look through a scope, CS2's scope over the view: the AWP's, SSG 08's and auto-snipers' black ring with its thin
-  lines, and through the AUG's and SG 553's sight, brought up to the eye, the blur around it and its green dot. Untick
-  it to keep only the zoom and add your own scope in editing. The zoom itself (40 then 10 for the AWP, 45 for the
-  AUG…), the gun hidden behind a sniper's scope and the AUG's sight at the eye are always as in CS2.
+- **Camera**: brightness (in camera stops: +1 is twice as bright), depth of field, motion blur. How wide their view
+  is: **View field of view** in the Viewmodel panel. Through the players' eyes the blur is **Blur with distance**
+  (ticked at first): the blur of a depth pass in After Effects, the gun and what is near sharp, the map blurring more
+  the further away it is, whatever the player looks at, and the same through a scope's zoom. **Depth of field** sets
+  how blurred the far map gets (0 is everything sharp; 0.5 at first, a light blur; 1 the most, 0.8 % of the picture's
+  width), and **Blur distance** how far away it is half that (20 m at first; nearer blurs more of the map). Untick
+  **Blur with distance** for a lens focused where the player looks instead (0.8 a strong cinematic blur of the map
+  behind what they look at; the gun stays sharp); a scope's zoom then blurs a lot more, as a long lens does. It is for
+  the players' eyes when the round has no focus keys (below, *Depth of field over the round*). **Scope overlay**
+  (ticked at first): through a player's eyes, while they look through a scope, CS2's scope over the view: the AWP's,
+  SSG 08's and auto-snipers' black ring with its thin lines, and through the AUG's and SG 553's sight, brought up to
+  the eye, the blur around it and its green dot. In the realistic look the camera's exposure leaves the black ring out
+  while the scope is up, so the view through it is as bright as without it. Untick it to keep only the zoom and add
+  your own scope in editing. The zoom itself (40 then 10 for the AWP, 45 for the AUG…), the gun hidden behind a
+  sniper's scope and the AUG's sight at the eye are always as in CS2.
 - **Colour and film**: warm or cool, saturation (0 is black and white), contrast, vignette, film grain; in the
   realistic look also bloom and lens flare.
 - **Reset everything** puts every slider back to the map's own look. Each slider's own reset arrow puts it back to

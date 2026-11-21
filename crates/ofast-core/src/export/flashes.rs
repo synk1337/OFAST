@@ -18,8 +18,9 @@
 //! child, smaller (`tools/unreal/shot_effects.py` draws both).
 //!
 //! The shots carry the system's stem and draw at the configuration's attachment (`muzzle_flash`, or `muzzle_flash2`:
-//! the M4A1-S's silencer tip, one of the Dual Berettas' pistols), [`super::shots`]. Which of the Dual Berettas' two
-//! sequences a shot plays is not in the demo: OFAST alternates by the magazine's count
+//! the M4A1-S's silencer tip, one of the Dual Berettas' pistols), [`super::shots`], but for a silencer's shot, which
+//! CS2 draws at the silencer's tip, `muzzle_flash2`, whatever its configuration names ([`SILENCER_TIP`]). Which of
+//! the Dual Berettas' two sequences a shot plays is not in the demo: OFAST alternates by the magazine's count
 //! ([`super::shots::ShotData::flash_of`]), not checked against CS2.
 
 use std::collections::BTreeMap;
@@ -50,17 +51,32 @@ pub struct GunFlashes {
     pub secondary: Option<FlashEvent>,
 }
 
+/// Where CS2 draws a silencer's shot (the M4A1-S's and USP-S's with their silencer on): the silencer's tip. The
+/// USP-S's `shoot` starts `uweapon_muzsilenced_subm` in its `thirdperson` configuration, which names `muzzle_flash`
+/// (made for the MP5-SD, whose `muzzle_flash` is its suppressor's end): on the USP-S that is the slide's end, 5.1
+/// units along the gun, inside the silencer that ends at its `muzzle_flash2`, 12.9 units. CS2 draws the flash past
+/// the silencer's tip in its own first-person view and in third person (a local game on CS2 1.42.0.0, filmed
+/// 2026-11-21); OFAST had it inside the silencer (the user's report). The M4A1-S's configuration names this tip
+/// itself.
+pub const SILENCER_TIP: &str = "muzzle_flash2";
+
 impl GunFlashes {
     /// The flash of a shot: `silencer` whether the gun has one, `silenced` whether it is on, `secondary` the Dual
-    /// Berettas' `shoot_secondary`.
-    pub fn of_shot(&self, silencer: bool, silenced: bool, secondary: bool) -> Option<&FlashEvent> {
+    /// Berettas' `shoot_secondary`. A silenced shot plays at [`SILENCER_TIP`].
+    pub fn of_shot(&self, silencer: bool, silenced: bool, secondary: bool) -> Option<FlashEvent> {
         if silencer && !silenced {
-            return self.unsilenced.as_ref().or(self.fire.as_ref());
+            return self.unsilenced.as_ref().or(self.fire.as_ref()).cloned();
+        }
+        if silencer {
+            return self.fire.as_ref().map(|f| FlashEvent {
+                system: f.system.clone(),
+                attachment: SILENCER_TIP.to_owned(),
+            });
         }
         if secondary {
-            return self.secondary.as_ref().or(self.fire.as_ref());
+            return self.secondary.as_ref().or(self.fire.as_ref()).cloned();
         }
-        self.fire.as_ref()
+        self.fire.clone()
     }
 }
 
@@ -205,6 +221,35 @@ mod tests {
         assert_eq!(
             m4.of_shot(false, false, true).unwrap().attachment,
             "muzzle_flash2"
+        );
+    }
+
+    #[test]
+    fn a_silenced_shot_plays_at_the_silencers_tip() {
+        // The USP-S's: its silenced system's configuration names `muzzle_flash` (the slide's end).
+        let usp = GunFlashes {
+            fire: Some(FlashEvent {
+                system: "uweapon_muzsilenced_subm".into(),
+                attachment: "muzzle_flash".into(),
+            }),
+            unsilenced: Some(FlashEvent {
+                system: "uweapon_muzzleflash_pist".into(),
+                attachment: "muzzle_flash".into(),
+            }),
+            secondary: None,
+        };
+        let silenced = usp.of_shot(true, true, false).unwrap();
+        assert_eq!(silenced.system, "uweapon_muzsilenced_subm");
+        assert_eq!(silenced.attachment, SILENCER_TIP);
+        // Without its silencer it fires from the slide's end.
+        assert_eq!(
+            usp.of_shot(true, false, false).unwrap().attachment,
+            "muzzle_flash"
+        );
+        // A gun without a silencer keeps its configuration's attachment (the MP5-SD's suppressor end).
+        assert_eq!(
+            usp.of_shot(false, false, false).unwrap().attachment,
+            "muzzle_flash"
         );
     }
 }

@@ -171,7 +171,10 @@ from when it is started (its first frame then), so the times only need to be rig
   (its edge 0.03), darker toward its rim, crossed by two one-pixel lines (CS2's `legacy_sniper_scope.vfx`). A
   translucent unlit material drawn from the screen's position, keyed visible over the player's `scope` runs, seen
   only through their eyes; the Look panel's **Scope overlay** turns it off (the replay collection's `ScopeOverlay`)
-  for an editor's own scope. Checked on m0NESY's AWP (FaZe vs Falcons, de_anubis, round 6, ticks 55030 – 55370):
+  for an editor's own scope. Meanwhile the POV camera's exposure leaves the ring out (since 2026-11-21: keyed
+  `AutoExposureLowPercent` / `HighPercent` 77 / 98 over the scope runs, Unreal's 10 / 90 elsewhere,
+  `scopes.key_scope_exposure`; switched off with the overlay): in the realistic look the auto exposure took the
+  ring, two thirds of the picture, for a dark view and the lens came out blown white (the user's de_mirage round). Checked on m0NESY's AWP (FaZe vs Falcons, de_anubis, round 6, ticks 55030 – 55370):
   the scope from the tick after he scopes in, the gun hidden, the view at 40 then 10, the gun and its bolt back
   between a shot and the zoom's return, no scope in the other players' views.
 - **Sights**: in CS2 the AUG's and SG 553's sight comes right up to the eye and fills the middle of the view

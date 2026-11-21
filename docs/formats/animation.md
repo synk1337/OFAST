@@ -444,8 +444,18 @@ ragdoll on the client and demos carry only what starts it ([demo.md](demo.md#dea
 [model.md](model.md#skeleton-and-skinning)), the map's `world_physics` collision, and the death fields.
 
 - **Start**: on the first frame where the pawn is dead, the parts sit on the last living pose and move as that pose
-  moved over its last frame (the run, the limbs), plus the killing hit: `m_vRagdollDamageForce` × 0.1
-  (`DEATH_FORCE_SCALE`, a first guess) as an impulse at `m_vRagdollDamagePosition` on the part of the hit bone.
+  moved over the last tenth of a second of the player's life (`START_MOTION_WINDOW_S`, as Source's ragdolls take
+  the animation's motion: the run, the limbs), plus the killing hit: `m_vRagdollDamageForce` × 0.05
+  (`DEATH_FORCE_SCALE`) as an impulse at `m_vRagdollDamagePosition` on the part of the hit bone.
+- **Against CS2 (2026-11-21)**: the user's de_mirage demo (Understudy bots, five kills: three AWP, two USP-S), CS2's
+  playback filmed from the demo free camera and Unreal shot from the same places at the same ticks. Until then the
+  starting motion was the last frame's alone (1/64 s) and the force scale 0.1, a first guess. Two players standing
+  still started with their forearms at 390 and 510 in/s and the whole body at 60 – 110 in/s (any jump of the pose
+  between the last two frames became a throw), and an AWP's impulse on the head (12 of the agent's 272 units of
+  mass) whipped it at 300 in/s: bodies tipped over backward, legs up, where CS2 folds them where they stand. Over a
+  tenth of a second and at 0.05, a player killed mid-jump comes to rest where CS2's body does and the standing ones
+  topple less; CS2's still fold sooner at the knees and drop more in place (not matched). The forces in that round:
+  26 000 for the USP-S's headshots, 28 000 – 36 000 for the AWP's.
 - **Solver** (`physics::ragdoll`): extended position-based dynamics, 8 substeps per frame; gravity 800 in/s²; joints
   keep their frames' origins together, the child's z axis within the swing cone (a hinge without one) and the twist
   about z within its range; spheres along each capsule collide with the world's hulls (face planes) and triangles

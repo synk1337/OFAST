@@ -720,6 +720,13 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   distance** for where it is half its strongest. Unreal's depth blur behind a lens focused 1 m away and too stopped
   down to blur by itself, the POV cameras' own focus tracks switched off meanwhile
   ([lighting](formats/lighting.md#the-look-panel)).
+- [x] **The user's Understudy round on de_mirage (2026-11-21)**, four reports: the view through an AWP's scope blown
+  white in the realistic look (its exposure now leaves the scope's ring out), the blur too strong (Blur with
+  distance now the default, lighter, and no longer stronger through a zoom), the USP-S's silenced flash inside the
+  silencer (now at its tip, as CS2 draws it), the dead falling too hard (their starting motion over a tenth of a
+  second, the hit's force halved; [animation](formats/animation.md#deaths-exportdeaths-physicsragdoll)).
+- [ ] Dead bodies against CS2: CS2's fold at the knees and drop where they stand sooner than OFAST's (2026-11-21,
+  five kills filmed from the same places).
 
 ## Hard problems we know about
 

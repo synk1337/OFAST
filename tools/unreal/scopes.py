@@ -24,6 +24,10 @@ first-person gun) with a translucent material drawn from the screen's own pixels
 through it (keyed visibility, from their spans) and only through their eyes (the camera owns it: OnlyOwnerSee, as
 their viewmodel). The Look panel's **Scope overlay** switch (ofast_look.py) sets the replay collection's
 `ScopeOverlay` (1 on, 0 off), which both materials multiply their effect by.
+
+While a sniper's scope is up, the POV camera's exposure leaves its black ring out (key_scope_exposure,
+SCOPE_EXPOSURE_PERCENT): in the realistic look Unreal's auto exposure took the ring for a dark view and the lens came
+out blown white (the user's report, 2026-11-21). The switch turns those keys off with the ring.
 """
 
 import unreal
@@ -198,6 +202,78 @@ PLACED = ("scope", "sight")
 SIGHT_DELAY_FRAMES = 6
 
 
+# The realistic look meters its exposure on the picture (Unreal's histogram auto exposure, import_map.setup_realistic):
+# the mean brightness between two percentiles of the picture's brightness, 10 % and 90 % by Unreal's default. The
+# sniper scope's black ring is two thirds of a 16:9 picture (the lens, 0.425 screen heights across, the other third),
+# so with the scope up the metering read a view 8.6 stops darker than the lens showed and opened up: the lens came out
+# blown white (the user's report, 2026-11-21: an AWP on de_mirage; with the card hidden the same frames were right).
+# While the scope is up the POV camera's own post-process settings move the percentiles above the ring and the lens's
+# vignetted rim: on three zoomed views of that round (the card hidden, the ring and vignette laid over them,
+# scratch percent_model.py) 77 / 98 metered within half a stop of the bare view (−0.25, +0.4, −0.35; 71 / 97 gave
+# −0.66, −0.12, −0.66, and a shot through it came out a little bright). Off the scope, Unreal's own percentiles.
+SCOPE_EXPOSURE_PERCENT = (77.0, 98.0)
+UNREAL_EXPOSURE_PERCENT = (10.0, 90.0)
+EXPOSURE_PATHS = ("PostProcessSettings.AutoExposureLowPercent", "PostProcessSettings.AutoExposureHighPercent")
+
+
+def camera_component_binding(sequence, camera):
+    """The binding of a POV camera's component in `sequence` (under the camera's own binding, where its focus and zoom
+    tracks are), made when it has none."""
+    component = camera.camera_component
+    label, name = camera.get_actor_label(), str(component.get_name())
+    for binding in sequence.get_bindings():
+        if str(binding.get_display_name()) == label:
+            for child in binding.get_child_possessables():
+                if str(child.get_display_name()) == name:
+                    return child
+    return sequence.add_possessable(component)
+
+
+def key_scope_exposure(sequence, camera, frames, end_frame):
+    """Keys `camera`'s auto exposure percentiles (EXPOSURE_PATHS): SCOPE_EXPOSURE_PERCENT over its player's sniper
+    scope spans `frames` [[first, last, kind], ...] (frames), UNREAL_EXPOSURE_PERCENT elsewhere, held (constant keys);
+    their overrides on. CS2's look exposes by hand, which they do not touch. Returns the number of spans keyed."""
+    spans = [(first, last) for first, last, kind in frames if kind == "scope"]
+    component = camera.camera_component
+    settings = component.get_editor_property("post_process_settings")
+    for name, value in (("auto_exposure_low_percent", UNREAL_EXPOSURE_PERCENT[0]),
+                        ("auto_exposure_high_percent", UNREAL_EXPOSURE_PERCENT[1])):
+        settings.set_editor_property("override_" + name, True)
+        settings.set_editor_property(name, value)
+    component.set_editor_property("post_process_settings", settings)
+    child = camera_component_binding(sequence, camera)
+    for track in child.find_tracks_by_type(unreal.MovieSceneFloatTrack):
+        if str(track.get_property_path()) in EXPOSURE_PATHS:
+            child.remove_track(track)
+    if not spans:
+        return 0
+    constant = unreal.MovieSceneKeyInterpolation.CONSTANT
+    for path, scoped, unscoped in zip(EXPOSURE_PATHS, SCOPE_EXPOSURE_PERCENT, UNREAL_EXPOSURE_PERCENT):
+        track = child.add_track(unreal.MovieSceneFloatTrack)
+        track.set_property_name_and_path(path.rsplit(".", 1)[1], path)
+        section = track.add_section()
+        section.set_range(0, end_frame)
+        channel = section.get_all_channels()[0]
+        channel.add_key(unreal.FrameNumber(0), unscoped, 0.0, unreal.MovieSceneTimeUnit.DISPLAY_RATE, constant)
+        for first, last in spans:
+            channel.add_key(unreal.FrameNumber(int(first)), scoped, 0.0, unreal.MovieSceneTimeUnit.DISPLAY_RATE,
+                            constant)
+            channel.add_key(unreal.FrameNumber(min(int(last) + 1, end_frame)), unscoped, 0.0,
+                            unreal.MovieSceneTimeUnit.DISPLAY_RATE, constant)
+    return len(spans)
+
+
+def exposure_sections(sequence):
+    """The scope exposure sections (key_scope_exposure) in `sequence`."""
+    out = []
+    for binding in sequence.get_bindings() if sequence is not None else []:
+        for child in binding.get_child_possessables():
+            for track in child.find_tracks_by_type(unreal.MovieSceneFloatTrack):
+                if str(track.get_property_path()) in EXPOSURE_PATHS:
+                    out.extend(track.get_sections())
+    return out
+
+
 def changes(spans, kind, end_frame):
     """(frame, visible) for a card of `kind` from a player's spans [[first tick, last tick, kind], ...] (frames); a
     sight's from SIGHT_DELAY_FRAMES into its run."""
@@ -212,7 +288,8 @@ def changes(spans, kind, end_frame):
 def place_scopes(sequence, scopes, tick0, end_frame, cameras, names, spawn_tagged, key_visibility, own_view_only):
     """Each scoping player's cards on their POV camera (`cameras`: controller -> camera actor; `names`: controller ->
     name), keyed visible while they look through them (`scopes`: the cameras file's, controller (text) -> spans in
-    ticks). `own_view_only(actor, controller)` makes it their view's only. Returns the number of cards."""
+    ticks), and the camera's exposure without the sniper scope's ring (key_scope_exposure). `own_view_only(actor,
+    controller)` makes it their view's only. Returns the number of cards."""
     built = {}
     placed = 0
     for controller_text, spans in (scopes or {}).items():
@@ -221,6 +298,7 @@ def place_scopes(sequence, scopes, tick0, end_frame, cameras, names, spawn_tagge
         if camera is None or not spans:
             continue
         frames = [[first - tick0, last - tick0, kind] for first, last, kind in spans]
+        key_scope_exposure(sequence, camera, frames, end_frame)
         for kind in sorted({span[2] for span in frames}):
             if kind not in PLACED:
                 continue
@@ -287,9 +365,12 @@ def see_through_lenses(mesh, lens=None):
     return changed
 
 
-def set_overlay(on):
-    """The Look panel's Scope overlay: the replay collection's `ScopeOverlay` default (1 drawn, 0 not); saved when it
-    changes."""
+def set_overlay(on, sequence=None):
+    """The Look panel's Scope overlay: the replay collection's `ScopeOverlay` default (1 drawn, 0 not), saved when it
+    changes; and the scope exposure keys of `sequence` (the round) on with it, off without the ring they leave out."""
+    for section in exposure_sections(sequence):
+        if section.is_active() != on:
+            section.set_is_active(on)
     collection = smoke_volumes.replay_collection()
     parameters = list(collection.get_editor_property("scalar_parameters"))
     value = 1.0 if on else 0.0

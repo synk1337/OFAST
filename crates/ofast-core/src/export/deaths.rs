@@ -4,8 +4,8 @@
 //! A death is the first frame where the player's pawn is there but no longer alive. From it until the player lives
 //! again (or the round ends):
 //!
-//! - the ragdoll's parts start on the last living pose, moving as that pose moved over its last frame (the run, the
-//!   animation), plus the killing hit: the pawn's `m_vRagdollDamageForce` × [`DEATH_FORCE_SCALE`] as an impulse at
+//! - the ragdoll's parts start on the last living pose, moving as that pose moved over the last tenth of a second
+//!   ([`START_MOTION_WINDOW_S`]: the run, the animation), plus the killing hit: the pawn's `m_vRagdollDamageForce` × [`DEATH_FORCE_SCALE`] as an impulse at
 //!   `m_vRagdollDamagePosition` on the part of the hit bone (`m_nRagdollDamageBone`, or the nearest of its parents
 //!   that has a part);
 //! - each frame steps the simulation against the map's world collision (until the body rests: it then stays);
@@ -16,16 +16,37 @@
 //! Poses are in the agent's model space relative to the actor Unreal places from the replay's samples (the pawn's
 //! position and body yaw at that tick, which stay where the pawn died), so the glTF animation holds the fall.
 //!
-//! The force scale is OFAST's choice, to be checked against CS2 (whose solver and force handling are not public).
+//! The force scale is OFAST's choice (CS2's solver and force handling are not public), set against CS2's playback of
+//! five deaths of one round ([`DEATH_FORCE_SCALE`]).
 
 use crate::demo::players::{PlayerSample, RoundTrack};
 use crate::model::{Affine, Model, affine, compose, invert_rigid};
 use crate::physics::PhysicsData;
 use crate::physics::ragdoll::{Ragdoll, WorldCollision};
 
-/// Multiplies the killing hit's force (`m_vRagdollDamageForce`: 20000 – 30000 for rifle bullets) into the impulse
-/// given to the hit part (mass × inches per second).
-pub const DEATH_FORCE_SCALE: f32 = 0.1;
+/// Multiplies the killing hit's force (`m_vRagdollDamageForce`: 20000 – 30000 for rifle bullets and the USP-S, 28000
+/// – 36000 for the AWP) into the impulse given to the hit part (mass × inches per second). 0.1 until 2026-11-21, a
+/// first guess: on the head (12 of the agent's 272) an AWP's 3600 whipped it at 300 in/s and tipped standing bodies
+/// over backward, legs up, where CS2's playback folds them where they stand (the user's de_mirage demo, filmed from
+/// the same free camera at the same ticks; with [`START_MOTION_WINDOW_S`]). At 0.05 the jumping player's body comes
+/// to rest where CS2's does and the standing ones topple less; CS2's still fold sooner at the knees (not matched).
+pub const DEATH_FORCE_SCALE: f32 = 0.05;
+
+/// How long before the death the parts' starting motion is measured over, seconds: the pose's move from then to the
+/// last living frame, as Source's ragdolls take the animation's motion over a tenth of a second
+/// (`C_BaseAnimating::BecomeRagdollOnClient`'s `boneDt`). Over one frame (1/64 s, until 2026-11-21) any jump of the
+/// pose between the last two frames became a throw: on the user's de_mirage demo (Understudy bots, CS2 1.42.0.0) two
+/// players standing still started with their forearms at 390 and 510 in/s and the whole body at 60 – 110 (a pose 1.5
+/// – 2.7 m/s on the move without moving), and fell far harder than CS2's playback shows them ("ragdolls too strong",
+/// the user's report; filmed from the same free camera at the same ticks).
+pub const START_MOTION_WINDOW_S: f32 = 0.1;
+
+/// The frames back from the last living one the starting motion is measured from ([`START_MOTION_WINDOW_S`] at
+/// `fps`, at least one, no further back than the round's first frame or than the player has been alive and there).
+fn motion_window(fps: f32, last_living: usize, alive_since: usize) -> usize {
+    let wanted = (START_MOTION_WINDOW_S * fps).round().max(1.0) as usize;
+    wanted.min(last_living - alive_since)
+}
 
 /// The deaths baked for one player.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -159,15 +180,25 @@ pub fn bake_deaths(
             .iter()
             .map(|&b| compose(&actor_then, &living[b]))
             .collect();
-        // The parts' motion over the last living frame.
-        let velocities: Vec<_> = match (first >= 2).then(|| player(first - 2)).flatten() {
+        // The parts' motion over the last START_MOTION_WINDOW_S of the player's life (frames they were there and alive).
+        let alive_since = (0..first)
+            .rev()
+            .take_while(|&j| player(j).is_some_and(|p| p.alive))
+            .last()
+            .unwrap_or(first - 1);
+        let back = motion_window(fps, first - 1, alive_since);
+        let velocities: Vec<_> = match (back >= 1).then(|| player(first - 1 - back)).flatten() {
             Some(earlier) => {
                 let actor_earlier = actor(earlier);
                 part_bones
                     .iter()
                     .zip(&start)
                     .map(|(&b, now)| {
-                        velocity(&compose(&actor_earlier, &worlds[first - 2][b]), now, dt)
+                        velocity(
+                            &compose(&actor_earlier, &worlds[first - 1 - back][b]),
+                            now,
+                            dt * back as f32,
+                        )
                     })
                     .collect()
             }
@@ -273,5 +304,21 @@ mod tests {
         assert!((linear[0] - 4.0).abs() < 1e-5);
         // 0.1 rad about z in 0.5 s.
         assert!((angular[2] - 0.2).abs() < 1e-4, "{angular:?}");
+    }
+
+    #[test]
+    fn the_starting_motion_is_measured_over_a_tenth_of_a_second() {
+        // 64 frames a second: 6 frames back (0.094 s), whatever the frame of death.
+        assert_eq!(motion_window(64.0, 1486, 0), 6);
+        // Not further back than the player's life (here spawned 3 frames before), nor less than a frame.
+        assert_eq!(motion_window(64.0, 103, 100), 3);
+        assert_eq!(motion_window(4.0, 10, 0), 1);
+        // A pose that jumps once in its last frame moves its part 6 times slower over the window than over a frame.
+        let still = affine([0.0, 0.0, 0.0, 1.0], [0.0; 3]);
+        let jumped = affine([0.0, 0.0, 0.0, 1.0], [6.0, 0.0, 0.0]);
+        let over_a_frame = velocity(&still, &jumped, 1.0 / 64.0).0[0];
+        let over_the_window =
+            velocity(&still, &jumped, motion_window(64.0, 500, 0) as f32 / 64.0).0[0];
+        assert!((over_a_frame / over_the_window - 6.0).abs() < 1e-3);
     }
 }

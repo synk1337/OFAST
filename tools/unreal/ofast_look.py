@@ -45,14 +45,26 @@ DOF_RANGE = 22.0
 # the player looks. Unreal's depth blur: a blur of DEPTH_BLUR_WIDTH × the depth of field amount far away (a radius, in
 # fractions of the picture's width), half that at the panel's Blur distance. Unreal adds it only to what lies behind a
 # lens's focus (in front, it is the foreground, which the foreground limit keeps sharp for the gun): so the lens
-# focuses 1 m away, at f/32 on a full-frame sensor, too small an opening to blur anything itself (0.01 % of the
-# width far away), and the POV camera's own focus track (where the player looks, replay_cameras.key_focus) is
-# switched off in the round's sequence meanwhile.
+# focuses 1 m away, at f/32, too small an opening to blur anything itself, and the POV camera's own focus track
+# (where the player looks, replay_cameras.key_focus) is switched off in the round's sequence meanwhile.
+# The default since 2026-11-21 (the user: "blur is way too strong and should be set by distance by default"), at
+# DEPTH_BLUR_AMOUNT. The lens's own blur grows with the square of the focal length, which a scope's zoom multiplies:
+# on a full-frame sensor (36 mm) the AWP's 10 degrees blurred the far map 4.6 % of the picture's width at f/32
+# (0.22 % at its 40); on DEPTH_SENSOR_MM, 0.06 % at 10 degrees, nothing to see at the eyes' own 106. The depth blur
+# itself is in pixels whatever the zoom.
 DEPTH_BLUR_WIDTH = 0.008
 DEPTH_FOCUS_CM = 100.0
 DEPTH_FSTOP = 32.0
-DEPTH_SENSOR_MM = 36.0
+DEPTH_SENSOR_MM = 0.5
 BLUR_DISTANCE_M = 20.0
+# Depth of field's start with Blur with distance in the realistic look: 0.4 % of the picture's width far away (8
+# pixels across at 1080p), half that at 20 m. The lens it replaced (f/1.8, 0.81) blurred whatever lay behind the
+# focus up to 2.5 % of the width, and through a scope's zoom always that much.
+DEPTH_BLUR_AMOUNT = 0.5
+# A look file's version: 2 since Blur with distance is the default (2026-11-21). Opening a version-1 file still at
+# the old defaults (Blur with distance off, Depth of field the look's own lens) moves it to the new ones, once; a
+# file whose blur the user changed keeps it.
+LOOK_VERSION = 2
 # Unreal's depth blur radius is "pixels of a 1920-wide picture", doubled when used (DiaphragmDOFUtils.cpp).
 DEPTH_BLUR_PIXELS = 1920.0 / 2.0
 # The POV cameras' own focus track (replay_cameras.key_focus).
@@ -119,14 +131,15 @@ class OfastLook(unreal.PrimaryDataAsset):
                    "it gets (Depth of field). Nearer: more of the map blurred."})
     depth_blur = unreal.uproperty(bool, meta={
         "Category": "Camera", "DisplayName": "Blur with distance",
-        "ToolTip": "Depth of field through the players' eyes as a depth pass blurred in After Effects: the gun and "
-                   "what is near sharp, the map blurring more the further away it is, whatever the player looks at "
-                   "(off: sharp where the player looks, blurred behind it). Depth of field sets how strong. Not "
+        "ToolTip": "On at first. Depth of field through the players' eyes as a depth pass blurred in After Effects: "
+                   "the gun and what is near sharp, the map blurring more the further away it is, whatever the "
+                   "player looks at, and the same through a scope's zoom (off: a lens, sharp where the player "
+                   "looks and blurred behind it, much more through a zoom). Depth of field sets how strong. Not "
                    "with focus keys (OFAST > Cameras, Depth of field), which focus as they say."})
     depth_of_field = slider(float, "Camera", "Depth of field", 0.0, 1.0,
-                            "Blur away from what the player looks at, through their eyes. 0: everything sharp; "
-                            "0.8 about f/1.9, a strong cinematic blur; 1 stronger still. With Blur with distance, "
-                            "how blurred the far map gets (1: 0.8 % of the picture's width). A round with focus keys "
+                            "How blurred the far map gets through the players' eyes. 0: everything sharp; with "
+                            "Blur with distance 0.5 a light blur, 1 the most (0.8 % of the picture's width). Without "
+                            "it, a lens: 0.8 about f/1.9, a strong cinematic blur. A round with focus keys "
                             "(OFAST > Cameras, Depth of field) takes them instead.")
     brightness = slider(float, "Camera", "Brightness", -3.0, 3.0,
                         "Brighter (+) or darker (−) in camera stops: +1 is twice as bright. 0 is the look's own.",
@@ -156,7 +169,7 @@ FIELDS = ["sun_height", "sun_direction", "sun_strength", "sun_warmth", "ambient"
           "contrast", "vignette", "film_grain", "bloom", "lens_flare", "reset"]
 # Their values for the map's own look; those not here start at what the level has (start_values).
 NEUTRAL = {"sun_height": 0.0, "sun_direction": 0.0, "sun_strength": 1.0, "sun_warmth": 0.0, "ambient": 1.0,
-           "haze": 1.0, "light_beams": 1.0, "brightness": 0.0, "depth_blur": False, "blur_distance": BLUR_DISTANCE_M,
+           "haze": 1.0, "light_beams": 1.0, "brightness": 0.0, "depth_blur": True, "blur_distance": BLUR_DISTANCE_M,
            "scope_overlay": True, "warmth": 0.0, "saturation": 1.0, "contrast": 1.0, "reset": False}
 
 
@@ -265,9 +278,10 @@ def pov_depth_of_field():
 
 
 def start_values(base):
-    """The panel's values for the map's own look: neutral changes, and the look's own amounts."""
+    """The panel's values for the map's own look: neutral changes, and the look's own amounts (its players' eyes blur
+    with distance at DEPTH_BLUR_AMOUNT where the look blurs them at all: the realistic one, not CS2's)."""
     values = dict(NEUTRAL)
-    values.update(depth_of_field=base.get("depth_of_field", 0.0),
+    values.update(depth_of_field=DEPTH_BLUR_AMOUNT if base.get("depth_of_field", 0.0) > 0.0 else 0.0,
                   motion_blur=base.get("motion_blur_amount", 0.5),
                   vignette=base.get("vignette_intensity", 0.0),
                   film_grain=base.get("film_grain_intensity", 0.0),
@@ -285,9 +299,25 @@ def get_base(look):
     return next((record["base"] for obj, record in _looks.values() if obj == look), {})
 
 
+def upgrade(record):
+    """A look file's record moved to LOOK_VERSION: a version-1 one still at its old blur defaults (Blur with distance
+    off, Depth of field the look's own lens) takes the new ones (start_values). True when it changed."""
+    if record.get("version", 1) >= LOOK_VERSION:
+        return False
+    values, base = record.setdefault("values", {}), record.get("base", {})
+    untouched = (not values.get("depth_blur", False)
+                 and abs(values.get("depth_of_field", 0.0) - base.get("depth_of_field", 0.0)) < 0.005)
+    if untouched:
+        fresh = start_values(base)
+        values.update(depth_blur=fresh["depth_blur"], depth_of_field=fresh["depth_of_field"])
+    record["version"] = LOOK_VERSION
+    return True
+
+
 def write_record(level):
     obj, record = _looks[level]
     record["values"] = values_of(obj)
+    record["version"] = LOOK_VERSION
     path = look_file(level)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -312,8 +342,12 @@ def look_for(level, create=True):
         obj = unreal.new_object(OfastLook, name="Look_" + level.rsplit("/", 1)[-1])
         if record is None:
             base = read_base()
-            record = {"values": start_values(base), "base": base, "import_id": stamp}
+            record = {"values": start_values(base), "base": base, "import_id": stamp, "version": LOOK_VERSION}
             log("look: made %s from %s" % (path, level))
+        elif upgrade(record):
+            log("look: %s moved to version %d (blur: %s, depth of field %.2f)"
+                % (path, LOOK_VERSION, "with distance" if record["values"].get("depth_blur") else "lens",
+                   record["values"].get("depth_of_field", 0.0)))
         for field, value in {**start_values(record["base"]), **record["values"]}.items():
             if field in FIELDS:
                 obj.set_editor_property(field, value)
@@ -394,10 +428,11 @@ def apply(look, level, sequence=None):
                 mel.set_material_instance_scalar_parameter_value(instance, param, value)
             mel.update_material_instance(instance)
 
-    pov_lens(v, sequence or unreal.LevelSequenceEditorBlueprintLibrary.get_current_level_sequence())
+    sequence = sequence or unreal.LevelSequenceEditorBlueprintLibrary.get_current_level_sequence()
+    pov_lens(v, sequence)
     import scopes
 
-    scopes.set_overlay(v["scope_overlay"])
+    scopes.set_overlay(v["scope_overlay"], sequence)
 
 
 def own_focus_sections(sequence):
