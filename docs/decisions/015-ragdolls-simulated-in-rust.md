@@ -30,7 +30,8 @@ Simulate each death in OFAST's core and bake it into the player's animation, fro
 
 - read the agent's ragdoll and the map's world physics (`PHYS` blocks);
 - at the death tick, place the ragdoll's bodies on the baked pose, give them the pawn's velocity and the death force
-  at the damage position on the body of the hit bone;
+  at the damage position on the body of the hit bone (2026-11-22: CS2 never fills the damage position, which OFAST
+  read as the map's origin and spun the bodies; the force is now applied at the hit bone);
 - step a rigid-body solver (extended position-based dynamics: joints with CS2's swing and twist limits, contacts
   against the world's Default hulls and meshes, CS2's gravity, the parts' damping) until the body rests or the round
   ends;

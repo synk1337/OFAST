@@ -5,9 +5,9 @@
 //! again (or the round ends):
 //!
 //! - the ragdoll's parts start on the last living pose, moving as that pose moved over the last tenth of a second
-//!   ([`START_MOTION_WINDOW_S`]: the run, the animation), plus the killing hit: the pawn's `m_vRagdollDamageForce` × [`DEATH_FORCE_SCALE`] as an impulse at
-//!   `m_vRagdollDamagePosition` on the part of the hit bone (`m_nRagdollDamageBone`, or the nearest of its parents
-//!   that has a part);
+//!   ([`START_MOTION_WINDOW_S`]: the run, the animation), plus the killing hit: the pawn's `m_vRagdollDamageForce`
+//!   × [`DEATH_FORCE_SCALE`] as an impulse on the part of the hit bone (`m_nRagdollDamageBone`, or the nearest of
+//!   its parents that has a part), at the hit bone (`hit_point`, in this file: CS2 does not send where it hit);
 //! - each frame steps the simulation against the map's world collision (until the body rests: it then stays);
 //! - the parts' bones take the parts' frames; every other bone keeps its offset from its parent as it was in the
 //!   last living pose (hands, fingers, twist bones, which the model's constraints then place again), the root keeps
@@ -25,12 +25,12 @@ use crate::physics::PhysicsData;
 use crate::physics::ragdoll::{Ragdoll, WorldCollision};
 
 /// Multiplies the killing hit's force (`m_vRagdollDamageForce`: 20000 – 30000 for rifle bullets and the USP-S, 28000
-/// – 36000 for the AWP) into the impulse given to the hit part (mass × inches per second). 0.1 until 2026-11-21, a
-/// first guess: on the head (12 of the agent's 272) an AWP's 3600 whipped it at 300 in/s and tipped standing bodies
-/// over backward, legs up, where CS2's playback folds them where they stand (the user's de_mirage demo, filmed from
-/// the same free camera at the same ticks; with [`START_MOTION_WINDOW_S`]). At 0.05 the jumping player's body comes
-/// to rest where CS2's does and the standing ones topple less; CS2's still fold sooner at the knees (not matched).
-pub const DEATH_FORCE_SCALE: f32 = 0.05;
+/// – 36000 for the AWP) into the impulse given to the hit part (mass × inches per second), applied at the hit bone
+/// (`hit_point`, in this file). OFAST 1.0.17 halved it to 0.05 against the bodies' flips, whose cause was the hit applied at the
+/// map's origin; with the hit at the bone, 0.1 keeps a crouching player shot by an AWP on the scaffold he died on, as
+/// CS2's playback does (0.05 slid him off; the user's de_mirage demo, filmed from the same free camera at the same
+/// ticks as CS2's playback, 2026-11-22).
+pub const DEATH_FORCE_SCALE: f32 = 0.1;
 
 /// How long before the death the parts' starting motion is measured over, seconds: the pose's move from then to the
 /// last living frame, as Source's ragdolls take the animation's motion over a tenth of a second
@@ -40,6 +40,27 @@ pub const DEATH_FORCE_SCALE: f32 = 0.05;
 /// – 2.7 m/s on the move without moving), and fell far harder than CS2's playback shows them ("ragdolls too strong",
 /// the user's report; filmed from the same free camera at the same ticks).
 pub const START_MOTION_WINDOW_S: f32 = 0.1;
+
+/// How far from the hit bone a sent hit position may be and still be taken, inches (a bullet's point on a part,
+/// within its capsule's reach).
+pub const HIT_POINT_REACH: f32 = 24.0;
+
+/// Where the killing hit's impulse is applied: the hit position the demo sends (`m_vRagdollDamagePosition`) when it
+/// sends one near the hit bone, else the hit bone's own place in the last living pose. CS2 never fills that field in
+/// the demos checked (2026-11-22), and until then OFAST read the missing position as the map's origin (0, 0, 0): the
+/// impulse, applied thousands of inches from the body, came with a huge turn and bodies spun 180 – 360° as they died
+/// (the user's de_mirage demo: a crouching player hit by an AWP leapt up at 1500 in/s and tumbled, where CS2 folds
+/// him where he crouched).
+fn hit_point(sent: Option<[f32; 3]>, bone: [f32; 3]) -> [f32; 3] {
+    match sent {
+        Some(p)
+            if (0..3).map(|k| (p[k] - bone[k]).powi(2)).sum::<f32>().sqrt() <= HIT_POINT_REACH =>
+        {
+            p
+        }
+        _ => bone,
+    }
+}
 
 /// The frames back from the last living one the starting motion is measured from ([`START_MOTION_WINDOW_S`] at
 /// `fps`, at least one, no further back than the round's first frame or than the player has been alive and there).
@@ -206,13 +227,12 @@ pub fn bake_deaths(
         };
         let mut body = Ragdoll::new(ragdoll, &start, &velocities);
         if let Some(death) = &now.death
-            && let Some(part) = death.bone.and_then(|b| part_of(b as usize))
+            && let Some(bone) = death.bone.map(|b| b as usize).filter(|&b| b < bones.len())
+            && let Some(part) = part_of(bone)
         {
-            body.apply_impulse(
-                part,
-                death.position,
-                death.force.map(|f| f * DEATH_FORCE_SCALE),
-            );
+            let at = compose(&actor_then, &living[bone]);
+            let point = hit_point(death.position, [at[0][3], at[1][3], at[2][3]]);
+            body.apply_impulse(part, point, death.force.map(|f| f * DEATH_FORCE_SCALE));
         }
         // Without the map's collision: a floor where the player last stood (not under feet in the air: a player
         // killed mid-jump falls to the ground he left).
@@ -304,6 +324,17 @@ mod tests {
         assert!((linear[0] - 4.0).abs() < 1e-5);
         // 0.1 rad about z in 0.5 s.
         assert!((angular[2] - 0.2).abs() < 1e-4, "{angular:?}");
+    }
+
+    #[test]
+    fn the_hit_is_applied_at_the_hit_bone_unless_a_near_point_is_sent() {
+        let bone = [-20.0, -2148.0, 20.0];
+        // CS2 sends no hit position: the bone, not the map's origin.
+        assert_eq!(hit_point(None, bone), bone);
+        // A sent point on the body is kept; one far from it (a zero read as a point) is not.
+        let near = [-14.0, -2150.0, 24.0];
+        assert_eq!(hit_point(Some(near), bone), near);
+        assert_eq!(hit_point(Some([0.0; 3]), bone), bone);
     }
 
     #[test]

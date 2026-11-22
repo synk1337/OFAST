@@ -133,8 +133,10 @@ pub struct Death {
     /// The force of the killing hit (`m_vRagdollDamageForce`), world, along the shot: magnitudes of about 20000 –
     /// 30000 for rifle bullets.
     pub force: [f32; 3],
-    /// Where it hit (`m_vRagdollDamagePosition`), world.
-    pub position: [f32; 3],
+    /// Where it hit (`m_vRagdollDamagePosition`), world; `None` when not sent, which is every death of the demos
+    /// checked (2026-11-22: a matchmaking demo of August 2026 and a local GOTV demo of CS2 1.42.0.0): the field is
+    /// in the pawn's class but never filled.
+    pub position: Option<[f32; 3]>,
     /// A headshot (`m_bRagdollDamageHeadshot`).
     pub headshot: bool,
     /// The weapon's name (`m_szRagdollDamageWeaponName`: `m4a1_silencer`, `ak47`…).
@@ -1486,7 +1488,7 @@ fn read_death(paths: &DeathPaths, pawn: &Entity) -> Death {
             .and_then(FieldValue::as_i64)
             .and_then(|b| u32::try_from(b).ok()),
         force: vector(&paths.force),
-        position: vector(&paths.position),
+        position: get(&paths.position).and_then(FieldValue::as_vector3),
         headshot: get(&paths.headshot)
             .and_then(FieldValue::as_bool)
             .unwrap_or(false),

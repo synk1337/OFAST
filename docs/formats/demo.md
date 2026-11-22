@@ -812,7 +812,7 @@ ragdoll from is set on the pawn that tick and kept until the next death (`Player
 |---|---|---|
 | `m_nRagdollDamageBone` | the bone hit, an index into the agent's skeleton | 7 (`head_0`) for a headshot, 4 (`spine_2`) for an AWP body shot |
 | `m_vRagdollDamageForce` | the killing hit's force, world, along the shot | (−26553, 16367, 712) for an M4A1-S headshot, (27317, 6145, 167) for an AWP body shot |
-| `m_vRagdollDamagePosition` | where it hit, world | |
+| `m_vRagdollDamagePosition` | where it hit, world | never filled in the demos checked (2026-11-22: a matchmaking demo of August 2026, a local GOTV demo of CS2 1.42.0.0): `None`; OFAST applies the hit at the hit bone (`export::deaths::hit_point`). Read as (0, 0, 0) until then, which spun the bodies |
 | `m_bRagdollDamageHeadshot`, `m_szRagdollDamageWeaponName` | headshot flag, weapon (`m4a1_silencer`, `awp`) | |
 | `m_vRagdollServerOrigin` | the pawn's origin a tick before the death, not where the body ends up | |
 | `m_qDeathEyeAngles` | the eye angles at death | |

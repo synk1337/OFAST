@@ -21,8 +21,9 @@
 //! Two parts that overlap in that pose (an arm across the chest) do not collide until they have come apart.
 //!
 //! Bodies: mass from the part (`m_flMass`), centre of mass and inertia from its shapes (capsules as solid
-//! cylinders with rounded ends, spheres, hulls as their bounding boxes) times `m_flInertiaScale` (7 on CS2's
-//! agents: limbs turn slowly). Contacts: each capsule is sampled as spheres along its segment, tested against the
+//! cylinders with rounded ends, spheres, hulls as their bounding boxes); `m_flInertiaScale` (7 on CS2's agents) is
+//! read but not applied ([`USE_INERTIA_SCALE`]: with it bodies folded far later than CS2's). A body stops being
+//! simulated once still ([`REST_DRIFT`]) or asleep ([`SLEEP_DRIFT`]). Contacts: each capsule is sampled as spheres along its segment, tested against the
 //! world's solid hulls (the signed distance to a convex hull is taken as the largest distance to one of its face
 //! planes: exact over faces, a little generous near edges) and mesh triangles (the closest point), found through a
 //! uniform grid ([`WorldCollision`]; "solid": the solid world, grates and glass, not the clips that stop only
@@ -53,6 +54,17 @@ pub const DYNAMIC_FRICTION: f32 = 0.7;
 pub const REST_DRIFT: f32 = 0.5;
 /// Frames [`REST_DRIFT`] is measured over: half a second at the exports' 64 frames per second.
 pub const REST_FRAMES: usize = 32;
+/// A ragdoll also counts as still (goes to sleep, as engines put bodies to sleep) once, for [`SLEEP_FRAMES`] frames,
+/// the parts' mean centre has stayed within this (inches) and no point has moved faster than [`SLEEP_SPEED`]. Bodies
+/// that had come down kept a hand or a forearm creeping at about 3 in/s, or jittering at 15 – 18 in/s, while their
+/// centre moved well under an inch a second; they never met [`REST_DRIFT`], and on the user's de_mirage round and the
+/// reference match some were still "moving" when their round ended, 7 to 9 seconds after they died (2026-11-22). A
+/// body sliding away moves its centre; a limb swinging moves faster.
+pub const SLEEP_DRIFT: f32 = 1.5;
+/// The fastest a point may move while the body goes to sleep, inches per second ([`SLEEP_DRIFT`]).
+pub const SLEEP_SPEED: f32 = 30.0;
+/// Frames [`SLEEP_DRIFT`] and [`SLEEP_SPEED`] must hold for: a second at 64 frames per second.
+pub const SLEEP_FRAMES: usize = 64;
 /// Edge of the world collision grid's cells, inches.
 const CELL: f32 = 96.0;
 /// A shape covering more grid cells than this (a whole floor of a large map is about 2,000) is kept out of the grid
@@ -66,8 +78,16 @@ pub const SETTLE_PASSES: usize = 16;
 /// exponential decay rate per second, like `m_flLinearDamping`). Rubikon's drag formula is not public. Checked on
 /// one body: KSCERATO, shot running at 248 in/s on de_nuke (Aurora vs FURIA, round 5, tick 34415), lies in CS2
 /// about 2.4 – 2.8 m from where he died; without drag OFAST's body went 3.7 m (most of it in the air, as it tips
-/// over), with drag as damping 2.8 m, and 2.5 m once friction and contact speeds were right.
+/// over), with drag as damping 2.8 m, and 2.5 m once friction and contact speeds were right; 2.7 m since the hit is
+/// applied at the hit bone and the inertia scale is not applied (2026-11-22; without drag then, 3.3 m).
 pub const DRAG_AS_DAMPING: f32 = 1.0;
+/// Whether a part's inertia is multiplied by its `m_flInertiaScale` (7 on every part of CS2's agents). No since
+/// 2026-11-22: with it the parts turned 2.6 times slower than the shapes make them, and bodies toppled like planks and
+/// folded late, where CS2's playback crumples them at once (the user's de_mirage round, five deaths filmed from the same
+/// free camera: a player standing still was down 15 ticks later than CS2's at 1, 30 at 7; one killed mid-jump landed
+/// kneeling upright for seconds at 7, flat at 1). KSCERATO's slide (see [`DRAG_AS_DAMPING`]) stays within CS2's: 2.7
+/// m. What Rubikon does with the scale is not public.
+pub const USE_INERTIA_SCALE: bool = false;
 /// The joint frames' twist axis (0 = x, 1 = y, 2 = z). On CS2's agents it is z: in CS2's own animation poses the
 /// knees (twist-only joints, 0° … 110°) bend about the frames' z with 0.0° of swing, the hips' and spine's bends are
 /// a twist about z within their ranges (−73° … 36°, −5° … 33°), and the signs match; about x or y the knees' bend
@@ -961,6 +981,10 @@ pub struct Ragdoll {
     anchor: Vec<(V3, Q)>,
     /// The fastest point of any part after the last step, inches per second.
     speed: f32,
+    /// Frames (plus one) in a row with no point faster than [`SLEEP_SPEED`] and the parts' mean centre within
+    /// [`SLEEP_DRIFT`] of `sleep_centre`, where it was when they began; 0 when the last frame was faster.
+    sleep_frames: usize,
+    sleep_centre: V3,
     candidates: Vec<Item>,
 }
 
@@ -976,7 +1000,13 @@ impl Ragdoll {
             .map(|(i, part)| {
                 let (com, inertia, volume_spheres, capsules) =
                     shape_properties(&part.shapes, part.mass);
-                let inertia = inertia.map(|row| row.map(|c| c * part.inertia_scale.max(1e-3)));
+                // The shapes' own inertia: `m_flInertiaScale` (7 on CS2's agents) is not applied
+                // (USE_INERTIA_SCALE).
+                let inertia = if USE_INERTIA_SCALE {
+                    inertia.map(|row| row.map(|c| c * part.inertia_scale.max(1e-3)))
+                } else {
+                    inertia
+                };
                 let frame = frames
                     .get(i)
                     .copied()
@@ -1058,6 +1088,8 @@ impl Ragdoll {
             still_frames: 0,
             anchor: Vec::new(),
             speed: f32::MAX,
+            sleep_frames: 0,
+            sleep_centre: [0.0; 3],
             candidates: Vec::new(),
         }
     }
@@ -1091,7 +1123,8 @@ impl Ragdoll {
         self.bodies.iter().map(|b| b.v).collect()
     }
 
-    /// Still: for [`REST_FRAMES`] frames, no point of any part has drifted more than [`REST_DRIFT`].
+    /// Still: for [`REST_FRAMES`] frames, no point of any part has drifted more than [`REST_DRIFT`]; or asleep: for
+    /// [`SLEEP_FRAMES`] frames the body's centre within [`SLEEP_DRIFT`] and no point faster than [`SLEEP_SPEED`].
     pub fn at_rest(&self) -> bool {
         self.still_frames >= REST_FRAMES
     }
@@ -1173,23 +1206,42 @@ impl Ragdoll {
             .map(|b| length(b.v) + length(b.w) * b.reach)
             .fold(0.0, f32::max);
         self.speed = fastest;
-        // How far the farthest point of any part is from where it was when the still stretch began: its centre of
-        // mass's move plus its turn times its reach.
-        let drift = self
-            .bodies
-            .iter()
-            .zip(&self.anchor)
-            .map(|(b, (x, q))| {
-                let d = quat_mul(b.q, [-q[0], -q[1], -q[2], q[3]]);
-                let angle = 2.0 * length([d[0], d[1], d[2]]).atan2(d[3].abs());
-                length(sub(b.x, *x)) + angle * b.reach
-            })
-            .fold(0.0, f32::max);
+        // How far the farthest point of any part is from where it was when a still stretch began: its centre of mass's
+        // move plus its turn times its reach.
+        let drift_from = |anchor: &[(V3, Q)]| {
+            self.bodies
+                .iter()
+                .zip(anchor)
+                .map(|(b, (x, q))| {
+                    let d = quat_mul(b.q, [-q[0], -q[1], -q[2], q[3]]);
+                    let angle = 2.0 * length([d[0], d[1], d[2]]).atan2(d[3].abs());
+                    length(sub(b.x, *x)) + angle * b.reach
+                })
+                .fold(0.0, f32::max)
+        };
+        let drift = drift_from(&self.anchor);
         if self.anchor.len() == self.bodies.len() && drift <= REST_DRIFT {
             self.still_frames += 1;
         } else {
             self.anchor = self.bodies.iter().map(|b| (b.x, b.q)).collect();
             self.still_frames = 0;
+        }
+        // Or asleep: for SLEEP_FRAMES the centre within SLEEP_DRIFT and no point faster than SLEEP_SPEED (a limb
+        // creeping or jittering on a body going nowhere).
+        let n = self.bodies.len().max(1) as f32;
+        let centre: V3 =
+            std::array::from_fn(|k| self.bodies.iter().map(|b| b.x[k]).sum::<f32>() / n);
+        if self.sleep_frames > 0
+            && fastest <= SLEEP_SPEED
+            && length(sub(centre, self.sleep_centre)) <= SLEEP_DRIFT
+        {
+            self.sleep_frames += 1;
+            if self.sleep_frames > SLEEP_FRAMES {
+                self.still_frames = self.still_frames.max(REST_FRAMES);
+            }
+        } else {
+            self.sleep_centre = centre;
+            self.sleep_frames = usize::from(fastest <= SLEEP_SPEED);
         }
     }
 
@@ -1219,10 +1271,10 @@ impl Ragdoll {
             // Swing: the child's twist axis within the cone around the parent's (locked when the joint has no
             // swing limit: a hinge, like the knees).
             {
-                let max = joint.swing;
                 let (a, _) = axes(&self.bodies[i1], &joint.rotation1);
                 let (b, _) = axes(&self.bodies[i2], &joint.rotation2);
                 let angle = length(cross(a, b)).atan2(dot(a, b));
+                let max = joint.swing;
                 if angle > max
                     && let Some(n) = normalized(cross(a, b))
                 {
@@ -1641,6 +1693,24 @@ mod tests {
             "{:?}",
             ragdoll.velocities()
         );
+    }
+
+    #[test]
+    fn the_inertia_scale_is_not_applied() {
+        // The same push off-centre turns a part of inertia scale 7 as fast as one of 1 (USE_INERTIA_SCALE).
+        let spin = |inertia_scale: f32| {
+            let mut part = capsule_part(10.0, [0.0; 3], [20.0, 0.0, 0.0], 4.0);
+            part.inertia_scale = inertia_scale;
+            let data = PhysicsData {
+                parts: vec![part],
+                ..Default::default()
+            };
+            let mut ragdoll = Ragdoll::new(&data, &[identity_at([0.0, 0.0, 100.0])], &[]);
+            ragdoll.apply_impulse(0, [20.0, 0.0, 100.0], [0.0, 100.0, 0.0]);
+            length(ragdoll.bodies[0].w)
+        };
+        assert!(spin(1.0) > 0.0);
+        assert!((spin(7.0) - spin(1.0)).abs() < 1e-5 * spin(1.0));
     }
 
     /// Two capsules joined end to end: a thigh hanging from a pelvis held still.

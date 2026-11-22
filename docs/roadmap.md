@@ -725,8 +725,15 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   distance now the default, lighter, and no longer stronger through a zoom), the USP-S's silenced flash inside the
   silencer (now at its tip, as CS2 draws it), the dead falling too hard (their starting motion over a tenth of a
   second, the hit's force halved; [animation](formats/animation.md#deaths-exportdeaths-physicsragdoll)).
-- [ ] Dead bodies against CS2: CS2's fold at the knees and drop where they stand sooner than OFAST's (2026-11-21,
-  five kills filmed from the same places).
+- [x] **Bodies spinning 180 – 360° as they die** (the user's report, 2026-11-22): CS2 never sends where the hit
+  landed and OFAST read it as the map's origin, so the hit's impulse came with a huge turn; now applied at the hit
+  bone ([animation](formats/animation.md#deaths-exportdeaths-physicsragdoll)).
+- [x] **Dead bodies folding like CS2's** (2026-11-22, the user's "fix collapse first"): the parts' inertia no longer
+  multiplied by `m_flInertiaScale` (bodies toppled like planks and one landed kneeling upright for seconds), and
+  bodies jittering in place go to sleep; they now fold within about 15 ticks of CS2's films and every body of the
+  reference match lies still ([animation](formats/animation.md#deaths-exportdeaths-physicsragdoll)).
+- [ ] Dead bodies against CS2, what is left: CS2's crumple at the knees from the first ticks; a crouching player's
+  knees are bent past the ragdoll's limits, so his legs straighten a little before he falls.
 
 ## Hard problems we know about
 

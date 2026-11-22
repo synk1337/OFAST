@@ -445,17 +445,29 @@ ragdoll on the client and demos carry only what starts it ([demo.md](demo.md#dea
 
 - **Start**: on the first frame where the pawn is dead, the parts sit on the last living pose and move as that pose
   moved over the last tenth of a second of the player's life (`START_MOTION_WINDOW_S`, as Source's ragdolls take
-  the animation's motion: the run, the limbs), plus the killing hit: `m_vRagdollDamageForce` × 0.05
-  (`DEATH_FORCE_SCALE`) as an impulse at `m_vRagdollDamagePosition` on the part of the hit bone.
+  the animation's motion: the run, the limbs), plus the killing hit: `m_vRagdollDamageForce` × 0.1
+  (`DEATH_FORCE_SCALE`) as an impulse on the part of the hit bone, applied at the hit bone itself (`hit_point`):
+  CS2 never fills `m_vRagdollDamagePosition` ([demo.md](demo.md#deaths)), and until 2026-11-22 OFAST read it as
+  the map's origin, so the impulse came with a turn as large as the body's distance from it: bodies spun 180 – 360°
+  as they died (the user's report; a crouching player hit by an AWP leapt up at 1500 in/s and tumbled, at 200 in/s
+  once the hit is at the bone).
 - **Against CS2 (2026-11-21)**: the user's de_mirage demo (Understudy bots, five kills: three AWP, two USP-S), CS2's
   playback filmed from the demo free camera and Unreal shot from the same places at the same ticks. Until then the
   starting motion was the last frame's alone (1/64 s) and the force scale 0.1, a first guess. Two players standing
   still started with their forearms at 390 and 510 in/s and the whole body at 60 – 110 in/s (any jump of the pose
-  between the last two frames became a throw), and an AWP's impulse on the head (12 of the agent's 272 units of
-  mass) whipped it at 300 in/s: bodies tipped over backward, legs up, where CS2 folds them where they stand. Over a
-  tenth of a second and at 0.05, a player killed mid-jump comes to rest where CS2's body does and the standing ones
-  topple less; CS2's still fold sooner at the knees and drop more in place (not matched). The forces in that round:
-  26 000 for the USP-S's headshots, 28 000 – 36 000 for the AWP's.
+  between the last two frames became a throw); 1.0.17 also halved the force to 0.05 against the flips, whose real
+  cause was the hit at the map's origin (above: fixed 2026-11-22, the force back at 0.1, which keeps the crouching
+  player on the scaffold he died on as CS2 does, where 0.05 slid him off). Now no body flips or is thrown, and they
+  go down where they stood. With the parts' inertia times `m_flInertiaScale` (7) they then toppled like planks: a
+  player standing still was down 30 ticks after CS2's, and one killed mid-jump landed kneeling upright for seconds
+  where CS2's lies flat. With the shapes' own inertia (`USE_INERTIA_SCALE` off, 2026-11-22) they fold within about 15
+  ticks of CS2's and lie flat; KSCERATO's slide on de_nuke stays within CS2's (2.7 m; 2.4 – 2.8 in CS2). Without
+  drag they would fold a little sooner still, but KSCERATO's slide went to 3.3 m; a lower friction (CS2's
+  `ragdoll_friction_scale` is 0.6) changed little. Still not matched: CS2's crumple at the knees from the first
+  ticks; a crouching player's knees are bent past the ragdoll's own limits (the right knee 113° against 90° in CS2's
+  `planting_crouch`), so his legs straighten a little before he falls (widening the limits to the starting pose
+  instead held him crouched like a statue: worse). The forces in that round: 26 000 for the USP-S's headshots,
+  28 000 – 36 000 for the AWP's.
 - **Solver** (`physics::ragdoll`): extended position-based dynamics, 8 substeps per frame; gravity 800 in/s²; joints
   keep their frames' origins together, the child's z axis within the swing cone (a hinge without one) and the twist
   about z within its range; spheres along each capsule collide with the world's hulls (face planes) and triangles
@@ -467,7 +479,11 @@ ragdoll on the client and demos carry only what starts it ([demo.md](demo.md#dea
   limits and out of the world without giving it speed, and two parts that overlap in that pose (an arm across the
   chest) collide only once they have come apart. The body stops being simulated once no point of it has drifted
   more than half an inch over half a second (`REST_DRIFT`: a body that has come down keeps an invisible creep of a
-  few tenths of an inch per second, which this freezes the way engines put bodies to sleep).
+  few tenths of an inch per second, which this freezes the way engines put bodies to sleep), or once asleep: for a
+  second its centre within 1.5 inches and no point faster than 30 in/s (`SLEEP_DRIFT`, `SLEEP_SPEED`, since
+  2026-11-22: a hand or forearm creeping at 3 in/s or jittering at 15 – 18 in/s on a body going nowhere kept some
+  bodies "moving" to the round's end; on the reference match's first three rounds every body now lies still, most
+  within 2 – 4 s).
 - **World**: the shapes that stop a body are the solid world ("Default") and the "ConditionallySolid" grates,
   glass and blockers (`passbullets`, `window`, `solid`); clips that stop only players, NPCs or grenades do not
   (`CollisionAttribute::stops_bodies`). Without the map's archive, a floor where the player last stood.
