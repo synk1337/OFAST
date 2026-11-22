@@ -117,15 +117,30 @@ AUG_FLAME = variant(MUZZLE_FLAME, "muzzle_aug", role="fire", slots=12, life=(0.0
                     alpha=(0.7, 0.78), bright=2.0, tint=(0.95, 0.93, 0.9), along=(3.0, 15.0), up=(0.0, 30.0))
 AUG_SIDES = variant(MUZZLE_SIDES, "muzzle_aug_sides", slots=5, radius=(1.0, 3.0), life=(0.055, 0.075),
                     tint=(1.0, 0.65, 0.0), bright=4.0)
-# weapon_muzzleflash_snip (AWP, SSG 08): 4 big puffs of fire_gas_batch_b_top (radius 9.3 - 11.8, growing 0.5 to 1.5
-# times, 0.15 - 0.2 s, white fading to (252, 163, 111), overbright 4, drag 0.3), flare trails, sparks and a ring of
+# weapon_muzzleflash_snip (AWP, SSG 08) and _snip_ar (SCAR-20, G3SG1): uweapon_muzflsh_awp_primaryflash, 4 big puffs
+# of fire_gas_batch_b_top (radius 9.3 - 11.8, 0.15 - 0.2 s, white fading to (252, 163, 111), overbright 4, drag 0.3),
+# growing from 0.5 to 1.5 times with a bias of 0.8 (C_OP_InterpolateRadius: 0.96 within a tenth of its life, then
+# slowly)
+# and fading out over the last 80 - 100 % of their life (C_OP_FadeOut 0.8 - 1.0): big and bright as they are born,
+# fading from then on, as CS2's first-person AWP flash on the user's Understudy round of de_mirage (2026-11-22: biggest
+# a tick after the shot, gone about 5 ticks on; grown evenly and faded over their last half, OFAST's was small at the
+# shot and brightest about 5 ticks on, showing floating where the gun had been after a quick switch). Their life and
+# age at birth are fitted to that film (the demo bar a tick behind the demo: the scope drops on the shot's tick, CS2's
+# first unscoped frame reads a tick before): CS2's flame is a big ball on the shot's own tick and the next, fading on
+# the second and third, gone on the fourth. Born at half size on the sheet's first, tiny frame, OFAST's showed two
+# ticks late; born 25 - 35 % into their life, with half the files' life (0.075 - 0.1 s: at 0.15 - 0.2 s the flame still
+# burned full 5 ticks after the shot, CS2's fade and its colour, white to orange, taking it out of sight sooner than
+# OFAST's additive sprite), they follow it. Its sheet is played over its life: at the renderer's
+# `m_flAnimationRate` 10 read as frames a second (the sheet's 34 frames last 1 s each) a puff would show only its first
+# 2 frames, small wisps, and the flame drew faint where CS2's is a bright ball. Flare trails, sparks and a ring of
 # ground smoke (`_ground_smoke`: up to 8 puffs).
-SNIPER_FLAME = variant(MUZZLE_FLAME, "muzzle_sniper", slots=4, life=(0.15, 0.2), radius=(9.3, 11.8),
-                       scale=(0.5, 1.5), alpha=(0.47, 0.71), bright=4.0, tint=(1.0, 0.82, 0.62), along=(0.0, 4.0),
-                       up=(10.0, 10.0), drag=0.3, fade_out=0.5)
+SNIPER_FLAME = variant(MUZZLE_FLAME, "muzzle_sniper", slots=4, life=(0.075, 0.1), radius=(9.3, 11.8),
+                       scale=(0.5, 1.5), scale_bias=0.8, alpha=(0.47, 0.71), bright=4.0, tint=(1.0, 0.82, 0.62),
+                       along=(0.0, 4.0), up=(10.0, 10.0), drag=0.3, fade_out=0.9, age=(0.25, 0.35))
 SNIPER_SMOKE = variant(MUZZLE_SMOKE, "muzzle_sniper_smoke", slots=6, life=(0.5, 1.0), radius=(6.0, 14.0),
                        scale=(0.8, 2.5), alpha=(0.2, 0.35), speed=(40.0, 120.0), up=(10.0, 60.0))
-SNIPER_AR_FLAME = variant(SNIPER_FLAME, "muzzle_sniper_ar", size_by=0.75, life=(0.1, 0.15))
+# The auto-snipers' (same system): smaller and shorter, its life halved with the AWP's (not checked on a shot of theirs).
+SNIPER_AR_FLAME = variant(SNIPER_FLAME, "muzzle_sniper_ar", size_by=0.75, life=(0.05, 0.075))
 # uweapon_muzzleflash_pist: always 8 small sprites of fire_gas (radius 2.2 - 4, alpha 0.2 - 0.4), the alt flame in
 # half the shots, a beam and sparks.
 # Drawn as the AK's flame (its radius and alpha): at the files' radius 2.2 - 6 and alpha 0.2 - 0.4 the Tec-9's flame
@@ -169,7 +184,15 @@ AK_LIGHT = 1.0
 # their mean, 0.049, taken). The `_fps` systems' own control points (the AK's 0.35, the M4A4's 0.5, the pistols'
 # 0.25…) read literally drew the pistols' a seventh of CS2's: their third-person sizes ride on control points the
 # files leave to the game's code.
-AK_CHOICE = [(1, [[MUZZLE_FLAME], [MUZZLE_ALT], [MUZZLE_ALT], [MUZZLE_BEAM]]),
+# The snipers' (AWP, SSG 08, SCAR-20, G3SG1) are whole: nothing in their flash systems reads a scale (no
+# C_INIT_GlobalScale: the AK's flame has one, uweapon_muzflsh_awp_primaryflash none; the `awp` configuration their
+# shoot event names puts control point 1 at 1, which only remaps the puffs' field 38), so CS2 draws the third-person
+# flash on the viewmodel's barrel. Checked on the user's Understudy round of de_mirage (2026-11-22): CS2's AWP fireball
+# reaches 0.04 - 0.047 of the picture's width (radius) a tick after the shot; at the 0.3 fitted before (on the snipers'
+# flame taken as about the AK's, ignoring its growth from half size), OFAST's was a quarter of that and hid behind the
+# barrel's end until the gun was put away.
+SNIPER_VIEW = 1.0
+AK_CHOICE =[(1, [[MUZZLE_FLAME], [MUZZLE_ALT], [MUZZLE_ALT], [MUZZLE_BEAM]]),
              (2, [[MUZZLE_SIDES], [MUZZLE_SPARKS], []])]
 FLASHES = {
     "uweapon_muzflsh_ak47": {"always": [MUZZLE_SMOKE], "choose": AK_CHOICE, "view": 0.35, "light": 1.0},
@@ -179,9 +202,9 @@ FLASHES = {
                                    "light": 1.0},
     "uweapon_muzflsh_aug": {"always": [AUG_FLAME, AUG_SIDES, MUZZLE_BEAM], "choose": [], "view": 0.9, "light": 1.0},
     "weapon_muzzleflash_snip": {"always": [SNIPER_FLAME, MUZZLE_SPARKS, SNIPER_SMOKE, MUZZLE_BEAM], "choose": [],
-                                "view": 0.3, "light": 1.0, "short": True},
+                                "view": SNIPER_VIEW, "light": 1.0, "short": True},
     "weapon_muzzleflash_snip_ar": {"always": [SNIPER_AR_FLAME, MUZZLE_SPARKS, MUZZLE_SMOKE], "choose": [],
-                                   "view": 0.4, "light": 1.0, "short": True},
+                                   "view": SNIPER_VIEW, "light": 1.0, "short": True},
     "uweapon_muzflsh_mach": {"always": [MUZZLE_SMOKE], "choose": AK_CHOICE, "view": 0.25, "light": 1.0},
     "uweapon_muzflsh_shot": {"always": [MUZZLE_SMOKE], "choose": AK_CHOICE, "view": 0.9, "light": 1.0},
     "uweapon_muzzleflash_subm": {"always": [MUZZLE_SMOKE], "choose": [(1, [[SMG_FLAME], [SMG_ALT], []])],

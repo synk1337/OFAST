@@ -409,7 +409,9 @@ SPRITE_SIZE = 0.5
 # `frame_span`: the share of its sheet's frames a life plays (a fireball whose sheet turns to smoke within a quarter of
 # its frames, played over the first 40 %); `camera_bias` (units): drawn that much nearer the camera, shrunk to look the
 # same size (a flashbang's glow, which CS2 draws without the depth test); `lit`: translucent and lit by the scene, its
-# colour (x tint x bright) the albedo, not a light (blood, which the sun warms and the shade darkens as in CS2).
+# colour (x tint x bright) the albedo, not a light (blood, which the sun warms and the shade darkens as in CS2);
+# `scale_bias`: how its size goes from `scale`'s first value to its second over its life, as Source's bias (0.5:
+# evenly; above, most of it early: CS2's C_OP_InterpolateRadius `m_flBias`, bias_power).
 LAYER_DEFAULTS = {"size": SPRITE_SIZE, "lift": 0.6, "speed": (0.0, 0.0), "up": (0.0, 0.0), "gravity": 0.0,
                   "drag": 0.0, "stretch": 0.0, "max_length": 0.0, "sequence": None, "floor": False,
                   "tint": (1.0, 1.0, 1.0), "hot": None, "translucent": False, "lit": False, "end_fade": 0.0,
@@ -417,7 +419,7 @@ LAYER_DEFAULTS = {"size": SPRITE_SIZE, "lift": 0.6, "speed": (0.0, 0.0), "up": (
                   "fade_in": 0.1, "fade_out": 0.33, "along": (0.0, 0.0), "min_width": 0.0, "local": False,
                   "roll_base": 0.0, "min_distance": 0.0, "age": (0.0, 0.0), "from_birth": False, "tail_drop": 0.0,
                   "sort": 0, "link": None, "gradient": None, "gradient_blend": 1.0, "gradient_fade": 0.0,
-                  "flat": False, "near_side": False, "frame_span": 1.0, "camera_bias": 0.0}
+                  "flat": False, "near_side": False, "frame_span": 1.0, "camera_bias": 0.0, "scale_bias": 0.5}
 # CS2's particle drag takes a share of the velocity per simulation step; OFAST reads it as per 1/30 s (an assumption:
 # the step is not in the files) and turns it into a rate per second, -30 ln(1 - drag): 0.025 -> 0.76, 0.1 -> 3.2.
 DRAG_STEPS_PER_SECOND = 30.0
@@ -558,7 +560,9 @@ float roll = radians(RollBase + (h5 * 2.0 - 1.0) * Roll);
 corner = float2(corner.x * cos(roll) - corner.y * sin(roll), corner.x * sin(roll) + corner.y * cos(roll));
 // Shown only with the camera at least MinDistance units from its centre (0: always).
 bool too_near = MinDistance > 0.0 && length(CameraPos - origin) < MinDistance * 2.54;
-float radius = alive && !too_near ? lerp(RadiusMin, RadiusMax, h2) * lerp(ScaleStart, ScaleEnd, norm) * 2.54 : 0.0;
+// From ScaleStart to ScaleEnd as norm^ScalePower (CS2's C_OP_InterpolateRadius bias; 1: linear).
+float grown = lerp(ScaleStart, ScaleEnd, pow(saturate(norm), ScalePower));
+float radius = alive && !too_near ? lerp(RadiusMin, RadiusMax, h2) * grown * 2.54 : 0.0;
 // Shrinking as its slot dies down (EndFade; end_fade is 1 before).
 radius *= lerp(EndShrink, 1.0, end_fade);
 // Lifted by Lift of its size (most of it for flames: the frames' flames sit low in their cells, so the sprite stands
@@ -688,7 +692,8 @@ float3 colour = lerp(Hot.rgb, Tint, saturate(norm / max(Hot.a, 0.0001)));
 return float4(rgb * colour * Bright, alpha);
 """
 # Scalar parameters of the Custom nodes (each a material parameter), besides the per-instance data and the tick.
-SPRITE_SCALARS = ["TicksPerSecond", "LifeMin", "LifeMax", "RadiusMin", "RadiusMax", "ScaleStart", "ScaleEnd", "Roll",
+SPRITE_SCALARS = ["TicksPerSecond", "LifeMin", "LifeMax", "RadiusMin", "RadiusMax", "ScaleStart", "ScaleEnd",
+                  "ScalePower", "Roll",
                   "Spread", "Rise", "AlphaMin", "AlphaMax", "Bright", "Sequences", "SequenceFirst", "Frames", "Stride",
                   "Columns", "Rows", "Lift", "SpeedMin", "SpeedMax", "UpMin", "UpMax", "Gravity", "Drag", "Stretch",
                   "MaxLength", "EndFade", "FadeIn", "FadeOut", "AlongMin", "AlongMax", "MinWidth", "Local", "RollBase",
@@ -898,6 +903,14 @@ def option(layer, key):
     return layer.get(key, LAYER_DEFAULTS[key])
 
 
+def bias_power(bias):
+    """The power x is raised to by Source's Bias(x, bias) = x^(ln bias / ln 0.5): 1 at 0.5 (linear); below 1 above
+    0.5 (most of the change early: 0.8 gives 0.32, which takes CS2's AWP flame from 0.5 to 0.96 of its radius in
+    the first tenth of its life, then on to 1.5)."""
+    bias = min(max(bias, 1e-4), 1.0 - 1e-4)
+    return math.log(bias) / math.log(0.5)
+
+
 def layer_name(layer):
     """A layer's own name (its material instance's, its components'): `name`, or its texture's role."""
     return layer.get("name", layer["role"])
@@ -939,6 +952,7 @@ def layer_instance(layer, effect, texture, material, tick_rate):
         "LifeMin": layer["life"][0], "LifeMax": layer["life"][1],
         "RadiusMin": layer["radius"][0] * size, "RadiusMax": layer["radius"][1] * size,
         "ScaleStart": layer["scale"][0], "ScaleEnd": layer["scale"][1],
+        "ScalePower": bias_power(option(layer, "scale_bias")),
         "Roll": layer["roll"], "Spread": layer["spread"], "Rise": layer["rise"],
         "AlphaMin": layer["alpha"][0], "AlphaMax": layer["alpha"][1], "Bright": layer["bright"],
         # Every sequence plays as many frames as the shortest of the layer's has (they differ by one or two).

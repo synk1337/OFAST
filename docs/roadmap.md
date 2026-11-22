@@ -409,7 +409,17 @@ player and round.
     trails and embers flying up, and the fire a little yellower than CS2's red-orange.
   - [ ] **Muzzle flashes**: CS2's AK picks no flame about one shot in four (its effect's empty child) and showed
     none on two shot-ticks + 1 where Unreal draws one; bigger in Unreal when both show one. Needs frames read at the
-    demo bar's tick (the console's is one or two later) before any timing change.
+    demo bar's tick (the console's is one or two later) before any timing change. The other guns' flames may play
+    their sheets too slowly or grow too evenly, as the snipers' did (below): not checked.
+  - [x] **The snipers' flash** (the user's report, 2026-11-22: the AWP's flash stayed after a quick switch): CS2's
+    first-person AWP flash is a big fireball on the shot's tick and the next, fading over two more, gone on the
+    fourth (CS2's playback of the user's Understudy round on de_mirage); OFAST's was a quarter of its size (first-person
+    scale 0.3: the snipers' systems scale nothing, now 1), hidden behind the barrel's end, small at the shot and
+    brightest about 5 ticks on, so after a quick switch it showed floating where the gun had been. Now grown and faded
+    as CS2's files say (radius bias 0.8, fade over 80 – 100 % of the life), its life and age at birth fitted to the
+    film: within a tick of CS2's on both shots compared. CS2 does not cut a flash when the weapon is switched (its
+    event stops emitting, the puffs play out): a cut at the switch was tried and dropped, the user's choice. Not
+    checked: third person against CS2, the SCAR-20 and G3SG1 (same system, life halved with the AWP's).
   - [x] **Fires**: Unreal's were orange flames on every flame, with no burst and no edge. Rebuilt from CS2's
     `molotov_groundfire` and `molotov_explosion` and checked on round 17's molotov at the top of mid, played at a
     quarter speed (`docs/checks.md`): the burst from the demo's own dispatch, a dense carpet in CS2's gradients, the
@@ -733,7 +743,7 @@ polish (2026-10-26). That pass includes the effects rework and the installer:
   bodies jittering in place go to sleep; they now fold within about 15 ticks of CS2's films and every body of the
   reference match lies still ([animation](formats/animation.md#deaths-exportdeaths-physicsragdoll)).
 - [ ] Dead bodies against CS2, what is left: CS2's crumple at the knees from the first ticks; a crouching player's
-  knees are bent past the ragdoll's limits, so his legs straighten a little before he falls.
+  knees are bent past the ragdoll's limits, so their legs straighten a little before they fall.
 
 ## Hard problems we know about
 
