@@ -10,7 +10,9 @@ blasts, flashes: their look, not the sprites' per-instance data, which only an i
 (the shots' layers and bullet holes; the muzzle lights are moved and lit as the sequence keys them), then for each
 "tick:controller" of OFAST_NAME sets MPC_Replay.ReplayTick to the tick, the effects' lights to what the sequence keys
 there, and screenshots through that player's eyes (feet + eye height, CS2's 90 degrees at 4:3), the way the sequence's POV
-cameras see it. A view can also be "tick:x:y:z:pitch:yaw" (Source units, degrees, as CS2's getpos prints it), or
+cameras see it. A view can also be "tick:x:y:z:pitch:yaw" (Source units, degrees, as CS2's getpos prints it; its
+tick may have a fraction, "1446.25:…", for the effects between two ticks, as a render faster than the tick rate
+shows them), or
 "tick:controller:seq": through that player's POV camera in the round's sequence, played to that tick, with what the
 sequence shows there (the viewmodel and its first-person muzzle flashes, where the import keyed that player's view:
 a tick of its -PovShots). With such a view, the sequence plays the other views to their ticks too.
@@ -131,9 +133,11 @@ def view_camera(replay, view):
         pitch, yaw = track["angles"][index]
         name = "tick%d_pov%s" % (tick, controller)
     else:
-        tick = int(view[0])
+        # The tick may have a fraction (1446.25): the effects between two ticks, as a render faster than the tick rate
+        # draws them.
+        tick = float(view[0])
         x, y, z, pitch, yaw = (float(v) for v in view[1:6])
-        name = "tick%d_view" % tick
+        name = "tick%s_view" % view[0]
     camera = actors.spawn_actor_from_class(unreal.CameraActor, unreal.Vector(
         x * UNITS_TO_CM, -y * UNITS_TO_CM, z * UNITS_TO_CM))
     camera.set_actor_rotation(unreal.Rotator(roll=0.0, pitch=-pitch, yaw=-yaw), False)

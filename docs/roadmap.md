@@ -420,6 +420,14 @@ player and round.
     film: within a tick of CS2's on both shots compared. CS2 does not cut a flash when the weapon is switched (its
     event stops emitting, the puffs play out): a cut at the switch was tried and dropped, the user's choice. Not
     checked: third person against CS2, the SCAR-20 and G3SG1 (same system, life halved with the AWP's).
+  - [x] **Sheets at high frame rates** (the user's report, 2026-11-22: in a render at 250 fps slowed down, blood held
+    each picture for several frames while it flew on): the sprite material showed one whole sheet frame at a time, so
+    a blood splash's 16 frames over half a second changed its picture about 30 times a second at any frame rate. CS2's
+    sprite and trail renderers blend each frame into the next (`m_bBlendFramesSeq0`, on unless a file turns it off;
+    of the systems OFAST rebuilds only the wood impact's flecks do, one frame each), and now so does OFAST's material,
+    for every sprite effect. Checked on the user's AWP hit at tick 1440 of the Understudy round, filmed at quarter
+    ticks (`probe_smoke.py` now takes a tick with a fraction): the streak held its shape and jumped, now it changes as
+    much at every step and the splash grows steadily. Not checked in a render of the Studio's.
   - [x] **Fires**: Unreal's were orange flames on every flame, with no burst and no edge. Rebuilt from CS2's
     `molotov_groundfire` and `molotov_explosion` and checked on round 17's molotov at the top of mid, played at a
     quarter speed (`docs/checks.md`): the burst from the demo's own dispatch, a dense carpet in CS2's gradients, the

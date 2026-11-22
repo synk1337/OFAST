@@ -20,7 +20,8 @@ explosion_flashbang). Niagara systems cannot be written from editor Python, so O
   blast's or burst's spans one tick, so it spawns once. The vertex shader turns the quad to face the camera at the
   particle's place and size (from ScaleStart to ScaleEnd of its radius, rising Rise units over its life); the pixel
   shader plays the sequence's frames over the particle's life (CS2's ANIMATION_TYPE_MANUAL_FRAMES driven by the
-  normalised age), tinted, fading in and out, and softened where it meets the world.
+  normalised age), each blended into the next as CS2's renderers do, tinted, fading in and out, and softened where it
+  meets the world.
 - Some particles fly (an HE blast's sparks, debris, ground smoke): the same lines throw them along their heading and
   up, slow them by CS2's drag and pull them down by gravity; sparks are drawn as streaks along their flight; sparks
   and debris die at the ground under the blast (the agents manifest's `blasts`), as CS2's die on touching the world.
@@ -633,17 +634,28 @@ if (Stretch > 0.0)
 }
 return centre + (right * corner.x + up * corner.y) * radius - WorldPos;
 """
-# Pixel shader: the sequence's frame at the particle's age, faded in over the FadeIn share of its life and out over the
-# FadeOut share (a tenth and a third unless the layer says otherwise); (colour x tint x brightness, opacity) in a
-# float4.
+# Pixel shader: the sequence's frame at the particle's age, blended into the next one, faded in over the FadeIn share of
+# its life and out over the FadeOut share (a tenth and a third unless the layer says otherwise); (colour x tint x
+# brightness, opacity) in a float4. The blend is CS2's: its sprite and trail renderers mix a sheet's two frames either
+# side of the particle's (m_bBlendFramesSeq0, on unless a file turns it off, and none of the systems OFAST rebuilds
+# with frames to blend does). Shown whole, a 16-frame blood splash living half a second changed its picture about 30
+# times a second whatever the render's rate: at 250 frames a second slowed down, it held each frame for 8 of them
+# while it flew on (the user's render, 2026-11-22).
 SPRITE_PIXEL = SPRITE_STATE + r"""
 if (!alive) return float4(0.0, 0.0, 0.0, 0.0);
 float sequence = SequenceFirst + min(floor(h6 * Sequences), Sequences - 1.0);
-float frame = min(floor(norm * Frames), Frames - 1.0);
+float frames_in = saturate(norm) * Frames;
+float frame = min(floor(frames_in), Frames - 1.0);
+float next = min(frame + 1.0, Frames - 1.0);
 float cell = sequence * Stride + frame;
 float row = floor((cell + 0.5) / Columns);
 float column = cell - row * Columns;
-float4 texel = Tex.Sample(TexSampler, (float2(column, row) + UV) / float2(Columns, Rows));
+float next_cell = sequence * Stride + next;
+float next_row = floor((next_cell + 0.5) / Columns);
+float next_column = next_cell - next_row * Columns;
+float2 cells = float2(Columns, Rows);
+float4 texel = lerp(Tex.Sample(TexSampler, (float2(column, row) + UV) / cells),
+                    Tex.Sample(TexSampler, (float2(next_column, next_row) + UV) / cells), frames_in - floor(frames_in));
 float fade_in = FadeIn > 0.0 ? saturate(norm / FadeIn) : 1.0;
 float fade_out = FadeOut > 0.0 ? saturate((1.0 - norm) / FadeOut) : 1.0;
 // A dying fire's flames keep their opacity over the first half of its dying down and fade over the second, shrinking
