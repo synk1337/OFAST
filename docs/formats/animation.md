@@ -734,6 +734,15 @@ slap, the charging handle or bolt, a shotgun's shells):
 Not checked: a slow reload in a match recorded after CS2 1.41.9.5 (none here), a shotgun's in a match, the XM1014
 and the Sawed-Off on 1.42.0.0.
 
+**Third person since CS2 1.42.0.1** (build 2000950, 2026-11-23: "Fixed third-person silent reload animations to play
+at correct speed"). The patch saved the 70 world-model `reload_silent` clips again (`animation/anims/world/…`, each
+weapon's standing and crouched one) with the same 74 frames at 15 fps instead of 30: twice as long, like the
+viewmodel's (the AK-47's `reload_ak_silent` lasts 4.867 s, and its poses at 0.8, 2.4 and 4.0 s are `reload_ak`'s at
+0.4, 1.2 and 2.0, bone for bone). OFAST reads each clip's rate from its file, so its code did not change. A pose
+recipe's sample gives its time as a share of the clip, so a demo recorded before the patch keeps the poses it had
+(the plain pace and the end held, as above); the ticks OFAST decides itself play the new length. Not checked yet: a
+slow reload in a demo recorded on 1.42.0.1.
+
 Not yet: the view punch on the camera; weapon skins.
 
 ## Verified
